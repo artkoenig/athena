@@ -194,6 +194,22 @@ test('/api/config returns a ready-to-paste agent environment', async () => {
   });
 });
 
+test('a token gates the data but not the app shell', async () => {
+  await withServer({ token: 'secret' }, async ({ base }) => {
+    // A browser puts the token on the document request because it is in the URL,
+    // but the <link> and <script> that document pulls in are fetched without it —
+    // sub-resource requests do not inherit the query string. Gating them served
+    // 401 for app.js, leaving a page with no script: the static markup, an empty
+    // env block, and nothing able to explain itself.
+    for (const asset of ['/', '/app.js', '/styles.css']) {
+      assert.equal((await fetch(`${base}${asset}`)).status, 200, `${asset} must load unauthenticated`);
+    }
+    // The data behind it stays shut.
+    assert.equal((await fetch(`${base}/api/sessions`)).status, 401);
+    assert.equal((await fetch(`${base}/api/stream`)).status, 401);
+  });
+});
+
 test('a token gates ingest and the API, via header or query parameter', async () => {
   await withServer({ token: 'secret' }, async ({ base }) => {
     assert.equal((await fetch(`${base}/api/stats`)).status, 401);

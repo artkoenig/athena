@@ -23,6 +23,7 @@ const state = {
   metrics: [],
   facets: { events: [], metrics: [] },
   search: '',
+  authError: false,
 };
 
 /* ------------------------------ formatting ------------------------------ */
@@ -94,7 +95,11 @@ async function api(path, params = {}) {
   }
   if (TOKEN) url.searchParams.set('token', TOKEN);
   const response = await fetch(url, { headers: { accept: 'application/json' } });
-  if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+  // The status is carried along because 401 is the one failure the page can tell
+  // the user how to fix, and "unreachable" would be the wrong thing to say.
+  if (!response.ok) {
+    throw Object.assign(new Error(`${response.status} ${response.statusText}`), { status: response.status });
+  }
   return response.json();
 }
 
@@ -634,6 +639,25 @@ function renderEmptyState() {
   const block = Object.entries(env)
     .map(([key, value]) => `export ${key}="${value}"`)
     .join('\n');
+
+  // Without the config there is no env block to show, and printing the promise
+  // above an empty box tells the reader nothing about what went wrong.
+  if (!block) {
+    detail.innerHTML = `
+      <div class="empty">
+        <h1>${state.authError ? 'Token required' : 'Collector unreachable'}</h1>
+        <p>${
+          state.authError
+            ? 'This collector is protected. Open it with the token appended to the URL: ' +
+              '<code>?token=…</code> — the value of ATHENA_OBS_TOKEN, which the collector also ' +
+              'prints when it starts.'
+            : 'The page loaded but the collector did not answer. It may have stopped, or be ' +
+              'reachable at a different address than the one this page was opened from.'
+        }</p>
+      </div>`;
+    return;
+  }
+
   detail.innerHTML = `
     <div class="empty">
       <h1>Waiting for telemetry</h1>
@@ -766,9 +790,17 @@ async function refresh({ sessions = true } = {}) {
 
   // The session list may pick the default selection, so it has to settle before
   // the session detail is fetched.
-  await Promise.all([loadStats(), sessions ? loadSessions() : Promise.resolve()]);
-  await loadSession();
-  await loadTabData();
+  try {
+    await Promise.all([loadStats(), sessions ? loadSessions() : Promise.resolve()]);
+    await loadSession();
+    await loadTabData();
+  } catch (error) {
+    // A failed load must not skip the render. The empty state is the only thing
+    // that can explain the failure, so throwing past it leaves the untouched
+    // markup from index.html on screen — which promises data and shows none.
+    if (error.status === 401) state.authError = true;
+    setLive('offline', state.authError ? 'token required' : 'unreachable');
+  }
   renderDetail();
 
   detail.scrollTop = scrollTop;
@@ -921,13 +953,17 @@ async function boot() {
   wireEvents();
   try {
     state.config = await api('/api/config');
-  } catch {
-    setLive('offline', 'unreachable');
+  } catch (error) {
+    state.authError = error.status === 401;
+    setLive('offline', state.authError ? 'token required' : 'unreachable');
   }
   const match = location.hash.match(/^#\/session\/(.+)$/);
   if (match) state.selectedSessionId = decodeURIComponent(match[1]);
   await refresh();
-  connectStream();
+  // EventSource reconnects on its own forever, which for a rejected token means
+  // a request every few seconds that can never succeed. The page has already
+  // said what to do about it; retrying adds noise, not a recovery.
+  if (!state.authError) connectStream();
   // Sessions age out of "live" and relative timestamps drift; repaint slowly.
   setInterval(() => {
     renderSessionList();

@@ -306,7 +306,16 @@ export function createServer({ store, token = null, endpoint = '', log = console
       return;
     }
 
-    if (!ok) {
+    // The app shell is not gated, only the data is. A browser sends the token on
+    // the document request — it is in the URL — but not on the <link> and
+    // <script> it then goes and fetches, because sub-resource requests do not
+    // inherit the query string. Gating those served a 401 for styles.css and
+    // app.js, which left a page with no script at all: the static markup, an
+    // empty env block and nothing that could explain itself. index.html, app.js
+    // and styles.css are identical for every visitor and contain neither
+    // telemetry nor the token, so there is nothing to protect there.
+    const needsAuth = Boolean(signal) || url.pathname.startsWith('/api/');
+    if (!ok && needsAuth) {
       res.setHeader('www-authenticate', 'Bearer');
       sendJson(res, 401, { error: 'unauthorized' });
       return;
