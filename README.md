@@ -1,97 +1,98 @@
 # athena
 
-> Ein AI-Agenten-Workflow, der auf Urteilsvermögen baut statt auf Regeln — ein
-> paar Invarianten, Selbstkorrektur in der Schleife, und ein Mensch nur dort,
-> wo es zählt. Nachfolger von [metis](https://github.com/artkoenig/metis).
+> An AI agent workflow built on judgment, not rules — a few invariants,
+> self-correction in the loop, and a human only where it matters. Successor to
+> [metis](https://github.com/artkoenig/metis).
 
-**Athena** ist die griechische Göttin der Weisheit und des Handwerks: Können,
-das aus Übung kommt, nicht aus Vorschrift. Das ist das Prinzip, nicht nur der
-Name.
+**Athena** is the Greek goddess of wisdom and craft: skill that comes from
+practice, not from instruction. That is the principle, not just the name.
 
-## Wie es funktioniert
+## How it works
 
-Das Regelwerk ist eine Seite: [`AGENTS.md`](AGENTS.md). Sein Kern ist **Urteil
-für den Prozess, Mechanik für Fakten** — alles Prozedurale entscheidet der
-Agent jedes Mal neu, Regeln bleiben nur dort, wo Selbsteinschätzung versagt.
-„Die Tests laufen durch" kommt aus einem Exit-Code, nie aus dem Eindruck des
-Agenten.
+The rulebook is one page: [`AGENTS.md`](AGENTS.md). Its core is **judgment for
+process, mechanics for facts** — everything procedural is the agent's call,
+every time; rules remain only where self-assessment fails. "The tests pass"
+comes from an exit code, never from the agent's impression.
 
-Fünf Invarianten gelten für jede Änderung:
+Five invariants hold for every change:
 
-1. Die Absicht — Akzeptanzkriterien — steht vor dem ersten Code.
-2. Die Tests dazu entstehen zuerst, blind aus der Absicht, und werden fallen
-   gesehen; eine Änderung ohne etwas Ausführbares sagt genau das.
-3. Ein frischer Kontext prüft den Diff gegen die geschriebene Absicht, mit
-   einer konkreten Reproduktion pro Fund.
-4. Suite und statische Analyse belegen sich per Exit-Code; wo nichts
-   existiert, ist dieses Fehlen der berichtete Fakt.
-5. Entscheidungen, Überraschungen und Checkpoint-Antworten landen im Issue,
-   während sie passieren — der Datensatz überlebt die Session.
+1. The intent — acceptance criteria — is written down before any code.
+2. The tests for it are written first, blind, from the intent alone, and seen
+   to fail; a change with nothing to run says exactly that.
+3. A fresh context checks the diff against the written intent, with a concrete
+   reproduction per finding.
+4. The suite and static analysis prove themselves by exit code; where nothing
+   exists to run, that absence is the reported fact.
+5. Decisions, surprises and checkpoint answers go into the issue as they
+   happen — the record outlives the session.
 
-Der Mensch steuert an drei Punkten: Kriterien freigeben, wenn die Idee
-wirklich unklar ist; alles Unumkehrbare oder nach außen Wirkende entscheiden;
-den Pull Request mergen.
+The human steers at three points: approving the criteria when the idea is
+genuinely unclear, deciding anything irreversible or outward-facing, and
+merging the pull request.
 
-**Der Workflow korrigiert sich über die Retro.** Nach jedem PR hält der Agent
-fest, was im Weg stand. Eine Regel, die danebenlag, wird zum Vorschlag: ein
-Pull Request gegen dieses Repository, entschieden wie jeder andere. Und weil
-jedes verdrahtete Projekt athena beim Session-Start frisch lädt, erreicht eine
-akzeptierte Regeländerung alle mit der nächsten Session.
+**The workflow corrects itself through the retro.** After every PR the agent
+records what got in the way. A rule that misfired becomes a proposal: a pull
+request against this repository, decided like any other. And because every
+wired project loads athena fresh at session start, an accepted rule change
+reaches all of them with their next session.
 
-## Installation
+## Installing it
 
-athena ist ein Claude-Code-Plugin aus dem eigenen Marketplace:
+athena is a Claude Code plugin, installed from its own marketplace:
 
 ```bash
 claude plugin marketplace add artkoenig/athena
 claude plugin install athena@athena
 ```
 
-Eine Session mit aktivem Plugin bekommt das Regelwerk des aktuellen `main` in
-den Kontext, dazu einen Selfcheck, der sagt, was tatsächlich erreichbar ist,
-und einen `pre-push`-Guard, der einen direkten Push auf den Default-Branch
-verweigert. Ein Projekt, das seine Git-Hooks selbst verwaltet — husky,
-lefthook, pre-commit — behält sie: athena übernimmt `core.hooksPath` dann
-nicht und meldet den fehlenden Guard, statt ihn stillschweigend zu
-überschreiben.
+A session with the plugin active gets the rulebook of the current `main` in
+its context, a self-check saying what is actually reachable, and a `pre-push`
+guard that refuses a direct push to the default branch. A project that manages
+its own git hooks — husky, lefthook, pre-commit — keeps them: athena then
+leaves `core.hooksPath` alone and reports the missing guard instead of
+overwriting it silently.
 
-Subagents und Skills bringt das Plugin noch nicht mit — der Selfcheck meldet
-`0 skills and 0 agents reachable`, und das Regelwerk schickt die Session genau
-dorthin, statt eine Seite anzunehmen, die es nicht gibt.
+The plugin does not ship subagents or skills yet. The self-check names how many
+of each are actually reachable, and the rulebook sends the session to that
+number rather than assuming a page that does not exist.
 
-Damit die Retros in *deinem* Regelwerk landen, forke das Repository und zeige
-mit `marketplace add` auf den Fork.
+To have the retros land in *your* rulebook, fork this repository and point
+`marketplace add` at the fork.
 
-## Parallel arbeiten
+## Working in parallel
 
-Ein Lauf, ein Worktree. Zwei Sessions, die gleichzeitig laufen, teilen sich nie
-ein Arbeitsverzeichnis:
+One run, one worktree. Two sessions running at the same time never share a
+working directory:
 
 ```bash
-claude --worktree feature-auth   # eigener Checkout unter .claude/worktrees/
-git worktree list                # was gerade läuft
+claude --worktree feature-auth   # its own checkout under .claude/worktrees/
+git worktree list                # what is already in flight
 ```
 
-Jeder Worktree zweigt vom Default-Branch ab, nicht von ungepushter Arbeit —
-`worktree.baseRef` steht dafür projektweit auf `"fresh"`. Der Push-Guard gilt
-im Worktree mit, weil `core.hooksPath` in der geteilten `.git`-Config liegt;
-ein Push auf `main` aus einem parallelen Lauf wird genauso verweigert.
-Gitignorierte Dateien, die ein Lauf braucht, stehen in
-[`.worktreeinclude`](.worktreeinclude) und werden in jeden neuen Worktree
-kopiert.
+Every worktree branches from the default branch, not from unpushed work —
+`worktree.baseRef` is pinned to `"fresh"` project-wide for that. The push
+guard holds inside a worktree too, because `core.hooksPath` lives in the
+shared `.git` config; a push to `main` from a parallel run is refused just the
+same. Gitignored files a run needs are listed in
+[`.worktreeinclude`](.worktreeinclude) and copied into every new worktree.
+
+Clearing a worktree away is Claude Code's job, not athena's: leaving an
+interactive session it removes a clean one and asks before dropping anything
+that still holds work. A `-p` run has no exit prompt, so its worktree stays
+until `git worktree remove`.
 
 ## tools/
 
-| Tool                                    | Zweck                                                                                                                |
-| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| [`observability`](tools/observability/) | OpenTelemetry-Collector + Web-UI, um Agent-Sessions live zu beobachten: Traces, Tokens, Kosten, Tool-Aufrufe, Fehler. |
+| Tool                                    | Purpose                                                                                                            |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| [`observability`](tools/observability/) | OpenTelemetry collector + web UI for watching agent sessions live: traces, tokens, cost, tool calls, errors.        |
 
 ```bash
 cd tools/observability && node bin/athena-observe.mjs   # http://127.0.0.1:4318
 ```
 
-Läuft auf dem eigenen Rechner — ohne Konto, ohne fremden Dienst, ohne laufende
-Kosten. Alternativ `docker compose up -d` im selben Verzeichnis.
+Runs on your own machine — no account, no third-party service, no running
+costs. Alternatively `docker compose up -d` in the same directory.
 
 ## Tests
 
@@ -99,8 +100,8 @@ Kosten. Alternativ `docker compose up -d` im selben Verzeichnis.
 bash test.sh
 ```
 
-Ein Befehl, alle Suites, Exit 0 nur wenn alles grün ist.
+One command, every suite, exit 0 only when all of them are green.
 
-## Lizenz
+## Licence
 
-GPL-3.0-or-later — siehe [LICENSE](LICENSE).
+GPL-3.0-or-later — see [LICENSE](LICENSE).

@@ -145,9 +145,7 @@ record the waiver like any judgment call.
   a rule disagree, the document is out of date.
 - Branch each issue from the current default branch, never on an unmerged
   predecessor.
-- Code, tests, commits, issues and pull requests are written in English. Prose
-  addressed to the human is not: the README speaks German, like the conversation
-  does.
+- Everything checked in and every pull request is written in English.
 - Never push to the default branch.
 - Work found mid-run that serves the current intent joins the task list.
   Anything else is filed as its own issue and waits for its own run.
