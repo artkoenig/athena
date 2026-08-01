@@ -46,17 +46,21 @@ export const EVENT = {
   pluginLoaded: 'claude_code.plugin_loaded',
 };
 
-/** Tool names whose `tool_parameters` describe todo/task state (see todo-tracking docs). */
+/** Tool names whose call parameters describe todo/task state (see todo-tracking docs). */
 export const TASK_TOOL_NAMES = new Set(['TodoWrite', 'TaskCreate', 'TaskUpdate']);
 
 /**
- * `tool_parameters` is a JSON string, only present when `OTEL_LOG_TOOL_DETAILS=1` is
- * set. Absent or malformed just means "nothing to show", not an error.
+ * The tool_result event carries the call's parameters as a JSON string, only
+ * present when `OTEL_LOG_TOOL_DETAILS=1` is set. The attribute has been named
+ * `tool_input` since Claude Code 2.1.x; `tool_parameters` is kept as a fallback
+ * for older CLI versions still emitting that name. Absent or malformed just
+ * means "nothing to show", not an error.
  */
 export function toolParametersOf(attrs) {
-  if (typeof attrs?.tool_parameters !== 'string') return null;
+  const raw = attrs?.tool_input ?? attrs?.tool_parameters;
+  if (typeof raw !== 'string') return null;
   try {
-    const value = JSON.parse(attrs.tool_parameters);
+    const value = JSON.parse(raw);
     return value && typeof value === 'object' ? value : null;
   } catch {
     return null;

@@ -318,6 +318,21 @@ test('TaskCreate and TaskUpdate reconstruct task state, keyed by id where known'
   assert.equal(session.todos.tasks[0].history.length, 2);
 });
 
+test('TaskCreate reconstructs task state from tool_input (current CLI attribute name)', () => {
+  const store = new TelemetryStore();
+  store.ingest('logs', [
+    log('claude_code.tool_result', {
+      tool_name: 'TaskCreate',
+      tool_use_id: 'call-1',
+      success: 'true',
+      tool_input: JSON.stringify({ subject: 'Fix flaky test', description: 'CI flakes on retry' }),
+    }),
+  ]);
+  const session = store.getSession(SESSION);
+  assert.equal(session.todos.unlinkedCreates.length, 1);
+  assert.equal(session.todos.unlinkedCreates[0].subject, 'Fix flaky test');
+});
+
 test('TaskUpdate reads id from repaired key names defensively', () => {
   const store = new TelemetryStore();
   store.ingest('logs', [
