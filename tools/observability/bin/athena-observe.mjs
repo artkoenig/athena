@@ -196,7 +196,19 @@ async function main(argv) {
     } catch (error) {
       console.error(`\n  Tunnel failed: ${error.message}\n`);
       console.error(`  The collector is still running locally on ${endpoint}.`);
-      console.error('  Any other tunnel works too — then pass its URL with --public-url.\n');
+      // A blocked 7844 is a firewall rule, not a hiccup: retrying cloudflared in
+      // any form will fail the same way. Every alternative below goes out over a
+      // port such a network almost certainly already allows, so name them here
+      // rather than making someone go looking for what "any other tunnel" means.
+      console.error('\n  Something else has to carry it. These leave over 22 or 443:\n');
+      console.error(`    ssh -R 80:localhost:${config.port} nokey@localhost.run   # nothing to install`);
+      console.error(`    tailscale funnel ${config.port}                          # stable URL, needs an account`);
+      console.error(`    ngrok http ${config.port}                                # needs an account`);
+      console.error('\n  Each prints a URL. Restart with it:\n');
+      console.error(`    node bin/athena-observe.mjs --public-url <url> --token ${config.token}\n`);
+      console.error('  Or skip tunnelling entirely and deploy the collector — see "Selbst hosten"');
+      console.error('  in the README. Then the public address is the deployment, and this');
+      console.error('  machine never has to be reachable at all.\n');
       return;
     }
     advertised = tunnel.url;

@@ -182,20 +182,38 @@ aus nicht aus — es versucht QUIC endlos weiter. Deshalb wird hier automatisch 
   QUIC (UDP 7844) did not get through — retrying over HTTP/2 (TCP 7844) …
 ```
 
-Scheitern beide, blockiert das Netz den Port selbst — dann hilft nur ein anderer Tunnel
-(siehe unten) oder eine Firewall-Regel. Mit `--tunnel-protocol quic|http2` lässt sich ein
-Transport festnageln, wenn man weiß, welcher funktioniert.
+Scheitern beide, blockiert das Netz den Port selbst — erkennbar an zwei `FAIL`-Zeilen in
+der Diagnose:
+
+```
+    |  UDP Connectivity  region2.v2.argotunnel.com  FAIL    QUIC connection failed
+    |  TCP Connectivity  region2.v2.argotunnel.com  FAIL    HTTP/2 connection is blocked
+```
+
+Das ist eine Firewall-Regel, kein Aussetzer: `cloudflared` kommt hier in keiner Form
+durch, ein weiterer Versuch ändert nichts. Der Befehl nennt dann selbst die Auswege — die
+Tabelle unten, oder gleich [Punkt 4](#4-dauerhaft-auf-einer-plattform-render-fly-railway):
+ein deployter Collector braucht überhaupt keinen Tunnel, weil der eigene Rechner dann gar
+nicht erreichbar sein muss.
+
+Mit `--tunnel-protocol quic|http2` lässt sich ein Transport festnageln, wenn man weiß,
+welcher funktioniert.
 
 > Die URL des Quick Tunnels ist **flüchtig** — jeder Neustart vergibt eine neue, und dann
 > müssen die Variablen nachgezogen werden. Wer das oft braucht, nimmt einen Tunnel mit
 > fester Adresse und reicht sie mit `--public-url` durch:
 >
-> | Tunnel                                            | Kosten          | URL        | Konto     |
-> | ------------------------------------------------- | --------------- | ---------- | --------- |
-> | `--tunnel` (Cloudflare Quick)                     | frei            | wechselnd  | keins     |
-> | `tailscale funnel 4318`                           | frei (Personal) | **stabil** | Tailscale |
-> | `ngrok http 4318 --domain <deine>.ngrok-free.app` | frei (1 Domain) | **stabil** | ngrok     |
-> | eigener Server / NAS mit `--host 0.0.0.0`         | vorhandene      | stabil     | –         |
+> | Tunnel                                            | Kosten          | URL        | Konto     | Geht raus über |
+> | ------------------------------------------------- | --------------- | ---------- | --------- | -------------- |
+> | `--tunnel` (Cloudflare Quick)                     | frei            | wechselnd  | keins     | **7844**       |
+> | `ssh -R 80:localhost:4318 nokey@localhost.run`    | frei            | wechselnd  | keins     | 22             |
+> | `tailscale funnel 4318`                           | frei (Personal) | **stabil** | Tailscale | 443            |
+> | `ngrok http 4318 --domain <deine>.ngrok-free.app` | frei (1 Domain) | **stabil** | ngrok     | 443            |
+> | eigener Server / NAS mit `--host 0.0.0.0`         | vorhandene      | stabil     | –         | –              |
+>
+> Die letzte Spalte ist der Punkt, wenn `--tunnel` an der Firewall scheitert: nur
+> Cloudflare braucht 7844, alle anderen gehen über Ports, die ein Netz praktisch immer
+> offen lässt. `localhost.run` verlangt nicht einmal eine Installation.
 
 #### Nachsehen, ob es ankommt
 
