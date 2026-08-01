@@ -633,6 +633,16 @@ function renderRawTab() {
 
 /* ------------------------------ empty state ----------------------------- */
 
+// Submitting reloads with the token in the query, which is the one request that
+// carries it: the server trades it for a cookie and redirects back here without
+// it. So the address bar never keeps the secret and nothing has to be retyped.
+const TOKEN_PROMPT = `
+  <form class="token-form">
+    <input name="token" type="password" autocomplete="current-password"
+      placeholder="ATHENA_OBS_TOKEN" aria-label="Access token" />
+    <button type="submit" class="ghost-button">Unlock</button>
+  </form>`;
+
 function renderEmptyState() {
   const detail = document.getElementById('detail');
   const env = state.config?.env ?? {};
@@ -648,12 +658,13 @@ function renderEmptyState() {
         <h1>${state.authError ? 'Token required' : 'Collector unreachable'}</h1>
         <p>${
           state.authError
-            ? 'This collector is protected. Open it with the token appended to the URL: ' +
-              '<code>?token=…</code> — the value of ATHENA_OBS_TOKEN, which the collector also ' +
-              'prints when it starts.'
+            ? 'This collector is protected. Enter the token it was started with — the value of ' +
+              'ATHENA_OBS_TOKEN, which it also prints on startup. It is stored in a cookie, so ' +
+              'this is asked once per browser.'
             : 'The page loaded but the collector did not answer. It may have stopped, or be ' +
               'reachable at a different address than the one this page was opened from.'
         }</p>
+        ${state.authError ? TOKEN_PROMPT : ''}
       </div>`;
     return;
   }
@@ -687,10 +698,10 @@ function renderSetupModal() {
       <p>${
         state.authError
           ? 'The environment block cannot be shown because this page is not authorized. ' +
-            'Open the UI with the token appended to the URL — <code>?token=…</code>, the value ' +
-            'of ATHENA_OBS_TOKEN — and the block will include it.'
+            'Enter the token this collector was started with and it will be included below.'
           : 'The collector did not answer, so there is no endpoint to point an agent at yet.'
-      }</p>`;
+      }</p>
+      ${state.authError ? TOKEN_PROMPT : ''}`;
     return;
   }
   const shell = Object.entries(env)
@@ -954,6 +965,16 @@ function wireEvents() {
       event.preventDefault();
       copyFrom(copy.dataset.copy);
     }
+  });
+
+  // Delegated: the prompt is rendered into both the detail pane and the dialog,
+  // and both get replaced wholesale on every render.
+  document.addEventListener('submit', (event) => {
+    const form = event.target.closest('.token-form');
+    if (!form) return;
+    event.preventDefault();
+    const value = form.elements.token.value.trim();
+    if (value) location.search = `?token=${encodeURIComponent(value)}`;
   });
 
   window.addEventListener('hashchange', () => {

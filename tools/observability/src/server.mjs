@@ -20,6 +20,19 @@ const PUBLIC_DIR = fileURLToPath(new URL('../public/', import.meta.url));
 const MAX_BODY_BYTES = 32 * 1024 * 1024;
 const SSE_FLUSH_MS = 250;
 
+/*
+ * A token in the query string is a poor way to hold a browser session: it sits
+ * in history, gets copied along with any link, and has to be re-pasted on every
+ * visit — for a secret the operator already configured once on the server. So it
+ * is accepted once and immediately traded for a cookie, which the browser then
+ * attaches to everything by itself. HttpOnly keeps it away from scripts, and
+ * SameSite=Strict means another site cannot make an authenticated request with
+ * it, which is what keeps the ingest and delete endpoints safe from a page the
+ * user merely happens to visit.
+ */
+const TOKEN_COOKIE = 'athena_obs_token';
+const TOKEN_COOKIE_MAX_AGE = 30 * 24 * 60 * 60;
+
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -137,12 +150,27 @@ export function createServer({ store, token = null, endpoint = '', log = console
     flushTimer ??= setTimeout(flush, SSE_FLUSH_MS);
   });
 
+  const cookieToken = (req) => {
+    for (const part of (req.headers.cookie ?? '').split(';')) {
+      const index = part.indexOf('=');
+      if (index > 0 && part.slice(0, index).trim() === TOKEN_COOKIE) {
+        return decodeURIComponent(part.slice(index + 1).trim());
+      }
+    }
+    return null;
+  };
+
   const authorized = (req, url) => {
     if (!token) return true;
     const header = req.headers.authorization ?? '';
+    // How an agent authenticates. Everything below exists because a browser
+    // cannot set this header on the requests it makes on its own.
     if (header === `Bearer ${token}`) return true;
-    // EventSource and plain <a> navigation cannot set headers; allow the token
-    // as a query parameter so a shared collector stays usable from a browser.
+    // How a browser authenticates once it has been here: the cookie rides on
+    // every request the page makes, including sub-resources and EventSource.
+    if (cookieToken(req) === token) return true;
+    // How it gets that cookie in the first place — one visit carrying the token,
+    // after which the query parameter is traded for the cookie and dropped.
     return url.searchParams.get('token') === token;
   };
 
@@ -356,6 +384,23 @@ export function createServer({ store, token = null, endpoint = '', log = console
       sendJson(res, 405, { error: 'method not allowed' });
       return;
     }
+
+    // One visit carrying the token is enough. Hand back a cookie and bounce to
+    // the same page without it, so the secret leaves the address bar and the
+    // history entry, and the next visit needs nothing at all.
+    if (token && url.searchParams.get('token') === token) {
+      url.searchParams.delete('token');
+      const secure = req.headers['x-forwarded-proto'] === 'https' || Boolean(req.socket.encrypted);
+      res.writeHead(302, {
+        'set-cookie':
+          `${TOKEN_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Strict; ` +
+          `Max-Age=${TOKEN_COOKIE_MAX_AGE}${secure ? '; Secure' : ''}`,
+        location: `${url.pathname}${url.search}${url.hash}`,
+      });
+      res.end();
+      return;
+    }
+
     serveStatic(req, res, url.pathname);
   });
 

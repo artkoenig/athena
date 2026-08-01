@@ -841,6 +841,29 @@ td.name {
   margin: 0 0 16px;
 }
 
+.token-form {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.token-form input {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 10px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.token-form input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
 .env-block {
   background: var(--bg-sunken);
   border: 1px solid var(--border);

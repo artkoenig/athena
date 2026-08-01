@@ -241,8 +241,27 @@ Danach eine **neue** Session starten; die laufende liest ihre Konfiguration nich
 
 > Sobald der Collector über `127.0.0.1` hinaus erreichbar ist, gehört ein Token davor —
 > sonst kann jeder, der die Adresse kennt, Telemetrie einkippen und die eigene mitlesen.
-> Einzige Ausnahme ist `/api/health`, das ohne Token antwortet, damit Healthchecks
-> funktionieren; es verrät nur, dass der Prozess läuft.
+> Ausgenommen sind `/api/health`, das ohne Token antwortet, damit Healthchecks
+> funktionieren (es verrät nur, dass der Prozess läuft), sowie die drei statischen
+> Dateien der Oberfläche — die sind für jeden gleich und enthalten nichts.
+
+### Token im Browser
+
+Ein Agent schickt `Authorization: Bearer …`. Ein Browser kann das nicht — auf die
+Dateien, die er selbst nachlädt, setzt er keine Kopfzeilen. Deshalb genügt **ein**
+Besuch mit dem Token in der Adresse:
+
+```
+http://127.0.0.1:4318/?token=<dein-token>
+```
+
+Der Collector tauscht es gegen ein Cookie und schickt dich auf dieselbe Seite ohne den
+Parameter zurück. Danach reicht die blanke Adresse — 30 Tage lang, pro Browser. Das
+Cookie ist `HttpOnly` (kein Skript kommt heran) und `SameSite=Strict`, womit keine
+fremde Seite mit deinen Rechten Daten einkippen oder löschen kann.
+
+Wer die Adresse ohne Token öffnet, bekommt statt einer leeren Seite ein Eingabefeld.
+Auch das setzt das Cookie, danach ist Ruhe.
 
 > Ob der Session-Container überhaupt nach außen darf, entscheidet die Network-Policy der
 > Umgebung. `check` sagt es dir in der ersten Zeile.
@@ -451,7 +470,7 @@ OTLP-Revisionen und neuen Claude-Code-Attributen tolerant.
 ## Tests
 
 ```bash
-npm test          # 68 Tests: Wire-Format, Decoder, Store, Persistenz, Config, Probe, Tunnel, HTTP
+npm test          # 70 Tests: Wire-Format, Decoder, Store, Persistenz, Config, Probe, Tunnel, HTTP
 npm run demo      # synthetische Session emittieren
 ```
 

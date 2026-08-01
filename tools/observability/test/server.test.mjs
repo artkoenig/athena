@@ -210,6 +210,33 @@ test('a token gates the data but not the app shell', async () => {
   });
 });
 
+test('the browser trades the token for a cookie and drops it from the URL', async () => {
+  await withServer({ token: 'secret' }, async ({ base }) => {
+    // Carrying the token in the query on every visit means keeping a secret in
+    // history and in every copied link, for something the operator already
+    // configured on the server. One visit is enough.
+    const handoff = await fetch(`${base}/?token=secret`, { redirect: 'manual' });
+    assert.equal(handoff.status, 302);
+    assert.equal(handoff.headers.get('location'), '/', 'the token has to leave the address bar');
+
+    const cookie = handoff.headers.get('set-cookie');
+    assert.match(cookie, /^athena_obs_token=secret;/);
+    // HttpOnly keeps it away from scripts; SameSite=Strict is what stops another
+    // site from reaching ingest or /api/data with the user's own credentials.
+    assert.match(cookie, /HttpOnly/);
+    assert.match(cookie, /SameSite=Strict/);
+
+    const jar = { cookie: 'athena_obs_token=secret' };
+    assert.equal((await fetch(`${base}/api/sessions`, { headers: jar })).status, 200);
+    assert.equal((await fetch(`${base}/api/stats`, { headers: jar })).status, 200);
+    // A wrong cookie is no better than none, and must not be traded for a good one.
+    const wrong = await fetch(`${base}/?token=nope`, { redirect: 'manual', headers: jar });
+    assert.equal(wrong.status, 200, 'a bad token in the query just serves the page');
+    assert.equal(wrong.headers.get('set-cookie'), null);
+    assert.equal((await fetch(`${base}/api/stats`, { headers: { cookie: 'athena_obs_token=nope' } })).status, 401);
+  });
+});
+
 test('a token gates ingest and the API, via header or query parameter', async () => {
   await withServer({ token: 'secret' }, async ({ base }) => {
     assert.equal((await fetch(`${base}/api/stats`)).status, 401);
