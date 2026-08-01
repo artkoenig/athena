@@ -135,41 +135,54 @@ in ihm gibt es weder deine `.claude/settings.local.json` noch deine Shell. Zwei 
 müssen also zusammenkommen: eine **von außen erreichbare Collector-URL** und die
 **Variablen in der Umgebung der Session**.
 
-#### Schritt 1 — Collector öffentlich erreichbar machen
-
-Der Collector läuft weiter auf deinem Rechner; nur ein Tunnel gibt ihm eine öffentliche
-Adresse. Immer mit Token, die URL ist ab jetzt aus dem Internet erreichbar.
+#### Ein Befehl
 
 ```bash
-TOKEN=$(openssl rand -hex 16); echo "$TOKEN"
-node bin/athena-observe.mjs --token "$TOKEN" --persist ./telemetry
+node bin/athena-observe.mjs --tunnel
 ```
 
-| Tunnel                                        | Kosten             | URL         | Konto        |
-| --------------------------------------------- | ------------------ | ----------- | ------------ |
-| `cloudflared tunnel --url http://127.0.0.1:4318` | frei            | wechselnd   | keins        |
-| `tailscale funnel 4318`                       | frei (Personal)    | **stabil**  | Tailscale    |
-| `ngrok http 4318 --domain <deine>.ngrok-free.app` | frei (1 Domain) | **stabil**  | ngrok        |
-| eigener Server / VM / NAS mit `--host 0.0.0.0` | vorhandene Kosten | stabil      | –            |
+Das erledigt alles auf einmal: Collector starten, Token erzeugen, Cloudflare-Tunnel
+öffnen, warten bis die öffentliche URL wirklich antwortet, und den fertigen Block
+ausgeben.
 
-Für Cloud-Sessions lohnt eine **stabile** URL: Cloudflares Quick Tunnel vergibt bei jedem
-Neustart eine andere, und dann müssen die Umgebungsvariablen jedes Mal nachgezogen werden.
+```
+  athena-observe listening on http://127.0.0.1:4318
+  UI          http://127.0.0.1:4318/?token=21c934f71106a6ffebf187510d233744
 
-#### Schritt 2 — Variablen in der Session-Umgebung setzen
+  Opening a Cloudflare quick tunnel …
+  Got https://fewer-cube-selective-physiology.trycloudflare.com, waiting for it to serve …
 
-```bash
-node bin/athena-observe.mjs env --public-url https://<deine-url> --token "$TOKEN" --format dotenv
+  Public URL  https://fewer-cube-selective-physiology.trycloudflare.com
+  Token       21c934f71106a6ffebf187510d233744
+
+  Set these in the cloud session environment, then start a NEW session:
+
+    CLAUDE_CODE_ENABLE_TELEMETRY=1
+    OTEL_EXPORTER_OTLP_ENDPOINT=https://fewer-cube-selective-physiology.trycloudflare.com
+    OTEL_EXPORTER_OTLP_HEADERS=Authorization=Bearer 21c934f71106a6ffebf187510d233744
+    …
 ```
 
-Die Ausgabe in die Environment-Einstellungen von Claude Code on the web eintragen (dort
+Die Zeilen in die Environment-Einstellungen von Claude Code on the web eintragen. Dort
 gehört auch das Token hin — **nicht** in eine Datei im Repo, sonst steht es im
-Versionsverlauf). Bei GitHub Actions dasselbe über `env:` und ein Repository-Secret.
+Versionsverlauf. Bei GitHub Actions dasselbe über `env:` und ein Repository-Secret.
 
-`--public-url` ändert nur die *angekündigte* Adresse — env-Block, Startbanner,
-Setup-Dialog der UI —, nicht die Bind-Adresse. Ohne das Flag stünde dort weiter
-`http://127.0.0.1:4318`, was in der Session ins Leere läuft.
+Voraussetzung ist `cloudflared`; fehlt es, sagt der Befehl, wie man es installiert. Ohne
+`--token` wird eins erzeugt, denn die URL ist ab jetzt aus dem Internet erreichbar. Solange
+der Befehl läuft, steht der Tunnel; `Ctrl-C` schließt beides.
 
-#### Schritt 3 — nachsehen, ob es ankommt
+> Die URL des Quick Tunnels ist **flüchtig** — jeder Neustart vergibt eine neue, und dann
+> müssen die Variablen nachgezogen werden. Wer das oft braucht, nimmt einen Tunnel mit
+> fester Adresse und reicht sie mit `--public-url` durch:
+>
+> | Tunnel                                            | Kosten          | URL        | Konto     |
+> | ------------------------------------------------- | --------------- | ---------- | --------- |
+> | `--tunnel` (Cloudflare Quick)                     | frei            | wechselnd  | keins     |
+> | `tailscale funnel 4318`                           | frei (Personal) | **stabil** | Tailscale |
+> | `ngrok http 4318 --domain <deine>.ngrok-free.app` | frei (1 Domain) | **stabil** | ngrok     |
+> | eigener Server / NAS mit `--host 0.0.0.0`         | vorhandene      | stabil     | –         |
+
+#### Nachsehen, ob es ankommt
 
 Kommt nichts an, schweigt der Exporter. Deshalb **in der Cloud-Session** prüfen:
 
@@ -227,6 +240,7 @@ Die UI aktualisiert sich über Server-Sent Events; Bursts werden auf 250 ms zusa
 | `-p, --port`            | `ATHENA_OBS_PORT`            | `4318`         | Port für OTLP-Ingest **und** UI                  |
 | `-h, --host`            | `ATHENA_OBS_HOST`            | `127.0.0.1`    | Bind-Adresse                                     |
 | `-t, --token`           | `ATHENA_OBS_TOKEN`           | –              | `Authorization: Bearer …` erzwingen              |
+| `--tunnel [binary]`     | –                            | –              | Cloudflare-Tunnel öffnen, Token erzeugen, Block ausgeben |
 | `--public-url <url>`    | `ATHENA_OBS_PUBLIC_URL`      | –              | Angekündigte URL hinter Tunnel/Proxy             |
 | `--persist [dir]`       | `ATHENA_OBS_PERSIST`         | –              | JSONL auf Platte, Replay beim Start              |
 | `--retention <dauer>`   | `ATHENA_OBS_RETENTION`       | `24h`          | Alter, ab dem Rohdaten verworfen werden          |
@@ -302,7 +316,7 @@ OTLP-Revisionen und neuen Claude-Code-Attributen tolerant.
 ## Tests
 
 ```bash
-npm test          # 58 Tests: Wire-Format, Decoder, Store, Persistenz, Config, Probe, HTTP
+npm test          # 63 Tests: Wire-Format, Decoder, Store, Persistenz, Config, Probe, Tunnel, HTTP
 npm run demo      # synthetische Session emittieren
 ```
 

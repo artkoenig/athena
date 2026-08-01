@@ -141,16 +141,20 @@ test('GET on an ingest path is a 405', async () => {
 
 test('read API exposes sessions, traces and events', async () => {
   await withServer({}, async ({ base }) => {
-    await fetch(`${base}/v1/traces`, {
+    // Assert the ingest itself, so a failed POST reports as a failed POST rather
+    // than as a confusing empty-store assertion further down.
+    const ingestedTrace = await fetch(`${base}/v1/traces`, {
       method: 'POST',
       headers: { 'content-type': 'application/x-protobuf' },
       body: tracePayload('s-api'),
     });
-    await fetch(`${base}/v1/logs`, {
+    assert.equal(ingestedTrace.status, 200);
+    const ingestedLogs = await fetch(`${base}/v1/logs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: logsPayloadJson('s-api'),
     });
+    assert.equal(ingestedLogs.status, 200);
 
     const sessions = await (await fetch(`${base}/api/sessions`)).json();
     assert.equal(sessions.total, 1);

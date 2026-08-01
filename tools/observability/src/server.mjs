@@ -89,6 +89,9 @@ function intParam(params, key, fallback, max = Number.MAX_SAFE_INTEGER) {
 }
 
 export function createServer({ store, token = null, endpoint = '', log = console.error } = {}) {
+  // A tunnel URL only exists once the tunnel is up, after the server is already
+  // listening, so the endpoint may be supplied as a getter and resolved per request.
+  const endpointOf = () => (typeof endpoint === 'function' ? endpoint() : endpoint);
   const clients = new Set();
   let pending = null;
   let flushTimer = null;
@@ -177,6 +180,7 @@ export function createServer({ store, token = null, endpoint = '', log = console
     const { pathname, searchParams } = url;
 
     if (pathname === '/api/config') {
+      const endpoint = endpointOf();
       sendJson(res, 200, {
         endpoint,
         requiresToken: Boolean(token),

@@ -8,12 +8,15 @@
  *   athena-observe env [options]       print the OTEL_* variables agents need
  */
 
+import crypto from 'node:crypto';
+
 import { TelemetryStore } from '../src/store.mjs';
 import { JsonlPersistence } from '../src/persist.mjs';
 import { createServer } from '../src/server.mjs';
 import { endpointFor, parseArgs, resolveConfig } from '../src/config.mjs';
 import { otelEnvFor } from '../src/claude.mjs';
 import { probeCollector } from '../src/probe.mjs';
+import { startTunnel } from '../src/tunnel.mjs';
 
 const HELP = `
 athena-observe — monitor Claude Agent SDK / Claude Code sessions over OpenTelemetry
@@ -28,6 +31,9 @@ Options
   -p, --port <n>                Port for OTLP ingest and the UI      (default 4318)
   -h, --host <addr>             Bind address                         (default 127.0.0.1)
   -t, --token <secret>          Require "Authorization: Bearer <secret>"
+      --tunnel [binary]         Open a Cloudflare quick tunnel, generate a token
+                                and print the env block for a cloud session.
+                                Everything a remote agent needs, in one command.
       --public-url <url>        Advertise this URL instead of the bind address
                                 (behind a tunnel or reverse proxy)
       --persist [dir]           Append records to JSONL and replay them on restart
@@ -124,7 +130,22 @@ async function main(argv) {
     );
   }
 
-  const server = createServer({ store, token: config.token, endpoint });
+  // A tunnel puts the collector on the public internet, so it must not be open.
+  if (flags.tunnel && !config.token) {
+    config.token = crypto.randomBytes(16).toString('hex');
+  }
+
+  let advertised = endpoint;
+  const server = createServer({ store, token: config.token, endpoint: () => advertised });
+  let tunnel = null;
+
+  const printEnv = (format, indent = '    ') =>
+    console.error(
+      renderEnv(otelEnvFor(advertised, { traces: config.traces, token: config.token }), format)
+        .split('\n')
+        .map((line) => `${indent}${line}`)
+        .join('\n'),
+    );
 
   server.on('error', (error) => {
     if (error.code === 'EADDRINUSE') {
@@ -138,23 +159,52 @@ async function main(argv) {
     process.exit(1);
   });
 
-  server.listen(config.port, config.host, () => {
-    const env = otelEnvFor(endpoint, { traces: config.traces, token: config.token });
+  const localUi = `${endpointFor({ host: config.host, port: config.port })}${config.token ? `/?token=${config.token}` : '/'}`;
+
+  server.listen(config.port, config.host, async () => {
     const bound = `${config.host}:${config.port}`;
     console.error(`\n  athena-observe listening on ${endpoint}${config.publicUrl ? `  (bound to ${bound})` : ''}`);
-    console.error(`  UI          ${endpoint}${config.token ? `/?token=${config.token}` : '/'}`);
+    console.error(`  UI          ${localUi}`);
     console.error(`  OTLP ingest ${endpoint}/v1/{traces,metrics,logs}  (http/protobuf and http/json)`);
-    console.error('\n  Point an agent at it:\n');
-    console.error(
-      renderEnv(env, 'shell')
-        .split('\n')
-        .map((line) => `    ${line}`)
-        .join('\n'),
-    );
-    console.error('');
+
+    if (!flags.tunnel) {
+      console.error('\n  Point an agent at it:\n');
+      printEnv('shell');
+      console.error('');
+      return;
+    }
+
+    console.error('\n  Opening a Cloudflare quick tunnel …');
+    try {
+      tunnel = await startTunnel({
+        port: config.port,
+        binary: flags.tunnel === true ? 'cloudflared' : flags.tunnel,
+        onProgress: (url) => console.error(`  Got ${url}, waiting for it to serve …`),
+      });
+    } catch (error) {
+      console.error(`\n  Tunnel failed: ${error.message}\n`);
+      console.error(`  The collector is still running locally on ${endpoint}.`);
+      console.error('  Any other tunnel works too — then pass its URL with --public-url.\n');
+      return;
+    }
+    advertised = tunnel.url;
+    tunnel.process.on('exit', () => {
+      // The advertised URL is dead once the tunnel is gone; say so rather than
+      // letting the UI keep handing out an endpoint that no longer resolves.
+      console.error('\n  athena-observe: the tunnel closed — the public URL is no longer reachable.\n');
+      advertised = endpoint;
+    });
+
+    console.error(`\n  Public URL  ${tunnel.url}`);
+    console.error(`  Token       ${config.token}`);
+    console.error('\n  Set these in the cloud session environment, then start a NEW session:\n');
+    printEnv('dotenv');
+    console.error('\n  Verify from inside that session with:\n');
+    console.error('    node tools/observability/bin/athena-observe.mjs check\n');
   });
 
   const shutdown = () => {
+    tunnel?.stop();
     server.close(() => {
       persistence?.close();
       process.exit(0);
