@@ -110,7 +110,7 @@ function newSession(id, now) {
     traceIds: new Set(),
     lastError: null,
     // Todo/task state reconstructed from TodoWrite/TaskCreate/TaskUpdate
-    // tool_parameters — see #applyTodo.
+    // call parameters — see #applyTodo.
     todos: {
       callsSeen: 0,
       legacy: null,
@@ -427,8 +427,9 @@ export class TelemetryStore {
 
   /**
    * Reconstruct todo/task state from a successful TodoWrite/TaskCreate/TaskUpdate
-   * call. Requires `OTEL_LOG_TOOL_DETAILS=1` — without it `tool_parameters` is
-   * absent and this is a no-op.
+   * call. Requires `OTEL_LOG_TOOL_DETAILS=1` — without it the call's parameters
+   * (`tool_input`, or `tool_parameters` on older CLI versions) are absent and
+   * this is a no-op.
    *
    * TaskCreate's assigned task id is not part of its own call — the CLI only
    * returns it in the tool result, which telemetry does not carry without the
