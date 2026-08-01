@@ -15,7 +15,7 @@ import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 
 import { decodeExportRequest } from './otlp/decode.mjs';
-import { attributionOf, describeEvent, otelEnvFor } from './claude.mjs';
+import { attributionOf, describeEvent, otelEnvFor, sessionNameHook } from './claude.mjs';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../public/', import.meta.url));
 const MAX_BODY_BYTES = 32 * 1024 * 1024;
@@ -111,13 +111,7 @@ function intParam(params, key, fallback, max = Number.MAX_SAFE_INTEGER) {
   return Math.min(value, max);
 }
 
-export function createServer({
-  store,
-  token = null,
-  endpoint = '',
-  log = console.error,
-  sessionName = null,
-} = {}) {
+export function createServer({ store, token = null, endpoint = '', log = console.error } = {}) {
   // A tunnel URL only exists once the tunnel is up, after the server is already
   // listening, so the endpoint may be supplied as a getter and resolved per request.
   const endpointOf = () => (typeof endpoint === 'function' ? endpoint() : endpoint);
@@ -140,11 +134,13 @@ export function createServer({
 
   // Coalesce bursts: an agent flushing every second can produce hundreds of
   // records per push, and the UI only needs to know that something changed.
-  store.subscribe(({ signal, records, sessionIds, seq, replay }) => {
+  store.subscribe(({ signal, records = [], sessionIds, seq, replay }) => {
     if (replay || !clients.size) return;
     pending ??= { seq: 0, sessionIds: [], counts: { traces: 0, metrics: 0, logs: 0 }, events: [] };
     pending.seq = Math.max(pending.seq, seq);
-    pending.counts[signal] += records.length;
+    // Naming a session is a change without records — it still has to reach the
+    // page, so that a session named before its first export appears right away.
+    if (signal in pending.counts) pending.counts[signal] += records.length;
     for (const id of sessionIds) {
       if (!pending.sessionIds.includes(id)) pending.sessionIds.push(id);
     }
@@ -220,6 +216,25 @@ export function createServer({
     sendOtlpAck(res, contentType);
   };
 
+  /**
+   * The one write the UI's data model accepts. Its caller is the SessionStart
+   * hook, which cannot get a name into the session's own telemetry (see
+   * TelemetryStore#setSessionName) and so hands it over here instead.
+   */
+  const handleSetSessionName = async (req, res, sessionId) => {
+    const raw = await readBody(req);
+    let payload;
+    try {
+      payload = raw.length ? JSON.parse(raw.toString('utf8')) : {};
+    } catch {
+      throw Object.assign(new Error('body must be JSON'), { status: 400 });
+    }
+    if (payload.name !== undefined && payload.name !== null && typeof payload.name !== 'string') {
+      throw Object.assign(new Error('name must be a string'), { status: 400 });
+    }
+    sendJson(res, 200, { ok: true, ...store.setSessionName(sessionId, payload.name ?? null) });
+  };
+
   const handleApi = (req, res, url) => {
     const { pathname, searchParams } = url;
 
@@ -235,7 +250,8 @@ export function createServer({
           metricPoints: store.options.maxMetricPoints,
           sessions: store.options.maxSessions,
         },
-        env: otelEnvFor(endpoint, { token, sessionName }),
+        env: otelEnvFor(endpoint, { token }),
+        hooks: sessionNameHook(),
       });
       return true;
     }
@@ -386,6 +402,13 @@ export function createServer({
       if (req.method === 'DELETE' && url.pathname === '/api/data') {
         store.clear();
         sendJson(res, 200, { ok: true });
+        return;
+      }
+      const nameMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/name$/);
+      if (req.method === 'POST' && nameMatch) {
+        handleSetSessionName(req, res, decodeURIComponent(nameMatch[1])).catch((error) => {
+          sendJson(res, error.status ?? 400, { error: error.message });
+        });
         return;
       }
       if (req.method !== 'GET') {

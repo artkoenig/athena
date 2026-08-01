@@ -14,7 +14,7 @@ import { TelemetryStore } from '../src/store.mjs';
 import { JsonlPersistence } from '../src/persist.mjs';
 import { createServer } from '../src/server.mjs';
 import { endpointFor, parseArgs, resolveConfig } from '../src/config.mjs';
-import { otelEnvFor } from '../src/claude.mjs';
+import { otelEnvFor, sessionNameHook } from '../src/claude.mjs';
 import { probeCollector } from '../src/probe.mjs';
 import { startTunnel } from '../src/tunnel.mjs';
 
@@ -39,10 +39,6 @@ Options
                                 of trying both
       --public-url <url>        Advertise this URL instead of the bind address
                                 (behind a tunnel or reverse proxy)
-      --name <label>            Add session.name=<label> to the printed env block,
-                                so the UI lists that session by name instead of
-                                by its id. Per session: set it in the environment
-                                the session is started from.
       --persist [dir]           Append records to JSONL and replay them on restart
       --retention <duration>    Drop records older than this          (default 24h)
       --max-spans <n>           Span buffer size                     (default 50000)
@@ -51,14 +47,15 @@ Options
       --max-sessions <n>        Sessions kept in memory              (default 500)
       --traces false            Leave traces out of the printed env block
       --format <fmt>            Output format for "env": shell (default), json,
-                                dotenv, settings (.claude/settings.local.json)
+                                dotenv, settings (.claude/settings.local.json,
+                                includes the SessionStart hook that names
+                                sessions in the UI)
       --help                    Show this message
 
 Environment
   ATHENA_OBS_PORT, ATHENA_OBS_HOST, ATHENA_OBS_TOKEN, ATHENA_OBS_PUBLIC_URL,
   ATHENA_OBS_PERSIST, ATHENA_OBS_RETENTION, ATHENA_OBS_MAX_SPANS,
-  ATHENA_OBS_MAX_LOGS, ATHENA_OBS_MAX_METRICS, ATHENA_OBS_MAX_SESSIONS,
-  ATHENA_OBS_SESSION_NAME
+  ATHENA_OBS_MAX_LOGS, ATHENA_OBS_MAX_METRICS, ATHENA_OBS_MAX_SESSIONS
 `.trim();
 
 function renderEnv(env, format) {
@@ -67,8 +64,10 @@ function renderEnv(env, format) {
       return JSON.stringify(env, null, 2);
     // Ready to drop into .claude/settings.local.json, which applies the block to
     // every session in the project without anyone having to remember an export.
+    // The SessionStart hook rides along: it is what makes those sessions show up
+    // under a name rather than a UUID, and it needs no configuration of its own.
     case 'settings':
-      return JSON.stringify({ env }, null, 2);
+      return JSON.stringify({ env, hooks: sessionNameHook() }, null, 2);
     case 'dotenv':
       return Object.entries(env)
         .map(([key, value]) => `${key}=${value}`)
@@ -92,11 +91,7 @@ async function main(argv) {
   const endpoint = endpointFor(config);
 
   if (command === 'env') {
-    const env = otelEnvFor(endpoint, {
-      traces: config.traces,
-      token: config.token,
-      sessionName: config.sessionName,
-    });
+    const env = otelEnvFor(endpoint, { traces: config.traces, token: config.token });
     console.log(renderEnv(env, flags.format === true ? 'shell' : (flags.format ?? 'shell')));
     return;
   }
@@ -154,24 +149,12 @@ async function main(argv) {
   }
 
   let advertised = endpoint;
-  const server = createServer({
-    store,
-    token: config.token,
-    endpoint: () => advertised,
-    sessionName: config.sessionName,
-  });
+  const server = createServer({ store, token: config.token, endpoint: () => advertised });
   let tunnel = null;
 
   const printEnv = (format, indent = '    ') =>
     console.error(
-      renderEnv(
-        otelEnvFor(advertised, {
-          traces: config.traces,
-          token: config.token,
-          sessionName: config.sessionName,
-        }),
-        format,
-      )
+      renderEnv(otelEnvFor(advertised, { traces: config.traces, token: config.token }), format)
         .split('\n')
         .map((line) => `${indent}${line}`)
         .join('\n'),

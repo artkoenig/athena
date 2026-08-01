@@ -81,3 +81,43 @@ test('files rotate once past the size cap', async () => {
   assert.ok(fs.existsSync(path.join(dir, 'logs.1.jsonl')));
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test('session names survive a restart, records or not', async () => {
+  const dir = tmpdir();
+  const first = new TelemetryStore();
+  const writer = new JsonlPersistence(dir);
+  await writer.load(first);
+  writer.attach(first);
+  first.setSessionName('s-name', 'athena · main');
+  first.ingest('logs', [logRecord('s-other', 10)]);
+  await settle();
+  writer.close();
+
+  const second = new TelemetryStore();
+  const reader = new JsonlPersistence(dir);
+  const restored = await reader.load(second);
+  reader.close();
+  // Names are not records: they restore the label without inflating the count.
+  assert.equal(restored, 1);
+  assert.equal(second.getSession('s-name').name, 'athena · main');
+  assert.equal(second.getSession('s-name').counts.logs, 0);
+  assert.equal(second.getSession('s-other').name, null);
+});
+
+test('the last name written for a session wins on replay', async () => {
+  const dir = tmpdir();
+  const first = new TelemetryStore();
+  const writer = new JsonlPersistence(dir);
+  await writer.load(first);
+  writer.attach(first);
+  first.setSessionName('s-renamed', 'first try');
+  first.setSessionName('s-renamed', 'second try');
+  await settle();
+  writer.close();
+
+  const second = new TelemetryStore();
+  const reader = new JsonlPersistence(dir);
+  await reader.load(second);
+  reader.close();
+  assert.equal(second.getSession('s-renamed').name, 'second try');
+});

@@ -14,7 +14,8 @@
   "files": [
     "bin",
     "src",
-    "public"
+    "public",
+    "hooks"
   ],
   "scripts": {
     "start": "node bin/athena-observe.mjs",

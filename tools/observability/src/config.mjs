@@ -81,9 +81,6 @@ export function resolveConfig(flags = {}, env = process.env) {
     maxSessions: parseCount(flags['max-sessions'] ?? env.ATHENA_OBS_MAX_SESSIONS, 500),
     persistMaxBytes: parseCount(flags['persist-max-bytes'] ?? env.ATHENA_OBS_PERSIST_MAX_BYTES, 64 * 1024 * 1024),
     traces: flags.traces === 'false' ? false : true,
-    // Label for the session the printed env block will start, not for the
-    // collector itself — see sessionNameOf in claude.mjs.
-    sessionName: flags.name === true ? null : (flags.name ?? env.ATHENA_OBS_SESSION_NAME ?? null),
   };
   if (!config.port) throw new Error('port must be a positive number');
   return config;

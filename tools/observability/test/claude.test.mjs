@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { otelEnvFor, sessionNameOf } from '../src/claude.mjs';
+import { otelEnvFor, sessionNameHook, sessionNameOf } from '../src/claude.mjs';
 
 test('a session name is read from the resource, and from metric attributes', () => {
   assert.equal(sessionNameOf({ resource: { 'session.name': 'athena-refactor' } }), 'athena-refactor');
@@ -28,17 +28,20 @@ test('long names are capped', () => {
   assert.equal(name.length, 120);
 });
 
-test('otelEnvFor carries a session name as a resource attribute, encoded', () => {
-  const env = otelEnvFor('http://localhost:4318', { sessionName: 'nightly run' });
-  assert.equal(env.OTEL_RESOURCE_ATTRIBUTES, 'session.name=nightly%20run');
-  // Round-trips through the same helper the store uses on ingest.
-  assert.equal(
-    sessionNameOf({ resource: { 'session.name': env.OTEL_RESOURCE_ATTRIBUTES.split('=')[1] } }),
-    'nightly run',
-  );
-});
-
-test('otelEnvFor leaves the variable out when no name is given', () => {
+test('the env block stays free of naming configuration', () => {
+  // Naming is the hook's job — it works out the name per session, so there is
+  // nothing to bake into an env block that gets pasted into many of them.
   const env = otelEnvFor('http://localhost:4318');
   assert.ok(!('OTEL_RESOURCE_ATTRIBUTES' in env));
+});
+
+test('the settings hook points at the shipped script and needs no arguments', async () => {
+  const { SessionStart } = sessionNameHook();
+  const command = SessionStart[0].hooks[0].command;
+  assert.equal(SessionStart[0].hooks[0].type, 'command');
+  assert.match(command, /^node "\/.*hooks\/session-name\.mjs"$/);
+  // The path is real, not assembled from a guess about the install layout.
+  const file = command.match(/"(.+)"/)[1];
+  const { access } = await import('node:fs/promises');
+  await access(file);
 });
