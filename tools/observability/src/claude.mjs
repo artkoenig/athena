@@ -46,6 +46,23 @@ export const EVENT = {
   pluginLoaded: 'claude_code.plugin_loaded',
 };
 
+/** Tool names whose `tool_parameters` describe todo/task state (see todo-tracking docs). */
+export const TASK_TOOL_NAMES = new Set(['TodoWrite', 'TaskCreate', 'TaskUpdate']);
+
+/**
+ * `tool_parameters` is a JSON string, only present when `OTEL_LOG_TOOL_DETAILS=1` is
+ * set. Absent or malformed just means "nothing to show", not an error.
+ */
+export function toolParametersOf(attrs) {
+  if (typeof attrs?.tool_parameters !== 'string') return null;
+  try {
+    const value = JSON.parse(attrs.tool_parameters);
+    return value && typeof value === 'object' ? value : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Events worth surfacing as an audit trail (see "Audit security events"). */
 export const SECURITY_EVENTS = new Set([
   EVENT.toolDecision,

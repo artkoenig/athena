@@ -259,6 +259,100 @@ test('stats aggregate across sessions', () => {
   assert.equal(stats.received.metrics, 2);
 });
 
+test('TodoWrite snapshots the full todo list on every call', () => {
+  const store = new TelemetryStore();
+  const todos = (list) => JSON.stringify({ todos: list });
+  store.ingest('logs', [
+    log('claude_code.tool_result', {
+      tool_name: 'TodoWrite',
+      success: 'true',
+      tool_parameters: todos([{ content: 'write tests', status: 'in_progress', activeForm: 'Writing tests' }]),
+    }),
+  ]);
+  let session = store.getSession(SESSION);
+  assert.deepEqual(session.todos.legacy, [
+    { content: 'write tests', status: 'in_progress', activeForm: 'Writing tests' },
+  ]);
+
+  store.ingest('logs', [
+    log('claude_code.tool_result', {
+      tool_name: 'TodoWrite',
+      success: 'true',
+      tool_parameters: todos([{ content: 'write tests', status: 'completed', activeForm: 'Writing tests' }]),
+    }),
+  ]);
+  session = store.getSession(SESSION);
+  assert.equal(session.todos.legacy.length, 1);
+  assert.equal(session.todos.legacy[0].status, 'completed');
+});
+
+test('TaskCreate and TaskUpdate reconstruct task state, keyed by id where known', () => {
+  const store = new TelemetryStore();
+  store.ingest('logs', [
+    log('claude_code.tool_result', {
+      tool_name: 'TaskCreate',
+      tool_use_id: 'call-1',
+      success: 'true',
+      tool_parameters: JSON.stringify({ subject: 'Fix flaky test', description: 'CI flakes on retry' }),
+    }),
+    log('claude_code.tool_result', {
+      tool_name: 'TaskUpdate',
+      tool_use_id: 'call-2',
+      success: 'true',
+      tool_parameters: JSON.stringify({ taskId: 'task-1', status: 'in_progress' }),
+    }),
+    log('claude_code.tool_result', {
+      tool_name: 'TaskUpdate',
+      tool_use_id: 'call-3',
+      success: 'true',
+      tool_parameters: JSON.stringify({ taskId: 'task-1', status: 'completed', subject: 'Fix flaky test' }),
+    }),
+  ]);
+  const session = store.getSession(SESSION);
+  assert.equal(session.todos.unlinkedCreates.length, 1);
+  assert.equal(session.todos.unlinkedCreates[0].subject, 'Fix flaky test');
+  assert.equal(session.todos.tasks.length, 1);
+  assert.equal(session.todos.tasks[0].taskId, 'task-1');
+  assert.equal(session.todos.tasks[0].status, 'completed');
+  assert.equal(session.todos.tasks[0].subject, 'Fix flaky test');
+  assert.equal(session.todos.tasks[0].history.length, 2);
+});
+
+test('TaskUpdate reads id from repaired key names defensively', () => {
+  const store = new TelemetryStore();
+  store.ingest('logs', [
+    log('claude_code.tool_result', {
+      tool_name: 'TaskUpdate',
+      success: 'true',
+      tool_parameters: JSON.stringify({ id: 'task-9', status: 'completed' }),
+    }),
+  ]);
+  assert.equal(store.getSession(SESSION).todos.tasks[0].taskId, 'task-9');
+});
+
+test('todo state is not populated without OTEL_LOG_TOOL_DETAILS, but calls are still counted', () => {
+  const store = new TelemetryStore();
+  store.ingest('logs', [log('claude_code.tool_result', { tool_name: 'TaskCreate', success: 'true' })]);
+  const session = store.getSession(SESSION);
+  assert.equal(session.todos.callsSeen, 1);
+  assert.equal(session.todos.legacy, null);
+  assert.equal(session.todos.tasks.length, 0);
+  assert.equal(session.todos.unlinkedCreates.length, 0);
+});
+
+test('a failed TaskUpdate call does not mutate todo state', () => {
+  const store = new TelemetryStore();
+  store.ingest('logs', [
+    log('claude_code.tool_result', {
+      tool_name: 'TaskUpdate',
+      success: 'false',
+      error_type: 'PermissionDenied',
+      tool_parameters: JSON.stringify({ taskId: 'task-1', status: 'completed' }),
+    }),
+  ]);
+  assert.equal(store.getSession(SESSION).todos.tasks.length, 0);
+});
+
 test('clear() empties the store but keeps subscribers attached', () => {
   const store = new TelemetryStore();
   let notified = 0;

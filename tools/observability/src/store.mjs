@@ -20,13 +20,20 @@ import {
   ERROR_EVENTS,
   METRIC,
   SPAN,
+  TASK_TOOL_NAMES,
   TOKEN_TYPES,
   EMPTY_TOKENS,
   bool,
   num,
   serviceNameOf,
   sessionIdOf,
+  toolParametersOf,
 } from './claude.mjs';
+
+/** Bound on how many stray TaskCreate calls a session keeps (see #applyTodo). */
+const MAX_UNLINKED_CREATES = 200;
+/** Bound on the per-task status history kept for the Todos tab. */
+const MAX_TASK_HISTORY = 50;
 
 const DEFAULTS = {
   maxSpans: 50_000,
@@ -102,6 +109,15 @@ function newSession(id, now) {
     tools: new Map(),
     traceIds: new Set(),
     lastError: null,
+    // Todo/task state reconstructed from TodoWrite/TaskCreate/TaskUpdate
+    // tool_parameters — see #applyTodo.
+    todos: {
+      callsSeen: 0,
+      legacy: null,
+      legacyAtMs: 0,
+      tasks: new Map(),
+      unlinked: [],
+    },
     // Per-series cursors used to fold cumulative counters into running totals.
     _cumulative: new Map(),
     _gauges: new Map(),
@@ -381,6 +397,7 @@ export class TelemetryStore {
         break;
       case EVENT.toolResult: {
         const stats = this.#tool(session, attrs.tool_name);
+        if (TASK_TOOL_NAMES.has(attrs.tool_name)) session.todos.callsSeen++;
         if (!bool(attrs.success)) {
           stats.failures++;
           session.lastError = {
@@ -388,6 +405,8 @@ export class TelemetryStore {
             kind: 'tool',
             message: String(attrs.error ?? attrs.error_type ?? `${attrs.tool_name} failed`),
           };
+        } else {
+          this.#applyTodo(session, log);
         }
         break;
       }
@@ -404,6 +423,79 @@ export class TelemetryStore {
       default:
         break;
     }
+  }
+
+  /**
+   * Reconstruct todo/task state from a successful TodoWrite/TaskCreate/TaskUpdate
+   * call. Requires `OTEL_LOG_TOOL_DETAILS=1` — without it `tool_parameters` is
+   * absent and this is a no-op.
+   *
+   * TaskCreate's assigned task id is not part of its own call — the CLI only
+   * returns it in the tool result, which telemetry does not carry without the
+   * separate (and much more sensitive) `OTEL_LOG_TOOL_CONTENT=1`. So created
+   * tasks are kept in an unlinked list by creation time instead of being
+   * (possibly wrongly) merged into the id-keyed map that TaskUpdate calls build.
+   */
+  #applyTodo(session, log) {
+    const attrs = log.attrs ?? {};
+    const toolName = attrs.tool_name;
+    if (!TASK_TOOL_NAMES.has(toolName)) return;
+    const params = toolParametersOf(attrs);
+    if (!params) return;
+    const atMs = log.timeMs;
+    const todos = session.todos;
+
+    if (toolName === 'TodoWrite') {
+      const list = Array.isArray(params.todos) ? params.todos : [];
+      todos.legacy = list.map((todo) => ({
+        content: String(todo?.content ?? ''),
+        status: String(todo?.status ?? 'pending'),
+        activeForm: todo?.activeForm ? String(todo.activeForm) : '',
+      }));
+      todos.legacyAtMs = atMs;
+      return;
+    }
+
+    if (toolName === 'TaskCreate') {
+      todos.unlinked.push({
+        toolUseId: attrs.tool_use_id ?? '',
+        subject: params.subject ? String(params.subject) : '',
+        description: params.description ? String(params.description) : '',
+        activeForm: params.activeForm ? String(params.activeForm) : '',
+        createdAtMs: atMs,
+      });
+      if (todos.unlinked.length > MAX_UNLINKED_CREATES) todos.unlinked.shift();
+      return;
+    }
+
+    // TaskUpdate. The model repairs `id`/`task_id` to `taskId` before execution,
+    // but that repair is not reflected in the streamed tool_use input — read
+    // defensively (see the Task tools migration notes in the SDK docs).
+    const taskId = params.taskId ?? params.id ?? params.task_id;
+    if (!taskId) return;
+    let task = todos.tasks.get(taskId);
+    if (!task) {
+      task = {
+        taskId: String(taskId),
+        subject: '',
+        description: '',
+        activeForm: '',
+        status: 'pending',
+        owner: '',
+        createdAtMs: atMs,
+        updatedAtMs: atMs,
+        history: [],
+      };
+      todos.tasks.set(taskId, task);
+    }
+    if (params.subject) task.subject = String(params.subject);
+    if (params.description) task.description = String(params.description);
+    if (params.activeForm) task.activeForm = String(params.activeForm);
+    if (params.owner) task.owner = String(params.owner);
+    if (params.status) task.status = String(params.status);
+    task.updatedAtMs = atMs;
+    task.history.push({ atMs, status: params.status ? String(params.status) : null });
+    if (task.history.length > MAX_TASK_HISTORY) task.history.shift();
   }
 
   /* -------------------------------- metrics ---------------------------- */
@@ -771,6 +863,16 @@ function mergeUsage(tokensMetric, tokensEvent, costMetric, costEvent) {
   };
 }
 
+function summarizeTodos(session) {
+  return {
+    callsSeen: session.todos.callsSeen,
+    legacy: session.todos.legacy,
+    legacyAtMs: session.todos.legacyAtMs || null,
+    tasks: [...session.todos.tasks.values()].sort((a, b) => b.updatedAtMs - a.updatedAtMs),
+    unlinkedCreates: [...session.todos.unlinked].sort((a, b) => b.createdAtMs - a.createdAtMs),
+  };
+}
+
 export function summarizeSession(session) {
   const usage = mergeUsage(
     session.tokensMetric,
@@ -825,6 +927,7 @@ export function summarizeSession(session) {
     startTypes: [...session.startTypes],
     models,
     tools,
+    todos: summarizeTodos(session),
     toolFailuresFromEvents: tools.reduce((sum, tool) => sum + tool.failures, 0),
     traceCount: session.traceIds.size,
     lastError: session.lastError,
