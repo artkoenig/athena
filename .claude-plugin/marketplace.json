@@ -1,0 +1,16 @@
+{
+  "name": "athena",
+  "description": "The home marketplace of the athena plugin: the athena rulebook, released from the repository that grows it.",
+  "owner": {
+    "name": "Artjom König",
+    "email": "artkoenig@gmail.com",
+    "url": "https://github.com/artkoenig"
+  },
+  "plugins": [
+    {
+      "name": "athena",
+      "source": "./",
+      "description": "An AI agent workflow built on judgment, not rules: the athena rulebook, delivered to every session."
+    }
+  ]
+}

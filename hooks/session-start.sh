@@ -1,0 +1,127 @@
+#!/bin/bash
+set -u
+
+# ---------------------------------------------------------------------------
+# The plugin's SessionStart hook. It does two things a plugin cannot do by
+# itself: it puts the rulebook text into the session's context — a CLAUDE.md
+# at a plugin root is not loaded, and a skill is model-invoked and therefore
+# optional — and it points the project's git hooks at the push guard shipped
+# with the plugin, unless the project already has hooks of its own.
+#
+# Skills and agents need nothing from here: plugin discovery exposes
+# skills/<name>/SKILL.md and agents/<name>.md on its own. What this script
+# adds for them is the self-check status, which counts what is actually
+# reachable in the plugin tree, so a session sees what it really has instead
+# of trusting the rulebook's role names.
+#
+# stdout carries the hook JSON and nothing else.
+# ---------------------------------------------------------------------------
+
+plugin_root="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+plugin_root="$(cd "$plugin_root" 2>/dev/null && pwd || echo "$plugin_root")"
+project_dir="${CLAUDE_PROJECT_DIR:-.}"
+rulebook="${plugin_root}/AGENTS.md"
+guard_dir="${plugin_root}/.githooks"
+
+# JSON-encode stdin as the body of a JSON string: drop the control bytes that
+# carry no text anyway, escape the two delimiters, the tab and the carriage
+# return, then fold the newlines. A raw CR would end the JSON string's
+# validity as surely as a raw newline, so it is escaped rather than dropped —
+# a rulebook with CRLF line ends arrives whole. Multibyte UTF-8 passes
+# through untouched.
+json_body() {
+  LC_ALL=C tr -d '\000-\010\013\014\016-\037\177' \
+    | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/\t/\\t/g' -e 's/\r/\\r/g' \
+    | sed -e ':a' -e 'N' -e '$!ba' -e 's/\n/\\n/g' \
+    | tr -d '\n'
+}
+
+problems=""
+
+# 1. What the plugin actually exposes. Count, do not assume: a skill
+#    directory without its SKILL.md and an agent that is not a flat .md file
+#    are invisible to plugin discovery, so neither may be counted, and each
+#    is a defect — something is in the tree that the session cannot reach.
+#    A count of zero is not: athena ships the rulebook first and its agents
+#    and skills after, and the rulebook tells the session to read these
+#    counts rather than assume a role has a page behind it.
+skills=0
+for dir in "${plugin_root}/skills"/*/; do
+  [ -d "$dir" ] || continue
+  name=$(basename "$dir")
+  if [ -f "${dir}SKILL.md" ]; then
+    skills=$((skills + 1))
+  else
+    problems="${problems} skill without SKILL.md: ${name};"
+  fi
+done
+# Discovery reads agents/<name>.md and does not recurse, so anything else
+# under agents/ — a nested directory above all — is in the tree and still
+# unreachable.
+agents=0
+for entry in "${plugin_root}/agents"/*; do
+  [ -e "$entry" ] || continue
+  name=$(basename "$entry")
+  if [ -f "$entry" ] && [ "${name%.md}" != "$name" ]; then
+    agents=$((agents + 1))
+  else
+    problems="${problems} agent not reachable: ${name%.md};"
+  fi
+done
+
+# 2. The rulebook itself, verbatim — a pointer to the file would leave the
+#    session free to skip it.
+if [ -f "$rulebook" ]; then
+  rulebook_state="rulebook delivered"
+else
+  rulebook_state="rulebook missing (no AGENTS.md at the plugin root)"
+  problems="${problems} ${rulebook_state};"
+fi
+
+# 3. The push guard: point the project's git hooks at the plugin's, so
+#    pre-push refuses a direct push to the default branch. A project that is
+#    no git repository cannot be pushed from, so an absent guard there is a
+#    note; anywhere else it means an unguarded push is possible, and that is
+#    a failure. A project that already points core.hooksPath somewhere else
+#    manages its own hooks — husky, lefthook, pre-commit — and taking that
+#    over would silently delete all of them, so the value is left alone and
+#    the missing guard is reported instead. Report the end state, not the
+#    step that was attempted.
+existing_hooks_path=""
+if ! git -C "$project_dir" rev-parse --git-dir >/dev/null 2>&1; then
+  guard_state="push guard n/a (project is not a git repository)"
+elif [ ! -d "$guard_dir" ]; then
+  guard_state="push guard not set (no .githooks at the plugin root)"
+  problems="${problems} ${guard_state};"
+else
+  existing_hooks_path="$(git -C "$project_dir" config core.hooksPath 2>/dev/null || true)"
+  if [ -n "$existing_hooks_path" ] && [ "$existing_hooks_path" != "$guard_dir" ]; then
+    guard_state="push guard not set (project's own hooks at ${existing_hooks_path} left in place)"
+    problems="${problems} ${guard_state};"
+  else
+    git -C "$project_dir" config core.hooksPath "$guard_dir" >/dev/null 2>&1
+    if [ "$(git -C "$project_dir" config core.hooksPath 2>/dev/null)" = "$guard_dir" ]; then
+      guard_state="push guard set"
+    else
+      guard_state="push guard not set (could not write core.hooksPath)"
+      problems="${problems} ${guard_state};"
+    fi
+  fi
+fi
+
+status="Athena self-check: ${skills} skills and ${agents} agents reachable; ${rulebook_state}; ${guard_state};"
+if [ -z "$problems" ]; then
+  status="${status} no problems."
+else
+  status="${status} FAILED:${problems} the plugin at ${plugin_root} is incomplete."
+fi
+
+# 4. Hand the rulebook and the status to the session, in that order.
+{
+  printf '{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "'
+  {
+    [ -f "$rulebook" ] && cat "$rulebook"
+    printf '\n%s\n' "$status"
+  } | json_body
+  printf '"}}\n'
+}

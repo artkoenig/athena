@@ -1,0 +1,8 @@
+# Gitignored files that a parallel run needs in its own checkout. Claude Code
+# copies a file listed here into every worktree it creates, but only when the
+# file is gitignored as well — a pattern that is not is silently a no-op, so
+# test-worktree.sh checks that every line here is one .gitignore covers.
+#
+# The telemetry env block lives in this file (see .gitignore), and without it
+# a run in a worktree exports nowhere while the main checkout still does.
+.claude/settings.local.json
