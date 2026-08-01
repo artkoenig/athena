@@ -1,0 +1,10 @@
+node_modules/
+*.log
+
+# Personal Claude Code settings — this is where the telemetry env block belongs,
+# so it never forces other contributors to export into a collector they don't run.
+.claude/settings.local.json
+
+# athena-observe persistence (--persist)
+.athena-telemetry/
+telemetry/
