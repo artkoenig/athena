@@ -143,6 +143,9 @@ record the waiver like any judgment call.
 - Documentation mirrors the current state. A change that falsifies a statement
   fixes it in the same change, bounded to what it falsified. When a document and
   a rule disagree, the document is out of date.
+- Conventions live next to the code they govern. A rule that holds for one
+  subsystem belongs in that directory's `CLAUDE.md`, not in the root file every
+  run pays for. Only what holds everywhere stays at the root.
 - Branch each issue from the current default branch, never on an unmerged
   predecessor.
 - Everything checked in and every pull request is written in English.
