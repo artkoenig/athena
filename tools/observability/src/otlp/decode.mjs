@@ -40,14 +40,31 @@ function toBigInt(value) {
 }
 
 /**
- * Nanoseconds since epoch -> float milliseconds. Values near 1.7e18 exceed
- * Number's integer range, so this rounds to ~0.3µs. That is far below anything
- * a UI renders and keeps ordering intact.
+ * Nanoseconds since epoch -> float milliseconds. Values near 1.7e18 are past
+ * Number's integer range, so converting first and dividing afterwards would
+ * discard up to ~0.3µs before the division ever happens. Splitting the whole
+ * milliseconds from the remainder keeps both operands exact, which matters
+ * because these timestamps get subtracted from each other downstream: a
+ * whole-millisecond timestamp has to survive as a whole millisecond.
  */
 export function nanosToMs(nanos) {
   const n = toBigInt(nanos);
   if (n === 0n) return 0;
-  return Number(n) / 1e6;
+  return Number(n / 1000000n) + Number(n % 1000000n) / 1e6;
+}
+
+/**
+ * Duration in milliseconds, subtracted on the raw nanosecond integers.
+ * Differencing two nanosToMs results instead would carry both of their rounding
+ * errors into a value that is exact by construction — a 1500 ms span reported as
+ * 1499.99951171875, and the error moves with the wall clock. Spans still in
+ * flight export with endTime 0; those are open, not instantaneous.
+ */
+export function nanosDurationMs(start, end) {
+  const from = toBigInt(start);
+  const to = toBigInt(end);
+  if (from <= 0n || to <= 0n) return null;
+  return Number(to - from) / 1e6;
 }
 
 const HEX_RE = /^[0-9a-fA-F]+$/;
@@ -126,8 +143,10 @@ export function normalizeTraces(payload) {
           kind: SPAN_KIND[pick(span, 'kind') ?? 0] ?? 'unspecified',
           startMs,
           endMs,
-          // Spans still in flight export with endTime 0; treat those as open.
-          durationMs: endMs > 0 && startMs > 0 ? endMs - startMs : null,
+          durationMs: nanosDurationMs(
+            pick(span, 'startTimeUnixNano'),
+            pick(span, 'endTimeUnixNano'),
+          ),
           status: {
             code: STATUS_CODE[pick(status, 'code') ?? 0] ?? 'unset',
             message: pick(status, 'message') ?? '',

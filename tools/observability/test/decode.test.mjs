@@ -7,7 +7,7 @@ import {
   EXPORT_LOGS_REQUEST,
   EXPORT_METRICS_REQUEST,
 } from '../src/otlp/schema.mjs';
-import { decodeExportRequest, nanosToMs } from '../src/otlp/decode.mjs';
+import { decodeExportRequest, nanosDurationMs, nanosToMs } from '../src/otlp/decode.mjs';
 
 const attrs = (object) =>
   Object.entries(object).map(([key, value]) => {
@@ -24,6 +24,27 @@ test('nanosToMs keeps millisecond ordering', () => {
   assert.equal(nanosToMs(1500000n), 1.5);
   assert.equal(nanosToMs(0n), 0);
   assert.ok(nanosToMs(T0 + 1000000n) > nanosToMs(T0));
+});
+
+test('a duration stays exact at any point on the clock', () => {
+  // Nanoseconds since the epoch are past Number's integer range, so a duration
+  // taken as the difference of two converted timestamps drifts — by an amount
+  // that depends on the wall clock, which makes it a rare, moving failure.
+  for (const epochMs of [1767225600000n, 1785575737865n, BigInt(Date.now())]) {
+    const start = epochMs * 1000000n;
+    assert.equal(nanosDurationMs(start, start + 1500n * 1000000n), 1500, `at ${epochMs}`);
+    assert.equal(nanosDurationMs(start, start + 1n), 0.000001, `at ${epochMs}`);
+  }
+  // An unfinished span is open, not zero-length.
+  assert.equal(nanosDurationMs(T0, 0n), null);
+  assert.equal(nanosDurationMs(0n, T0), null);
+
+  // Aggregates elsewhere subtract converted timestamps, so the conversion has to
+  // hold whole milliseconds exactly rather than merely close enough to render.
+  for (const epochMs of [1767225600000n, 1785575737865n, BigInt(Date.now())]) {
+    const start = epochMs * 1000000n;
+    assert.equal(nanosToMs(start + 1500n * 1000000n) - nanosToMs(start), 1500, `at ${epochMs}`);
+  }
 });
 
 test('protobuf traces normalize into flat spans', () => {

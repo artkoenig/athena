@@ -171,6 +171,20 @@ Voraussetzung ist `cloudflared`; fehlt es, sagt der Befehl, wie man es installie
 `--token` wird eins erzeugt, denn die URL ist ab jetzt aus dem Internet erreichbar. Solange
 der Befehl läuft, steht der Tunnel; `Ctrl-C` schließt beides.
 
+`cloudflared` erreicht Cloudflare standardmäßig über **QUIC**, also UDP auf Port 7844. Viele
+Router, Firmennetze und Container lassen UDP nicht raus, und `cloudflared` weicht von sich
+aus nicht aus — es versucht QUIC endlos weiter. Deshalb wird hier automatisch auf **HTTP/2**
+(TCP, gleicher Port) umgeschaltet, sobald QUIC nicht durchkommt:
+
+```
+  Got https://…trycloudflare.com, waiting for it to serve …
+  QUIC (UDP 7844) did not get through — retrying over HTTP/2 (TCP 7844) …
+```
+
+Scheitern beide, blockiert das Netz den Port selbst — dann hilft nur ein anderer Tunnel
+(siehe unten) oder eine Firewall-Regel. Mit `--tunnel-protocol quic|http2` lässt sich ein
+Transport festnageln, wenn man weiß, welcher funktioniert.
+
 > Die URL des Quick Tunnels ist **flüchtig** — jeder Neustart vergibt eine neue, und dann
 > müssen die Variablen nachgezogen werden. Wer das oft braucht, nimmt einen Tunnel mit
 > fester Adresse und reicht sie mit `--public-url` durch:
@@ -241,6 +255,7 @@ Die UI aktualisiert sich über Server-Sent Events; Bursts werden auf 250 ms zusa
 | `-h, --host`            | `ATHENA_OBS_HOST`            | `127.0.0.1`    | Bind-Adresse                                     |
 | `-t, --token`           | `ATHENA_OBS_TOKEN`           | –              | `Authorization: Bearer …` erzwingen              |
 | `--tunnel [binary]`     | –                            | –              | Cloudflare-Tunnel öffnen, Token erzeugen, Block ausgeben |
+| `--tunnel-protocol <p>` | –                            | beide          | Transport festnageln: `quic` oder `http2`        |
 | `--public-url <url>`    | `ATHENA_OBS_PUBLIC_URL`      | –              | Angekündigte URL hinter Tunnel/Proxy             |
 | `--persist [dir]`       | `ATHENA_OBS_PERSIST`         | –              | JSONL auf Platte, Replay beim Start              |
 | `--retention <dauer>`   | `ATHENA_OBS_RETENTION`       | `24h`          | Alter, ab dem Rohdaten verworfen werden          |
@@ -316,7 +331,7 @@ OTLP-Revisionen und neuen Claude-Code-Attributen tolerant.
 ## Tests
 
 ```bash
-npm test          # 63 Tests: Wire-Format, Decoder, Store, Persistenz, Config, Probe, Tunnel, HTTP
+npm test          # 67 Tests: Wire-Format, Decoder, Store, Persistenz, Config, Probe, Tunnel, HTTP
 npm run demo      # synthetische Session emittieren
 ```
 

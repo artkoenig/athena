@@ -12,6 +12,13 @@
  * fails — a firewall blocking outbound 7844 is the common cause — that URL never
  * works. So the URL is not the ready signal: the tunnel counts as up only once a
  * request actually comes back through it.
+ *
+ * By default cloudflared reaches the edge over QUIC, which is UDP. Plenty of
+ * home routers, company networks and container runtimes drop outbound UDP while
+ * letting TCP through, and cloudflared does not fall back on its own — it just
+ * keeps retrying QUIC forever. Since that failure is both common and mechanical
+ * to recover from, the second protocol is tried automatically rather than left
+ * as a flag in the error message for the user to find.
  */
 
 import { spawn } from 'node:child_process';
@@ -20,6 +27,19 @@ const URL_RE = /https:\/\/[a-z0-9][a-z0-9-]*\.trycloudflare\.com/i;
 const URL_TIMEOUT_MS = 30_000;
 const READY_TIMEOUT_MS = 60_000;
 const POLL_INTERVAL_MS = 2_000;
+
+/** Tried in order; the first one that actually serves wins. */
+const PROTOCOLS = [
+  { flag: null, label: 'QUIC (UDP 7844)' },
+  { flag: 'http2', label: 'HTTP/2 (TCP 7844)' },
+];
+
+// cloudflared retries the edge connection on its own, so a single failure line
+// means nothing. Several in a row mean the path is blocked, not slow — that is
+// worth abandoning early instead of sitting out the whole readiness window.
+const EDGE_FAILURE_RE =
+  /failed to dial to edge|failed to dial a quic connection|quic connection failed|connection is blocked or unreachable|allow outbound quic traffic/gi;
+const EDGE_FAILURE_THRESHOLD = 4;
 
 export const INSTALL_HINT = `cloudflared is not installed. Install it with one of:
 
@@ -52,19 +72,23 @@ function diagnostics(output) {
 }
 
 /**
- * Start a quick tunnel to `port` and resolve once it is genuinely reachable.
- * Rejects if the binary is missing, the process dies, no URL appears, or the URL
- * never starts serving.
+ * One tunnel attempt over one protocol. Rejects if the binary is missing, the
+ * process dies, no URL appears, or the URL never starts serving. Only the last
+ * of those is worth retrying over another protocol, so it is tagged
+ * `edgeFailure` for the caller.
  */
-export async function startTunnel({
+async function attemptTunnel({
   port,
-  binary = 'cloudflared',
-  urlTimeoutMs = URL_TIMEOUT_MS,
-  readyTimeoutMs = READY_TIMEOUT_MS,
-  verify = defaultVerify,
-  onProgress = () => {},
-} = {}) {
-  const child = spawn(binary, ['tunnel', '--no-autoupdate', '--url', `http://127.0.0.1:${port}`], {
+  binary,
+  protocol,
+  urlTimeoutMs,
+  readyTimeoutMs,
+  verify,
+  onProgress,
+}) {
+  const args = ['tunnel', '--no-autoupdate', '--url', `http://127.0.0.1:${port}`];
+  if (protocol) args.push('--protocol', protocol);
+  const child = spawn(binary, args, {
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
@@ -83,10 +107,25 @@ export async function startTunnel({
     });
   };
 
+  // The URL arrives as output, so wait for it on the stream rather than polling:
+  // a poll loop would keep a timer alive long after the URL was found and hold
+  // the process open for the rest of its window.
+  let announce = null;
+  let urlTimer = null;
+  const findUrl = new Promise((resolve, reject) => {
+    announce = resolve;
+    urlTimer = setTimeout(
+      () => reject(fail(`cloudflared produced no tunnel URL within ${urlTimeoutMs} ms`)),
+      urlTimeoutMs,
+    );
+  });
+
   child.stdout.setEncoding('utf8');
   child.stderr.setEncoding('utf8');
   const collect = (chunk) => {
     output += chunk;
+    const match = output.match(URL_RE);
+    if (match) announce(match[0]);
   };
   child.stdout.on('data', collect);
   child.stderr.on('data', collect);
@@ -95,34 +134,75 @@ export async function startTunnel({
     child.on('error', (error) =>
       reject(error.code === 'ENOENT' ? Object.assign(new Error(INSTALL_HINT), { code: 'ENOENT' }) : error),
     );
-    child.on('exit', (code) => {
+    // 'close' rather than 'exit': it fires once stdio has been drained, so the
+    // diagnosis is complete. On 'exit' the last stderr chunk — usually the whole
+    // reason the process died — may not have been delivered yet.
+    child.on('close', (code) => {
       exited = true;
       reject(fail(`cloudflared exited with code ${code}`));
     });
   });
 
-  const findUrl = (async () => {
-    const deadline = Date.now() + urlTimeoutMs;
-    while (Date.now() < deadline) {
-      const match = output.match(URL_RE);
-      if (match) return match[0];
-      await sleep(200);
-    }
-    throw fail(`cloudflared produced no tunnel URL within ${urlTimeoutMs} ms`);
-  })();
-
-  const url = await Promise.race([findUrl, spawnFailure]);
-  onProgress(url);
+  let url;
+  try {
+    url = await Promise.race([findUrl, spawnFailure]);
+  } finally {
+    clearTimeout(urlTimer);
+  }
+  onProgress(url, protocol);
 
   // The URL exists; now wait for it to actually serve, which is what proves the
   // edge connection came up.
   const deadline = Date.now() + readyTimeoutMs;
   while (Date.now() < deadline && !exited) {
-    if (await verify(url)) return { url, stop, process: child };
+    if (await verify(url)) return { url, protocol, stop, process: child };
+    if ((output.match(EDGE_FAILURE_RE) ?? []).length >= EDGE_FAILURE_THRESHOLD) break;
     await sleep(POLL_INTERVAL_MS);
   }
-  throw fail(
-    `the tunnel at ${url} never became reachable. cloudflared needs outbound access ` +
-      'to Cloudflare on port 7844 (QUIC/UDP, or TCP with --protocol http2)',
-  );
+  throw Object.assign(fail(`the tunnel at ${url} never became reachable`), { edgeFailure: true });
+}
+
+/**
+ * Start a quick tunnel to `port` and resolve once it is genuinely reachable,
+ * falling back from QUIC to HTTP/2 if the edge connection cannot be made.
+ * `protocol` pins one protocol and disables the fallback.
+ */
+export async function startTunnel({
+  port,
+  binary = 'cloudflared',
+  protocol = null,
+  urlTimeoutMs = URL_TIMEOUT_MS,
+  readyTimeoutMs = READY_TIMEOUT_MS,
+  verify = defaultVerify,
+  onProgress = () => {},
+  onFallback = () => {},
+} = {}) {
+  const attempts = protocol ? [{ flag: protocol, label: protocol }] : PROTOCOLS;
+
+  for (const [index, attempt] of attempts.entries()) {
+    try {
+      return await attemptTunnel({
+        port,
+        binary,
+        protocol: attempt.flag,
+        urlTimeoutMs,
+        readyTimeoutMs,
+        verify,
+        onProgress,
+      });
+    } catch (error) {
+      const next = attempts[index + 1];
+      // Anything but a blocked edge path — a missing binary, a crash — will fail
+      // exactly the same way over the other protocol, so it is reported as is.
+      if (!error.edgeFailure || !next) {
+        if (error.edgeFailure) {
+          error.message +=
+            '\n\n  cloudflared needs outbound access to Cloudflare on port 7844. ' +
+            'Both UDP (QUIC) and TCP (HTTP/2) were tried, so your network blocks the port itself.';
+        }
+        throw error;
+      }
+      onFallback(attempt, next);
+    }
+  }
 }

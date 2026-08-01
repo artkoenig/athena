@@ -34,6 +34,9 @@ Options
       --tunnel [binary]         Open a Cloudflare quick tunnel, generate a token
                                 and print the env block for a cloud session.
                                 Everything a remote agent needs, in one command.
+                                Falls back from QUIC to HTTP/2 if UDP is blocked.
+      --tunnel-protocol <p>     Pin the tunnel transport (quic | http2) instead
+                                of trying both
       --public-url <url>        Advertise this URL instead of the bind address
                                 (behind a tunnel or reverse proxy)
       --persist [dir]           Append records to JSONL and replay them on restart
@@ -179,7 +182,10 @@ async function main(argv) {
       tunnel = await startTunnel({
         port: config.port,
         binary: flags.tunnel === true ? 'cloudflared' : flags.tunnel,
+        protocol: flags['tunnel-protocol'] ?? null,
         onProgress: (url) => console.error(`  Got ${url}, waiting for it to serve …`),
+        onFallback: (failed, next) =>
+          console.error(`  ${failed.label} did not get through — retrying over ${next.label} …`),
       });
     } catch (error) {
       console.error(`\n  Tunnel failed: ${error.message}\n`);
