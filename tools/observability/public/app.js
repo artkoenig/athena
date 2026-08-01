@@ -177,6 +177,7 @@ function renderSessionList() {
 
 const TABS = [
   { id: 'overview', label: 'Overview' },
+  { id: 'todos', label: 'Todos' },
   { id: 'traces', label: 'Traces' },
   { id: 'events', label: 'Events' },
   { id: 'metrics', label: 'Metrics' },
@@ -192,6 +193,10 @@ function renderDetail() {
   }
   const errors = session.counts.apiErrors + session.counts.toolFailures;
   const counts = {
+    todos:
+      (session.todos.legacy?.length ?? 0) +
+      session.todos.tasks.length +
+      session.todos.unlinkedCreates.length,
     traces: session.traceCount,
     events: session.counts.logs,
     metrics: session.counts.metricPoints,
@@ -232,6 +237,9 @@ function renderTabBody() {
   const body = document.getElementById('tab-body');
   if (!body) return;
   switch (state.tab) {
+    case 'todos':
+      body.innerHTML = renderTodosTab();
+      break;
     case 'traces':
       body.innerHTML = renderTracesTab();
       break;
@@ -358,6 +366,95 @@ function renderOverviewTab() {
     : '';
 
   return `<div class="kpi-grid">${kpis}</div>${lastError}${models}${tools}`;
+}
+
+/* --------------------------------- todos --------------------------------- */
+
+function todoStatusChip(status) {
+  const tone = { completed: 'ok', in_progress: 'warn', deleted: 'error' }[status];
+  return `<span class="chip"${tone ? ` data-tone="${tone}"` : ''}>${esc(status || 'pending')}</span>`;
+}
+
+function renderTodosTab() {
+  const todos = state.session.todos;
+  const legacy = todos.legacy;
+  const tasks = todos.tasks;
+  const unlinked = todos.unlinkedCreates;
+
+  if (!legacy && !tasks.length && !unlinked.length) {
+    if (todos.callsSeen > 0) {
+      return `<div class="placeholder">
+        ${todos.callsSeen} TodoWrite/TaskCreate/TaskUpdate call(s) seen, but no parameters were
+        captured. Set <code>OTEL_LOG_TOOL_DETAILS=1</code> in the agent environment to see todo
+        content and status here.
+      </div>`;
+    }
+    return '<div class="placeholder">No todos or tasks recorded for this session.</div>';
+  }
+
+  const sections = [];
+
+  if (legacy) {
+    sections.push(`<div class="panel">
+      <h3>Todos (TodoWrite) · last write ${esc(fmtAgo(todos.legacyAtMs))}</h3>
+      <div class="table-scroll"><table>
+        <thead><tr><th>Status</th><th>Content</th></tr></thead>
+        <tbody>${legacy
+          .map(
+            (todo) => `<tr>
+              <td>${todoStatusChip(todo.status)}</td>
+              <td>${esc(todo.status === 'in_progress' && todo.activeForm ? todo.activeForm : todo.content)}</td>
+            </tr>`,
+          )
+          .join('')}</tbody>
+      </table></div>
+    </div>`);
+  }
+
+  if (tasks.length) {
+    sections.push(`<div class="panel">
+      <h3>Tasks by id (TaskUpdate)</h3>
+      <div class="table-scroll"><table>
+        <thead><tr><th>Id</th><th>Status</th><th>Subject</th><th>Description</th><th class="num">Updated</th></tr></thead>
+        <tbody>${tasks
+          .map(
+            (task) => `<tr>
+              <td class="name" title="${esc(task.taskId)}">${esc(shortId(task.taskId, 10))}</td>
+              <td>${todoStatusChip(task.status)}</td>
+              <td>${esc(task.subject || '—')}</td>
+              <td>${esc(task.description || '—')}</td>
+              <td class="num">${esc(fmtAgo(task.updatedAtMs))}</td>
+            </tr>`,
+          )
+          .join('')}</tbody>
+      </table></div>
+    </div>`);
+  }
+
+  if (unlinked.length) {
+    sections.push(`<div class="panel">
+      <h3>Created (id not yet known)</h3>
+      <p class="muted" style="padding: 0 12px 10px">
+        Claude Code assigns the task id after <code>TaskCreate</code> runs and only reports it in
+        the tool result, which this telemetry does not carry. These are the raw
+        <code>TaskCreate</code> calls — match them to the table above by time and subject.
+      </p>
+      <div class="table-scroll"><table>
+        <thead><tr><th>Subject</th><th>Description</th><th class="num">Created</th></tr></thead>
+        <tbody>${unlinked
+          .map(
+            (item) => `<tr>
+              <td>${esc(item.subject || '—')}</td>
+              <td>${esc(item.description || '—')}</td>
+              <td class="num">${esc(fmtAgo(item.createdAtMs))}</td>
+            </tr>`,
+          )
+          .join('')}</tbody>
+      </table></div>
+    </div>`);
+  }
+
+  return sections.join('');
 }
 
 /* -------------------------------- traces -------------------------------- */

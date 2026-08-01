@@ -415,6 +415,16 @@ button {
   border-color: color-mix(in srgb, var(--error) 40%, transparent);
 }
 
+.chip[data-tone="ok"] {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 40%, transparent);
+}
+
+.chip[data-tone="warn"] {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 40%, transparent);
+}
+
 .tabs {
   display: flex;
   gap: 2px;
