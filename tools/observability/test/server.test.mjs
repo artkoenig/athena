@@ -108,6 +108,60 @@ test('accepts OTLP/JSON on /v1/logs and answers in JSON', async () => {
   });
 });
 
+test('a TaskCreate tool_result with the real CLI event.name shape reaches the Todos tab', async () => {
+  // Regression test: Claude Code 2.1.x sends the `event.name` log attribute
+  // unprefixed ('tool_result'), not as 'claude_code.tool_result'. Every
+  // downstream switch keys off the prefixed EVENT.* constants, so without
+  // canonicalizing this in decode.mjs, tool_result events silently vanish —
+  // counted nowhere, todos state never reconstructed — despite arriving fine
+  // and showing up in the raw /api/events feed.
+  const sessionId = 's-real-taskcreate';
+  const payload = JSON.stringify({
+    resourceLogs: [
+      {
+        resource: { attributes: [{ key: 'session.id', value: { stringValue: sessionId } }] },
+        scopeLogs: [
+          {
+            logRecords: [
+              {
+                timeUnixNano: String(T0),
+                severityNumber: 9,
+                body: { stringValue: 'claude_code.tool_result' },
+                attributes: [
+                  { key: 'session.id', value: { stringValue: sessionId } },
+                  { key: 'event.name', value: { stringValue: 'tool_result' } },
+                  { key: 'tool_name', value: { stringValue: 'TaskCreate' } },
+                  { key: 'success', value: { stringValue: 'true' } },
+                  {
+                    key: 'tool_input',
+                    value: {
+                      stringValue: JSON.stringify({ subject: 'Fix flaky test', description: 'CI flakes' }),
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+
+  await withServer({}, async ({ base }) => {
+    const response = await fetch(`${base}/v1/logs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: payload,
+    });
+    assert.equal(response.status, 200);
+
+    const detail = await (await fetch(`${base}/api/sessions/${sessionId}`)).json();
+    assert.equal(detail.todos.callsSeen, 1);
+    assert.equal(detail.todos.unlinkedCreates.length, 1);
+    assert.equal(detail.todos.unlinkedCreates[0].subject, 'Fix flaky test');
+  });
+});
+
 test('accepts gzip-encoded bodies', async () => {
   await withServer({}, async ({ base, store }) => {
     const response = await fetch(`${base}/v1/traces`, {
