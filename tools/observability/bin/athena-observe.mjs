@@ -13,12 +13,16 @@ import { JsonlPersistence } from '../src/persist.mjs';
 import { createServer } from '../src/server.mjs';
 import { endpointFor, parseArgs, resolveConfig } from '../src/config.mjs';
 import { otelEnvFor } from '../src/claude.mjs';
+import { probeCollector } from '../src/probe.mjs';
 
 const HELP = `
 athena-observe — monitor Claude Agent SDK / Claude Code sessions over OpenTelemetry
 
   athena-observe [start]        Start the OTLP collector and the web UI.
   athena-observe env            Print the OTEL_* variables that point an agent here.
+  athena-observe check          Verify a collector is reachable from *here* and
+                                actually stores what it accepts. Run it inside the
+                                environment the agent runs in.
 
 Options
   -p, --port <n>                Port for OTLP ingest and the UI      (default 4318)
@@ -76,6 +80,26 @@ async function main(argv) {
   if (command === 'env') {
     const env = otelEnvFor(endpoint, { traces: config.traces, token: config.token });
     console.log(renderEnv(env, flags.format === true ? 'shell' : (flags.format ?? 'shell')));
+    return;
+  }
+  if (command === 'check') {
+    // Default to whatever the agent in this shell is already exporting to, so a
+    // bare `check` diagnoses the configuration actually in effect.
+    const target = config.publicUrl ?? process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? endpoint;
+    const secret =
+      config.token ??
+      (process.env.OTEL_EXPORTER_OTLP_HEADERS ?? '').match(/Authorization=Bearer\s+(\S+)/i)?.[1] ??
+      null;
+    const result = await probeCollector(target, { token: secret });
+    for (const step of result.steps) {
+      console.error(`  ${step.ok ? '✓' : '✗'} ${step.name.padEnd(10)} ${step.detail}`);
+    }
+    console.error(
+      result.ok
+        ? `\n  Telemetry from this environment reaches ${result.endpoint}.\n`
+        : `\n  Telemetry from this environment does NOT reach ${result.endpoint}.\n`,
+    );
+    if (!result.ok) process.exitCode = 1;
     return;
   }
   if (command !== 'start') {

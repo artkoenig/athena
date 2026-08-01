@@ -130,43 +130,76 @@ Container voreingestellt (`ATHENA_OBS_PERSIST=/data`), ein Neustart verliert als
 
 ### 3. Agent in einer Cloud-Session (Claude Code on the web, Actions, Container)
 
-Hier liegt der einzige Stolperstein: die Session läuft in einem fremden Container und
-erreicht dein `localhost` nicht. Zwei kostenlose Wege, den lokalen Collector trotzdem
-erreichbar zu machen.
+Die Session läuft in einem fremden Container. Der erreicht dein `localhost` nicht, und
+in ihm gibt es weder deine `.claude/settings.local.json` noch deine Shell. Zwei Teile
+müssen also zusammenkommen: eine **von außen erreichbare Collector-URL** und die
+**Variablen in der Umgebung der Session**.
 
-**Tunnel** — funktioniert von jedem Rechner aus, auch hinter NAT. Cloudflares
-Quick Tunnel braucht kein Konto:
+#### Schritt 1 — Collector öffentlich erreichbar machen
+
+Der Collector läuft weiter auf deinem Rechner; nur ein Tunnel gibt ihm eine öffentliche
+Adresse. Immer mit Token, die URL ist ab jetzt aus dem Internet erreichbar.
 
 ```bash
-# Shell 1 — Collector mit Token, weil die URL öffentlich erreichbar wird
-TOKEN=$(openssl rand -hex 16)
+TOKEN=$(openssl rand -hex 16); echo "$TOKEN"
 node bin/athena-observe.mjs --token "$TOKEN" --persist ./telemetry
-
-# Shell 2 — Tunnel; gibt eine https://…trycloudflare.com URL aus
-cloudflared tunnel --url http://127.0.0.1:4318
-
-# Shell 3 — env-Block für genau diese URL erzeugen und in die Session kopieren
-node bin/athena-observe.mjs env --public-url https://<deine>.trycloudflare.com --token "$TOKEN"
 ```
 
-`--public-url` ändert nur die *angekündigte* Adresse (env-Block, Startbanner,
-Setup-Dialog der UI), nicht die Bind-Adresse. Ohne das Flag würde `env` weiter
-`http://127.0.0.1:4318` ausgeben, was in der Session ins Leere läuft.
+| Tunnel                                        | Kosten             | URL         | Konto        |
+| --------------------------------------------- | ------------------ | ----------- | ------------ |
+| `cloudflared tunnel --url http://127.0.0.1:4318` | frei            | wechselnd   | keins        |
+| `tailscale funnel 4318`                       | frei (Personal)    | **stabil**  | Tailscale    |
+| `ngrok http 4318 --domain <deine>.ngrok-free.app` | frei (1 Domain) | **stabil**  | ngrok        |
+| eigener Server / VM / NAS mit `--host 0.0.0.0` | vorhandene Kosten | stabil      | –            |
 
-**Erreichbarer Host** — wenn ohnehin ein Server, NAS oder eine VM im LAN läuft:
+Für Cloud-Sessions lohnt eine **stabile** URL: Cloudflares Quick Tunnel vergibt bei jedem
+Neustart eine andere, und dann müssen die Umgebungsvariablen jedes Mal nachgezogen werden.
+
+#### Schritt 2 — Variablen in der Session-Umgebung setzen
 
 ```bash
-node bin/athena-observe.mjs --host 0.0.0.0 --token "$(openssl rand -hex 16)" --persist ./telemetry
+node bin/athena-observe.mjs env --public-url https://<deine-url> --token "$TOKEN" --format dotenv
 ```
 
-In beiden Fällen enthält der `env`-Block automatisch
-`OTEL_EXPORTER_OTLP_HEADERS=Authorization=Bearer …`. Das Token gilt gleichermaßen für
-Ingest und UI; im Browser wird es als `?token=…` mitgegeben.
+Die Ausgabe in die Environment-Einstellungen von Claude Code on the web eintragen (dort
+gehört auch das Token hin — **nicht** in eine Datei im Repo, sonst steht es im
+Versionsverlauf). Bei GitHub Actions dasselbe über `env:` und ein Repository-Secret.
+
+`--public-url` ändert nur die *angekündigte* Adresse — env-Block, Startbanner,
+Setup-Dialog der UI —, nicht die Bind-Adresse. Ohne das Flag stünde dort weiter
+`http://127.0.0.1:4318`, was in der Session ins Leere läuft.
+
+#### Schritt 3 — nachsehen, ob es ankommt
+
+Kommt nichts an, schweigt der Exporter. Deshalb **in der Cloud-Session** prüfen:
+
+```bash
+node tools/observability/bin/athena-observe.mjs check
+```
+
+Ohne Argumente nimmt `check` das, was in dieser Umgebung tatsächlich konfiguriert ist
+(`OTEL_EXPORTER_OTLP_ENDPOINT` samt Token aus `OTEL_EXPORTER_OTLP_HEADERS`), schickt einen
+echten OTLP-Span und liest ihn wieder aus:
+
+```
+  ✓ reachable  https://obs.example.ts.net is an athena-observe collector
+  ✓ ingest     OTLP span accepted
+  ✓ stored     probe session athena-check-16f7537d is in the store
+```
+
+Jeder Schritt scheitert für sich: `reachable` zeigt Netzpolitik oder falsche URL,
+`ingest` fehlendes oder falsches Token, `stored` einen Collector, der annimmt aber nicht
+speichert. Exit-Code 1, wenn irgendetwas scheitert — damit taugt es auch für ein Skript.
+
+Danach eine **neue** Session starten; die laufende liest ihre Konfiguration nicht neu.
 
 > Sobald der Collector über `127.0.0.1` hinaus erreichbar ist, gehört ein Token davor —
 > sonst kann jeder, der die Adresse kennt, Telemetrie einkippen und die eigene mitlesen.
 > Einzige Ausnahme ist `/api/health`, das ohne Token antwortet, damit Healthchecks
 > funktionieren; es verrät nur, dass der Prozess läuft.
+
+> Ob der Session-Container überhaupt nach außen darf, entscheidet die Network-Policy der
+> Umgebung. `check` sagt es dir in der ersten Zeile.
 
 ## Was die UI zeigt
 
@@ -269,7 +302,7 @@ OTLP-Revisionen und neuen Claude-Code-Attributen tolerant.
 ## Tests
 
 ```bash
-npm test          # 54 Tests: Wire-Format, Decoder, Store, Persistenz, Config, HTTP-Ende-zu-Ende
+npm test          # 58 Tests: Wire-Format, Decoder, Store, Persistenz, Config, Probe, HTTP
 npm run demo      # synthetische Session emittieren
 ```
 
@@ -289,9 +322,16 @@ npm run demo      # synthetische Session emittieren
 
 ## Fehlersuche
 
-Kommt nichts an, exportiert die CLI still ins Leere. `CLAUDE_CODE_OTEL_DIAG_STDERR=1`
-schaltet Exporter-Diagnosen auf stderr (Claude Code ≥ 2.1.179); beim SDK landen sie im
-`stderr`-Callback. Danach der Reihe nach prüfen:
+Kommt nichts an, exportiert die CLI still ins Leere. Erste Maßnahme ist immer, aus der
+Umgebung des Agenten heraus zu prüfen, ob der Weg überhaupt steht:
+
+```bash
+node tools/observability/bin/athena-observe.mjs check
+```
+
+`CLAUDE_CODE_OTEL_DIAG_STDERR=1` schaltet zusätzlich Exporter-Diagnosen auf stderr
+(Claude Code ≥ 2.1.179); beim SDK landen sie im `stderr`-Callback. Danach der Reihe nach
+prüfen:
 
 1. `curl -s http://127.0.0.1:4318/api/health` — läuft der Collector?
 2. Zeigt `OTEL_EXPORTER_OTLP_ENDPOINT` auf den Host **ohne** `/v1/…`-Pfad?
