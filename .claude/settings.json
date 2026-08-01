@@ -9,5 +9,8 @@
   },
   "enabledPlugins": {
     "athena@athena": true
+  },
+  "worktree": {
+    "baseRef": "fresh"
   }
 }

@@ -23,6 +23,9 @@ run "the repository itself" \
 run "the plugin: manifests, session-start hook, push guard" \
   bash "$root/test-plugin.sh"
 
+run "parallel runs: worktrees" \
+  bash "$root/test-worktree.sh"
+
 # Through the package's own `test` script rather than a `node --test` line
 # repeated here, so the suite this runs stays the suite the tool declares.
 # Zero-dependency, so no install step is needed first.

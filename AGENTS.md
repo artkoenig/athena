@@ -131,8 +131,12 @@ record the waiver like any judgment call.
 
 ## Bookkeeping
 
-- One issue = one branch = one pull request. No child issues — a change too big
-  to land whole gets a task list.
+- One issue = one branch = one pull request = one working directory. No child
+  issues — a change too big to land whole gets a task list.
+- Runs that overlap in time never share a checkout: each gets its own worktree,
+  branched from the current default branch like any other run. Before starting
+  one, `git worktree list` says what is already in flight; a run whose worktree
+  is gone did not finish, it was thrown away.
 - The tracker is the issue the run belongs to: its problem statement, its
   numbered criteria, and everything decided along the way. A subagent that has
   to write there gets the means to.

@@ -62,6 +62,24 @@ dorthin, statt eine Seite anzunehmen, die es nicht gibt.
 Damit die Retros in *deinem* Regelwerk landen, forke das Repository und zeige
 mit `marketplace add` auf den Fork.
 
+## Parallel arbeiten
+
+Ein Lauf, ein Worktree. Zwei Sessions, die gleichzeitig laufen, teilen sich nie
+ein Arbeitsverzeichnis:
+
+```bash
+claude --worktree feature-auth   # eigener Checkout unter .claude/worktrees/
+git worktree list                # was gerade läuft
+```
+
+Jeder Worktree zweigt vom Default-Branch ab, nicht von ungepushter Arbeit —
+`worktree.baseRef` steht dafür projektweit auf `"fresh"`. Der Push-Guard gilt
+im Worktree mit, weil `core.hooksPath` in der geteilten `.git`-Config liegt;
+ein Push auf `main` aus einem parallelen Lauf wird genauso verweigert.
+Gitignorierte Dateien, die ein Lauf braucht, stehen in
+[`.worktreeinclude`](.worktreeinclude) und werden in jeden neuen Worktree
+kopiert.
+
 ## tools/
 
 | Tool                                    | Zweck                                                                                                                |
