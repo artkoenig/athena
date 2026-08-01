@@ -17,6 +17,9 @@ run() {
   echo
 }
 
+run "the repository itself" \
+  bash "$root/test-repo.sh"
+
 run "the plugin: manifests, session-start hook, push guard" \
   bash "$root/test-plugin.sh"
 

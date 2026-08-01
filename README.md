@@ -85,4 +85,4 @@ Ein Befehl, alle Suites, Exit 0 nur wenn alles grün ist.
 
 ## Lizenz
 
-Apache 2.0 — siehe [LICENSE](LICENSE).
+GPL-3.0-or-later — siehe [LICENSE](LICENSE).
