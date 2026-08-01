@@ -112,16 +112,23 @@ check $? "claude plugin validate accepts the plugin manifest and its components"
 # it turns the "No version specified" warning into an error on a defect-free
 # tree. Its warnings are still the only thing that catches a manifest field
 # the loader ignores (a misspelled `repository`) or one it misses
-# (`description`), so the gate is the warning list, not the exit code:
-# exactly one warning, and it is the version one.
+# (`description`), or a file that lands in a component directory without
+# being a component — an `agents/CLAUDE.md` registers as an agent with no
+# frontmatter. So the gate is the warning list, not the exit code: two
+# warnings are expected on a defect-free tree, and any third is a defect.
+#
+# The two: the missing version, and the root CLAUDE.md, which is this
+# repository's own project context and deliberately not shipped to the
+# sessions of projects that install the plugin.
 strict_out="$tmp/strict.txt"
 claude plugin validate "$root/.claude-plugin/plugin.json" --strict >"$strict_out" 2>&1
 warnings="$(grep -c '^  > ' "$strict_out")"
 version_warnings="$(grep -c '^  > version: No version specified' "$strict_out")"
-if [ "$warnings" = "1" ] && [ "$version_warnings" = "1" ]; then
-  ok "--strict warns about the missing version and nothing else"
+root_md_warnings="$(grep -c '^  > root: CLAUDE.md at the plugin root is not loaded' "$strict_out")"
+if [ "$warnings" = "2" ] && [ "$version_warnings" = "1" ] && [ "$root_md_warnings" = "1" ]; then
+  ok "--strict warns about the missing version and the root CLAUDE.md, and nothing else"
 else
-  no "--strict warns about more than the missing version:"
+  no "--strict warns about more than the missing version and the root CLAUDE.md:"
   grep '^  > ' "$strict_out" | sed 's/^/       /'
 fi
 
