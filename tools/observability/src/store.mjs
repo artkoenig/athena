@@ -70,7 +70,30 @@ function emptyModelStats() {
 }
 
 function emptyToolStats() {
-  return { calls: 0, failures: 0, rejected: 0, durationMsTotal: 0, resultTokens: 0 };
+  return {
+    calls: 0,
+    failures: 0,
+    rejected: 0,
+    durationMsTotal: 0,
+    resultTokens: 0,
+    // Portion of resultTokens that is an estimate (see #applyResultTokenFallback)
+    // rather than the CLI's own `result_tokens` attribute.
+    resultTokensEstimated: 0,
+  };
+}
+
+/**
+ * `result_tokens` is documented as an unconditional attribute on
+ * `claude_code.tool` spans, but current CLI builds (checked against 2.1.220)
+ * never actually send it. The sibling `claude_code.tool_result` log event
+ * does reliably carry `tool_result_size_bytes`, so that stands in: ~4 bytes
+ * per token is the usual rule of thumb for English text, the same ratio
+ * commonly used to eyeball token counts from character/byte counts. It is
+ * only ever used when the CLI hasn't reported a real value.
+ */
+const BYTES_PER_TOKEN_ESTIMATE = 4;
+function estimateTokensFromBytes(bytes) {
+  return Math.round(bytes / BYTES_PER_TOKEN_ESTIMATE);
 }
 
 function newSession(id, now) {
@@ -107,6 +130,13 @@ function newSession(id, now) {
     startTypes: new Set(),
     models: new Map(),
     tools: new Map(),
+    // tool_use_id -> stats, for a `claude_code.tool` span seen before its
+    // matching tool_result log event. Spans and logs export on separate
+    // OTLP pipelines with independent flush intervals, so arrival order
+    // between the two is never guaranteed.
+    pendingToolSpanStats: new Map(),
+    // tool_use_id -> tool_result_size_bytes, for the reverse ordering.
+    pendingToolResultBytes: new Map(),
     traceIds: new Set(),
     lastError: null,
     // Todo/task state reconstructed from TodoWrite/TaskCreate/TaskUpdate
@@ -252,6 +282,40 @@ export class TelemetryStore {
     return stats;
   }
 
+  /**
+   * A `claude_code.tool` span without `result_tokens` — join it against the
+   * matching tool_result log event's `tool_result_size_bytes`, whichever of
+   * the two arrives second.
+   */
+  #applyResultTokenFallback(session, stats, toolUseId) {
+    if (!toolUseId) return;
+    const bytes = session.pendingToolResultBytes.get(toolUseId);
+    if (bytes === undefined) {
+      session.pendingToolSpanStats.set(toolUseId, stats);
+      return;
+    }
+    session.pendingToolResultBytes.delete(toolUseId);
+    const estimate = estimateTokensFromBytes(bytes);
+    stats.resultTokens += estimate;
+    stats.resultTokensEstimated += estimate;
+  }
+
+  /** The log-side half of #applyResultTokenFallback. */
+  #applyResultBytesFallback(session, toolUseId, sizeBytesAttr) {
+    if (!toolUseId) return;
+    const bytes = num(sizeBytesAttr, NaN);
+    if (!Number.isFinite(bytes)) return;
+    const pendingStats = session.pendingToolSpanStats.get(toolUseId);
+    if (!pendingStats) {
+      session.pendingToolResultBytes.set(toolUseId, bytes);
+      return;
+    }
+    session.pendingToolSpanStats.delete(toolUseId);
+    const estimate = estimateTokensFromBytes(bytes);
+    pendingStats.resultTokens += estimate;
+    pendingStats.resultTokensEstimated += estimate;
+  }
+
   /* --------------------------------- spans ----------------------------- */
 
   #applySpan(session, span) {
@@ -298,7 +362,11 @@ export class TelemetryStore {
         const stats = this.#tool(session, attrs.tool_name);
         stats.calls++;
         stats.durationMsTotal += num(attrs.duration_ms, span.durationMs ?? 0);
-        stats.resultTokens += num(attrs.result_tokens, 0);
+        if (attrs.result_tokens !== undefined) {
+          stats.resultTokens += num(attrs.result_tokens, 0);
+        } else {
+          this.#applyResultTokenFallback(session, stats, attrs.tool_use_id);
+        }
         break;
       }
       case SPAN.toolExecution:
@@ -408,6 +476,7 @@ export class TelemetryStore {
         } else {
           this.#applyTodo(session, log);
         }
+        this.#applyResultBytesFallback(session, attrs.tool_use_id, attrs.tool_result_size_bytes);
         break;
       }
       case EVENT.toolDecision:
