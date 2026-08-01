@@ -10,8 +10,8 @@ One issue is one markdown file under `docs/issues/`. That file is the whole
 tracker: no database, no script.
 
 This skill owns the file: its name, its frontmatter, its sections, its states.
-Four parts are handed to other owners (listed below); everything else is
-described here and nowhere else — two descriptions of one thing drift apart.
+What is handed to another owner is named below; everything else is described
+here and nowhere else — two descriptions of one thing drift apart.
 
 A caller hands this skill **content** and names an **operation** — never a
 path, a filename, a frontmatter key or a heading. That way the file can
@@ -47,9 +47,13 @@ filenames, the template, the sections. It can change without anything outside
 
 ## Filing an issue
 
-1. **Pick the number.** `NNNN-slug.md` — four digits, zero-padded, the next
-   number after the highest under `docs/issues/`, never reused. The padding
-   keeps the directory listing in filing order.
+1. **Stamp the day.** `YYYY-MM-DD-slug.md` — the day it is filed, then a short
+   hyphenated slug of the title. Take the date from `date +%F`, never from
+   memory: what day it is is a fact like any other, and a session's idea of it
+   is often months out. The stamp keeps the directory listing in filing order
+   and dates every issue without a field; issues filed on the same day are
+   told apart by their slugs, so an issue whose slug is taken that day needs a
+   more specific one.
 2. **Copy `assets/TEMPLATE.md`** to that path. Do not retype it, do not
    reorder or rename its sections.
 3. **Delete the comment block** under the title — it is a filing instruction,
@@ -122,6 +126,13 @@ schema. A missing section simply shows the file is older than that section —
 no migration machinery needed. If a section ever keeps its name but changes
 its meaning, the migration note belongs here, in prose.
 
-One such note exists: earlier setups copied a template into each project as
-`docs/issues/TEMPLATE.md`. That copy is obsolete — this skill carries the
-template now — and a project still holding one can delete it.
+The same holds for the filename. Two notes exist:
+
+- Earlier setups copied a template into each project as
+  `docs/issues/TEMPLATE.md`. That copy is obsolete — this skill carries the
+  template now — and a project still holding one can delete it.
+- Issues filed before the date stamp are named `NNNN-slug.md`, a running
+  four-digit number. They keep those names: renaming them would break every
+  reference from a branch, a pull request or another issue, and buy nothing.
+  Nothing here reads the name anyway — the scan reads every file under
+  `docs/issues/` and takes what it needs from the frontmatter.
