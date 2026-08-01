@@ -9,6 +9,10 @@ Keine Dependencies, kein Build-Schritt, keine Datenbank — nur Node ≥ 20.11. 
 Absicht: das Tool soll in einem beliebigen Sandbox-Container per `node bin/athena-observe.mjs`
 starten, auch ohne `npm install`.
 
+Gedacht zum Selbst-Betreiben auf dem eigenen Rechner: kein Konto, kein fremder Dienst,
+keine laufenden Kosten. Die Telemetrie bleibt dort, wo sie entsteht — siehe
+[Selbst hosten](#selbst-hosten).
+
 ```
 ┌──────────────┐  OTLP/HTTP   ┌────────────────────────────┐
 │ Claude Code  │─────────────▶│  athena-observe :4318      │
@@ -72,23 +76,69 @@ Drei Signale, drei unabhängige Schalter — jedes funktioniert für sich:
 Sind Metrics **und** Events aktiv, gewinnt für Tokens/Kosten die Metrik — es wird nicht
 doppelt gezählt. Die UI schreibt unter jede Kennzahl, aus welcher Quelle sie stammt.
 
-### Cloud-Sessions (Claude Code on the web, Actions, Container)
+## Selbst hosten
 
-Cloud-Sessions laufen in einem entfernten Container. Der muss den Collector erreichen
-können, `localhost` reicht dort nicht:
+athena-observe ist dafür gebaut, dass es jeder auf dem eigenen Rechner betreibt: keine
+Registrierung, kein Konto, kein fremder Dienst, keine laufenden Kosten. Die Telemetrie
+verlässt die eigene Maschine nicht. Es gibt drei Formen, je nachdem, wo der Agent läuft.
+
+### 1. Agent und Collector auf demselben Rechner
+
+Der Normalfall — der Schnellstart oben ist bereits alles. Bind-Adresse bleibt
+`127.0.0.1`, damit ist der Collector von außen nicht erreichbar und braucht kein Token.
+
+### 2. Per Docker
+
+Wer Node nicht direkt betreiben will: das Image installiert nichts, es ist nur ein
+Node-Runtime plus Quelltext.
 
 ```bash
-# auf einem Host, den die Session erreicht:
-node bin/athena-observe.mjs --host 0.0.0.0 --port 4318 --token "$(openssl rand -hex 16)" --persist ./telemetry
+cd tools/observability
+docker compose up -d          # http://127.0.0.1:4318, Daten im Volume "telemetry"
 ```
 
-Der ausgegebene `env`-Block enthält dann automatisch
-`OTEL_EXPORTER_OTLP_HEADERS=Authorization=Bearer …`. Das Token gilt gleichermaßen für
-Ingest und UI; im Browser wird es als `?token=…` mitgegeben. Vor `--host 0.0.0.0` immer
-ein Token setzen — sonst kann jeder im Netz Telemetrie einkippen und mitlesen.
+Der veröffentlichte Port ist absichtlich an `127.0.0.1` gebunden. Persistenz ist im
+Container voreingestellt (`ATHENA_OBS_PERSIST=/data`), ein Neustart verliert also nichts.
 
-Ohne erreichbaren Host bleibt der Weg über einen Tunnel (`ssh -R`, `cloudflared`, …) auf
-die lokale Instanz.
+### 3. Agent in einer Cloud-Session (Claude Code on the web, Actions, Container)
+
+Hier liegt der einzige Stolperstein: die Session läuft in einem fremden Container und
+erreicht dein `localhost` nicht. Zwei kostenlose Wege, den lokalen Collector trotzdem
+erreichbar zu machen.
+
+**Tunnel** — funktioniert von jedem Rechner aus, auch hinter NAT. Cloudflares
+Quick Tunnel braucht kein Konto:
+
+```bash
+# Shell 1 — Collector mit Token, weil die URL öffentlich erreichbar wird
+TOKEN=$(openssl rand -hex 16)
+node bin/athena-observe.mjs --token "$TOKEN" --persist ./telemetry
+
+# Shell 2 — Tunnel; gibt eine https://…trycloudflare.com URL aus
+cloudflared tunnel --url http://127.0.0.1:4318
+
+# Shell 3 — env-Block für genau diese URL erzeugen und in die Session kopieren
+node bin/athena-observe.mjs env --public-url https://<deine>.trycloudflare.com --token "$TOKEN"
+```
+
+`--public-url` ändert nur die *angekündigte* Adresse (env-Block, Startbanner,
+Setup-Dialog der UI), nicht die Bind-Adresse. Ohne das Flag würde `env` weiter
+`http://127.0.0.1:4318` ausgeben, was in der Session ins Leere läuft.
+
+**Erreichbarer Host** — wenn ohnehin ein Server, NAS oder eine VM im LAN läuft:
+
+```bash
+node bin/athena-observe.mjs --host 0.0.0.0 --token "$(openssl rand -hex 16)" --persist ./telemetry
+```
+
+In beiden Fällen enthält der `env`-Block automatisch
+`OTEL_EXPORTER_OTLP_HEADERS=Authorization=Bearer …`. Das Token gilt gleichermaßen für
+Ingest und UI; im Browser wird es als `?token=…` mitgegeben.
+
+> Sobald der Collector über `127.0.0.1` hinaus erreichbar ist, gehört ein Token davor —
+> sonst kann jeder, der die Adresse kennt, Telemetrie einkippen und die eigene mitlesen.
+> Einzige Ausnahme ist `/api/health`, das ohne Token antwortet, damit Healthchecks
+> funktionieren; es verrät nur, dass der Prozess läuft.
 
 ## Was die UI zeigt
 
@@ -116,6 +166,7 @@ Die UI aktualisiert sich über Server-Sent Events; Bursts werden auf 250 ms zusa
 | `-p, --port`            | `ATHENA_OBS_PORT`            | `4318`         | Port für OTLP-Ingest **und** UI                  |
 | `-h, --host`            | `ATHENA_OBS_HOST`            | `127.0.0.1`    | Bind-Adresse                                     |
 | `-t, --token`           | `ATHENA_OBS_TOKEN`           | –              | `Authorization: Bearer …` erzwingen              |
+| `--public-url <url>`    | `ATHENA_OBS_PUBLIC_URL`      | –              | Angekündigte URL hinter Tunnel/Proxy             |
 | `--persist [dir]`       | `ATHENA_OBS_PERSIST`         | –              | JSONL auf Platte, Replay beim Start              |
 | `--retention <dauer>`   | `ATHENA_OBS_RETENTION`       | `24h`          | Alter, ab dem Rohdaten verworfen werden          |
 | `--max-spans <n>`       | `ATHENA_OBS_MAX_SPANS`       | `50000`        | Span-Puffer                                      |
@@ -190,7 +241,7 @@ OTLP-Revisionen und neuen Claude-Code-Attributen tolerant.
 ## Tests
 
 ```bash
-npm test          # 48 Tests: Wire-Format, Decoder, Store, Persistenz, HTTP-Ende-zu-Ende
+npm test          # 53 Tests: Wire-Format, Decoder, Store, Persistenz, Config, HTTP-Ende-zu-Ende
 npm run demo      # synthetische Session emittieren
 ```
 

@@ -176,10 +176,6 @@ export function createServer({ store, token = null, endpoint = '', log = console
   const handleApi = (req, res, url) => {
     const { pathname, searchParams } = url;
 
-    if (pathname === '/api/health') {
-      sendJson(res, 200, { ok: true, uptimeMs: Date.now() - store.startedAt, seq: store.seq });
-      return true;
-    }
     if (pathname === '/api/config') {
       sendJson(res, 200, {
         endpoint,
@@ -294,7 +290,19 @@ export function createServer({ store, token = null, endpoint = '', log = console
       return;
     }
 
-    if (!authorized(req, url)) {
+    const ok = authorized(req, url);
+
+    // Liveness stays reachable without the token so container healthchecks and
+    // uptime probes work; the record counter is only added for callers that
+    // authenticated, so an unauthenticated prober learns nothing about volume.
+    if (url.pathname === '/api/health' && req.method === 'GET') {
+      const payload = { ok: true, uptimeMs: Date.now() - store.startedAt };
+      if (ok) payload.seq = store.seq;
+      sendJson(res, 200, payload);
+      return;
+    }
+
+    if (!ok) {
       res.setHeader('www-authenticate', 'Bearer');
       sendJson(res, 401, { error: 'unauthorized' });
       return;

@@ -24,6 +24,8 @@ Options
   -p, --port <n>                Port for OTLP ingest and the UI      (default 4318)
   -h, --host <addr>             Bind address                         (default 127.0.0.1)
   -t, --token <secret>          Require "Authorization: Bearer <secret>"
+      --public-url <url>        Advertise this URL instead of the bind address
+                                (behind a tunnel or reverse proxy)
       --persist [dir]           Append records to JSONL and replay them on restart
       --retention <duration>    Drop records older than this          (default 24h)
       --max-spans <n>           Span buffer size                     (default 50000)
@@ -35,9 +37,9 @@ Options
       --help                    Show this message
 
 Environment
-  ATHENA_OBS_PORT, ATHENA_OBS_HOST, ATHENA_OBS_TOKEN, ATHENA_OBS_PERSIST,
-  ATHENA_OBS_RETENTION, ATHENA_OBS_MAX_SPANS, ATHENA_OBS_MAX_LOGS,
-  ATHENA_OBS_MAX_METRICS, ATHENA_OBS_MAX_SESSIONS
+  ATHENA_OBS_PORT, ATHENA_OBS_HOST, ATHENA_OBS_TOKEN, ATHENA_OBS_PUBLIC_URL,
+  ATHENA_OBS_PERSIST, ATHENA_OBS_RETENTION, ATHENA_OBS_MAX_SPANS,
+  ATHENA_OBS_MAX_LOGS, ATHENA_OBS_MAX_METRICS, ATHENA_OBS_MAX_SESSIONS
 `.trim();
 
 function renderEnv(env, format) {
@@ -109,7 +111,8 @@ async function main(argv) {
 
   server.listen(config.port, config.host, () => {
     const env = otelEnvFor(endpoint, { traces: config.traces, token: config.token });
-    console.error(`\n  athena-observe listening on ${endpoint}`);
+    const bound = `${config.host}:${config.port}`;
+    console.error(`\n  athena-observe listening on ${endpoint}${config.publicUrl ? `  (bound to ${bound})` : ''}`);
     console.error(`  UI          ${endpoint}${config.token ? `/?token=${config.token}` : '/'}`);
     console.error(`  OTLP ingest ${endpoint}/v1/{traces,metrics,logs}  (http/protobuf and http/json)`);
     console.error('\n  Point an agent at it:\n');

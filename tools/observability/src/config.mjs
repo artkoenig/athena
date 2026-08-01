@@ -65,6 +65,7 @@ export function resolveConfig(flags = {}, env = process.env) {
     host: flags.host ?? env.ATHENA_OBS_HOST ?? '127.0.0.1',
     port: parseCount(flags.port ?? env.ATHENA_OBS_PORT, 4318),
     token: flags.token === true ? null : (flags.token ?? env.ATHENA_OBS_TOKEN ?? null),
+    publicUrl: flags['public-url'] ?? env.ATHENA_OBS_PUBLIC_URL ?? null,
     persist: flags.persist === true ? '.athena-telemetry' : (flags.persist ?? env.ATHENA_OBS_PERSIST ?? null),
     retentionMs: parseDuration(flags.retention ?? env.ATHENA_OBS_RETENTION, 24 * 60 * 60 * 1000),
     maxSpans: parseCount(flags['max-spans'] ?? env.ATHENA_OBS_MAX_SPANS, 50_000),
@@ -81,8 +82,13 @@ export function resolveConfig(flags = {}, env = process.env) {
 /**
  * The URL agents should export to. A wildcard bind is not a usable endpoint, so
  * fall back to a loopback address when the server listens on all interfaces.
+ *
+ * Behind a tunnel or reverse proxy the reachable URL has nothing to do with the
+ * bind address, so `publicUrl` overrides it outright — that is the address that
+ * ends up in the printed env block and in the UI's setup dialog.
  */
-export function endpointFor({ host, port }) {
+export function endpointFor({ host, port, publicUrl = null }) {
+  if (publicUrl) return String(publicUrl).trim().replace(/\/+$/, '');
   const reachable =
     host === '0.0.0.0' || host === '::' || host === '' ? 'localhost' : host.includes(':') ? `[${host}]` : host;
   return `http://${reachable}:${port}`;

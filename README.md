@@ -11,8 +11,11 @@ sichtbar, was tatsächlich passiert.
 | [`observability`](tools/observability/)    | OpenTelemetry-Collector + Web-UI, um Agent-Sessions live zu beobachten: Traces, Tokens, Kosten, Tool-Aufrufe, Fehler. |
 
 ```bash
-cd tools/observability && node bin/athena-observe.mjs
+cd tools/observability && node bin/athena-observe.mjs   # http://127.0.0.1:4318
 ```
+
+Läuft auf dem eigenen Rechner — ohne Konto, ohne fremden Dienst, ohne laufende Kosten.
+Alternativ `docker compose up -d` im selben Verzeichnis.
 
 ## Lizenz
 

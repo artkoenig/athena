@@ -213,6 +213,21 @@ test('a token gates ingest and the API, via header or query parameter', async ()
   });
 });
 
+test('health answers without a token but only counts records for authorized callers', async () => {
+  await withServer({ token: 'secret' }, async ({ base }) => {
+    // Container healthchecks and uptime probes have no token to offer.
+    const open = await fetch(`${base}/api/health`);
+    assert.equal(open.status, 200);
+    const body = await open.json();
+    assert.equal(body.ok, true);
+    assert.ok(typeof body.uptimeMs === 'number');
+    assert.equal(body.seq, undefined, 'ingest volume must not leak to anonymous probes');
+
+    const authed = await (await fetch(`${base}/api/health?token=secret`)).json();
+    assert.equal(authed.seq, 0);
+  });
+});
+
 test('the UI is served from the same port as ingest', async () => {
   await withServer({}, async ({ base }) => {
     const page = await fetch(`${base}/`);
