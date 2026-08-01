@@ -1,0 +1,13 @@
+{
+  "extraKnownMarketplaces": {
+    "athena": {
+      "source": {
+        "source": "directory",
+        "path": "."
+      }
+    }
+  },
+  "enabledPlugins": {
+    "athena@athena": true
+  }
+}
