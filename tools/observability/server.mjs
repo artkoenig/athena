@@ -21,8 +21,9 @@ const config = resolveConfig({}, { ATHENA_OBS_HOST: '0.0.0.0', ...process.env })
 const endpoint = endpointFor(config);
 
 const store = new TelemetryStore(config);
+let persistence = null;
 if (config.persist) {
-  const persistence = new JsonlPersistence(config.persist, {
+  persistence = new JsonlPersistence(config.persist, {
     maxBytes: config.persistMaxBytes,
     log: (message) => console.error(message),
   });
@@ -54,3 +55,18 @@ const server = createServer({ store, token: config.token, endpoint: () => endpoi
 server.listen(config.port, config.host, () => {
   console.error(`athena-observe listening on ${endpoint} (bound to ${config.host}:${config.port})`);
 });
+
+// Scaling down is routine here, not an incident — Vercel reclaims an instance
+// after five idle minutes and gives it SIGTERM with a 30 second grace period.
+// Without a handler the process is simply killed, which tears down open SSE
+// streams mid-frame and leaves the persistence stream unflushed. Held sockets
+// would otherwise use up that entire grace period for nothing.
+const shutdown = () => {
+  server.close(() => {
+    persistence?.close();
+    process.exit(0);
+  });
+  setTimeout(() => process.exit(0), 5000).unref();
+};
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);

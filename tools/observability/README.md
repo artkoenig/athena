@@ -315,6 +315,18 @@ athena-observe: WARNING — on Vercel this keeps its data only in the instance t
   recycled and sessions to split when more than one is running.
 ```
 
+Der Container-Weg (`Dockerfile.vercel`) ändert daran nichts: Vercel führt OCI-Images als
+*Functions* aus, dieselben Limits gelten. Die Doku nennt die Zahl, auf die es ankommt —
+**„Functions not receiving any traffic for 5 minutes in production environments … will
+automatically scale down."** Fünf Minuten Pause zwischen zwei Prompts, und die Historie ist
+weg. Das Image ist hier also nur eine andere Verpackung derselben Funktion, mit längerer
+Bauzeit; das beiliegende `server.mjs` erreicht dasselbe einfacher.
+
+Zwei kleinere Fallstricke derselben Limits: Anfragen sind auf **4,5 MB** begrenzt (der
+Collector selbst nimmt 32 MB), ein großer Export mit Prompt-Inhalten kann also an Vercel
+scheitern, bevor der Code ihn sieht. Und der Port ist standardmäßig 80, überschrieben
+durch `PORT` — das wird gelesen.
+
 Damit taugt es zum **Live-Zuschauen**, nicht als Aufzeichnung. Wer auf Vercel Historie
 will, muss den Store nach außen legen (Vercel Postgres o. ä.) — das ist ein echter Umbau,
 kein Schalter. Für alles andere ist eine Plattform mit Platte der kürzere Weg.
