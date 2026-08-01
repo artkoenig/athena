@@ -65,6 +65,34 @@ export OTEL_TRACES_EXPORT_INTERVAL="1000"
 (TypeScript/Python SDK) oder eine `.env`-Datei. Der Setup-Dialog in der UI zeigt
 fertige Snippets für beide SDKs.
 
+### Dauerhaft einschalten
+
+Ein `export` gilt nur für die Shell, in der es abgesetzt wurde. Claude Code liest die
+Konfiguration **beim Prozessstart**, eine bereits laufende Session lässt sich also nicht
+nachträglich erfassen — erfasst wird immer erst die nächste.
+
+Damit man nicht daran denken muss, gehört der Block in die persönlichen Projekt-Settings:
+
+```bash
+node bin/athena-observe.mjs env --format settings > ../../.claude/settings.local.json
+```
+
+Das schreibt `{"env": {…}}`, und Claude Code wendet das auf jede Session in diesem
+Projekt an. Bewusst `settings.local.json` und nicht `settings.json`: Letzteres wird
+mitversioniert und würde jeden Mitwirkenden im Sekundentakt gegen einen Collector
+exportieren lassen, den er gar nicht betreibt. `settings.local.json` steht in
+`.gitignore`.
+
+> Hat die Datei schon Inhalt, überschreibt `>` sie. Dann den `env`-Block von Hand
+> einfügen statt umleiten.
+
+Danach eine **neue** Session starten — die laufende ändert sich nicht mehr.
+
+Für Cloud-Sessions (Claude Code on the web) gehören dieselben Variablen in die
+Environment-Einstellungen der Web-Oberfläche, nicht in eine Datei im Repo: dort landet
+sonst das Token im Versionsverlauf. Der Endpunkt muss zusätzlich aus dem
+Session-Container erreichbar sein — siehe [Selbst hosten](#3-agent-in-einer-cloud-session-claude-code-on-the-web-actions-container).
+
 Drei Signale, drei unabhängige Schalter — jedes funktioniert für sich:
 
 | Signal      | Schalter                                              | Was die UI daraus baut                                  |
@@ -241,7 +269,7 @@ OTLP-Revisionen und neuen Claude-Code-Attributen tolerant.
 ## Tests
 
 ```bash
-npm test          # 53 Tests: Wire-Format, Decoder, Store, Persistenz, Config, HTTP-Ende-zu-Ende
+npm test          # 54 Tests: Wire-Format, Decoder, Store, Persistenz, Config, HTTP-Ende-zu-Ende
 npm run demo      # synthetische Session emittieren
 ```
 

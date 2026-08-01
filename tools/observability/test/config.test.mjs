@@ -36,6 +36,17 @@ test('resolveConfig layers defaults, environment and flags', () => {
   assert.equal(resolveConfig({}, {}).publicUrl, null);
 });
 
+test('the settings format nests the env block the way Claude Code expects', async () => {
+  const { execFile } = await import('node:child_process');
+  const { promisify } = await import('node:util');
+  const bin = new URL('../bin/athena-observe.mjs', import.meta.url).pathname;
+  const { stdout } = await promisify(execFile)(process.execPath, [bin, 'env', '--format', 'settings']);
+  const parsed = JSON.parse(stdout);
+  assert.deepEqual(Object.keys(parsed), ['env'], 'settings.local.json keys live under "env"');
+  assert.equal(parsed.env.CLAUDE_CODE_ENABLE_TELEMETRY, '1');
+  assert.equal(parsed.env.OTEL_EXPORTER_OTLP_ENDPOINT, 'http://127.0.0.1:4318');
+});
+
 test('parseDuration accepts the documented units', () => {
   assert.equal(parseDuration('90m'), 90 * 60_000);
   assert.equal(parseDuration('24h'), 86_400_000);

@@ -33,7 +33,8 @@ Options
       --max-metrics <n>         Metric point buffer size             (default 50000)
       --max-sessions <n>        Sessions kept in memory              (default 500)
       --traces false            Leave traces out of the printed env block
-      --format <shell|json|dotenv>  Output format for "env"          (default shell)
+      --format <fmt>            Output format for "env": shell (default), json,
+                                dotenv, settings (.claude/settings.local.json)
       --help                    Show this message
 
 Environment
@@ -46,6 +47,10 @@ function renderEnv(env, format) {
   switch (format) {
     case 'json':
       return JSON.stringify(env, null, 2);
+    // Ready to drop into .claude/settings.local.json, which applies the block to
+    // every session in the project without anyone having to remember an export.
+    case 'settings':
+      return JSON.stringify({ env }, null, 2);
     case 'dotenv':
       return Object.entries(env)
         .map(([key, value]) => `${key}=${value}`)
