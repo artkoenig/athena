@@ -185,6 +185,18 @@ function severityLabel(number, text) {
   return SEVERITY_TEXT[base] ?? 'INFO';
 }
 
+/**
+ * The `event.name` attribute is unprefixed (`tool_result`), while the
+ * LogRecord.event_name field and the body string are both fully qualified
+ * (`claude_code.tool_result`). Every EVENT.* constant elsewhere in this
+ * codebase is written in the fully qualified form, so an unprefixed value
+ * has to be normalized here or it silently never matches any switch case.
+ */
+function canonicalEventName(raw) {
+  if (!raw) return '';
+  return raw.startsWith('claude_code.') ? raw : `claude_code.${raw}`;
+}
+
 export function normalizeLogs(payload) {
   const logs = [];
   for (const rl of pick(payload, 'resourceLogs') ?? []) {
@@ -204,10 +216,11 @@ export function normalizeLogs(payload) {
           // Claude Code names events three different ways depending on version:
           // the LogRecord.event_name field, an `event.name` attribute, or the body.
           eventName:
-            pick(record, 'eventName') ||
-            attrs['event.name'] ||
-            (typeof body === 'string' ? body : '') ||
-            'log',
+            canonicalEventName(
+              pick(record, 'eventName') ||
+                attrs['event.name'] ||
+                (typeof body === 'string' ? body : ''),
+            ) || 'log',
           body,
           attrs,
           traceId: toHexId(pick(record, 'traceId')),

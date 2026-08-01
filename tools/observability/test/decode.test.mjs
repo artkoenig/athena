@@ -170,7 +170,12 @@ test('log records resolve their event name from field, attribute or body', () =>
                 {
                   timeUnixNano: T0,
                   severityNumber: 17,
-                  attributes: attrs({ 'event.name': 'claude_code.api_error', error: 'boom' }),
+                  // Current Claude Code CLIs (2.1.x) send this attribute unprefixed
+                  // ('api_error', not 'claude_code.api_error') — the opposite of what
+                  // the LogRecord.event_name field and the body carry. Both forms must
+                  // resolve to the same canonical, prefixed name or every EVENT.*
+                  // switch downstream silently never matches.
+                  attributes: attrs({ 'event.name': 'api_error', error: 'boom' }),
                 },
                 { timeUnixNano: T0, body: { stringValue: 'claude_code.tool_result' } },
               ],
