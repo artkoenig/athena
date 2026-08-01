@@ -72,7 +72,16 @@ export function resolveConfig(flags = {}, env = process.env) {
     // its bind address, and gets that name to it as RENDER_EXTERNAL_URL. Taking
     // it means the printed env block and the setup dialog show the URL an agent
     // can actually reach, instead of a loopback address that is true but useless.
-    publicUrl: flags['public-url'] ?? env.ATHENA_OBS_PUBLIC_URL ?? env.RENDER_EXTERNAL_URL ?? null,
+    publicUrl:
+      flags['public-url'] ??
+      env.ATHENA_OBS_PUBLIC_URL ??
+      env.RENDER_EXTERNAL_URL ??
+      // Vercel passes the host without a scheme, and the production alias is the
+      // stable one — VERCEL_URL is a per-deployment address that changes on
+      // every push, which is no use in an env block an agent keeps.
+      (env.VERCEL_PROJECT_PRODUCTION_URL || env.VERCEL_URL
+        ? `https://${env.VERCEL_PROJECT_PRODUCTION_URL || env.VERCEL_URL}`
+        : null),
     persist: flags.persist === true ? '.athena-telemetry' : (flags.persist ?? env.ATHENA_OBS_PERSIST ?? null),
     retentionMs: parseDuration(flags.retention ?? env.ATHENA_OBS_RETENTION, 24 * 60 * 60 * 1000),
     maxSpans: parseCount(flags['max-spans'] ?? env.ATHENA_OBS_MAX_SPANS, 50_000),

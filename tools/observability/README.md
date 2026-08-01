@@ -292,7 +292,36 @@ gelesen werden. `PORT` ist die Konvention aller dieser Plattformen, Fly und Rail
 laufen also genauso — dort dann mit `--public-url` bzw. `ATHENA_OBS_PUBLIC_URL` für die
 Adresse.
 
-Zwei Dinge, die man vorher wissen sollte:
+#### Vercel
+
+Geht auch — aber nur halb, und man sollte wissen, welche Hälfte.
+
+Vercel nimmt inzwischen einen normalen Node-Server entgegen: eine Datei `server.mjs`, die
+`listen()` aufruft, wird eingefangen und beliefert. Die liegt bei, Next.js und React
+braucht es dafür nicht. Root Directory im Projekt auf `tools/observability` setzen,
+`ATHENA_OBS_TOKEN` als Variable eintragen, fertig — `VERCEL_PROJECT_PRODUCTION_URL` wird
+gelesen, die öffentliche Adresse steht also von selbst im Env-Block.
+
+Was fehlt, ist der Zustand. Fluid Compute teilt eine Instanz zwischen gleichzeitigen
+Aufrufen, der Store überlebt also von Request zu Request — aber das ist eine Optimierung,
+keine Zusage. Vercel skaliert unter Last auf mehrere Instanzen und räumt sie im Leerlauf
+ab, und eine Platte gibt es nicht. Zwei Instanzen heißt zwei halbe Bilder derselben
+Session, und ein SSE-Client an der einen erfährt nichts von Telemetrie, die an der anderen
+ankam. Der Start sagt das auch selbst:
+
+```
+athena-observe: WARNING — on Vercel this keeps its data only in the instance that
+  happens to serve the request. Expect history to vanish when the instance is
+  recycled and sessions to split when more than one is running.
+```
+
+Damit taugt es zum **Live-Zuschauen**, nicht als Aufzeichnung. Wer auf Vercel Historie
+will, muss den Store nach außen legen (Vercel Postgres o. ä.) — das ist ein echter Umbau,
+kein Schalter. Für alles andere ist eine Plattform mit Platte der kürzere Weg.
+
+#### Vorher wissen
+
+Zwei Dinge gelten für alle diese Varianten:
 
 - **Das kostet.** Renders freier Tarif hat keine Platte und legt den Dienst nach ~15
   Minuten Ruhe schlafen. Beides löscht die Historie, und ein Agent, der in den

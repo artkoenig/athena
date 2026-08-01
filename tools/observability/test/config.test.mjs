@@ -46,6 +46,18 @@ test('a PaaS can hand over the port and the public URL without extra config', ()
   assert.equal(paas.publicUrl, 'https://obs.onrender.com');
   assert.equal(endpointFor(paas), 'https://obs.onrender.com');
 
+  // Vercel omits the scheme, and its per-deployment URL changes on every push —
+  // the production alias is the one worth putting in an env block an agent keeps.
+  assert.equal(
+    resolveConfig({}, { VERCEL_URL: 'obs-git-abc123.vercel.app' }).publicUrl,
+    'https://obs-git-abc123.vercel.app',
+  );
+  assert.equal(
+    resolveConfig({}, { VERCEL_URL: 'obs-git-abc123.vercel.app', VERCEL_PROJECT_PRODUCTION_URL: 'obs.vercel.app' })
+      .publicUrl,
+    'https://obs.vercel.app',
+  );
+
   // The namespaced variables are the deliberate ones, so they outrank the
   // platform's guess rather than the other way round.
   const pinned = resolveConfig(
