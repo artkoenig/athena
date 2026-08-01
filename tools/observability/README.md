@@ -386,10 +386,13 @@ Zwei Dinge gelten für alle diese Varianten:
   Interaktionen, LLM-Requests, Tool-Calls, Lines of Code, Commits/PRs, aktive Zeit) plus
   Tabellen pro Modell (Requests, Latenz, TTFT, Fehler) und pro Tool (Calls, Failures,
   Rejects, Dauer).
-- **Todos** — aktueller Stand von `TodoWrite` (volle Liste je Aufruf) sowie
+- **Tasks** — aktueller Stand von `TodoWrite` (volle Liste je Aufruf) sowie
   `TaskCreate`/`TaskUpdate` (Tasks nach ID, plus separat neu erstellte Tasks, deren ID die
   Telemetrie nicht trägt — siehe [Grenzen](#grenzen)). Braucht `OTEL_LOG_TOOL_DETAILS=1`,
-  sonst bleiben Inhalt und Status leer.
+  sonst bleiben Inhalt und Status leer. Der Tab hat bewusst keinen Zähler im Reiter:
+  abgeschlossene und gelöschte Tasks bleiben im rekonstruierten Zustand erhalten (siehe
+  [Grenzen](#grenzen)), eine Zahl würde also nur wachsen und nichts über den aktuellen
+  Stand aussagen.
 - **Traces** — Wasserfall je Interaktion: `interaction` → `llm_request` / `tool` →
   `tool.blocked_on_user` + `tool.execution`, farbig nach Span-Typ, Klick auf einen Balken
   zeigt alle Attribute und Span-Events. Subagent-Spans hängen unter dem `tool`-Span des
@@ -505,8 +508,12 @@ npm run demo      # synthetische Session emittieren
 - **Neu erstellte Tasks lassen sich nicht immer ihrer ID zuordnen.** Die CLI vergibt die
   Task-ID bei `TaskCreate` und nennt sie nur im Tool-Ergebnis — das exportiert nur
   `OTEL_LOG_TOOL_CONTENT=1` (undokumentiertes Format, deutlich sensibler, siehe
-  [Sensible Daten](#sensible-daten)). Der Todos-Tab zeigt solche Tasks deshalb getrennt
+  [Sensible Daten](#sensible-daten)). Der Tasks-Tab zeigt solche Tasks deshalb getrennt
   unter „Created (id not yet known)" statt sie zu erraten.
+- **Der Tasks-Tab zeigt nur, was jemals gesehen wurde, nicht was gerade existiert.**
+  Ein gelöschter oder abgeschlossener Task verschwindet nicht aus der Tabelle, er bekommt
+  nur den Status `deleted`/`completed`. Es gibt hier absichtlich keinen aggregierten
+  Zähler (anders als bei Traces/Events/Metrics), weil er nur monoton wachsen würde.
 - Der Store lebt im Prozess. Für langfristige Aufbewahrung oder Alerting gehört die
   Telemetrie in ein echtes Backend (Honeycomb, Grafana, Datadog, Langfuse) — beides geht
   parallel, `OTEL_EXPORTER_OTLP_*`-Variablen lassen sich pro Signal auf verschiedene
