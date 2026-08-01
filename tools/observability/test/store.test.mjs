@@ -418,6 +418,35 @@ test('a failed TaskUpdate call does not mutate todo state', () => {
   assert.equal(store.getSession(SESSION).todos.tasks.length, 0);
 });
 
+test('a session.name from OTEL_RESOURCE_ATTRIBUTES becomes the session name', () => {
+  const store = new TelemetryStore();
+  store.ingest('logs', [
+    { ...log('claude_code.user_prompt'), resource: { 'service.name': 'agent', 'session.name': 'nightly run' } },
+  ]);
+  const session = store.getSession(SESSION);
+  assert.equal(session.name, 'nightly run');
+  assert.equal(session.id, SESSION);
+  // The name is searchable, so the list can be filtered by it like by an id.
+  assert.equal(store.listSessions({ search: 'nightly' }).items.length, 1);
+  assert.equal(store.listSessions({ search: 'daily' }).items.length, 0);
+});
+
+test('a session.name arriving only on metric attributes sticks to the session', () => {
+  const store = new TelemetryStore();
+  store.ingest('metrics', [
+    metric('claude_code.token.usage', 10, { type: 'input', 'session.name': 'labelled' }),
+    metric('claude_code.token.usage', 10, { type: 'output' }),
+  ]);
+  assert.equal(store.getSession(SESSION).name, 'labelled');
+});
+
+test('sessions without a name report null, leaving the id as the only label', () => {
+  const store = new TelemetryStore();
+  store.ingest('logs', [log('claude_code.user_prompt')]);
+  assert.equal(store.getSession(SESSION).name, null);
+  assert.equal(store.listSessions().items[0].name, null);
+});
+
 test('clear() empties the store but keeps subscribers attached', () => {
   const store = new TelemetryStore();
   let notified = 0;

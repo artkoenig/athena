@@ -65,6 +65,35 @@ export OTEL_TRACES_EXPORT_INTERVAL="1000"
 (TypeScript/Python SDK) oder eine `.env`-Datei. Der Setup-Dialog in der UI zeigt
 fertige Snippets für beide SDKs.
 
+### Sessions benennen
+
+Claude Code exportiert **keinen** Session-Namen: `session.id` ist eine UUID, und im
+Standard-Attributsatz steckt weder Titel noch Zusammenfassung noch Arbeitsverzeichnis.
+Was der CLI weiterreicht, ist `OTEL_RESOURCE_ATTRIBUTES` — darüber bekommt eine Session
+ein Label, das die UI dann anstelle der ID anzeigt:
+
+```bash
+export OTEL_RESOURCE_ATTRIBUTES="session.name=athena-refactor"
+claude
+```
+
+`athena-observe env --name athena-refactor` schreibt die Zeile gleich mit in den Block.
+Zu beachten:
+
+- **Vor dem Start setzen.** Die OTel-Resource wird beim Prozessstart einmalig aus der
+  Umgebung gelesen. Ein Hook kann das nicht nachholen: Hooks laufen als Subprozess mit
+  einer Kopie der Umgebung, und ihre Änderungen erreichen den CLI-Prozess nicht.
+- **Pro Session, nicht pro Projekt.** In `settings.local.json` wäre der Name für jede
+  Session im Projekt derselbe. Für wechselnde Labels gehört der `export` in die Shell —
+  gern dynamisch, etwa `session.name=athena-$(git branch --show-current)`.
+- **Nur US-ASCII, keine Leerzeichen.** Alles andere wird prozent-kodiert
+  (`nightly%20run`); die UI dekodiert es wieder. Mehrere Attribute werden mit Komma
+  getrennt: `session.name=x,team.id=platform`.
+
+Ohne Label bleibt alles wie bisher, die Session wird über ihre ID geführt. Die ID
+verschwindet auch bei benannten Sessions nicht — sie steht unter dem Namen und ist
+weiterhin das, worauf API-Pfade und Suche zeigen.
+
 ### Dauerhaft einschalten
 
 Ein `export` gilt nur für die Shell, in der es abgesetzt wurde. Claude Code liest die
@@ -380,8 +409,10 @@ Zwei Dinge gelten für alle diese Varianten:
 
 ## Was die UI zeigt
 
-- **Sessions** — Liste aller `session.id`, sortiert nach letzter Aktivität, mit Kosten,
-  Tokens und Fehlerzahl; live-Sessions sind markiert.
+- **Sessions** — Liste aller Sessions, sortiert nach letzter Aktivität, mit Kosten,
+  Tokens und Fehlerzahl; live-Sessions sind markiert. Geführt werden sie über ihre
+  `session.id`, es sei denn, die Session bringt ein `session.name` mit — dann steht der
+  Name vorn und die ID darunter (siehe [Sessions benennen](#sessions-benennen)).
 - **Overview** — Kennzahlenraster (Kosten, Tokens nach Typ inkl. Cache-Trefferquote,
   Interaktionen, LLM-Requests, Tool-Calls, Lines of Code, Commits/PRs, aktive Zeit) plus
   Tabellen pro Modell (Requests, Latenz, TTFT, Fehler) und pro Tool (Calls, Failures,
@@ -420,6 +451,7 @@ Die UI aktualisiert sich über Server-Sent Events; Bursts werden auf 250 ms zusa
 | `--max-logs <n>`        | `ATHENA_OBS_MAX_LOGS`        | `50000`        | Event-Puffer                                     |
 | `--max-metrics <n>`     | `ATHENA_OBS_MAX_METRICS`     | `50000`        | Metrik-Puffer                                    |
 | `--max-sessions <n>`    | `ATHENA_OBS_MAX_SESSIONS`    | `500`          | Sessions im Speicher                             |
+| `--name <label>`        | `ATHENA_OBS_SESSION_NAME`    | –              | `session.name=<label>` in den ausgegebenen Env-Block schreiben |
 
 Dauern akzeptieren `ms`, `s`, `m`, `h`, `d` (z. B. `--retention 90m`).
 

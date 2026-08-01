@@ -335,6 +335,23 @@ button {
   flex: 1 1 auto;
 }
 
+.session-name {
+  font-size: 13px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1 1 auto;
+}
+
+.session-sub {
+  display: block;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-bottom: 4px;
+}
+
 .session-card-meta {
   display: flex;
   gap: 10px;
@@ -378,6 +395,21 @@ button {
   font-family: var(--mono);
   font-size: 17px;
   word-break: break-all;
+}
+
+/* A name is prose, not an identifier — and it is free to contain spaces. */
+.detail-title[data-named="true"] {
+  font-family: var(--sans);
+  word-break: normal;
+  overflow-wrap: anywhere;
+}
+
+.detail-subtitle {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-dim);
+  word-break: break-all;
+  margin-top: 3px;
 }
 
 .chips {

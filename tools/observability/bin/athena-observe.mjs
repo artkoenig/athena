@@ -39,6 +39,10 @@ Options
                                 of trying both
       --public-url <url>        Advertise this URL instead of the bind address
                                 (behind a tunnel or reverse proxy)
+      --name <label>            Add session.name=<label> to the printed env block,
+                                so the UI lists that session by name instead of
+                                by its id. Per session: set it in the environment
+                                the session is started from.
       --persist [dir]           Append records to JSONL and replay them on restart
       --retention <duration>    Drop records older than this          (default 24h)
       --max-spans <n>           Span buffer size                     (default 50000)
@@ -53,7 +57,8 @@ Options
 Environment
   ATHENA_OBS_PORT, ATHENA_OBS_HOST, ATHENA_OBS_TOKEN, ATHENA_OBS_PUBLIC_URL,
   ATHENA_OBS_PERSIST, ATHENA_OBS_RETENTION, ATHENA_OBS_MAX_SPANS,
-  ATHENA_OBS_MAX_LOGS, ATHENA_OBS_MAX_METRICS, ATHENA_OBS_MAX_SESSIONS
+  ATHENA_OBS_MAX_LOGS, ATHENA_OBS_MAX_METRICS, ATHENA_OBS_MAX_SESSIONS,
+  ATHENA_OBS_SESSION_NAME
 `.trim();
 
 function renderEnv(env, format) {
@@ -87,7 +92,11 @@ async function main(argv) {
   const endpoint = endpointFor(config);
 
   if (command === 'env') {
-    const env = otelEnvFor(endpoint, { traces: config.traces, token: config.token });
+    const env = otelEnvFor(endpoint, {
+      traces: config.traces,
+      token: config.token,
+      sessionName: config.sessionName,
+    });
     console.log(renderEnv(env, flags.format === true ? 'shell' : (flags.format ?? 'shell')));
     return;
   }
@@ -145,12 +154,24 @@ async function main(argv) {
   }
 
   let advertised = endpoint;
-  const server = createServer({ store, token: config.token, endpoint: () => advertised });
+  const server = createServer({
+    store,
+    token: config.token,
+    endpoint: () => advertised,
+    sessionName: config.sessionName,
+  });
   let tunnel = null;
 
   const printEnv = (format, indent = '    ') =>
     console.error(
-      renderEnv(otelEnvFor(advertised, { traces: config.traces, token: config.token }), format)
+      renderEnv(
+        otelEnvFor(advertised, {
+          traces: config.traces,
+          token: config.token,
+          sessionName: config.sessionName,
+        }),
+        format,
+      )
         .split('\n')
         .map((line) => `${indent}${line}`)
         .join('\n'),

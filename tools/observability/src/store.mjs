@@ -27,6 +27,7 @@ import {
   num,
   serviceNameOf,
   sessionIdOf,
+  sessionNameOf,
   toolParametersOf,
 } from './claude.mjs';
 
@@ -42,6 +43,13 @@ const DEFAULTS = {
   maxSessions: 500,
   retentionMs: 24 * 60 * 60 * 1000,
 };
+
+/**
+ * Custom attributes from OTEL_RESOURCE_ATTRIBUTES that the UI reads by name.
+ * They normally arrive on the resource, which is merged wholesale, but they also
+ * ride along on metric attributes — where nothing outside STICKY_ATTRS survives.
+ */
+const STICKY_CUSTOM_ATTRS = ['session.name', 'session_name'];
 
 /** Standard attributes worth pinning to the session card. */
 const STICKY_ATTRS = [
@@ -257,6 +265,12 @@ export class TelemetryStore {
     }
     for (const key of STICKY_ATTRS) {
       const value = record.attrs?.[key] ?? record.resource?.[key];
+      if (value !== undefined && value !== null && value !== '') session.attrs[key] = value;
+    }
+    // Deliberately not falling back to the resource here: it is already kept in
+    // full, and pinning a copy would list the same attribute twice in the UI.
+    for (const key of STICKY_CUSTOM_ATTRS) {
+      const value = record.attrs?.[key];
       if (value !== undefined && value !== null && value !== '') session.attrs[key] = value;
     }
     return session;
@@ -713,6 +727,7 @@ export class TelemetryStore {
       sessions = sessions.filter((session) => {
         const haystack = [
           session.id,
+          sessionNameOf(session),
           session.serviceName,
           session.attrs['user.email'],
           ...Object.values(session.resource ?? {}),
@@ -980,6 +995,7 @@ export function summarizeSession(session) {
 
   return {
     id: session.id,
+    name: sessionNameOf(session),
     serviceName: session.serviceName,
     resource: session.resource,
     attrs: session.attrs,

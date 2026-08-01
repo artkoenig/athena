@@ -111,7 +111,13 @@ function intParam(params, key, fallback, max = Number.MAX_SAFE_INTEGER) {
   return Math.min(value, max);
 }
 
-export function createServer({ store, token = null, endpoint = '', log = console.error } = {}) {
+export function createServer({
+  store,
+  token = null,
+  endpoint = '',
+  log = console.error,
+  sessionName = null,
+} = {}) {
   // A tunnel URL only exists once the tunnel is up, after the server is already
   // listening, so the endpoint may be supplied as a getter and resolved per request.
   const endpointOf = () => (typeof endpoint === 'function' ? endpoint() : endpoint);
@@ -229,7 +235,7 @@ export function createServer({ store, token = null, endpoint = '', log = console
           metricPoints: store.options.maxMetricPoints,
           sessions: store.options.maxSessions,
         },
-        env: otelEnvFor(endpoint, { token }),
+        env: otelEnvFor(endpoint, { token, sessionName }),
       });
       return true;
     }

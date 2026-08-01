@@ -154,13 +154,18 @@ function renderSessionList() {
   list.innerHTML = state.sessions
     .map((session) => {
       const errors = session.counts.apiErrors + session.counts.toolFailures;
+      // A named session leads with its name; the id stays on the card because it
+      // is what every other view, log line and API path refers to.
       return `<li>
         <button type="button" class="session-card" data-session="${esc(session.id)}"
           aria-current="${session.id === state.selectedSessionId}">
           <span class="session-card-top">
             ${isLive(session) ? '<span class="dot-live" aria-label="live"></span>' : ''}
-            <span class="session-id" title="${esc(session.id)}">${esc(shortId(session.id, 20))}</span>
+            <span class="${session.name ? 'session-name' : 'session-id'}" title="${esc(session.id)}">${esc(
+              session.name || shortId(session.id, 20),
+            )}</span>
           </span>
+          ${session.name ? `<span class="session-sub" title="${esc(session.id)}">${esc(shortId(session.id, 20))}</span>` : ''}
           <span class="session-card-meta">
             <span>${esc(fmtAgo(session.lastSeenMs))}</span>
             <span>${esc(fmtCost(session.costUsd))}</span>
@@ -204,7 +209,8 @@ function renderDetail() {
   detail.innerHTML = `
     <div class="detail-head">
       <div>
-        <h1 class="detail-title">${esc(session.id)}</h1>
+        <h1 class="detail-title"${session.name ? ' data-named="true"' : ''}>${esc(session.name || session.id)}</h1>
+        ${session.name ? `<div class="detail-subtitle">${esc(session.id)}</div>` : ''}
         <div class="chips">
           ${isLive(session) ? '<span class="chip" data-tone="live">live</span>' : ''}
           <span class="chip">service <b>${esc(session.serviceName)}</b></span>
@@ -826,6 +832,12 @@ options = ClaudeAgentOptions(env=OTEL_ENV)`;
         <button type="button" class="ghost-button" data-copy="env-shell">Copy</button></div>
       <pre id="env-shell">${esc(shell)}</pre>
     </div>
+    <p class="muted">
+      Sessions are listed by their id — Claude Code exports no name of its own. To label one,
+      add <code>OTEL_RESOURCE_ATTRIBUTES="session.name=my-label"</code> before starting it
+      (percent-encode spaces). It is read once at process start, so it has to be set in the
+      environment the session is launched from.
+    </p>
     <h3>TypeScript SDK</h3>
     <div class="env-block">
       <div class="env-block-head"><span>options.env replaces the inherited environment</span>

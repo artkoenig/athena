@@ -1,0 +1,44 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+
+import { otelEnvFor, sessionNameOf } from '../src/claude.mjs';
+
+test('a session name is read from the resource, and from metric attributes', () => {
+  assert.equal(sessionNameOf({ resource: { 'session.name': 'athena-refactor' } }), 'athena-refactor');
+  // Custom resource attributes ride along on metric attributes too, and metrics
+  // are the one signal that may arrive without a resource block worth the name.
+  assert.equal(sessionNameOf({ attrs: { 'session.name': 'athena-refactor' } }), 'athena-refactor');
+  assert.equal(sessionNameOf({ resource: { 'session_name': 'snake-case' } }), 'snake-case');
+});
+
+test('a session without a name resolves to null rather than a placeholder', () => {
+  assert.equal(sessionNameOf({ resource: { 'service.name': 'claude-code' } }), null);
+  assert.equal(sessionNameOf({ resource: { 'session.name': '   ' } }), null);
+  assert.equal(sessionNameOf({}), null);
+  assert.equal(sessionNameOf(undefined), null);
+});
+
+test('percent-encoded names are decoded, malformed ones survive as-is', () => {
+  assert.equal(sessionNameOf({ resource: { 'session.name': 'nightly%20run' } }), 'nightly run');
+  assert.equal(sessionNameOf({ resource: { 'session.name': '100%' } }), '100%');
+});
+
+test('long names are capped', () => {
+  const name = sessionNameOf({ resource: { 'session.name': 'x'.repeat(500) } });
+  assert.equal(name.length, 120);
+});
+
+test('otelEnvFor carries a session name as a resource attribute, encoded', () => {
+  const env = otelEnvFor('http://localhost:4318', { sessionName: 'nightly run' });
+  assert.equal(env.OTEL_RESOURCE_ATTRIBUTES, 'session.name=nightly%20run');
+  // Round-trips through the same helper the store uses on ingest.
+  assert.equal(
+    sessionNameOf({ resource: { 'session.name': env.OTEL_RESOURCE_ATTRIBUTES.split('=')[1] } }),
+    'nightly run',
+  );
+});
+
+test('otelEnvFor leaves the variable out when no name is given', () => {
+  const env = otelEnvFor('http://localhost:4318');
+  assert.ok(!('OTEL_RESOURCE_ATTRIBUTES' in env));
+});

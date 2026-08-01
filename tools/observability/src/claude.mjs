@@ -115,6 +115,54 @@ export function serviceNameOf(record) {
   return record.resource?.['service.name'] || 'claude-code';
 }
 
+/** Longest label kept; anything beyond this is a paste accident, not a name. */
+const MAX_SESSION_NAME_LENGTH = 120;
+
+/**
+ * Values in OTEL_RESOURCE_ATTRIBUTES are `key=value` pairs separated by commas
+ * and restricted to US-ASCII, so a label with a space, a comma or an umlaut has
+ * to be percent-encoded (the W3C Baggage rules the OTel spec points at). SDKs
+ * decode before export, but not every exporter in the chain does, so a value
+ * that still looks encoded on arrival is decoded here rather than shown raw.
+ */
+function decodePercent(value) {
+  if (!value.includes('%')) return value;
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+/**
+ * Human-readable label for a session, when the run supplied one.
+ *
+ * Claude Code exports no name of its own: `session.id` is a UUID, and nothing in
+ * the standard attribute set carries a title, a workspace or a cwd. What it does
+ * forward is OTEL_RESOURCE_ATTRIBUTES, so a session started with
+ * `OTEL_RESOURCE_ATTRIBUTES=session.name=<label>` in its environment carries that
+ * label on every record it exports — as a resource attribute, and (unless
+ * OTEL_METRICS_INCLUDE_RESOURCE_ATTRIBUTES=false) on metric attributes too, which
+ * is why both are checked. It has to be set before the process starts: the OTel
+ * resource is built once at init, so neither a hook nor anything else inside the
+ * session can add it afterwards.
+ */
+export function sessionNameOf(record) {
+  const raw =
+    record?.resource?.['session.name'] ??
+    record?.attrs?.['session.name'] ??
+    record?.resource?.['session_name'] ??
+    record?.attrs?.['session_name'];
+  if (typeof raw !== 'string') return null;
+  const name = decodePercent(raw).trim();
+  return name ? name.slice(0, MAX_SESSION_NAME_LENGTH) : null;
+}
+
+/** Percent-encode a label so it survives OTEL_RESOURCE_ATTRIBUTES intact. */
+export function encodeResourceAttrValue(value) {
+  return encodeURIComponent(String(value).trim());
+}
+
 /** Attribution attributes that answer "which agent/skill/tool spent this". */
 export function attributionOf(attrs = {}) {
   const out = {};
@@ -186,7 +234,10 @@ export function describeEvent(log) {
  * collector. Rendered by `athena-observe env` and shown in the UI so the whole
  * setup is copy-pasteable.
  */
-export function otelEnvFor(endpoint, { traces = true, token = null, fastFlush = true } = {}) {
+export function otelEnvFor(
+  endpoint,
+  { traces = true, token = null, fastFlush = true, sessionName = null } = {},
+) {
   const env = {
     CLAUDE_CODE_ENABLE_TELEMETRY: '1',
     OTEL_METRICS_EXPORTER: 'otlp',
@@ -194,6 +245,12 @@ export function otelEnvFor(endpoint, { traces = true, token = null, fastFlush = 
     OTEL_EXPORTER_OTLP_PROTOCOL: 'http/protobuf',
     OTEL_EXPORTER_OTLP_ENDPOINT: endpoint,
   };
+  // The only way to give a session a name the UI can show instead of its UUID
+  // (see sessionNameOf). Left out entirely when unset, so the block stays a
+  // block anyone can paste into any session.
+  if (sessionName) {
+    env.OTEL_RESOURCE_ATTRIBUTES = `session.name=${encodeResourceAttrValue(sessionName)}`;
+  }
   if (traces) {
     // Spans are the beta signal and need their own opt-in flag.
     env.CLAUDE_CODE_ENHANCED_TELEMETRY_BETA = '1';
