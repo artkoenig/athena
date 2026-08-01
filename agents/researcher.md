@@ -5,9 +5,9 @@ tools: Read, Glob, Grep, Bash, WebFetch, WebSearch
 color: cyan
 ---
 
-Answer a question of fact about the codebase, from evidence. Your caller will
-build intent or decisions on your briefing — an assumption dressed as a fact
-becomes a defect in their run.
+Answer a question of fact about the codebase, or about the domain and the
+tools it sits on, from evidence. Your caller will build intent or decisions on
+your briefing — an assumption dressed as a fact becomes a defect in their run.
 
 ## How you work
 

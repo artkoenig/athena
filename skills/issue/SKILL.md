@@ -1,6 +1,6 @@
 ---
 name: issue
-description: The athena tracker. Every read of and every write to an issue goes through this skill — file an issue, record a decision, an observation, a plan, checkpoint answers, a retro or a task list, set the state, or orient a session on the running issue. Hand it the content and name the operation; it knows where that content lands. Not a shelf tool. Trigger on "file an issue", "open an issue", "new issue", "put this in the backlog", "record this in the issue", "where did we leave off", or whenever you are about to read or write anything in the tracker.
+description: The athena tracker. Every read of and every write to an issue goes through this skill — file an issue, record a decision, an observation, a plan, checkpoint answers, a retro or a task list, set the state, read what the record already says on a subject, or orient a session on the running issue. Hand it the content and name the operation; it knows where that content lands. Not a shelf tool. Trigger on "file an issue", "open an issue", "new issue", "put this in the backlog", "record this in the issue", "what did we already decide about this", "where did we leave off", or whenever you are about to read or write anything in the tracker.
 user-invocable: true
 ---
 
@@ -35,6 +35,7 @@ what they are.
 | **record a retro** | what got in the way, what should change |
 | **record a task list** | the steps a change is being landed in — the rulebook says when one is due |
 | **set the state** | which state the issue is now in, and the branch or the pull request if one now exists |
+| **read the record on a subject** | a subject, in whatever words the caller has for it. Returns what past issues settled on it, what was filed and never built, and what was tried and abandoned — each with the issue it came from |
 | **orient a session** | nothing. Returns which issue is running and everything the previous session knew about it — or, when none is running, the unfinished issues and how they depend on each other |
 
 Three parts are owned by the rulebook, because each is a rule of the run, and
@@ -85,6 +86,22 @@ A `status:` that says `active` is not proof: check that its `pr:` is empty
 before you take it for the running one. An issue whose pull request is merged
 is finished whatever its status line says, and the wrong path here costs the
 session its whole orientation.
+
+## Reading the record on a subject
+
+Scan the `## Intent` of every file under `docs/issues/` for the subject. Read
+the `## Decisions`, `## Log` and `## Retro` of the ones it matches, and of no
+others — the point of this operation is that the caller pays for the matches,
+not for the tracker.
+
+Return three things, each with the issue it came from: what was settled, what
+was filed and never built, and what was tried and abandoned. A decision found
+here carries its own source with it — pass that on rather than restating it as
+your own.
+
+Nothing outside `docs/issues/` is read, and "nothing on this subject" is a
+complete answer. An empty result is a fact; an invented near-match is worse
+than nothing, because the caller will build criteria on it.
 
 ## The shape
 
