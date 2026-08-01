@@ -32,7 +32,7 @@ import {
 
 /** Bound on how many stray TaskCreate calls a session keeps (see #applyTodo). */
 const MAX_UNLINKED_CREATES = 200;
-/** Bound on the per-task status history kept for the Todos tab. */
+/** Bound on the per-task status history kept for the Tasks tab. */
 const MAX_TASK_HISTORY = 50;
 
 const DEFAULTS = {

@@ -108,7 +108,7 @@ test('accepts OTLP/JSON on /v1/logs and answers in JSON', async () => {
   });
 });
 
-test('a TaskCreate tool_result with the real CLI event.name shape reaches the Todos tab', async () => {
+test('a TaskCreate tool_result with the real CLI event.name shape reaches the Tasks tab', async () => {
   // Regression test: Claude Code 2.1.x sends the `event.name` log attribute
   // unprefixed ('tool_result'), not as 'claude_code.tool_result'. Every
   // downstream switch keys off the prefixed EVENT.* constants, so without

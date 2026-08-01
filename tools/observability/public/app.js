@@ -177,7 +177,7 @@ function renderSessionList() {
 
 const TABS = [
   { id: 'overview', label: 'Overview' },
-  { id: 'todos', label: 'Todos' },
+  { id: 'todos', label: 'Tasks' },
   { id: 'traces', label: 'Traces' },
   { id: 'events', label: 'Events' },
   { id: 'metrics', label: 'Metrics' },
@@ -193,10 +193,9 @@ function renderDetail() {
   }
   const errors = session.counts.apiErrors + session.counts.toolFailures;
   const counts = {
-    todos:
-      (session.todos.legacy?.length ?? 0) +
-      session.todos.tasks.length +
-      session.todos.unlinkedCreates.length,
+    // No count badge for the tasks tab: completed/deleted tasks stay in the
+    // reconstructed state (see #applyTodo), so a count only ever grows and
+    // stops reflecting what currently exists — worse than no number at all.
     traces: session.traceCount,
     events: session.counts.logs,
     metrics: session.counts.metricPoints,
@@ -385,11 +384,11 @@ function renderTodosTab() {
     if (todos.callsSeen > 0) {
       return `<div class="placeholder">
         ${todos.callsSeen} TodoWrite/TaskCreate/TaskUpdate call(s) seen, but no parameters were
-        captured. Set <code>OTEL_LOG_TOOL_DETAILS=1</code> in the agent environment to see todo
+        captured. Set <code>OTEL_LOG_TOOL_DETAILS=1</code> in the agent environment to see task
         content and status here.
       </div>`;
     }
-    return '<div class="placeholder">No todos or tasks recorded for this session.</div>';
+    return '<div class="placeholder">No tasks recorded for this session.</div>';
   }
 
   const sections = [];
