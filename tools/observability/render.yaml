@@ -1,0 +1,44 @@
+# Render Blueprint for athena-observe.
+#
+# Render reads blueprints from the repository root, so copy this file there:
+#
+#     cp tools/observability/render.yaml render.yaml
+#
+# then point a Blueprint at the repo. `rootDir` below keeps the build scoped to
+# the tool, so nothing else in the repository is involved.
+#
+# The disk is what makes this worth doing at all: without it the store lives
+# only in the process, and every deploy or restart takes the session history
+# with it. A disk also pins the service to a single instance, which is exactly
+# what this app needs — see the note on scaling in the README.
+
+services:
+  - type: web
+    name: athena-observe
+    runtime: docker
+    rootDir: tools/observability
+    dockerfilePath: ./Dockerfile
+    plan: starter # free has no disk and sleeps when idle; both lose the history
+    region: frankfurt
+    healthCheckPath: /api/health # deliberately reachable without the token
+    autoDeploy: false
+
+    disk:
+      name: telemetry
+      mountPath: /data # the Dockerfile already exports ATHENA_OBS_PERSIST=/data
+      sizeGB: 1
+
+    envVars:
+      # Render assigns the port and routes to it; the Dockerfile's own default
+      # would otherwise take precedence over what Render injects.
+      - key: ATHENA_OBS_PORT
+        value: 10000
+      - key: ATHENA_OBS_HOST
+        value: 0.0.0.0
+      # A collector on a public URL accepts telemetry from anyone who finds it,
+      # so the token is not optional here. Render generates it once; read it in
+      # the dashboard under Environment, or off the first lines of the log.
+      - key: ATHENA_OBS_TOKEN
+        generateValue: true
+      - key: ATHENA_OBS_RETENTION
+        value: 7d

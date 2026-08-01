@@ -36,6 +36,37 @@ test('resolveConfig layers defaults, environment and flags', () => {
   assert.equal(resolveConfig({}, {}).publicUrl, null);
 });
 
+test('a PaaS can hand over the port and the public URL without extra config', () => {
+  // Render, Railway, Fly and Heroku all assign the port through bare PORT and
+  // route to whatever binds it, so ignoring it means the service never answers.
+  const paas = resolveConfig({}, { PORT: '10000', RENDER_EXTERNAL_URL: 'https://obs.onrender.com' });
+  assert.equal(paas.port, 10000);
+  // Without this the printed env block would advertise a loopback address that
+  // is correct about the bind and useless to an agent somewhere else.
+  assert.equal(paas.publicUrl, 'https://obs.onrender.com');
+  assert.equal(endpointFor(paas), 'https://obs.onrender.com');
+
+  // The namespaced variables are the deliberate ones, so they outrank the
+  // platform's guess rather than the other way round.
+  const pinned = resolveConfig(
+    {},
+    {
+      PORT: '10000',
+      ATHENA_OBS_PORT: '4318',
+      RENDER_EXTERNAL_URL: 'https://obs.onrender.com',
+      ATHENA_OBS_PUBLIC_URL: 'https://obs.example.com',
+    },
+  );
+  assert.equal(pinned.port, 4318);
+  assert.equal(pinned.publicUrl, 'https://obs.example.com');
+
+  // And a flag still beats both.
+  const { flags } = parseArgs(['--port=5000', '--public-url', 'https://flag.example']);
+  const fromFlags = resolveConfig(flags, { PORT: '10000', RENDER_EXTERNAL_URL: 'https://obs.onrender.com' });
+  assert.equal(fromFlags.port, 5000);
+  assert.equal(fromFlags.publicUrl, 'https://flag.example');
+});
+
 test('the settings format nests the env block the way Claude Code expects', async () => {
   const { execFile } = await import('node:child_process');
   const { promisify } = await import('node:util');

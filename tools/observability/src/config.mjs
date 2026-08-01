@@ -63,9 +63,16 @@ export function parseArgs(argv) {
 export function resolveConfig(flags = {}, env = process.env) {
   const config = {
     host: flags.host ?? env.ATHENA_OBS_HOST ?? '127.0.0.1',
-    port: parseCount(flags.port ?? env.ATHENA_OBS_PORT, 4318),
+    // Bare PORT is how every PaaS assigns one — Render, Railway, Fly, Heroku all
+    // inject it and route to whatever binds it. It ranks below the namespaced
+    // variable so a deliberate ATHENA_OBS_PORT still wins on a host that sets it.
+    port: parseCount(flags.port ?? env.ATHENA_OBS_PORT ?? env.PORT, 4318),
     token: flags.token === true ? null : (flags.token ?? env.ATHENA_OBS_TOKEN ?? null),
-    publicUrl: flags['public-url'] ?? env.ATHENA_OBS_PUBLIC_URL ?? null,
+    // Render publishes the service under a name the process cannot derive from
+    // its bind address, and gets that name to it as RENDER_EXTERNAL_URL. Taking
+    // it means the printed env block and the setup dialog show the URL an agent
+    // can actually reach, instead of a loopback address that is true but useless.
+    publicUrl: flags['public-url'] ?? env.ATHENA_OBS_PUBLIC_URL ?? env.RENDER_EXTERNAL_URL ?? null,
     persist: flags.persist === true ? '.athena-telemetry' : (flags.persist ?? env.ATHENA_OBS_PERSIST ?? null),
     retentionMs: parseDuration(flags.retention ?? env.ATHENA_OBS_RETENTION, 24 * 60 * 60 * 1000),
     maxSpans: parseCount(flags['max-spans'] ?? env.ATHENA_OBS_MAX_SPANS, 50_000),

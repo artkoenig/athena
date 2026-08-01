@@ -162,7 +162,13 @@ async function main(argv) {
     process.exit(1);
   });
 
-  const localUi = `${endpointFor({ host: config.host, port: config.port })}${config.token ? `/?token=${config.token}` : '/'}`;
+  // With a tunnel the process is on this machine, so the loopback address is the
+  // better thing to click — it skips the hop and keeps working if the tunnel
+  // drops. Deployed somewhere (a PaaS setting RENDER_EXTERNAL_URL, a reverse
+  // proxy, --public-url) there is no "here" to browse, so the public URL is the
+  // only one that opens anything.
+  const uiBase = config.publicUrl && !flags.tunnel ? endpoint : endpointFor({ host: config.host, port: config.port });
+  const localUi = `${uiBase}${config.token ? `/?token=${config.token}` : '/'}`;
 
   server.listen(config.port, config.host, async () => {
     const bound = `${config.host}:${config.port}`;

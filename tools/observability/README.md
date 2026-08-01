@@ -108,7 +108,8 @@ doppelt gezählt. Die UI schreibt unter jede Kennzahl, aus welcher Quelle sie st
 
 athena-observe ist dafür gebaut, dass es jeder auf dem eigenen Rechner betreibt: keine
 Registrierung, kein Konto, kein fremder Dienst, keine laufenden Kosten. Die Telemetrie
-verlässt die eigene Maschine nicht. Es gibt drei Formen, je nachdem, wo der Agent läuft.
+verlässt die eigene Maschine nicht. Es gibt vier Formen, je nachdem, wo der Agent läuft
+— und, bei der letzten, wie dauerhaft es sein soll.
 
 ### 1. Agent und Collector auf demselben Rechner
 
@@ -228,6 +229,62 @@ Danach eine **neue** Session starten; die laufende liest ihre Konfiguration nich
 > Ob der Session-Container überhaupt nach außen darf, entscheidet die Network-Policy der
 > Umgebung. `check` sagt es dir in der ersten Zeile.
 
+### 4. Dauerhaft auf einer Plattform (Render, Fly, Railway)
+
+Der Tunnel taugt für eine Sitzung, nicht für den Dauerbetrieb: er hängt an deinem
+laufenden Rechner und die URL wechselt bei jedem Start. Wer eine feste Adresse will,
+stellt den Collector irgendwohin, wo ein Prozess einfach weiterläuft.
+
+Wichtig ist nur das: **eine Plattform für Prozesse, keine für Funktionen.** Der Store
+lebt im Arbeitsspeicher eines einzigen, langlebigen Prozesses, und der SSE-Strom
+funktioniert, weil Ingest und UI sich denselben Prozess teilen. Serverless (Vercel,
+Netlify Functions, Lambda) bricht beides — dort zählt jede Instanz einen Teil der
+Kosten und die UI liest von einer, die nichts weiß. Aus demselben Grund darf der Dienst
+**nicht auf mehrere Instanzen skalieren**; eine angehängte Platte erzwingt das bei
+Render ohnehin.
+
+Für Render liegt ein Blueprint bei. Render liest ihn aus dem Repository-Wurzelverzeichnis,
+`rootDir` darin hält den Build trotzdem auf das Werkzeug beschränkt:
+
+```bash
+cp tools/observability/render.yaml render.yaml
+git add render.yaml && git commit -m "Add Render blueprint" && git push
+# dann auf render.com: New → Blueprint → Repository auswählen
+```
+
+Der Blueprint setzt Port und Bind-Adresse, hängt eine Platte auf `/data` (die
+Persistenz ist im Image bereits darauf voreingestellt), erzeugt ein Token und meldet
+`/api/health` als Healthcheck — der antwortet absichtlich ohne Token.
+
+Nach dem Deploy stehen die fertigen Variablen in den ersten Zeilen des Logs, mit der
+öffentlichen Adresse bereits eingesetzt:
+
+```
+  athena-observe listening on https://athena-observe.onrender.com  (bound to 0.0.0.0:10000)
+  UI          https://athena-observe.onrender.com/?token=…
+
+  Point an agent at it:
+
+    export OTEL_EXPORTER_OTLP_ENDPOINT="https://athena-observe.onrender.com"
+    export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer …"
+```
+
+Das geht, weil Render `PORT` und `RENDER_EXTERNAL_URL` in den Prozess reicht und beide
+gelesen werden. `PORT` ist die Konvention aller dieser Plattformen, Fly und Railway
+laufen also genauso — dort dann mit `--public-url` bzw. `ATHENA_OBS_PUBLIC_URL` für die
+Adresse.
+
+Zwei Dinge, die man vorher wissen sollte:
+
+- **Das kostet.** Renders freier Tarif hat keine Platte und legt den Dienst nach ~15
+  Minuten Ruhe schlafen. Beides löscht die Historie, und ein Agent, der in den
+  Kaltstart hinein exportiert, verliert seine Telemetrie stillschweigend — genau der
+  Fall, für den es `check` gibt. Der Blueprint steht deshalb auf `starter`.
+- **Die Daten liegen dann dort.** Durch den Collector fließen bei eingeschaltetem
+  `CLAUDE_CODE_ENHANCED_TELEMETRY_BETA` auch Prompts und Antworten. Auf dem eigenen
+  Rechner ist das folgenlos, auf fremder Infrastruktur ist es eine Entscheidung. Siehe
+  [Sensible Daten](#sensible-daten).
+
 ## Was die UI zeigt
 
 - **Sessions** — Liste aller `session.id`, sortiert nach letzter Aktivität, mit Kosten,
@@ -265,6 +322,10 @@ Die UI aktualisiert sich über Server-Sent Events; Bursts werden auf 250 ms zusa
 | `--max-sessions <n>`    | `ATHENA_OBS_MAX_SESSIONS`    | `500`          | Sessions im Speicher                             |
 
 Dauern akzeptieren `ms`, `s`, `m`, `h`, `d` (z. B. `--retention 90m`).
+
+Zusätzlich werden zwei Variablen gelesen, die Plattformen selbst setzen: `PORT` (Render,
+Fly, Railway, Heroku) als Port und `RENDER_EXTERNAL_URL` als öffentliche Adresse. Beide
+rangieren unter den `ATHENA_OBS_*`-Varianten, ein bewusst gesetzter Wert gewinnt also.
 
 ## Datenhaltung
 
@@ -331,7 +392,7 @@ OTLP-Revisionen und neuen Claude-Code-Attributen tolerant.
 ## Tests
 
 ```bash
-npm test          # 67 Tests: Wire-Format, Decoder, Store, Persistenz, Config, Probe, Tunnel, HTTP
+npm test          # 68 Tests: Wire-Format, Decoder, Store, Persistenz, Config, Probe, Tunnel, HTTP
 npm run demo      # synthetische Session emittieren
 ```
 
