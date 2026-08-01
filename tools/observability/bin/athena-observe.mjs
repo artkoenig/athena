@@ -14,7 +14,7 @@ import { TelemetryStore } from '../src/store.mjs';
 import { JsonlPersistence } from '../src/persist.mjs';
 import { createServer } from '../src/server.mjs';
 import { endpointFor, parseArgs, resolveConfig } from '../src/config.mjs';
-import { otelEnvFor } from '../src/claude.mjs';
+import { otelEnvFor, sessionNameHook } from '../src/claude.mjs';
 import { probeCollector } from '../src/probe.mjs';
 import { startTunnel } from '../src/tunnel.mjs';
 
@@ -47,7 +47,9 @@ Options
       --max-sessions <n>        Sessions kept in memory              (default 500)
       --traces false            Leave traces out of the printed env block
       --format <fmt>            Output format for "env": shell (default), json,
-                                dotenv, settings (.claude/settings.local.json)
+                                dotenv, settings (.claude/settings.local.json,
+                                includes the SessionStart hook that names
+                                sessions in the UI)
       --help                    Show this message
 
 Environment
@@ -62,8 +64,10 @@ function renderEnv(env, format) {
       return JSON.stringify(env, null, 2);
     // Ready to drop into .claude/settings.local.json, which applies the block to
     // every session in the project without anyone having to remember an export.
+    // The SessionStart hook rides along: it is what makes those sessions show up
+    // under a name rather than a UUID, and it needs no configuration of its own.
     case 'settings':
-      return JSON.stringify({ env }, null, 2);
+      return JSON.stringify({ env, hooks: sessionNameHook() }, null, 2);
     case 'dotenv':
       return Object.entries(env)
         .map(([key, value]) => `${key}=${value}`)

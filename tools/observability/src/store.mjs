@@ -25,8 +25,10 @@ import {
   EMPTY_TOKENS,
   bool,
   num,
+  normalizeSessionName,
   serviceNameOf,
   sessionIdOf,
+  sessionNameOf,
   toolParametersOf,
 } from './claude.mjs';
 
@@ -42,6 +44,13 @@ const DEFAULTS = {
   maxSessions: 500,
   retentionMs: 24 * 60 * 60 * 1000,
 };
+
+/**
+ * Custom attributes from OTEL_RESOURCE_ATTRIBUTES that the UI reads by name.
+ * They normally arrive on the resource, which is merged wholesale, but they also
+ * ride along on metric attributes — where nothing outside STICKY_ATTRS survives.
+ */
+const STICKY_CUSTOM_ATTRS = ['session.name', 'session_name'];
 
 /** Standard attributes worth pinning to the session card. */
 const STICKY_ATTRS = [
@@ -99,6 +108,9 @@ function estimateTokensFromBytes(bytes) {
 function newSession(id, now) {
   return {
     id,
+    // Set out of band by the SessionStart hook (see setSessionName). A name the
+    // session exported itself outranks it — that one was chosen deliberately.
+    assignedName: null,
     serviceName: 'claude-code',
     resource: {},
     attrs: {},
@@ -152,6 +164,11 @@ function newSession(id, now) {
     _cumulative: new Map(),
     _gauges: new Map(),
   };
+}
+
+/** What the UI puts where the id used to be, or null if nothing named it. */
+function nameOf(session) {
+  return sessionNameOf(session) ?? session.assignedName ?? null;
 }
 
 /** Stable identity for one metric time series (metric name + attribute set). */
@@ -240,6 +257,52 @@ export class TelemetryStore {
     return { count: records.length, sessionIds: change.sessionIds };
   }
 
+  /**
+   * Name a session from outside the telemetry stream.
+   *
+   * This is how the SessionStart hook labels a session: the OTel resource is
+   * built once at process start, so nothing running *inside* a session can add
+   * a `session.name` attribute to what it exports (see sessionNameOf). The hook
+   * knows the session id and the collector's address, and says so directly.
+   *
+   * The session usually does not exist yet when this arrives — the hook runs
+   * before the first export — so it is created here. That is deliberate: a
+   * session shows up in the list the moment it starts, instead of only once it
+   * has spent a token.
+   *
+   * @param {string} id `session.id` as the CLI reports it
+   * @param {string|null} name the label, or an empty value to drop it again
+   * @param {{replay?: boolean, timeMs?: number}} opts `replay` suppresses
+   *   re-persisting on hydrate; `timeMs` is when the name was assigned, so a
+   *   replayed name recreates the session at its original age instead of
+   *   resurrecting it as brand new.
+   */
+  setSessionName(id, name, opts = {}) {
+    const sessionId = String(id ?? '').trim();
+    if (!sessionId) throw Object.assign(new Error('session id required'), { status: 400 });
+    const timeMs = opts.timeMs || Date.now();
+    let session = this.sessions.get(sessionId);
+    const created = !session;
+    if (!session) {
+      session = newSession(sessionId, timeMs);
+      this.sessions.set(sessionId, session);
+    }
+    session.assignedName = normalizeSessionName(name);
+    // Only after the name is in place: a replayed name older than the retention
+    // window is meant to be dropped here rather than resurface as a session.
+    if (created) this.#evict();
+    const change = {
+      signal: 'names',
+      records: [],
+      names: [{ id: sessionId, name: session.assignedName, timeMs }],
+      sessionIds: [sessionId],
+      seq: ++this.seq,
+      replay: Boolean(opts.replay),
+    };
+    this.#emit(change);
+    return { id: sessionId, name: nameOf(session) };
+  }
+
   #session(id, record) {
     let session = this.sessions.get(id);
     const timeMs = record.startMs || record.timeMs || Date.now();
@@ -257,6 +320,12 @@ export class TelemetryStore {
     }
     for (const key of STICKY_ATTRS) {
       const value = record.attrs?.[key] ?? record.resource?.[key];
+      if (value !== undefined && value !== null && value !== '') session.attrs[key] = value;
+    }
+    // Deliberately not falling back to the resource here: it is already kept in
+    // full, and pinning a copy would list the same attribute twice in the UI.
+    for (const key of STICKY_CUSTOM_ATTRS) {
+      const value = record.attrs?.[key];
       if (value !== undefined && value !== null && value !== '') session.attrs[key] = value;
     }
     return session;
@@ -713,6 +782,7 @@ export class TelemetryStore {
       sessions = sessions.filter((session) => {
         const haystack = [
           session.id,
+          nameOf(session),
           session.serviceName,
           session.attrs['user.email'],
           ...Object.values(session.resource ?? {}),
@@ -980,6 +1050,7 @@ export function summarizeSession(session) {
 
   return {
     id: session.id,
+    name: nameOf(session),
     serviceName: session.serviceName,
     resource: session.resource,
     attrs: session.attrs,

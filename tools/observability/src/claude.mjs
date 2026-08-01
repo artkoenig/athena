@@ -8,6 +8,8 @@
  * of the code never has to string-match inline.
  */
 
+import { fileURLToPath } from 'node:url';
+
 export const METRIC = {
   session: 'claude_code.session.count',
   linesOfCode: 'claude_code.lines_of_code.count',
@@ -115,6 +117,58 @@ export function serviceNameOf(record) {
   return record.resource?.['service.name'] || 'claude-code';
 }
 
+/** Longest label kept; anything beyond this is a paste accident, not a name. */
+const MAX_SESSION_NAME_LENGTH = 120;
+
+/**
+ * Values in OTEL_RESOURCE_ATTRIBUTES are `key=value` pairs separated by commas
+ * and restricted to US-ASCII, so a label with a space, a comma or an umlaut has
+ * to be percent-encoded (the W3C Baggage rules the OTel spec points at). SDKs
+ * decode before export, but not every exporter in the chain does, so a value
+ * that still looks encoded on arrival is decoded here rather than shown raw.
+ */
+function decodePercent(value) {
+  if (!value.includes('%')) return value;
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+/** Trim, decode and cap a label from any source into what the UI will show. */
+export function normalizeSessionName(value) {
+  if (typeof value !== 'string') return null;
+  const name = decodePercent(value).trim();
+  return name ? name.slice(0, MAX_SESSION_NAME_LENGTH) : null;
+}
+
+/**
+ * Human-readable label a session carried in its own telemetry.
+ *
+ * Claude Code exports no name of its own: `session.id` is a UUID, and nothing in
+ * the standard attribute set carries a title, a workspace or a cwd. What it does
+ * forward is OTEL_RESOURCE_ATTRIBUTES, so a session started with
+ * `OTEL_RESOURCE_ATTRIBUTES=session.name=<label>` in its environment carries that
+ * label on every record it exports — as a resource attribute, and (unless
+ * OTEL_METRICS_INCLUDE_RESOURCE_ATTRIBUTES=false) on metric attributes too, which
+ * is why both are checked.
+ *
+ * It has to be set before the process starts, because the OTel resource is built
+ * once at init. That is exactly what the SessionStart hook cannot do — it runs
+ * inside an already-configured process — so the hook names sessions through the
+ * collector's API instead, and this stays the manual override (see
+ * TelemetryStore#setSessionName).
+ */
+export function sessionNameOf(record) {
+  return normalizeSessionName(
+    record?.resource?.['session.name'] ??
+      record?.attrs?.['session.name'] ??
+      record?.resource?.['session_name'] ??
+      record?.attrs?.['session_name'],
+  );
+}
+
 /** Attribution attributes that answer "which agent/skill/tool spent this". */
 export function attributionOf(attrs = {}) {
   const out = {};
@@ -179,6 +233,22 @@ export function describeEvent(log) {
     default:
       return typeof log.body === 'string' ? log.body : log.eventName;
   }
+}
+
+/**
+ * Settings block that makes sessions arrive with a name instead of only a UUID.
+ *
+ * It belongs next to the env block rather than behind a flag: the name is
+ * derived per session (repository and branch), so there is nothing to configure
+ * — and a collector that lists twenty UUIDs is the state everyone wants fixed
+ * anyway. The hook reads the endpoint and token straight out of the environment
+ * the env block sets, which is why the two are handed out together.
+ */
+export function sessionNameHook() {
+  const script = fileURLToPath(new URL('../hooks/session-name.mjs', import.meta.url));
+  return {
+    SessionStart: [{ hooks: [{ type: 'command', command: `node ${JSON.stringify(script)}` }] }],
+  };
 }
 
 /**

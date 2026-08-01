@@ -154,13 +154,18 @@ function renderSessionList() {
   list.innerHTML = state.sessions
     .map((session) => {
       const errors = session.counts.apiErrors + session.counts.toolFailures;
+      // A named session leads with its name; the id stays on the card because it
+      // is what every other view, log line and API path refers to.
       return `<li>
         <button type="button" class="session-card" data-session="${esc(session.id)}"
           aria-current="${session.id === state.selectedSessionId}">
           <span class="session-card-top">
             ${isLive(session) ? '<span class="dot-live" aria-label="live"></span>' : ''}
-            <span class="session-id" title="${esc(session.id)}">${esc(shortId(session.id, 20))}</span>
+            <span class="${session.name ? 'session-name' : 'session-id'}" title="${esc(session.id)}">${esc(
+              session.name || shortId(session.id, 20),
+            )}</span>
           </span>
+          ${session.name ? `<span class="session-sub" title="${esc(session.id)}">${esc(shortId(session.id, 20))}</span>` : ''}
           <span class="session-card-meta">
             <span>${esc(fmtAgo(session.lastSeenMs))}</span>
             <span>${esc(fmtCost(session.costUsd))}</span>
@@ -204,7 +209,8 @@ function renderDetail() {
   detail.innerHTML = `
     <div class="detail-head">
       <div>
-        <h1 class="detail-title">${esc(session.id)}</h1>
+        <h1 class="detail-title"${session.name ? ' data-named="true"' : ''}>${esc(session.name || session.id)}</h1>
+        ${session.name ? `<div class="detail-subtitle">${esc(session.id)}</div>` : ''}
         <div class="chips">
           ${isLive(session) ? '<span class="chip" data-tone="live">live</span>' : ''}
           <span class="chip">service <b>${esc(session.serviceName)}</b></span>
@@ -807,6 +813,7 @@ function renderSetupModal() {
   const shell = Object.entries(env)
     .map(([key, value]) => `export ${key}="${value}"`)
     .join('\n');
+  const hooks = JSON.stringify({ hooks: state.config?.hooks ?? {} }, null, 2);
   const ts = `const otelEnv = ${JSON.stringify(env, null, 2)};
 
 for await (const message of query({
@@ -826,6 +833,18 @@ options = ClaudeAgentOptions(env=OTEL_ENV)`;
         <button type="button" class="ghost-button" data-copy="env-shell">Copy</button></div>
       <pre id="env-shell">${esc(shell)}</pre>
     </div>
+    <h3>Session names</h3>
+    <div class="env-block">
+      <div class="env-block-head"><span>.claude/settings.json — SessionStart hook</span>
+        <button type="button" class="ghost-button" data-copy="env-hook">Copy</button></div>
+      <pre id="env-hook">${esc(hooks)}</pre>
+    </div>
+    <p class="muted">
+      Claude Code exports no session name, and the OTel resource that could carry one is built
+      before any hook runs — so the hook tells this collector directly, keyed by the session id.
+      It names sessions after repository and branch, and takes endpoint and token from the
+      environment above. Without it, sessions are listed by their id.
+    </p>
     <h3>TypeScript SDK</h3>
     <div class="env-block">
       <div class="env-block-head"><span>options.env replaces the inherited environment</span>

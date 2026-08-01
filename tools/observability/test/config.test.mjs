@@ -73,9 +73,14 @@ test('the settings format nests the env block the way Claude Code expects', asyn
   const bin = new URL('../bin/athena-observe.mjs', import.meta.url).pathname;
   const { stdout } = await promisify(execFile)(process.execPath, [bin, 'env', '--format', 'settings']);
   const parsed = JSON.parse(stdout);
-  assert.deepEqual(Object.keys(parsed), ['env'], 'settings.local.json keys live under "env"');
+  assert.deepEqual(
+    Object.keys(parsed),
+    ['env', 'hooks'],
+    'settings.local.json keys live under "env", the naming hook under "hooks"',
+  );
   assert.equal(parsed.env.CLAUDE_CODE_ENABLE_TELEMETRY, '1');
   assert.equal(parsed.env.OTEL_EXPORTER_OTLP_ENDPOINT, 'http://127.0.0.1:4318');
+  assert.match(parsed.hooks.SessionStart[0].hooks[0].command, /session-name\.mjs/);
 });
 
 test('parseDuration accepts the documented units', () => {

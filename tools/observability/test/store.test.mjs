@@ -418,6 +418,84 @@ test('a failed TaskUpdate call does not mutate todo state', () => {
   assert.equal(store.getSession(SESSION).todos.tasks.length, 0);
 });
 
+test('a session.name from OTEL_RESOURCE_ATTRIBUTES becomes the session name', () => {
+  const store = new TelemetryStore();
+  store.ingest('logs', [
+    { ...log('claude_code.user_prompt'), resource: { 'service.name': 'agent', 'session.name': 'nightly run' } },
+  ]);
+  const session = store.getSession(SESSION);
+  assert.equal(session.name, 'nightly run');
+  assert.equal(session.id, SESSION);
+  // The name is searchable, so the list can be filtered by it like by an id.
+  assert.equal(store.listSessions({ search: 'nightly' }).items.length, 1);
+  assert.equal(store.listSessions({ search: 'daily' }).items.length, 0);
+});
+
+test('a session.name arriving only on metric attributes sticks to the session', () => {
+  const store = new TelemetryStore();
+  store.ingest('metrics', [
+    metric('claude_code.token.usage', 10, { type: 'input', 'session.name': 'labelled' }),
+    metric('claude_code.token.usage', 10, { type: 'output' }),
+  ]);
+  assert.equal(store.getSession(SESSION).name, 'labelled');
+});
+
+test('sessions without a name report null, leaving the id as the only label', () => {
+  const store = new TelemetryStore();
+  store.ingest('logs', [log('claude_code.user_prompt')]);
+  assert.equal(store.getSession(SESSION).name, null);
+  assert.equal(store.listSessions().items[0].name, null);
+});
+
+test('setSessionName names a session before it has exported anything', () => {
+  const store = new TelemetryStore();
+  // What the SessionStart hook does: the session exists as a name and nothing else.
+  store.setSessionName(SESSION, 'athena · main');
+  const early = store.getSession(SESSION);
+  assert.equal(early.name, 'athena · main');
+  assert.equal(early.counts.logs, 0);
+
+  store.ingest('logs', [log('claude_code.user_prompt')]);
+  const session = store.getSession(SESSION);
+  assert.equal(session.name, 'athena · main');
+  assert.equal(session.counts.logs, 1);
+  assert.equal(store.listSessions({ search: 'athena' }).items.length, 1);
+});
+
+test('a name the session exported itself outranks the one the hook assigned', () => {
+  const store = new TelemetryStore();
+  store.setSessionName(SESSION, 'athena · main');
+  store.ingest('logs', [
+    { ...log('claude_code.user_prompt'), resource: { 'session.name': 'chosen by hand' } },
+  ]);
+  assert.equal(store.getSession(SESSION).name, 'chosen by hand');
+});
+
+test('setSessionName rejects an empty id and clears on an empty name', () => {
+  const store = new TelemetryStore();
+  assert.throws(() => store.setSessionName('', 'nameless'), /session id required/);
+  store.setSessionName(SESSION, 'temporary');
+  store.setSessionName(SESSION, '');
+  assert.equal(store.getSession(SESSION).name, null);
+});
+
+test('naming reaches subscribers so the UI learns about a session with no records', () => {
+  const store = new TelemetryStore();
+  const changes = [];
+  store.subscribe((change) => changes.push(change));
+  store.setSessionName(SESSION, 'athena · main');
+  assert.equal(changes.length, 1);
+  assert.equal(changes[0].signal, 'names');
+  assert.deepEqual(changes[0].sessionIds, [SESSION]);
+  assert.equal(changes[0].records.length, 0);
+});
+
+test('a replayed name older than the retention window does not resurrect a session', () => {
+  const store = new TelemetryStore({ retentionMs: 60_000 });
+  store.setSessionName('long-gone', 'yesterday', { replay: true, timeMs: Date.now() - 86_400_000 });
+  assert.equal(store.getSession('long-gone'), null);
+});
+
 test('clear() empties the store but keeps subscribers attached', () => {
   const store = new TelemetryStore();
   let notified = 0;

@@ -65,6 +65,50 @@ export OTEL_TRACES_EXPORT_INTERVAL="1000"
 (TypeScript/Python SDK) oder eine `.env`-Datei. Der Setup-Dialog in der UI zeigt
 fertige Snippets für beide SDKs.
 
+### Sessions benennen
+
+Claude Code exportiert **keinen** Session-Namen: `session.id` ist eine UUID, und im
+Standard-Attributsatz steckt weder Titel noch Zusammenfassung noch Arbeitsverzeichnis.
+Deshalb bringt athena-observe einen SessionStart-Hook mit, der jede Session automatisch
+benennt — nach Repository und Branch, also `athena · main`. Konfiguriert wird daran
+nichts; der Hook steckt in dem Settings-Block, den
+[Dauerhaft einschalten](#dauerhaft-einschalten) schreibt:
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "node /pfad/zu/hooks/session-name.mjs" }] }
+    ]
+  }
+}
+```
+
+Warum ein Hook und nicht eine Umgebungsvariable: die OTel-Resource wird beim
+Prozessstart einmalig gelesen, ein Hook läuft danach — und als Subprozess mit einer
+Kopie der Umgebung, seine `export`s erreichen den CLI-Prozess also nie. Der Name kann
+deshalb nicht in der Telemetrie mitreisen. Der Hook schickt ihn stattdessen direkt an den
+Collector (`POST /api/sessions/<id>/name`), mit der `session_id`, die jeder Hook ohnehin
+bekommt. Endpunkt und Token liest er aus `OTEL_EXPORTER_OTLP_ENDPOINT` bzw.
+`OTEL_EXPORTER_OTLP_HEADERS` — denselben Variablen, mit denen die Session exportiert.
+Läuft keine Telemetrie, tut er nichts.
+
+Weil der Name vor dem ersten Export ankommt, taucht eine Session in der Liste auf,
+sobald sie startet — nicht erst, wenn sie das erste Token ausgegeben hat.
+
+Zwei Dinge lassen sich verstellen:
+
+- `ATHENA_OBS_SESSION_NAME` überschreibt den abgeleiteten Namen. Sinnvoll für CI-Jobs
+  (Build-Nummer) oder SDK-Flotten, die ihre Runs selbst benennen.
+- `OTEL_RESOURCE_ATTRIBUTES="session.name=…"` **vor** dem Start gesetzt, gewinnt gegen
+  den Hook — das ist der manuelle Weg, wenn eine Session anders heißen soll als ihr
+  Branch. Nur US-ASCII, Leerzeichen prozent-kodiert (`nightly%20run`), mehrere Attribute
+  mit Komma getrennt.
+
+Ohne Hook und ohne Attribut wird die Session weiter über ihre ID geführt. Die ID
+verschwindet auch bei benannten Sessions nicht — sie steht unter dem Namen und ist
+weiterhin das, worauf API-Pfade und Suche zeigen.
+
 ### Dauerhaft einschalten
 
 Ein `export` gilt nur für die Shell, in der es abgesetzt wurde. Claude Code liest die
@@ -77,8 +121,9 @@ Damit man nicht daran denken muss, gehört der Block in die persönlichen Projek
 node bin/athena-observe.mjs env --format settings > ../../.claude/settings.local.json
 ```
 
-Das schreibt `{"env": {…}}`, und Claude Code wendet das auf jede Session in diesem
-Projekt an. Bewusst `settings.local.json` und nicht `settings.json`: Letzteres wird
+Das schreibt `{"env": {…}, "hooks": {…}}` — den Export-Block plus den SessionStart-Hook
+aus [Sessions benennen](#sessions-benennen) —, und Claude Code wendet das auf jede
+Session in diesem Projekt an. Bewusst `settings.local.json` und nicht `settings.json`: Letzteres wird
 mitversioniert und würde jeden Mitwirkenden im Sekundentakt gegen einen Collector
 exportieren lassen, den er gar nicht betreibt. `settings.local.json` steht in
 `.gitignore`.
@@ -380,8 +425,10 @@ Zwei Dinge gelten für alle diese Varianten:
 
 ## Was die UI zeigt
 
-- **Sessions** — Liste aller `session.id`, sortiert nach letzter Aktivität, mit Kosten,
-  Tokens und Fehlerzahl; live-Sessions sind markiert.
+- **Sessions** — Liste aller Sessions, sortiert nach letzter Aktivität, mit Kosten,
+  Tokens und Fehlerzahl; live-Sessions sind markiert. Mit installiertem Hook steht der
+  Name vorn und die ID darunter, sonst führt die ID (siehe
+  [Sessions benennen](#sessions-benennen)).
 - **Overview** — Kennzahlenraster (Kosten, Tokens nach Typ inkl. Cache-Trefferquote,
   Interaktionen, LLM-Requests, Tool-Calls, Lines of Code, Commits/PRs, aktive Zeit) plus
   Tabellen pro Modell (Requests, Latenz, TTFT, Fehler) und pro Tool (Calls, Failures,
@@ -466,6 +513,7 @@ src/claude.mjs           Claude-Code-Domänenwissen: Metrik-, Event-, Span-Namen
 src/store.mjs            In-Memory-Store, Session-Aggregation, Trace-Baum, Queries
 src/persist.mjs          optionales JSONL-Append + Replay
 src/server.mjs           OTLP-Ingest, JSON-API, SSE, statische Auslieferung
+hooks/session-name.mjs   SessionStart-Hook: benennt die Session im Collector
 public/                  UI (Vanilla JS, kein Build)
 scripts/demo-emit.mjs    synthetische Sessions als echtes OTLP-Protobuf
 ```
@@ -485,14 +533,15 @@ OTLP-Revisionen und neuen Claude-Code-Attributen tolerant.
 | `GET /api/metrics`       | Metrikpunkte (`session`, `name`)                           |
 | `GET /api/stats`         | Gesamtzahlen, Top-Modelle, Top-Tools, Puffergrößen         |
 | `GET /api/facets`        | vorkommende Event- und Metriknamen mit Häufigkeit          |
-| `GET /api/config`        | Endpoint, Limits, fertiger `OTEL_*`-Block                  |
+| `POST /api/sessions/:id/name` | Session benennen (`{"name": "…"}`), vom SessionStart-Hook  |
+| `GET /api/config`        | Endpoint, Limits, fertiger `OTEL_*`-Block, Hook-Block      |
 | `GET /api/stream`        | Server-Sent Events bei Ingest                              |
 | `DELETE /api/data`       | Store leeren                                               |
 
 ## Tests
 
 ```bash
-npm test          # 74 Tests: Wire-Format, Decoder, Store, Persistenz, Config, Probe, Tunnel, HTTP
+npm test          # 110 Tests: Wire-Format, Decoder, Store, Persistenz, Config, Probe, Tunnel, HTTP, Hook
 npm run demo      # synthetische Session emittieren
 ```
 
