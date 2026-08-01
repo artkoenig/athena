@@ -4,3 +4,4 @@ telemetry
 .athena-telemetry
 *.log
 *.png
+.vercel

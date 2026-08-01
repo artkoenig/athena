@@ -317,9 +317,27 @@ Geht auch — aber nur halb, und man sollte wissen, welche Hälfte.
 
 Vercel nimmt inzwischen einen normalen Node-Server entgegen: eine Datei `server.mjs`, die
 `listen()` aufruft, wird eingefangen und beliefert. Die liegt bei, Next.js und React
-braucht es dafür nicht. Root Directory im Projekt auf `tools/observability` setzen,
-`ATHENA_OBS_TOKEN` als Variable eintragen, fertig — `VERCEL_PROJECT_PRODUCTION_URL` wird
-gelesen, die öffentliche Adresse steht also von selbst im Env-Block.
+braucht es dafür nicht. Zu setzen sind:
+
+- **Root Directory** → `tools/observability`
+- **Production Branch** → der Branch, auf dem das Werkzeug liegt
+- **`ATHENA_OBS_TOKEN`** als Umgebungsvariable
+- **Deployment Protection** → aus. Sie leitet *jede* Anfrage auf eine Vercel-Anmeldung
+  um, auch `/api/health`. Ein Browser kommt da durch, ein OTLP-Exporter nicht: der folgt
+  der Umleitung, lädt seine Spans bei `vercel.com` ab und verwirft die Antwort
+  kommentarlos. `check` erkennt und benennt das.
+
+Die öffentliche Adresse kommt über `VERCEL_PROJECT_PRODUCTION_URL` von selbst in den
+Env-Block.
+
+Das beiliegende `vercel.json` ist nicht optional. Ohne es deployt Vercel **nur statische
+Dateien**: die Zero-Config-Erkennung sieht ein Verzeichnis namens `public/`, hält das
+Projekt für eine statische Seite, veröffentlicht die drei Dateien daraus und sucht nie
+nach dem Server-Entrypoint. Die Oberfläche lädt dann, aber jeder `/api`- und `/v1`-Pfad
+ist 404. (`public/` zu löschen hilft nicht — dann wird das ganze Projekt statisch
+veröffentlicht, `src/` inklusive.) Die Datei deklariert stattdessen einen Build, womit
+Zero-Config abgeschaltet ist: eine Funktion aus `server.mjs`, eine Catch-all-Route
+hinein, kein statisches Ausliefern.
 
 Was fehlt, ist der Zustand. Fluid Compute teilt eine Instanz zwischen gleichzeitigen
 Aufrufen, der Store überlebt also von Request zu Request — aber das ist eine Optimierung,

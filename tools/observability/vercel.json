@@ -1,0 +1,18 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+
+  "//": [
+    "Without this, Vercel deploys nothing but static files. Its zero-config step",
+    "sees a directory named public/, concludes the project is a static site,",
+    "publishes those three files and never looks for the server entrypoint — so",
+    "the UI loads and every /api and /v1 path is a 404. Deleting public/ is no",
+    "answer either: the whole project then gets published as static, src/ and all.",
+
+    "Declaring a build turns zero-config off. One function from server.mjs, one",
+    "catch-all route into it, no static output at all — which is right, because",
+    "this app serves its own files and gates them on the same token as the data."
+  ],
+
+  "builds": [{ "src": "server.mjs", "use": "@vercel/node" }],
+  "routes": [{ "src": "/(.*)", "dest": "/server.mjs" }]
+}
