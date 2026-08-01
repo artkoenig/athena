@@ -1,0 +1,6 @@
+node_modules/
+*.log
+
+# athena-observe persistence (--persist)
+.athena-telemetry/
+telemetry/

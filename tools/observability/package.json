@@ -1,0 +1,25 @@
+{
+  "name": "@athena/observability",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Zero-dependency OpenTelemetry collector and web UI for monitoring Claude Agent SDK / Claude Code sessions",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=20.11"
+  },
+  "bin": {
+    "athena-observe": "./bin/athena-observe.mjs"
+  },
+  "files": [
+    "bin",
+    "src",
+    "public"
+  ],
+  "scripts": {
+    "start": "node bin/athena-observe.mjs",
+    "dev": "node --watch bin/athena-observe.mjs",
+    "test": "node --test \"test/*.test.mjs\"",
+    "demo": "node scripts/demo-emit.mjs"
+  }
+}
