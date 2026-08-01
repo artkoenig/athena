@@ -8,6 +8,7 @@
  */
 
 import http from 'node:http';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
@@ -32,6 +33,15 @@ const SSE_FLUSH_MS = 250;
  */
 const TOKEN_COOKIE = 'athena_obs_token';
 const TOKEN_COOKIE_MAX_AGE = 30 * 24 * 60 * 60;
+
+/*
+ * Identifies this process, so a caller can tell whether the URL it is talking to
+ * is one collector or several. The store is in memory, so several is not a
+ * smaller version of one: telemetry lands in whichever instance took the POST
+ * and is invisible from every other, which looks exactly like sessions
+ * appearing and vanishing at random. It is worth being able to prove.
+ */
+const INSTANCE_ID = crypto.randomBytes(6).toString('hex');
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -328,7 +338,7 @@ export function createServer({ store, token = null, endpoint = '', log = console
     // uptime probes work; the record counter is only added for callers that
     // authenticated, so an unauthenticated prober learns nothing about volume.
     if (url.pathname === '/api/health' && req.method === 'GET') {
-      const payload = { ok: true, uptimeMs: Date.now() - store.startedAt };
+      const payload = { ok: true, uptimeMs: Date.now() - store.startedAt, instance: INSTANCE_ID };
       if (ok) payload.seq = store.seq;
       sendJson(res, 200, payload);
       return;

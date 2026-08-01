@@ -275,6 +275,17 @@ test('health answers without a token but only counts records for authorized call
   });
 });
 
+test('health identifies the process, so several instances behind one URL are visible', async () => {
+  await withServer({}, async ({ base }) => {
+    // Without a token either — a caller has to be able to tell how many
+    // collectors a URL stands for before it has any credentials for them.
+    const first = await (await fetch(`${base}/api/health`)).json();
+    const second = await (await fetch(`${base}/api/health`)).json();
+    assert.ok(first.instance, 'health must identify the process');
+    assert.equal(first.instance, second.instance, 'one process must not look like two');
+  });
+});
+
 test('the UI is served from the same port as ingest', async () => {
   await withServer({}, async ({ base }) => {
     const page = await fetch(`${base}/`);

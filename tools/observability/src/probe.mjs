@@ -83,10 +83,12 @@ export async function probeCollector(endpoint, { token = null, timeoutMs = DEFAU
     const landed = new URL(response.url);
     const asked = new URL(base);
     if (landed.host !== asked.host) {
-      const gate = /(^|\.)vercel\.com$/.test(landed.host)
-        ? ' — Vercel Deployment Protection. Turn it off for this project, or give the agent the bypass token as an extra OTLP header'
-        : ' — an access gate is answering instead of the collector';
-      record('reachable', false, `${base} redirects to ${landed.host}${gate}`);
+      record(
+        'reachable',
+        false,
+        `${base} redirects to ${landed.host} — an access gate is answering instead of the collector. ` +
+          'Turn it off for this service, or give the agent its bypass token as an extra OTLP header',
+      );
     } else if (!response.ok) {
       record('reachable', false, `${base}/api/health answered HTTP ${response.status}`);
     } else if (!body.includes('"ok"')) {
@@ -100,7 +102,40 @@ export async function probeCollector(endpoint, { token = null, timeoutMs = DEFAU
   }
   if (!reachable) return { ok: false, endpoint: base, steps };
 
-  // 2. Push a real OTLP span the same way the exporter would.
+  // 2. Is it one collector or several? The store is in memory, so a URL served
+  //    by more than one process is not a slower collector, it is a broken one:
+  //    each instance sees the subset of telemetry that happened to be routed to
+  //    it, and a reload picks one at random. That reads as sessions appearing
+  //    and disappearing, which is a hard thing to diagnose from the outside and
+  //    an easy one to measure — sequential requests tend to stick to a single
+  //    instance, so the requests have to overlap for the split to show.
+  try {
+    const seen = new Set();
+    const replies = await Promise.all(
+      Array.from({ length: 8 }, () =>
+        fetchWithTimeout(`${base}/api/health`, {}, timeoutMs)
+          .then((response) => response.json())
+          .catch(() => null),
+      ),
+    );
+    for (const reply of replies) if (reply?.instance) seen.add(reply.instance);
+    if (seen.size > 1) {
+      record(
+        'single',
+        false,
+        `${seen.size} instances answer this URL, each with its own memory — telemetry will appear and vanish. ` +
+          'Pin the service to one instance, or move it to a platform that runs one process',
+      );
+    } else if (seen.size === 1) {
+      record('single', true, 'one collector process answers this URL');
+    }
+    // No instance id at all means an older collector; silence beats a wrong verdict.
+  } catch {
+    // A failure here says nothing about the export path, which is what this
+    // command is for. Leave the step out rather than fail a working collector.
+  }
+
+  // 3. Push a real OTLP span the same way the exporter would.
   const sessionId = `athena-check-${crypto.randomBytes(4).toString('hex')}`;
   const traceId = crypto.randomBytes(16).toString('hex');
   const headers = { 'content-type': 'application/x-protobuf' };
@@ -125,7 +160,7 @@ export async function probeCollector(endpoint, { token = null, timeoutMs = DEFAU
   }
   if (!accepted) return { ok: false, endpoint: base, steps };
 
-  // 3. Read it back, so this proves storage and not just a 200.
+  // 4. Read it back, so this proves storage and not just a 200.
   try {
     const url = `${base}/api/sessions?search=${encodeURIComponent(sessionId)}${token ? `&token=${encodeURIComponent(token)}` : ''}`;
     const response = await fetchWithTimeout(url, {}, timeoutMs);

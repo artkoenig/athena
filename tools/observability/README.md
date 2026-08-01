@@ -229,13 +229,16 @@ echten OTLP-Span und liest ihn wieder aus:
 
 ```
   ✓ reachable  https://obs.example.ts.net is an athena-observe collector
+  ✓ single     one collector process answers this URL
   ✓ ingest     OTLP span accepted
   ✓ stored     probe session athena-check-16f7537d is in the store
 ```
 
 Jeder Schritt scheitert für sich: `reachable` zeigt Netzpolitik oder falsche URL,
-`ingest` fehlendes oder falsches Token, `stored` einen Collector, der annimmt aber nicht
-speichert. Exit-Code 1, wenn irgendetwas scheitert — damit taugt es auch für ein Skript.
+`single` mehrere Instanzen hinter einer Adresse (siehe
+[Serverless](#nicht-auf-serverless--und-warum-gemessen)), `ingest` fehlendes oder falsches
+Token, `stored` einen Collector, der annimmt aber nicht speichert. Exit-Code 1, wenn
+irgendetwas scheitert — damit taugt es auch für ein Skript.
 
 Danach eine **neue** Session starten; die laufende liest ihre Konfiguration nicht neu.
 
@@ -274,24 +277,38 @@ stellt den Collector irgendwohin, wo ein Prozess einfach weiterläuft.
 
 Wichtig ist nur das: **eine Plattform für Prozesse, keine für Funktionen.** Der Store
 lebt im Arbeitsspeicher eines einzigen, langlebigen Prozesses, und der SSE-Strom
-funktioniert, weil Ingest und UI sich denselben Prozess teilen. Serverless (Vercel,
-Netlify Functions, Lambda) bricht beides — dort zählt jede Instanz einen Teil der
-Kosten und die UI liest von einer, die nichts weiß. Aus demselben Grund darf der Dienst
-**nicht auf mehrere Instanzen skalieren**; eine angehängte Platte erzwingt das bei
-Render ohnehin.
+funktioniert, weil Ingest und UI sich denselben Prozess teilen. Serverless bricht beides:
+dort zählt jede Instanz einen Teil der Kosten, und die UI liest von einer, die nichts
+weiß — wie das aussieht und wie man es misst, steht unten. Aus demselben Grund darf der
+Dienst **nicht auf mehrere Instanzen skalieren**; eine angehängte Platte erzwingt das
+bei Render ohnehin.
 
-Für Render liegt ein Blueprint bei. Render liest ihn aus dem Repository-Wurzelverzeichnis,
-`rootDir` darin hält den Build trotzdem auf das Werkzeug beschränkt:
+Für Render liegt ein fertiger Blueprint im Wurzelverzeichnis des Repositories
+(`render.yaml`) — dort und nur dort liest Render ihn; `rootDir` darin hält den Build
+trotzdem auf dieses Werkzeug beschränkt. Es ist nichts zu kopieren:
 
-```bash
-cp tools/observability/render.yaml render.yaml
-git add render.yaml && git commit -m "Add Render blueprint" && git push
-# dann auf render.com: New → Blueprint → Repository auswählen
+```
+render.com → New → Blueprint → dieses Repository auswählen → Apply
 ```
 
 Der Blueprint setzt Port und Bind-Adresse, hängt eine Platte auf `/data` (die
 Persistenz ist im Image bereits darauf voreingestellt), erzeugt ein Token und meldet
-`/api/health` als Healthcheck — der antwortet absichtlich ohne Token.
+`/api/health` als Healthcheck — der antwortet absichtlich ohne Token. Das Token steht
+danach im Dashboard unter *Environment*.
+
+Danach von der Umgebung aus prüfen, in der der Agent läuft:
+
+```bash
+node bin/athena-observe.mjs check \
+  --public-url https://athena-observe.onrender.com --token <token>
+
+  ✓ reachable  … is an athena-observe collector
+  ✓ single     one collector process answers this URL
+  ✓ ingest     OTLP span accepted
+  ✓ stored     probe session athena-check-… is in the store
+```
+
+Die zweite Zeile ist die, die auf einer Plattform mit Funktionen fehlschlägt.
 
 Nach dem Deploy stehen die fertigen Variablen in den ersten Zeilen des Logs, mit der
 öffentlichen Adresse bereits eingesetzt:
@@ -311,44 +328,42 @@ gelesen werden. `PORT` ist die Konvention aller dieser Plattformen, Fly und Rail
 laufen also genauso — dort dann mit `--public-url` bzw. `ATHENA_OBS_PUBLIC_URL` für die
 Adresse.
 
-#### Vercel
+#### Nicht auf Serverless — und warum, gemessen
 
-Geht auch — aber nur halb, und man sollte wissen, welche Hälfte.
-
-Vercel nimmt inzwischen einen normalen Node-Server entgegen: eine Datei `server.mjs`, die
-`listen()` aufruft, wird eingefangen und beliefert. Die liegt bei, Next.js und React
-braucht es dafür nicht. Root Directory im Projekt auf `tools/observability` setzen,
-`ATHENA_OBS_TOKEN` als Variable eintragen, fertig — `VERCEL_PROJECT_PRODUCTION_URL` wird
-gelesen, die öffentliche Adresse steht also von selbst im Env-Block.
-
-Was fehlt, ist der Zustand. Fluid Compute teilt eine Instanz zwischen gleichzeitigen
-Aufrufen, der Store überlebt also von Request zu Request — aber das ist eine Optimierung,
-keine Zusage. Vercel skaliert unter Last auf mehrere Instanzen und räumt sie im Leerlauf
-ab, und eine Platte gibt es nicht. Zwei Instanzen heißt zwei halbe Bilder derselben
-Session, und ein SSE-Client an der einen erfährt nichts von Telemetrie, die an der anderen
-ankam. Der Start sagt das auch selbst:
+Der Store lebt im Arbeitsspeicher eines Prozesses. Auf einer Funktionsplattform gibt es
+den nicht: dort beantwortet eine wechselnde Zahl kurzlebiger Instanzen dieselbe URL. Das
+ist hier kein langsamerer Collector, sondern ein kaputter. Zwölf **gleichzeitige** Anfragen
+an ein solches Deployment, je `/api/health` (Laufzeit des Prozesses) und `/api/sessions`
+(was dieser Prozess sieht):
 
 ```
-athena-observe: WARNING — on Vercel this keeps its data only in the instance that
-  happens to serve the request. Expect history to vanish when the instance is
-  recycled and sessions to split when more than one is running.
+uptime=264242  sessions=0     uptime=736594  sessions=0
+uptime=264168  sessions=0     uptime=736583  sessions=0
+uptime=264195  sessions=0     uptime=736607  sessions=0
+uptime=264211  sessions=1     uptime=736552  sessions=1
+uptime=264277  sessions=1     uptime=736564  sessions=0
+uptime=264152  sessions=0     uptime=264609  sessions=0
 ```
 
-Der Container-Weg (`Dockerfile.vercel`) ändert daran nichts: Vercel führt OCI-Images als
-*Functions* aus, dieselben Limits gelten. Die Doku nennt die Zahl, auf die es ankommt —
-**„Functions not receiving any traffic for 5 minutes in production environments … will
-automatically scale down."** Fünf Minuten Pause zwischen zwei Prompts, und die Historie ist
-weg. Das Image ist hier also nur eine andere Verpackung derselben Funktion, mit längerer
-Bauzeit; das beiliegende `server.mjs` erreicht dasselbe einfacher.
+Zwei klar getrennte Laufzeiten, also mindestens zwei Prozesse — und innerhalb derselben
+Gruppe antwortet mal `1`, mal `0`, also noch mehr. Jeder hat seinen eigenen Speicher. Die
+Telemetrie eines Agents liegt in genau einem davon; welcher antwortet, wird pro Anfrage neu
+entschieden. Im Browser sieht das so aus: **die Session erscheint in der Liste und
+verschwindet beim Neuladen wieder.** Der SSE-Strom hilft nicht, der hängt an einer Instanz
+und bekommt von den POSTs an die anderen nichts mit.
 
-Zwei kleinere Fallstricke derselben Limits: Anfragen sind auf **4,5 MB** begrenzt (der
-Collector selbst nimmt 32 MB), ein großer Export mit Prompt-Inhalten kann also an Vercel
-scheitern, bevor der Code ihn sieht. Und der Port ist standardmäßig 80, überschrieben
-durch `PORT` — das wird gelesen.
+Aufeinanderfolgende Anfragen aus einer Verbindung treffen meist dieselbe Instanz — deshalb
+sieht ein einzelner Aufruf gesund aus, und deshalb feuert `check` seine Anfragen parallel:
 
-Damit taugt es zum **Live-Zuschauen**, nicht als Aufzeichnung. Wer auf Vercel Historie
-will, muss den Store nach außen legen (Vercel Postgres o. ä.) — das ist ein echter Umbau,
-kein Schalter. Für alles andere ist eine Plattform mit Platte der kürzere Weg.
+```
+✗ single     4 instances answer this URL, each with its own memory —
+             telemetry will appear and vanish
+```
+
+Wer es trotzdem serverless will, muss den Store nach außen legen (Postgres, Redis) — ein
+Umbau, kein Schalter, und bei `OTEL_*_EXPORT_INTERVAL=1000` schreibt jeder Agent im
+Sekundentakt. Eine Plattform mit einem Prozess und einer Platte ist der kürzere Weg.
+
 
 #### Vorher wissen
 
@@ -470,7 +485,7 @@ OTLP-Revisionen und neuen Claude-Code-Attributen tolerant.
 ## Tests
 
 ```bash
-npm test          # 71 Tests: Wire-Format, Decoder, Store, Persistenz, Config, Probe, Tunnel, HTTP
+npm test          # 74 Tests: Wire-Format, Decoder, Store, Persistenz, Config, Probe, Tunnel, HTTP
 npm run demo      # synthetische Session emittieren
 ```
 

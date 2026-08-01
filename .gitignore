@@ -8,3 +8,4 @@ node_modules/
 # athena-observe persistence (--persist)
 .athena-telemetry/
 telemetry/
+

@@ -1,16 +1,17 @@
-# Render Blueprint for athena-observe.
+# Render Blueprint for athena-observe (tools/observability).
 #
-# Render reads blueprints from the repository root, so copy this file there:
+# Render only reads blueprints from the repository root, which is why this file
+# sits here rather than next to the tool it deploys. `rootDir` below keeps the
+# build scoped to the tool, so nothing else in the repository is involved.
 #
-#     cp tools/observability/render.yaml render.yaml
-#
-# then point a Blueprint at the repo. `rootDir` below keeps the build scoped to
-# the tool, so nothing else in the repository is involved.
+# To use it: render.com → New → Blueprint → pick this repository.
 #
 # The disk is what makes this worth doing at all: without it the store lives
 # only in the process, and every deploy or restart takes the session history
 # with it. A disk also pins the service to a single instance, which is exactly
-# what this app needs — see the note on scaling in the README.
+# what this app needs — the store is in memory, so a second instance does not
+# share the load, it hides half the telemetry. `athena-observe check` measures
+# that and says so.
 
 services:
   - type: web
