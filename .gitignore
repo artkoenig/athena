@@ -9,5 +9,3 @@ node_modules/
 .athena-telemetry/
 telemetry/
 
-# Vercel build output
-.vercel/

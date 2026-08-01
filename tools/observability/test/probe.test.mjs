@@ -26,7 +26,7 @@ test('a healthy collector passes every step and the span is readable afterwards'
     assert.equal(result.endpoint, base, 'trailing slash is normalized away');
     assert.deepEqual(
       result.steps.map((step) => step.name),
-      ['reachable', 'ingest', 'stored'],
+      ['reachable', 'single', 'ingest', 'stored'],
     );
     // The probe must land in the store, not just return 200.
     assert.ok(store.getSession(result.sessionId));
@@ -99,5 +99,52 @@ test('a login gate in front of the collector is named, not mistaken for a bad en
   } finally {
     await new Promise((resolve) => collector.close(resolve));
     await new Promise((resolve) => gate.close(resolve));
+  }
+});
+
+test('one URL served by several processes is reported, not counted as healthy', async () => {
+  // This is what a serverless platform does with an in-memory store: every
+  // instance holds the telemetry that happened to be routed to it and knows
+  // nothing of the rest, so a session shows up on one reload and is gone on the
+  // next. Sequential requests tend to stick to a single instance, which is why
+  // it looks fine until the requests overlap — the probe therefore fires its
+  // health checks concurrently.
+  let served = 0;
+  const balanced = http.createServer((req, res) => {
+    if (req.url.startsWith('/api/health')) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, uptimeMs: 1, instance: `i${served++ % 3}` }));
+      return;
+    }
+    res.writeHead(500).end();
+  });
+  await new Promise((resolve) => balanced.listen(0, '127.0.0.1', resolve));
+  try {
+    const result = await probeCollector(`http://127.0.0.1:${balanced.address().port}`, {});
+    assert.equal(result.ok, false);
+    const single = stepsByName(result).single;
+    assert.equal(single.ok, false);
+    assert.match(single.detail, /3 instances answer this URL/);
+    assert.match(single.detail, /appear and vanish/);
+  } finally {
+    await new Promise((resolve) => balanced.close(resolve));
+  }
+});
+
+test('a collector too old to identify itself is not accused of being several', async () => {
+  const legacy = http.createServer((req, res) => {
+    if (req.url.startsWith('/api/health')) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, uptimeMs: 1 }));
+      return;
+    }
+    res.writeHead(500).end();
+  });
+  await new Promise((resolve) => legacy.listen(0, '127.0.0.1', resolve));
+  try {
+    const result = await probeCollector(`http://127.0.0.1:${legacy.address().port}`, {});
+    assert.equal(stepsByName(result).single, undefined, 'silence beats a wrong verdict');
+  } finally {
+    await new Promise((resolve) => legacy.close(resolve));
   }
 });

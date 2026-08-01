@@ -103,10 +103,16 @@ async function main(argv) {
     for (const step of result.steps) {
       console.error(`  ${step.ok ? '✓' : '✗'} ${step.name.padEnd(10)} ${step.detail}`);
     }
+    // A split endpoint is its own verdict: the export itself works, so saying it
+    // does not arrive would be wrong — but so would calling this healthy, since
+    // what arrives is only ever visible to one instance out of several.
+    const failed = result.steps.filter((step) => !step.ok).map((step) => step.name);
     console.error(
       result.ok
         ? `\n  Telemetry from this environment reaches ${result.endpoint}.\n`
-        : `\n  Telemetry from this environment does NOT reach ${result.endpoint}.\n`,
+        : failed.length === 1 && failed[0] === 'single'
+          ? `\n  Telemetry reaches ${result.endpoint}, but only one instance of several will ever show it.\n`
+          : `\n  Telemetry from this environment does NOT reach ${result.endpoint}.\n`,
     );
     if (!result.ok) process.exitCode = 1;
     return;
