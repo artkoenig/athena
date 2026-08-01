@@ -14,7 +14,7 @@ process, mechanics for facts** — everything procedural is the agent's call,
 every time; rules remain only where self-assessment fails. "The tests pass"
 comes from an exit code, never from the agent's impression.
 
-Five invariants hold for every change:
+These invariants hold for every change:
 
 1. The intent — acceptance criteria — is written down before any code.
 2. The tests for it are written first, blind, from the intent alone, and seen
@@ -26,9 +26,9 @@ Five invariants hold for every change:
 5. Decisions, surprises and checkpoint answers go into the issue as they
    happen — the record outlives the session.
 
-The human steers at three points: approving the criteria when the idea is
-genuinely unclear, deciding anything irreversible or outward-facing, and
-merging the pull request.
+The human steers where it matters and nowhere else: approving the criteria
+when the idea is genuinely unclear, deciding anything irreversible or
+outward-facing, and merging the pull request.
 
 **The workflow corrects itself through the retro.** After every PR the agent
 records what got in the way. A rule that misfired becomes a proposal: a pull
@@ -46,15 +46,17 @@ claude plugin install athena@athena
 ```
 
 A session with the plugin active gets the rulebook of the current `main` in
-its context, a self-check saying what is actually reachable, and a `pre-push`
-guard that refuses a direct push to the default branch. A project that manages
-its own git hooks — husky, lefthook, pre-commit — keeps them: athena then
-leaves `core.hooksPath` alone and reports the missing guard instead of
-overwriting it silently.
+its context, the subagents in [`agents/`](agents/) and the skills in
+[`skills/`](skills/), a self-check saying what of that is actually reachable,
+and a `pre-push` guard that refuses a direct push to the default branch. A
+project that manages its own git hooks — husky, lefthook, pre-commit — keeps
+them: athena then leaves `core.hooksPath` alone and reports the missing guard
+instead of overwriting it silently.
 
-The plugin does not ship subagents or skills yet. The self-check names how many
-of each are actually reachable, and the rulebook sends the session to that
-number rather than assuming a page that does not exist.
+Updates come with the next session, not with a re-installation. The rulebook
+reads its roles off the self-check rather than assuming a page exists, so a
+subagent or a skill that is added or dropped changes what a session does
+without anything else having to be told.
 
 To have the retros land in *your* rulebook, fork this repository and point
 `marketplace add` at the fork.
