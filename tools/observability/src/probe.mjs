@@ -75,7 +75,19 @@ export async function probeCollector(endpoint, { token = null, timeoutMs = DEFAU
   try {
     const response = await fetchWithTimeout(`${base}/api/health`, {}, timeoutMs);
     const body = await response.text();
-    if (!response.ok) {
+    // An access gate in front of the collector answers every request with a
+    // redirect to its own login, so the exporter uploads spans to a sign-in page
+    // and gets HTML back — which it discards without a word. Landing on another
+    // host is the giveaway, and worth naming: no amount of fixing the token or
+    // the endpoint helps while requests never arrive.
+    const landed = new URL(response.url);
+    const asked = new URL(base);
+    if (landed.host !== asked.host) {
+      const gate = /(^|\.)vercel\.com$/.test(landed.host)
+        ? ' — Vercel Deployment Protection. Turn it off for this project, or give the agent the bypass token as an extra OTLP header'
+        : ' — an access gate is answering instead of the collector';
+      record('reachable', false, `${base} redirects to ${landed.host}${gate}`);
+    } else if (!response.ok) {
       record('reachable', false, `${base}/api/health answered HTTP ${response.status}`);
     } else if (!body.includes('"ok"')) {
       record('reachable', false, `${base} answered, but it is not an athena-observe collector`);

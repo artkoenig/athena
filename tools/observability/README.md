@@ -470,7 +470,7 @@ OTLP-Revisionen und neuen Claude-Code-Attributen tolerant.
 ## Tests
 
 ```bash
-npm test          # 70 Tests: Wire-Format, Decoder, Store, Persistenz, Config, Probe, Tunnel, HTTP
+npm test          # 71 Tests: Wire-Format, Decoder, Store, Persistenz, Config, Probe, Tunnel, HTTP
 npm run demo      # synthetische Session emittieren
 ```
 

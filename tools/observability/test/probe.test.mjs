@@ -70,3 +70,34 @@ test('something else answering on the endpoint is not mistaken for a collector',
     await new Promise((resolve) => other.close(resolve));
   }
 });
+
+test('a login gate in front of the collector is named, not mistaken for a bad endpoint', async () => {
+  // An access gate (Vercel Deployment Protection, Cloudflare Access, a password
+  // wall) redirects every request to its own host. The OTLP exporter follows
+  // that redirect, posts spans to a sign-in page and drops the HTML answer
+  // without a word, so this is exactly the silent failure the probe exists for.
+  const gate = http.createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'text/html' });
+    res.end('<html>Sign in to continue</html>');
+  });
+  await new Promise((resolve) => gate.listen(0, '127.0.0.1', resolve));
+  const gateHost = `127.0.0.1:${gate.address().port}`;
+
+  const collector = http.createServer((req, res) => {
+    res.writeHead(302, { location: `http://${gateHost}/sso` });
+    res.end();
+  });
+  await new Promise((resolve) => collector.listen(0, '127.0.0.1', resolve));
+
+  try {
+    const result = await probeCollector(`http://127.0.0.1:${collector.address().port}`);
+    assert.equal(result.ok, false);
+    assert.match(result.steps[0].detail, /redirects to/);
+    assert.match(result.steps[0].detail, /access gate/);
+    // The walk stops there: nothing past this step can succeed or be diagnosed.
+    assert.equal(result.steps.length, 1);
+  } finally {
+    await new Promise((resolve) => collector.close(resolve));
+    await new Promise((resolve) => gate.close(resolve));
+  }
+});
