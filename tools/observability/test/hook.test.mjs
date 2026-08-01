@@ -35,7 +35,7 @@ test('the hook names the session it is told about', async () => {
   await withServer({}, async ({ base, store }) => {
     await runHook(
       { hook_event_name: 'SessionStart', session_id: 'hooked', cwd: process.cwd() },
-      { OTEL_EXPORTER_OTLP_ENDPOINT: base, ATHENA_OBS_SESSION_NAME: 'from the hook' },
+      { ATHENA_OBS_URL: base, ATHENA_OBS_SESSION_NAME: 'from the hook' },
     );
     assert.equal(store.getSession('hooked').name, 'from the hook');
   });
@@ -46,8 +46,8 @@ test('the hook authenticates with the token the session already exports with', a
     await runHook(
       { hook_event_name: 'SessionStart', session_id: 'hooked-auth', cwd: process.cwd() },
       {
-        OTEL_EXPORTER_OTLP_ENDPOINT: base,
-        OTEL_EXPORTER_OTLP_HEADERS: 'Authorization=Bearer secret',
+        ATHENA_OBS_URL: base,
+        ATHENA_OBS_TOKEN: 'secret',
         ATHENA_OBS_SESSION_NAME: 'authenticated',
       },
     );
@@ -55,9 +55,25 @@ test('the hook authenticates with the token the session already exports with', a
   });
 });
 
+test('the exporter variables still work when a hook does get to see them', async () => {
+  // Not the path Claude Code takes — it strips OTEL_* from hook environments —
+  // but the one a hand-run or an SDK harness keeps.
+  await withServer({}, async ({ base, store }) => {
+    await runHook(
+      { hook_event_name: 'SessionStart', session_id: 'hooked-otel', cwd: process.cwd() },
+      {
+        OTEL_EXPORTER_OTLP_ENDPOINT: base,
+        OTEL_EXPORTER_OTLP_HEADERS: 'Authorization=Bearer none',
+        ATHENA_OBS_SESSION_NAME: 'via exporter vars',
+      },
+    );
+    assert.equal(store.getSession('hooked-otel').name, 'via exporter vars');
+  });
+});
+
 test('a session that is not being monitored is left alone', async () => {
   await withServer({}, async ({ store }) => {
-    // No endpoint in the environment: telemetry is off, so there is nothing to name.
+    // No collector in the environment: telemetry is off, so there is nothing to name.
     await runHook({ hook_event_name: 'SessionStart', session_id: 'unmonitored', cwd: process.cwd() }, {});
     assert.equal(store.sessions.size, 0);
   });
