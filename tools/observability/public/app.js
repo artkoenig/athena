@@ -680,6 +680,19 @@ function renderEmptyState() {
 
 function renderSetupModal() {
   const env = state.config?.env ?? {};
+  // Same reason as the empty state: every block in here is built from the
+  // config, so without it the dialog is three headings over three empty boxes.
+  if (!Object.keys(env).length) {
+    document.getElementById('setup-modal-body').innerHTML = `
+      <p>${
+        state.authError
+          ? 'The environment block cannot be shown because this page is not authorized. ' +
+            'Open the UI with the token appended to the URL — <code>?token=…</code>, the value ' +
+            'of ATHENA_OBS_TOKEN — and the block will include it.'
+          : 'The collector did not answer, so there is no endpoint to point an agent at yet.'
+      }</p>`;
+    return;
+  }
   const shell = Object.entries(env)
     .map(([key, value]) => `export ${key}="${value}"`)
     .join('\n');
