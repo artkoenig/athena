@@ -208,6 +208,56 @@ test('tool_result events record failures against the tool', () => {
   assert.equal(session.lastError.message, 'ENOENT');
 });
 
+test('tool span result_tokens fallback: span arrives before the tool_result event', () => {
+  const store = new TelemetryStore();
+  store.ingest('traces', [span('claude_code.tool', { tool_name: 'Read', tool_use_id: 'tu-1' })]);
+  store.ingest('logs', [
+    log('claude_code.tool_result', {
+      tool_name: 'Read',
+      tool_use_id: 'tu-1',
+      success: 'true',
+      tool_result_size_bytes: 400,
+    }),
+  ]);
+  const read = store.getSession(SESSION).tools.find((tool) => tool.name === 'Read');
+  assert.equal(read.resultTokens, 100);
+  assert.equal(read.resultTokensEstimated, 100);
+});
+
+test('tool span result_tokens fallback: tool_result event arrives before the span', () => {
+  const store = new TelemetryStore();
+  store.ingest('logs', [
+    log('claude_code.tool_result', {
+      tool_name: 'Bash',
+      tool_use_id: 'tu-2',
+      success: 'true',
+      tool_result_size_bytes: 800,
+    }),
+  ]);
+  store.ingest('traces', [span('claude_code.tool', { tool_name: 'Bash', tool_use_id: 'tu-2' })]);
+  const bash = store.getSession(SESSION).tools.find((tool) => tool.name === 'Bash');
+  assert.equal(bash.resultTokens, 200);
+  assert.equal(bash.resultTokensEstimated, 200);
+});
+
+test('a real result_tokens attribute wins and is never treated as an estimate', () => {
+  const store = new TelemetryStore();
+  store.ingest('traces', [
+    span('claude_code.tool', { tool_name: 'Read', tool_use_id: 'tu-3', result_tokens: 42 }),
+  ]);
+  store.ingest('logs', [
+    log('claude_code.tool_result', {
+      tool_name: 'Read',
+      tool_use_id: 'tu-3',
+      success: 'true',
+      tool_result_size_bytes: 999_999,
+    }),
+  ]);
+  const read = store.getSession(SESSION).tools.find((tool) => tool.name === 'Read');
+  assert.equal(read.resultTokens, 42);
+  assert.equal(read.resultTokensEstimated, 0);
+});
+
 test('event queries filter by name, errors and free text', () => {
   const store = new TelemetryStore();
   store.ingest('logs', [

@@ -505,6 +505,13 @@ npm run demo      # synthetische Session emittieren
 - **Nicht als `console`-Exporter nutzbar.** Beim Agent SDK ist stdout der Nachrichtenkanal;
   `console` würde ihn zerstören. Deshalb immer `otlp`.
 - Histogramme werden gespeichert und aufgelistet, aber nicht als Verteilung gezeichnet.
+- **„Result tokens" ist bei aktuellen CLI-Versionen (geprüft: 2.1.220) fast immer eine
+  Schätzung.** Das dokumentierte `result_tokens`-Attribut auf `claude_code.tool`-Spans wird
+  von der CLI derzeit nicht gesendet. Fehlt es, rechnet der Store es aus
+  `tool_result_size_bytes` vom zugehörigen `claude_code.tool_result`-Event hoch (~4 Byte pro
+  Token, Daumenregel für englischen Text) und markiert den Wert in der Tools-Tabelle mit
+  einer Tilde (`~`). Sobald die CLI das Attribut selbst liefert, wird dieser Wert bevorzugt
+  und die Tilde verschwindet.
 - **Neu erstellte Tasks lassen sich nicht immer ihrer ID zuordnen.** Die CLI vergibt die
   Task-ID bei `TaskCreate` und nennt sie nur im Tool-Ergebnis — das exportiert nur
   `OTEL_LOG_TOOL_CONTENT=1` (undokumentiertes Format, deutlich sensibler, siehe

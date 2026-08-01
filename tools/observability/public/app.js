@@ -337,17 +337,21 @@ function renderOverviewTab() {
             <th class="num">Result tokens</th>
           </tr></thead>
           <tbody>${s.tools
-            .map(
-              (tool) => `<tr>
+            .map((tool) => {
+              const estimated = tool.resultTokensEstimated > 0;
+              const resultTokens = estimated
+                ? `<span class="muted" title="CLI didn't report result_tokens for these calls; estimated from tool_result_size_bytes (~4 bytes/token)">~${fmtNum(tool.resultTokens)}</span>`
+                : fmtNum(tool.resultTokens);
+              return `<tr>
                 <td class="name">${esc(tool.name)}</td>
                 <td class="num">${fmtNum(tool.calls)}</td>
                 <td class="num${tool.failures ? ' bad' : ''}">${tool.failures}</td>
                 <td class="num">${tool.rejected}</td>
                 <td class="num">${esc(fmtDur(tool.avgDurationMs))}</td>
                 <td class="num">${esc(fmtDur(tool.durationMsTotal))}</td>
-                <td class="num">${fmtNum(tool.resultTokens)}</td>
-              </tr>`,
-            )
+                <td class="num">${resultTokens}</td>
+              </tr>`;
+            })
             .join('')}</tbody>
         </table></div>
       </div>`
