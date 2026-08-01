@@ -45,3 +45,16 @@ test('the settings hook points at the shipped script and needs no arguments', as
   const { access } = await import('node:fs/promises');
   await access(file);
 });
+
+test('the env block carries the collector address under a hook-visible name', () => {
+  // Claude Code strips OTEL_* from the environment it gives hook commands, so
+  // the naming hook would otherwise have no idea where its collector is.
+  const open = otelEnvFor('http://localhost:4318');
+  assert.equal(open.ATHENA_OBS_URL, 'http://localhost:4318');
+  assert.ok(!('ATHENA_OBS_TOKEN' in open), 'no token, nothing to pass on');
+
+  const gated = otelEnvFor('https://collector.example', { token: 'secret' });
+  assert.equal(gated.ATHENA_OBS_URL, 'https://collector.example');
+  assert.equal(gated.ATHENA_OBS_TOKEN, 'secret');
+  assert.equal(gated.OTEL_EXPORTER_OTLP_HEADERS, 'Authorization=Bearer secret');
+});

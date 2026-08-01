@@ -59,6 +59,7 @@ export OTEL_TRACES_EXPORTER="otlp"
 export OTEL_METRIC_EXPORT_INTERVAL="1000"        # the 60s default is too sluggish for short runs
 export OTEL_LOGS_EXPORT_INTERVAL="1000"
 export OTEL_TRACES_EXPORT_INTERVAL="1000"
+export ATHENA_OBS_URL="http://127.0.0.1:4318"    # dieselbe Adresse für den Namens-Hook
 ```
 
 `--format json` and `--format dotenv` give the same values for `options.env`
@@ -83,13 +84,22 @@ SessionStart hook that names every session automatically — after repository an
 }
 ```
 
-Why a hook and not an environment variable: the OTel resource is read once at process
-start, a hook runs after that — and as a subprocess with a copy of the environment, so its
-`export`s never reach the CLI process. The name therefore cannot travel along in the
-telemetry. Instead the hook sends it straight to the collector (`POST
-/api/sessions/<id>/name`), with the `session_id` every hook is handed anyway. It reads
-endpoint and token from `OTEL_EXPORTER_OTLP_ENDPOINT` and `OTEL_EXPORTER_OTLP_HEADERS` —
-the same variables the session exports with. With no telemetry running, it does nothing.
+Why a hook does not simply set an environment variable: the OTel resource is read once at
+process start, and a hook runs after that. There is `CLAUDE_ENV_FILE` — a SessionStart hook
+may write `export` lines into it — but the documentation is explicit about who that
+reaches: "available in all subsequent Bash commands that Claude Code executes during the
+session". Later subprocesses, that is, not the running CLI process and certainly not its
+already-initialised exporter. Measured: a session whose SessionStart hook writes
+`OTEL_RESOURCE_ATTRIBUTES` into `CLAUDE_ENV_FILE` still exports without `session.name` —
+the **next** session started from that shell has it.
+
+So the hook sends the name straight to the collector (`POST /api/sessions/<id>/name`), with
+the `session_id` every hook is handed anyway. It reads address and token from
+`ATHENA_OBS_URL` / `ATHENA_OBS_TOKEN`, which the env block sets. Not from
+`OTEL_EXPORTER_OTLP_ENDPOINT`: **Claude Code strips every `OTEL_*` variable from the
+environment it gives hook commands** (measured against 2.1.220 — `CLAUDE_CODE_ENABLE_TELEMETRY`
+and arbitrary variables of your own come through, `OTEL_*` does not). A hook therefore never
+sees where its session exports to. Without `ATHENA_OBS_URL` it does nothing.
 
 Because the name arrives before the first export, a session shows up in the list as soon as
 it starts — not only once it has spent its first token.
@@ -593,9 +603,12 @@ The name is the one thing that does not travel with the telemetry (see
 [Naming sessions](#naming-sessions)), so it can be missing while everything else is
 there. In order:
 
-1. **Is the hook installed?** `.claude/settings.local.json` (or the cloud session's
-   environment settings) needs a `hooks.SessionStart` block next to `env`. A file written
-   before this feature has only `env` — print `env --format settings` again and install it.
+1. **Is the hook installed, and is `ATHENA_OBS_URL` in the environment?**
+   `.claude/settings.local.json` (or the cloud session's environment settings) needs both:
+   the `hooks.SessionStart` block and `ATHENA_OBS_URL` in the `env` block. Without the
+   variable the hook cannot find the collector — it never sees the `OTEL_*` variables,
+   Claude Code filters those out of the hook environment. A file written before this
+   feature has neither: print `env --format settings` again and install it.
 2. **Does the collector know the route?** `athena-observe check` has a step of its own for
    this: `✗ naming … predates session naming` means the collector runs an older build.
    Redeploy or restart it — with `autoDeploy: false` on Render that does not happen by
@@ -610,5 +623,7 @@ there. In order:
    ```
 
    No output means it named the session (check `/api/sessions?search=probe`). Otherwise it
-   writes the reason to stderr — no endpoint in the environment, the collector's HTTP
-   status, a timeout. As a hook the same lines show up under `claude --debug`.
+   writes the reason to stderr — a missing `ATHENA_OBS_URL` in the environment, the
+   collector's HTTP status, a timeout. As a hook the same lines show up under
+   `claude --debug`; to keep them, append `2>>/tmp/hook.err` to the hook command in the
+   settings.

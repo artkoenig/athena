@@ -270,6 +270,13 @@ export function otelEnvFor(endpoint, { traces = true, token = null, fastFlush = 
     env.OTEL_TRACES_EXPORTER = 'otlp';
   }
   if (token) env.OTEL_EXPORTER_OTLP_HEADERS = `Authorization=Bearer ${token}`;
+  // The same address again, under a name that survives the trip to a hook.
+  // Claude Code strips every OTEL_* variable from the environment it gives hook
+  // commands (measured against 2.1.220: CLAUDE_CODE_ENABLE_TELEMETRY and
+  // unrelated variables come through, OTEL_* does not), so the naming hook has
+  // no way to learn where to send a name from the exporter configuration alone.
+  env.ATHENA_OBS_URL = endpoint;
+  if (token) env.ATHENA_OBS_TOKEN = token;
   if (fastFlush) {
     // Defaults are 60s for metrics and 5s for logs/traces, which loses data on
     // short-lived SDK calls. Flushing every second keeps the UI close to live.

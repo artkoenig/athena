@@ -7,10 +7,13 @@
  * hook runs. So the name cannot travel with the telemetry; this hook sends it to
  * the collector directly, keyed by the `session_id` every hook is handed.
  *
- * It configures itself from the same variables the session already exports to:
- * OTEL_EXPORTER_OTLP_ENDPOINT for the address, OTEL_EXPORTER_OTLP_HEADERS for
- * the token. A session that is not being monitored has neither, and the hook
- * does nothing.
+ * It configures itself from ATHENA_OBS_URL / ATHENA_OBS_TOKEN, which the env
+ * block sets alongside the exporter variables. It cannot read the exporter
+ * variables themselves: Claude Code strips every OTEL_* variable from the
+ * environment it hands to hook commands, so a hook never sees where its session
+ * exports to (they are still read as a fallback, for a run by hand or an SDK
+ * harness that keeps them). Without either, nothing is being monitored and the
+ * hook does nothing.
  *
  * Nothing it does may disturb the session it names: every failure path exits 0,
  * so an unreachable collector costs a session start no more than the timeout
@@ -105,7 +108,7 @@ async function main() {
   }
   const collector = collectorFrom();
   if (!collector) {
-    debug('no OTEL_EXPORTER_OTLP_ENDPOINT in the environment — this session is not being monitored');
+    debug('no ATHENA_OBS_URL in the environment — this session is not being monitored');
     return;
   }
 
