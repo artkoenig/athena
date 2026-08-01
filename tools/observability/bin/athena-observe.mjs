@@ -107,16 +107,20 @@ async function main(argv) {
     for (const step of result.steps) {
       console.error(`  ${step.ok ? '✓' : '✗'} ${step.name.padEnd(10)} ${step.detail}`);
     }
-    // A split endpoint is its own verdict: the export itself works, so saying it
-    // does not arrive would be wrong — but so would calling this healthy, since
-    // what arrives is only ever visible to one instance out of several.
+    // Some failures are their own verdict: the export itself works, so saying it
+    // does not arrive would be wrong — but so would calling this healthy. A split
+    // endpoint shows only the share of telemetry that lands on one instance; a
+    // collector too old to name sessions shows all of it, under UUIDs.
     const failed = result.steps.filter((step) => !step.ok).map((step) => step.name);
+    const only = (name) => failed.length === 1 && failed[0] === name;
     console.error(
       result.ok
         ? `\n  Telemetry from this environment reaches ${result.endpoint}.\n`
-        : failed.length === 1 && failed[0] === 'single'
+        : only('single')
           ? `\n  Telemetry reaches ${result.endpoint}, but only one instance of several will ever show it.\n`
-          : `\n  Telemetry from this environment does NOT reach ${result.endpoint}.\n`,
+          : only('naming')
+            ? `\n  Telemetry reaches ${result.endpoint}, but it cannot name sessions — they stay listed by their id.\n`
+            : `\n  Telemetry from this environment does NOT reach ${result.endpoint}.\n`,
     );
     if (!result.ok) process.exitCode = 1;
     return;

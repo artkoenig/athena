@@ -175,5 +175,37 @@ export async function probeCollector(endpoint, { token = null, timeoutMs = DEFAU
     record('stored', false, `GET /api/sessions failed: ${error.message}`);
   }
 
+  // 5. Name a session, the way the SessionStart hook does. Worth its own step
+  //    because the symptom of a collector that does not know this route —
+  //    sessions listed by UUID — is indistinguishable from a hook that never
+  //    ran, and one of the two is fixed by updating the collector.
+  try {
+    const response = await fetchWithTimeout(
+      `${base}/api/sessions/${encodeURIComponent(sessionId)}/name`,
+      {
+        method: 'POST',
+        headers: { ...headers, 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'athena-observe check' }),
+      },
+      timeoutMs,
+    );
+    // An older collector rejects every non-GET below /api/ with 405 and only
+    // unknown GET routes with 404; both mean the same thing here.
+    if (response.status === 404 || response.status === 405) {
+      record(
+        'naming',
+        false,
+        'this collector does not know POST /api/sessions/<id>/name — it predates session naming, ' +
+          'so the SessionStart hook has nowhere to send the name. Update and restart it',
+      );
+    } else if (!response.ok) {
+      record('naming', false, `POST /api/sessions/<id>/name answered HTTP ${response.status}`);
+    } else {
+      record('naming', true, 'sessions can be named');
+    }
+  } catch (error) {
+    record('naming', false, `POST /api/sessions/<id>/name failed: ${error.message}`);
+  }
+
   return { ok: steps.every((step) => step.ok), endpoint: base, sessionId, steps };
 }

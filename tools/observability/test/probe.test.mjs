@@ -26,10 +26,13 @@ test('a healthy collector passes every step and the span is readable afterwards'
     assert.equal(result.endpoint, base, 'trailing slash is normalized away');
     assert.deepEqual(
       result.steps.map((step) => step.name),
-      ['reachable', 'single', 'ingest', 'stored'],
+      ['reachable', 'single', 'ingest', 'stored', 'naming'],
     );
     // The probe must land in the store, not just return 200.
     assert.ok(store.getSession(result.sessionId));
+    // And the naming step must have gone through the real route, not a 200 from
+    // somewhere else: the probe session carries the name it just posted.
+    assert.equal(store.getSession(result.sessionId).name, 'athena-observe check');
   });
 });
 
@@ -146,5 +149,32 @@ test('a collector too old to identify itself is not accused of being several', a
     assert.equal(stepsByName(result).single, undefined, 'silence beats a wrong verdict');
   } finally {
     await new Promise((resolve) => legacy.close(resolve));
+  }
+});
+
+test('a collector too old to name sessions is diagnosed as exactly that', async () => {
+  // Every route of a current collector, except the one naming needs: what a
+  // deployment from before session naming looks like from the outside.
+  const store = new TelemetryStore();
+  const collector = createServer({ store, endpoint: 'http://test', log: () => {} });
+  const old = http.createServer((req, res) => {
+    if (/^\/api\/sessions\/[^/]+\/name$/.test(new URL(req.url, 'http://x').pathname)) {
+      res.writeHead(405, { 'content-type': 'application/json' });
+      res.end('{"error":"method not allowed"}');
+      return;
+    }
+    collector.emit('request', req, res);
+  });
+  await new Promise((resolve) => old.listen(0, '127.0.0.1', resolve));
+  try {
+    const result = await probeCollector(`http://127.0.0.1:${old.address().port}`, {});
+    const steps = stepsByName(result);
+    assert.equal(steps.ingest.ok, true, 'telemetry itself still arrives');
+    assert.equal(steps.stored.ok, true);
+    assert.equal(steps.naming.ok, false);
+    assert.match(steps.naming.detail, /predates session naming/);
+    assert.equal(result.ok, false);
+  } finally {
+    await new Promise((resolve) => old.close(resolve));
   }
 });

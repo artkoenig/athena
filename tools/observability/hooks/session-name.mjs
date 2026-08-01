@@ -12,13 +12,18 @@
  * the token. A session that is not being monitored has neither, and the hook
  * does nothing.
  *
- * Nothing it does may disturb the session it names: every failure path exits 0
- * and prints nothing, so an unreachable collector costs a session start no more
- * than the timeout below.
+ * Nothing it does may disturb the session it names: every failure path exits 0,
+ * so an unreachable collector costs a session start no more than the timeout
+ * below. Why it gave up goes to stderr, which Claude Code shows under `--debug`
+ * and otherwise ignores — silence was the first version of this, and "no name
+ * appears and nothing says why" turned out to be the harder problem.
  */
 
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+
+const debug = (message) => process.stderr.write(`athena-observe hook: ${message}\n`);
 
 const TIMEOUT_MS = 2000;
 
@@ -94,27 +99,48 @@ async function main() {
     // Not being called as a hook: nothing to name.
   }
   const sessionId = hook.session_id;
+  if (!sessionId) {
+    debug('no session_id on stdin — not running as a SessionStart hook');
+    return;
+  }
   const collector = collectorFrom();
-  if (!sessionId || !collector) return;
+  if (!collector) {
+    debug('no OTEL_EXPORTER_OTLP_ENDPOINT in the environment — this session is not being monitored');
+    return;
+  }
 
   const name = deriveName(hook.cwd);
   if (!name) return;
 
-  await fetch(`${collector.endpoint}/api/sessions/${encodeURIComponent(sessionId)}/name`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      ...(collector.token ? { authorization: `Bearer ${collector.token}` } : {}),
+  const response = await fetch(
+    `${collector.endpoint}/api/sessions/${encodeURIComponent(sessionId)}/name`,
+    {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        ...(collector.token ? { authorization: `Bearer ${collector.token}` } : {}),
+      },
+      body: JSON.stringify({ name }),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
     },
-    body: JSON.stringify({ name }),
-    signal: AbortSignal.timeout(TIMEOUT_MS),
-  });
+  );
+  if (response.ok) return;
+  // 404/405 is the collector not knowing the route: it predates session naming.
+  debug(
+    response.status === 404 || response.status === 405
+      ? `${collector.endpoint} does not accept session names — update and restart the collector`
+      : `${collector.endpoint} answered HTTP ${response.status} — session stays named by its id`,
+  );
 }
 
 // Only when run as the hook, so the helpers above stay importable for tests.
-if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
-  main().catch(() => {
+// pathToFileURL rather than a `file://` template: the two disagree as soon as
+// the install path contains a space or an umlaut, and then the hook does nothing
+// at all — with no output to explain it.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((error) => {
     // A collector that is down, slow or unauthenticated is not the session's
-    // problem. Stay silent and let it start.
+    // problem. Say so and let it start.
+    debug(`${error.message} — session stays named by its id`);
   });
 }

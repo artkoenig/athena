@@ -586,3 +586,29 @@ order:
 4. Only spans missing? Then `CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1` is missing.
 5. Short run with no data? Lower the export intervals (see above) — at process exit there
    is only a narrow flush window.
+
+### Sessions arrive, but without a name
+
+The name is the one thing that does not travel with the telemetry (see
+[Naming sessions](#naming-sessions)), so it can be missing while everything else is
+there. In order:
+
+1. **Is the hook installed?** `.claude/settings.local.json` (or the cloud session's
+   environment settings) needs a `hooks.SessionStart` block next to `env`. A file written
+   before this feature has only `env` — print `env --format settings` again and install it.
+2. **Does the collector know the route?** `athena-observe check` has a step of its own for
+   this: `✗ naming … predates session naming` means the collector runs an older build.
+   Redeploy or restart it — with `autoDeploy: false` on Render that does not happen by
+   itself.
+3. **Was a new session started?** The hook fires at startup. Running sessions do not get a
+   name retroactively.
+4. **What does the hook itself say?** Run it by hand, with the same environment as the
+   session:
+
+   ```bash
+   echo "{\"session_id\":\"probe\",\"cwd\":\"$PWD\"}" | node tools/observability/hooks/session-name.mjs
+   ```
+
+   No output means it named the session (check `/api/sessions?search=probe`). Otherwise it
+   writes the reason to stderr — no endpoint in the environment, the collector's HTTP
+   status, a timeout. As a hook the same lines show up under `claude --debug`.
