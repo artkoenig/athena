@@ -110,10 +110,12 @@ self-check at session start — read it there, do not assume it.
 
 ## Bookkeeping
 
-- One issue = one branch = one pull request = one working directory. A change
-  too big to land whole is split into smaller issues before it starts — flat
-  siblings, never a parent with children, each running the full pipeline on
-  its own branch, PR and worktree.
+- One issue = one branch = one pull request; there are no child issues. `##
+  Tasks` stays empty by default — Plan says how, Log proves what happened.
+  Fill it only when the work needs a state those two cannot hold: the change
+  lands in several intermediate commits, or a review round left more than one
+  finding. Then a box goes in before the work and gets checked when it is
+  done.
 - Runs that overlap in time never share a checkout: each gets its own worktree,
   branched from the current default branch like any other run. Before starting
   one, `git worktree list` says what is already in flight; a run whose worktree
