@@ -29,7 +29,7 @@ plugin_copy() {
   local dest="$1"
   mkdir -p "$dest"
   cp -R "$root/.claude-plugin" "$root/hooks" "$root/.githooks" "$dest/"
-  cp "$root/AGENTS.md" "$dest/"
+  cp "$root/CLAUDE.md" "$dest/"
   for optional in skills agents; do
     [ -d "$root/$optional" ] && cp -R "$root/$optional" "$dest/"
   done
@@ -117,9 +117,9 @@ check $? "claude plugin validate accepts the plugin manifest and its components"
 # frontmatter. So the gate is the warning list, not the exit code: two
 # warnings are expected on a defect-free tree, and any third is a defect.
 #
-# The two: the missing version, and the root CLAUDE.md, which is this
-# repository's own project context and deliberately not shipped to the
-# sessions of projects that install the plugin.
+# The two: the missing version, and the root CLAUDE.md — the rulebook
+# itself, deliberately not loaded by the CLI's own convention and
+# delivered to sessions of installing projects via the hook instead.
 strict_out="$tmp/strict.txt"
 claude plugin validate "$root/.claude-plugin/plugin.json" --strict >"$strict_out" 2>&1
 warnings="$(grep -c '^  > ' "$strict_out")"
@@ -191,8 +191,8 @@ node -e '
   const out = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
   const rulebook = fs.readFileSync(process.argv[2], "utf8");
   if (!out.hookSpecificOutput.additionalContext.includes(rulebook.trimEnd())) process.exit(1);
-' "$tmp/happy.json" "$root/AGENTS.md"
-check $? "the whole text of AGENTS.md arrives verbatim in additionalContext"
+' "$tmp/happy.json" "$root/CLAUDE.md"
+check $? "the whole text of CLAUDE.md arrives verbatim in additionalContext"
 
 # hooks.json registers exactly one SessionStart command hook, and it
 # runs the script this suite exercises, from the plugin root.
@@ -268,10 +268,10 @@ esac
 # has to say so rather than report success.
 no_rulebook="$tmp/no-rulebook"
 plugin_copy "$no_rulebook"
-rm -f "$no_rulebook/AGENTS.md"
+rm -f "$no_rulebook/CLAUDE.md"
 status="$(run_hook "$no_rulebook" "$empty_project" >"$tmp/no-rulebook.json" && hook_status "$tmp/no-rulebook.json")"
 case "$status" in
-  *"rulebook missing"*"FAILED"*) ok "a missing AGENTS.md is named and success withdrawn" ;;
+  *"rulebook missing"*"FAILED"*) ok "a missing CLAUDE.md is named and success withdrawn" ;;
   *) no "a missing rulebook went unreported: $status" ;;
 esac
 

@@ -34,7 +34,7 @@ project loads athena fresh at session start, an accepted fix reaches all of
 them with their next session — the workflow gets better at being followed
 without a human rewriting it by hand.
 
-The rules themselves are one page, [`AGENTS.md`](AGENTS.md) — short enough
+The rules themselves are one page, [`CLAUDE.md`](CLAUDE.md) — short enough
 to read end to end if you want the specifics; this page won't repeat it.
 
 ## Installing it

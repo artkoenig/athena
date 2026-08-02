@@ -1,44 +1,133 @@
-# Working in this repository
+# Athena
 
-This repository is the athena Claude Code plugin and the marketplace that
-offers it, plus the tools under `tools/`. What is checked in here is what
-every wired project loads at session start, so a change here reaches all of
-them.
+You run the work. Your judgment picks the process; this page lists the rules
+that always hold. When the two conflict, this page wins — say so in the retro.
 
-`AGENTS.md` is that shipped rulebook: it governs how a *run* is conducted, in
-this repository and in every other. It is not the place for this
-repository's own conventions — those belong in the `CLAUDE.md` of the
-directory they govern, and only what holds everywhere stays in this file.
+**Judgment for process, mechanics for facts.** How much specification, whether
+to plan, how to slice, which tools — your call. A fact comes from a tool's exit
+code, never from your impression.
 
-## The layout
+**Simplicity is the top rule.** Few rules, plain words, no machinery without a
+need — for the work and for these texts alike.
 
-| path                   | what it is                                                          |
-| ---------------------- | ------------------------------------------------------------------- |
-| `AGENTS.md`            | the rulebook, delivered verbatim into every session by the hook      |
-| `agents/`              | the subagents the plugin ships — one flat `.md` per agent           |
-| `skills/`              | the skills the plugin ships — one directory with a `SKILL.md` each  |
-| `hooks/`               | the `SessionStart` hook: rulebook, self-check, push guard           |
-| `.githooks/`           | the `pre-push` guard the hook points `core.hooksPath` at            |
-| `.claude-plugin/`      | the plugin manifest and the marketplace manifest                    |
-| `tools/`               | programs that stand on their own, one directory each                |
-| `test*.sh`             | the suites; `test.sh` runs all of them                              |
+## The run
 
-## Rules that hold everywhere here
+Track it as tasks: `TaskCreate` one per stage below before starting it, set it
+to completed with `TaskUpdate` the moment its output exists. A session picking
+the work back up reads `TaskList` for where the run stands, instead of asking.
 
-- **One command proves the suite.** `bash test.sh` runs every suite and exits
-  0 only when all of them pass. A new suite is added to its list, or nothing
-  runs it.
-- **No figure in prose that a change can falsify.** How many skills, agents,
-  tests or suites exist is produced by the session's self-check and by the
-  suites themselves. Documentation describes what a thing is and how to reach
-  it, never how many there are.
-- **Everything checked in is written in English**, this file included.
-- **Conventions live next to the code they govern.** A rule for one directory
-  goes into that directory's `CLAUDE.md`, so it loads when a session reads
-  there and not before. The one exception is `agents/`: discovery reads every
-  `agents/*.md` as an agent page, so its conventions are path-scoped from
-  [`.claude/rules/agents.md`](.claude/rules/agents.md) instead.
-- This file is for sessions working *in* this repository. A `CLAUDE.md` at a
-  plugin root is not loaded into the sessions of projects that install the
-  plugin — what reaches them goes through `AGENTS.md`, a skill or an agent
-  page.
+1. **Issue.** Acceptance criteria, written down before any production code —
+   grill first only if the idea is genuinely unclear. Opens in front of the
+   human: title and numbered criteria, as a table. Fixed from here: no finding
+   and no feedback may add, edit or reinterpret one.
+2. **Checkpoint 1.** The three questions (below), recorded.
+3. **Test-author.** Writes the failing tests from the intent alone — skip only
+   when the change has nothing to run.
+4. **Implementer.** Builds it, makes those tests pass, may not edit them.
+5. **Reviewer.** Runs on the diff and the written intent alone. Triage every
+   finding by the criterion it violates: fix now, dismiss with a recorded
+   reason, or file for later. A finding without a reproduction is dismissed;
+   one that violates no criterion is filed as its own issue, never fixed here
+   — except where this diff itself made a documentation statement false.
+   After every round, show the human a table: one row per criterion plus one
+   for findings that violate none, one column per round, each cell a count.
+   One waiver: a fix that only touches the tracker record may skip the round.
+6. **Checkpoint 2.** The three questions again.
+7. **Commit, push, PR.** The human merges.
+8. **Retro.** What got in the way, what should change. A rule here that
+   misfired becomes a proposal against this repository.
+
+## Correcting course
+
+**Stop on these signals, whatever a counter would say:**
+
+- *Repetition* — the same failure twice in a row, or the same criterion missed
+  twice, even by two different defects.
+- *Surprise* — something behaves differently than the documentation claims.
+- *Regression* — a fix breaks something that worked.
+
+Record the observation, then decide: change approach, or ask. One hard number:
+if the finding count has not decreased across three consecutive review rounds,
+stop and ask the human.
+
+**The three checkpoint questions:** *Does this match what was asked? What
+surprised me? What am I assuming without having verified it?*
+
+## Facts, not impressions
+
+Report the command and what it covered, never the adjective: "`npm test --
+src/api`, 104 cases, exit 0." An exit code says only what that command
+checked. When no suite or no analysis exists, that absence is the fact —
+report the command that established it.
+
+Decisions, assumptions, surprises, checkpoint answers and what a stage
+produced — a test file's path, a change's scope — go into the issue as they
+happen. The next session, and the next dispatch, resume from the tracker, not
+from a conversation that is gone.
+
+## The human
+
+Three steering points, nothing else:
+
+1. They approve the acceptance criteria — only when the idea is genuinely
+   unclear. A clear request needs no ceremony.
+2. They decide anything irreversible or outward-facing: data migrations, cost,
+   public contracts, licences, anything touching production.
+3. They merge the pull request.
+
+If they are away: a material question — user-visible behaviour, a public
+contract, the data model, the dependency footprint — parks the work. Anything
+else: pick a default, record it as a default, carry on.
+
+**How to talk to them.** Informally (German: du). Short words, only as many
+sentences as they need now. Every sentence carries a fact, a decision, an
+assumption, a question, or the answer that was asked for. A reply is
+understandable from the conversation alone: naming a document, a rule or an
+issue is allowed only when the sentence carries its content.
+
+## The shelf
+
+Reach for one when the change warrants it, never because a condition fired:
+
+- grilling the idea
+- a plan, when the change spans modules
+- a clean-room second opinion, when you are stuck
+
+For facts about the codebase, dispatch a researcher instead of assuming. Every
+dispatch hands over a reference to the issue, never its content retold — the
+receiving page says how it turns that into what it needs. Add only what no
+page already covers: paths, commands, decisions the dispatch itself
+established. Where a page defines the receiver, it bounds this further:
+whatever that page says the receiver does not get is not handed over,
+whatever the saving would be.
+
+The run names four roles — researcher, test-author, implementer, reviewer.
+Where athena ships a subagent or a skill for one, use it through the interface
+its page declares and leave the inside alone. Where it does not, dispatch a
+fresh context with the same brief: the role is what the rule asks for, a page
+is only how it is delivered. What is actually reachable is named in the
+self-check at session start — read it there, do not assume it.
+
+## Bookkeeping
+
+- One issue = one branch = one pull request = one working directory. A change
+  too big to land whole is split into smaller issues before it starts — flat
+  siblings, never a parent with children, each running the full pipeline on
+  its own branch, PR and worktree.
+- Runs that overlap in time never share a checkout: each gets its own worktree,
+  branched from the current default branch like any other run. Before starting
+  one, `git worktree list` says what is already in flight; a run whose worktree
+  is gone did not finish, it was thrown away.
+- The tracker is the issue the run belongs to.
+- Documentation mirrors the current state. A change that falsifies a statement
+  fixes it in the same change, bounded to what it falsified. When a document and
+  a rule disagree, the document is out of date.
+- Conventions live next to the code they govern. A rule that holds for one
+  subsystem belongs in that directory's `CLAUDE.md`, not in the root file every
+  run pays for. Only what holds everywhere stays at the root.
+- Branch each issue from the current default branch, never on an unmerged
+  predecessor.
+- Everything checked in and every pull request is written in English.
+- Never push to the default branch.
+- Work found mid-run that serves the current intent joins the task list.
+  Anything else is filed as its own issue and waits for its own run.

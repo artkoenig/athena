@@ -20,7 +20,7 @@ set -u
 plugin_root="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 plugin_root="$(cd "$plugin_root" 2>/dev/null && pwd || echo "$plugin_root")"
 project_dir="${CLAUDE_PROJECT_DIR:-.}"
-rulebook="${plugin_root}/AGENTS.md"
+rulebook="${plugin_root}/CLAUDE.md"
 guard_dir="${plugin_root}/.githooks"
 
 # JSON-encode stdin as the body of a JSON string: drop the control bytes that
@@ -74,7 +74,7 @@ done
 if [ -f "$rulebook" ]; then
   rulebook_state="rulebook delivered"
 else
-  rulebook_state="rulebook missing (no AGENTS.md at the plugin root)"
+  rulebook_state="rulebook missing (no CLAUDE.md at the plugin root)"
   problems="${problems} ${rulebook_state};"
 fi
 
