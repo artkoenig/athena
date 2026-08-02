@@ -9,20 +9,30 @@ practice, not from instruction. That is the principle, not just the name.
 
 ## What it's for
 
-Most agent workflows land on one of two failure modes: no process, so
-quality depends on how careful the agent happened to feel that day, or so
-much process that a one-line fix pays the same ceremony as a rewrite.
-athena's bet is that an agent can be trusted to run the work — how much to
-plan, how to slice it, which tools to reach for — while a few checks catch
-exactly what an agent can't reliably catch in itself: grading its own
-tests, reviewing a diff it just wrote.
+athena bets on the judgment of a modern Anthropic agent — it assumes at
+least Opus 5 — and builds on that trust rather than around its absence.
+Most agent workflows compensate for a model they don't quite trust with
+process: approval gates, checklists, a human re-checking work the agent
+could have checked itself. athena instead gives the agent the run and asks
+it to decide how much planning a change needs, how to slice it, which
+tools to reach for — and keeps process only for the handful of things a
+model can't reliably judge about its own work, like grading its own tests
+or reviewing a diff it just wrote.
 
-That leaves a human only where a human actually has to be: saying yes to
-intent that's genuinely unclear, deciding anything irreversible, merging.
-Everything else the agent decides and writes down, so a rule that turns out
-wrong becomes a pull request instead of a lesson each session re-learns —
-and because every wired project loads athena fresh at session start, an
-accepted fix reaches all of them with their next session.
+That trust is what makes unattended work possible: a run is meant to go
+from idea to pull request with no human at the keyboard, stepping in only
+where a human actually has to — intent that's genuinely unclear, anything
+irreversible, the merge itself. Everything a run decides or discovers along
+the way is written to an issue as it happens, so a session that picks the
+work back up — hours later, or a different session entirely — resumes from
+that record instead of from a conversation that's gone.
+
+**It also improves itself.** After every run, the agent records what got in
+its way; a rule that keeps misfiring becomes a proposed change to the
+rulebook itself, reviewed like any other pull request. Because every wired
+project loads athena fresh at session start, an accepted fix reaches all of
+them with their next session — the workflow gets better at being followed
+without a human rewriting it by hand.
 
 The rules themselves are one page, [`AGENTS.md`](AGENTS.md) — short enough
 to read end to end if you want the specifics; this page won't repeat it.
