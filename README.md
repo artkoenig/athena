@@ -7,23 +7,25 @@
 **Athena** is the Greek goddess of wisdom and craft: skill that comes from
 practice, not from instruction. That is the principle, not just the name.
 
-## How it works
+## What it's for
 
-The rulebook is one page: [`AGENTS.md`](AGENTS.md) — the invariants every
-change holds to, the signals that stop a run, where the human steers, and the
-run they add up to. That page is the only place those rules live; this one
-points at it rather than repeating it, so a rule is changed in one file and
-nowhere else.
+Most agent workflows land on one of two failure modes: no process, so
+quality depends on how careful the agent happened to feel that day, or so
+much process that a one-line fix pays the same ceremony as a rewrite.
+athena's bet is that an agent can be trusted to run the work — how much to
+plan, how to slice it, which tools to reach for — while a few checks catch
+exactly what an agent can't reliably catch in itself: grading its own
+tests, reviewing a diff it just wrote.
 
-Its core is **judgment for process, mechanics for facts**: everything
-procedural is the agent's call, every time, and rules remain only where
-self-assessment fails. Read it in full — it is short — to see whether the
-workflow suits you.
+That leaves a human only where a human actually has to be: saying yes to
+intent that's genuinely unclear, deciding anything irreversible, merging.
+Everything else the agent decides and writes down, so a rule that turns out
+wrong becomes a pull request instead of a lesson each session re-learns —
+and because every wired project loads athena fresh at session start, an
+accepted fix reaches all of them with their next session.
 
-**The workflow corrects itself.** A rule that misfires becomes a proposal: a
-pull request against this repository, decided like any other. And because
-every wired project loads athena fresh at session start, an accepted rule
-change reaches all of them with their next session.
+The rules themselves are one page, [`AGENTS.md`](AGENTS.md) — short enough
+to read end to end if you want the specifics; this page won't repeat it.
 
 ## Installing it
 
