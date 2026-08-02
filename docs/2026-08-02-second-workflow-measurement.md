@@ -258,3 +258,76 @@ directory this measurement does not own) — would show whether the
 tracker-subagent fix actually holds up under the metric the first measurement
 used to justify it. Not done here: clearing a shared cache is exactly the
 kind of action this repository's own rules ask to be checked, not assumed.
+
+## Clearing the stale cache: what actually worked
+
+Approved and attempted on the same day. Deleting the cache directory turned
+out to be necessary but not sufficient — six things had to be worked out
+along the way, all of them relevant to doing this again cleanly:
+
+1. **The cache directory and the plugin registry are two different stores.**
+   `rm -rf ~/.claude/plugins/cache/athena` only deletes the extracted files.
+   `claude plugin list` still reported `athena@athena` at `c3d9102cfb1a`
+   afterward — which cached build counts as "installed" lives in a separate
+   registry that survives deleting the cache. A session started after the
+   deletion but before fixing the registry saw `"plugins":[]` in its own
+   `stream-json` init event — an empty list, no error — because the registry
+   pointed at files that no longer existed. **What actually moved the
+   registry:** `claude plugin marketplace update athena` (re-fetch the
+   marketplace source), then `claude plugin update athena@athena` (bump the
+   installed version). This is what took it from `c3d9102cfb1a` to
+   `eab1c4c92da4` (`origin/main`'s HEAD at the time) and repopulated the
+   cache.
+2. **`--setting-sources project` does not reach that registry.** It only
+   suppresses reading `enabledPlugins`/`extraKnownMarketplaces` from
+   non-project settings files. The registry update above applies regardless
+   of that flag, machine-wide, for every session on the account — there is no
+   way demonstrated here to pin one build for a single measurement run
+   without touching shared, global state.
+3. **A directory-source marketplace declared in a project's own
+   `.claude/settings.json`, under a name already registered globally, is
+   silently ignored** — reproduced a second time, identically, on a fresh
+   project copy, before the registry fix. This was the root cause of Surprise
+   1 above. A local override does not shadow an existing global registration
+   of the same marketplace name; control which build is used through the
+   global registry (point 1) instead, and accept that doing so affects every
+   concurrent session on the machine, not just the one being measured.
+4. **`CLAUDE_CODE_SESSION_ID` is set in every subshell of a Claude Code
+   Remote session, equal to the *outer* session's own ID.** A nested `claude
+   -p` call that omits `--session-id` silently reuses that ID instead of
+   starting fresh, and then reports the outer session's own settings and
+   plugins instead of the target project's — with no warning that anything
+   went wrong. Caught only because a one-line sanity prompt reported plugins
+   (`metis`, `cowork-plugin-management`) that made no sense for the target
+   project. Always pass a freshly generated `--session-id` (e.g. `cat
+   /proc/sys/kernel/random/uuid`) for every nested invocation, including
+   throwaway sanity checks.
+5. **A machine-wide `pre-push` git hook blocks direct pushes to
+   `main`/`master`** ("refusing to push to 'master' — it advances only
+   through a merged pull request") and fires in *any* repository on this
+   machine, including disposable scratch bare repos used only for
+   measurement. Name throwaway branches something other than `main`/`master`
+   (e.g. `work`) when setting up a fresh scratch project, to avoid unrelated
+   friction.
+6. **Updating athena's global registration from inside a live session that
+   has athena enabled leaves that session inconsistent until it restarts.**
+   Immediately after running `claude plugin update athena@athena` for this
+   measurement, *this* session's own self-check started reporting its push
+   guard as not set and the freshly-fetched build as incomplete. Both traced
+   to explainable, non-alarming causes: `core.hooksPath` here still pointed
+   at the now-orphaned `c3d9102cfb1a/.githooks` (present on disk and
+   functionally unchanged, but on a path the plugin system had marked
+   orphaned) — exactly the "restart required to apply changes" the `plugin
+   update` command warns about, just not yet acted on; and "incomplete"
+   traced to the fresh build correctly mirroring `origin/main`, which does
+   not yet contain this session's own unmerged doc commit on its feature
+   branch — a normal branch/main divergence, not a missing file. Practical
+   rule: don't run `claude plugin update`/`marketplace update` for athena
+   from inside an athena-governed session that still needs its own hooks
+   this session — do it from a separate context, or restart before relying
+   on the guard again.
+
+With the registry fixed (point 1), a fresh session's `stream-json` init event
+confirmed `athena:tracker` in its agent list — absent from the stale
+`c3d9102cfb1a` build — before any full rerun was started, at negligible cost
+(a single `--max-budget-usd 1` sanity prompt).
