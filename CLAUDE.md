@@ -95,7 +95,6 @@ Reach for one when the change warrants it, never because a condition fired:
 - grilling the idea, when it is too vague to write criteria
 - a plan, when the change spans modules
 - a clean-room second opinion, when you are stuck
-- a task list with intermediate commits, when a change is too big to land whole
 
 For facts about the codebase, dispatch a researcher instead of assuming. Every
 dispatch hands over the issue's problem statement and its numbered criteria word
@@ -113,8 +112,10 @@ self-check at session start — read it there, do not assume it.
 
 ## Bookkeeping
 
-- One issue = one branch = one pull request = one working directory. No child
-  issues — a change too big to land whole gets a task list.
+- One issue = one branch = one pull request = one working directory. A change
+  too big to land whole is split into smaller issues before it starts — flat
+  siblings, never a parent with children, each running the full pipeline on
+  its own branch, PR and worktree.
 - Runs that overlap in time never share a checkout: each gets its own worktree,
   branched from the current default branch like any other run. Before starting
   one, `git worktree list` says what is already in flight; a run whose worktree
