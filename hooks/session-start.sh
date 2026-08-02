@@ -20,6 +20,32 @@ set -u
 plugin_root="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 plugin_root="$(cd "$plugin_root" 2>/dev/null && pwd || echo "$plugin_root")"
 project_dir="${CLAUDE_PROJECT_DIR:-.}"
+
+# A remote, disposable environment can sit on a plugin cache that is a
+# stale snapshot from whenever the environment itself was provisioned —
+# nothing re-fetches it between sessions on its own. Update first, then
+# resolve the rulebook from wherever the update actually left the plugin,
+# not from the CLAUDE_PLUGIN_ROOT this invocation inherited: that path was
+# resolved before the update ran and may already be the orphaned version.
+# Local development never takes this path: CLAUDE_CODE_REMOTE is unset, so
+# no `claude` call, no network, no added dependency.
+#
+# Directory mtimes are not a safe way to find the current version — they
+# have been observed out of order between two installed versions. `claude
+# plugin list` is what actually knows, so that is what gets parsed. Any
+# failure here — no update available, the call times out, the reported
+# version does not exist on disk — leaves plugin_root exactly as inherited;
+# the rulebook this session gets is then the same one it would have gotten
+# without this block.
+if [ "${CLAUDE_CODE_REMOTE:-}" = "true" ] && command -v claude >/dev/null 2>&1; then
+  timeout 15 claude plugin update athena@athena >/dev/null 2>&1
+  new_version="$(claude plugin list 2>/dev/null | grep -A1 'athena@athena' | sed -n 's/^ *Version: *//p')"
+  if [ -n "$new_version" ]; then
+    candidate="$(dirname "$plugin_root")/${new_version}"
+    [ -d "$candidate" ] && plugin_root="$candidate"
+  fi
+fi
+
 rulebook="${plugin_root}/CLAUDE.md"
 guard_dir="${plugin_root}/.githooks"
 
