@@ -50,7 +50,48 @@ project_repo() {
 
 run_hook() {
   local plugin="$1" project="$2"
-  CLAUDE_PLUGIN_ROOT="$plugin" CLAUDE_PROJECT_DIR="$project" \
+  # Explicitly cleared, not merely omitted: this suite may itself be
+  # running inside a remote session, and an inherited CLAUDE_CODE_REMOTE=true
+  # would silently take every one of these calls through the self-update
+  # block instead of the plain path they are meant to exercise.
+  CLAUDE_PLUGIN_ROOT="$plugin" CLAUDE_PROJECT_DIR="$project" CLAUDE_CODE_REMOTE= \
+    bash "$plugin/hooks/session-start.sh" 2>/dev/null
+}
+
+# A stand-in `claude` on PATH for the self-update block: no network, no
+# model, deterministic. FAKE_CLAUDE_CALLED_MARKER records that it ran at
+# all; FAKE_CLAUDE_UPDATE_EXIT and FAKE_CLAUDE_UPDATE_DELAY control `plugin
+# update`; FAKE_CLAUDE_LIST_VERSION controls what `plugin list` reports for
+# athena@athena, empty meaning "no Version: line".
+fake_claude_bin() {
+  local bin_dir="$1"
+  mkdir -p "$bin_dir"
+  cat >"$bin_dir/claude" <<'EOF'
+#!/bin/bash
+[ -n "${FAKE_CLAUDE_CALLED_MARKER:-}" ] && touch "$FAKE_CLAUDE_CALLED_MARKER"
+if [ "${1:-}" = "plugin" ] && [ "${2:-}" = "update" ]; then
+  [ "${FAKE_CLAUDE_UPDATE_DELAY:-0}" != "0" ] && sleep "$FAKE_CLAUDE_UPDATE_DELAY"
+  exit "${FAKE_CLAUDE_UPDATE_EXIT:-0}"
+elif [ "${1:-}" = "plugin" ] && [ "${2:-}" = "list" ]; then
+  echo "Installed plugins:"
+  echo
+  echo "  > athena@athena"
+  [ -n "${FAKE_CLAUDE_LIST_VERSION:-}" ] && echo "    Version: ${FAKE_CLAUDE_LIST_VERSION}"
+  echo "    Scope: user"
+  echo "    Status: (mock) enabled"
+  exit 0
+fi
+exit 0
+EOF
+  chmod +x "$bin_dir/claude"
+}
+
+# Runs the hook as a remote session would: CLAUDE_CODE_REMOTE=true and the
+# fake claude ahead of the real one on PATH.
+run_hook_remote() {
+  local plugin="$1" project="$2" fake_bin="$3"
+  CLAUDE_CODE_REMOTE=true CLAUDE_PLUGIN_ROOT="$plugin" CLAUDE_PROJECT_DIR="$project" \
+    PATH="$fake_bin:$PATH" \
     bash "$plugin/hooks/session-start.sh" 2>/dev/null
 }
 
@@ -251,6 +292,70 @@ node -e '
   if (!hooks[0].command.endsWith("/hooks/session-start.sh")) process.exit(1);
 ' "$root/hooks/hooks.json"
 check $? "hooks.json registers one SessionStart hook, the plugin root's session-start.sh"
+
+echo
+echo "=== the plugin self-updates when remote"
+
+# The version the fake update lands on, and the plugin tree it resolves
+# to — a second copy with a marker line in its rulebook, so a test can tell
+# which copy's CLAUDE.md the hook actually delivered.
+selfupdate="$tmp/self-update"
+old_root="$selfupdate/old-version"
+new_root="$selfupdate/new-version"
+plugin_copy "$old_root"
+plugin_copy "$new_root"
+printf '\ntest-marker: new-version\n' >>"$new_root/CLAUDE.md"
+selfupdate_project="$tmp/self-update-project"
+project_repo "$selfupdate_project"
+fake_bin="$tmp/fake-bin"
+fake_claude_bin "$fake_bin"
+
+# the update succeeds and reports the new version: the hook delivers the
+# new copy's rulebook, not the one it was invoked with.
+called_marker="$tmp/called.marker"
+rm -f "$called_marker"
+FAKE_CLAUDE_CALLED_MARKER="$called_marker" FAKE_CLAUDE_LIST_VERSION="new-version" \
+  run_hook_remote "$old_root" "$selfupdate_project" "$fake_bin" >"$tmp/selfupdate-ok.json"
+node -e '
+  const out = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+  if (out.hookSpecificOutput.hookEventName !== "SessionStart") process.exit(1);
+  if (!out.hookSpecificOutput.additionalContext.includes("test-marker: new-version")) process.exit(1);
+' "$tmp/selfupdate-ok.json"
+check $? "a resolvable new version delivers that version's rulebook, still valid JSON"
+[ -f "$called_marker" ]
+check $? "the self-update block actually ran claude"
+
+# the update reports a version with no directory on disk: plugin_root
+# stays what it was inherited as, and the hook still delivers cleanly.
+FAKE_CLAUDE_LIST_VERSION="no-such-version" \
+  run_hook_remote "$old_root" "$selfupdate_project" "$fake_bin" >"$tmp/selfupdate-ghost.json"
+node -e '
+  const out = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+  if (out.hookSpecificOutput.additionalContext.includes("test-marker: new-version")) process.exit(1);
+' "$tmp/selfupdate-ghost.json"
+check $? "a version claude list reports but that is not on disk falls back to the inherited plugin_root"
+
+# `plugin update` itself fails outright: same fallback, no crash, no
+# broken JSON.
+FAKE_CLAUDE_UPDATE_EXIT=1 FAKE_CLAUDE_LIST_VERSION="" \
+  run_hook_remote "$old_root" "$selfupdate_project" "$fake_bin" >"$tmp/selfupdate-fail.json"
+node -e '
+  const out = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+  if (out.hookSpecificOutput.hookEventName !== "SessionStart") process.exit(1);
+  if (out.hookSpecificOutput.additionalContext.includes("test-marker: new-version")) process.exit(1);
+' "$tmp/selfupdate-fail.json"
+check $? "a failing plugin update falls back to the inherited plugin_root, still valid JSON"
+
+# outside a remote session the block never runs at all — no claude call,
+# no latency, no dependency, regardless of what a fake claude would report.
+# Cleared explicitly for the same reason as in run_hook(): this suite may
+# itself be running inside a remote session.
+rm -f "$called_marker"
+FAKE_CLAUDE_CALLED_MARKER="$called_marker" FAKE_CLAUDE_LIST_VERSION="new-version" \
+  CLAUDE_CODE_REMOTE= CLAUDE_PLUGIN_ROOT="$old_root" CLAUDE_PROJECT_DIR="$selfupdate_project" \
+  PATH="$fake_bin:$PATH" bash "$old_root/hooks/session-start.sh" >"$tmp/selfupdate-local.json" 2>/dev/null
+[ ! -f "$called_marker" ]
+check $? "outside CLAUDE_CODE_REMOTE=true the self-update block does not run claude at all"
 
 echo
 echo "=== the self-check reports what is really there"
