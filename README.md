@@ -48,7 +48,8 @@ claude plugin install athena@athena
 
 A session with the plugin active gets the rulebook of the current `main` in
 its context, the subagents in [`agents/`](agents/) and the skills in
-[`skills/`](skills/), a self-check saying what of that is actually reachable,
+[`skills/`](skills/) — plus, for a subagent that owns one, a skill preloaded
+from beside its page — a self-check saying what of that is actually reachable,
 and a `pre-push` guard that refuses a direct push to the default branch. A
 project that manages its own git hooks — husky, lefthook, pre-commit — keeps
 them: athena then leaves `core.hooksPath` alone and reports the missing guard

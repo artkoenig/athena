@@ -12,10 +12,6 @@ need — for the work and for these texts alike.
 
 ## The run
 
-Track it as tasks: `TaskCreate` one per stage below before starting it, set it
-to completed with `TaskUpdate` the moment its output exists. A session picking
-the work back up reads `TaskList` for where the run stands, instead of asking.
-
 1. **Issue.** Acceptance criteria, written down before any production code —
    grill first only if the idea is genuinely unclear. Opens in front of the
    human: title and numbered criteria, as a table. Fixed from here: no finding
@@ -107,6 +103,14 @@ its page declares and leave the inside alone. Where it does not, dispatch a
 fresh context with the same brief: the role is what the rule asks for, a page
 is only how it is delivered. What is actually reachable is named in the
 self-check at session start — read it there, do not assume it.
+
+The tracker keeps the record: dispatch the `tracker` subagent the first time
+a run needs to read from or write to `docs/issues/`, and continue that same
+instance for every tracker operation after — filing, decisions, log,
+checkpoints, retro, orienting a session. A subagent that only needs its own
+narrow read of the running issue — test-author, researcher, implementer —
+finds it directly under `docs/issues/`, the way its own page says; only the
+`tracker` ever writes there.
 
 ## Bookkeeping
 

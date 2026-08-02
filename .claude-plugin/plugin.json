@@ -14,5 +14,16 @@
     "agents",
     "skills",
     "rulebook"
+  ],
+  "skills": [
+    "./skills/",
+    "./agents/tracker/skills/"
+  ],
+  "agents": [
+    "./agents/implementer.md",
+    "./agents/researcher.md",
+    "./agents/reviewer.md",
+    "./agents/test-author.md",
+    "./agents/tracker.md"
   ]
 }

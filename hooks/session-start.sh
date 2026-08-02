@@ -45,8 +45,11 @@ problems=""
 #    A count of zero is not: athena ships the rulebook first and its agents
 #    and skills after, and the rulebook tells the session to read these
 #    counts rather than assume a role has a page behind it.
+#    Two places hold skills: the plugin's own skills/, and the directory of
+#    an agent that preloads one of its own. Both reach a session — the second
+#    through plugin.json's skills paths — so both are counted here.
 skills=0
-for dir in "${plugin_root}/skills"/*/; do
+for dir in "${plugin_root}/skills"/*/ "${plugin_root}/agents"/*/skills/*/; do
   [ -d "$dir" ] || continue
   name=$(basename "$dir")
   if [ -f "${dir}SKILL.md" ]; then
@@ -55,15 +58,22 @@ for dir in "${plugin_root}/skills"/*/; do
     problems="${problems} skill without SKILL.md: ${name};"
   fi
 done
-# Discovery reads agents/<name>.md and does not recurse, so anything else
-# under agents/ — a nested directory above all — is in the tree and still
-# unreachable.
+# plugin.json lists the agent files, which replaces the recursive scan of
+# agents/ — without that list every .md below the directory would load as an
+# agent named after its path. So what is reachable is agents/<name>.md, and
+# anything else under agents/ is in the tree and unreachable. The one
+# exception is an agent's own directory, <name>/ beside <name>.md, which
+# holds what belongs to that agent alone: the skills only it preloads. Those
+# reach the session through plugin.json's skills paths, so the directory is
+# not a lost agent.
 agents=0
 for entry in "${plugin_root}/agents"/*; do
   [ -e "$entry" ] || continue
   name=$(basename "$entry")
   if [ -f "$entry" ] && [ "${name%.md}" != "$name" ]; then
     agents=$((agents + 1))
+  elif [ -d "$entry" ] && [ -f "${entry}.md" ]; then
+    continue
   else
     problems="${problems} agent not reachable: ${name%.md};"
   fi

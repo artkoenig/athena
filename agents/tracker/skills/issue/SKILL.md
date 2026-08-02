@@ -1,7 +1,6 @@
 ---
 name: issue
-description: The athena tracker. Every read of and every write to an issue goes through this skill — file an issue, record a decision, an observation, a plan, checkpoint answers, a retro or a task list, set the state, read the intent of the running issue, read what the record already says on a subject, or orient a session on the running issue. Hand it the content and name the operation; it knows where that content lands. Not a shelf tool. Trigger on "file an issue", "open an issue", "new issue", "put this in the backlog", "record this in the issue", "what did we already decide about this", "where did we leave off", "what's the intent", or whenever you are about to read or write anything in the tracker.
-user-invocable: true
+description: The mechanics of the athena tracker — where an issue file lives, what shape it has, which states it moves through, and how each operation is carried out. Preloaded into the `tracker` subagent, which is the only context that runs it; nothing else needs it, because nothing else touches `docs/issues/`.
 ---
 
 # Issue
@@ -9,23 +8,18 @@ user-invocable: true
 One issue is one markdown file under `docs/issues/`. That file is the whole
 tracker: no database, no script.
 
-This skill owns the file: its name, its frontmatter, its sections, its states.
-What is handed to another owner is named below; everything else is described
-here and nowhere else — two descriptions of one thing drift apart.
-
-A caller hands this skill **content** and names an **operation** — never a
-path, a filename, a frontmatter key or a heading. That way the file can
-change without any caller changing.
-
-Subagents follow the same rule: a subagent that needs the tracker gets the
-`Skill` tool and orients here, instead of being handed a path.
+This page owns the file: its name, its frontmatter, its sections, its states.
+Everything here is mechanics — the caller who asks for an operation never sees
+a path, a filename, a frontmatter key or a heading, so all of it can change
+without any caller changing.
 
 The rulebook (`CLAUDE.md`) owns the run — what happens between the states, not
-what they are.
+what they are. Three parts belong to it and are not repeated here: the three
+checkpoint questions, what a retro says, and when a change gets a task list.
 
 ## The operations
 
-| operation | what the caller hands it |
+| operation | what the caller hands over |
 | --- | --- |
 | **file an issue** | the problem and the observable behaviour it wants, plus the acceptance criteria |
 | **record a decision** | what was settled, and the source it derives from — a document, a human's answer, or "default, unanswered" |
@@ -33,19 +27,11 @@ what they are.
 | **record a plan** | the modules the change touches, the contracts between them stated concretely, and one sentence per non-obvious choice saying why — a page at most, never a document of its own |
 | **record checkpoint answers** | the rulebook's three answers, and which of the two checkpoints they belong to |
 | **record a retro** | what got in the way, what should change |
-| **record a task list** | the steps a change is being landed in — the rulebook says when one is due |
+| **record a task list** | the steps a change is being landed in |
 | **set the state** | which state the issue is now in, and the branch or the pull request if one now exists |
-| **read the intent** | nothing. Returns the running issue's problem statement and numbered acceptance criteria, word for word — nothing else in the file. For a caller that must see no more than what was asked, like the test-author |
+| **read the intent** | nothing. Returns the running issue's problem statement and numbered acceptance criteria, word for word — nothing else in the file |
 | **read the record on a subject** | a subject, in whatever words the caller has for it. Returns what past issues settled on it, what was filed and never built, and what was tried and abandoned — each with the issue it came from |
 | **orient a session** | nothing. Returns which issue is running and everything the previous session knew about it — or, when none is running, the unfinished issues and how they depend on each other |
-
-Three parts are owned by the rulebook, because each is a rule of the run, and
-this page does not repeat what it says: the three checkpoint questions, what a
-retro says, and when a change gets a task list.
-
-Everything below this line is behind the interface — the directory, the
-filenames, the template, the sections. It can change without anything outside
-`skills/issue/` changing.
 
 ## Filing an issue
 
@@ -56,14 +42,53 @@ filenames, the template, the sections. It can change without anything outside
    and dates every issue without a field; issues filed on the same day are
    told apart by their slugs, so an issue whose slug is taken that day needs a
    more specific one.
-2. **Copy `assets/TEMPLATE.md`** to that path. Do not retype it, do not
-   reorder or rename its sections.
-3. **Delete the comment block** under the title — it is a filing instruction,
-   not part of an issue.
-4. **Write the `## Intent`** and nothing else: the problem and the wanted
-   observable behaviour, solution-free, then numbered acceptance criteria
-   that can each be shown false. Everything below Intent fills in as the run
-   happens.
+2. **Write the file** at that path, in the shape below — the whole template,
+   already here, so filing is one `Write` and never a copy from somewhere else.
+
+   ```markdown
+   ---
+   status: backlog
+   branch:
+   pr:
+   ---
+
+   # <title>
+
+   ## Intent
+
+   Acceptance criteria:
+
+   1.
+
+   ## Plan
+
+   ## Tasks
+
+   ## Decisions
+
+   ## Log
+
+   ## Checkpoints
+
+   ### Before implementation
+
+   - Does this match what was asked?
+   - What surprised me?
+   - What am I assuming without having verified it?
+
+   ### Before the PR
+
+   - Does this match what was asked?
+   - What surprised me?
+   - What am I assuming without having verified it?
+
+   ## Retro
+   ```
+
+3. **Fill `## Intent` and nothing else**: the problem and the wanted
+   observable behaviour, solution-free, then numbered acceptance criteria that
+   can each be shown false. Everything below Intent fills in as the run
+   happens, one record-operation at a time.
 
 ## Orienting a session
 
@@ -81,7 +106,7 @@ work out which of those issues depend on each other: one whose intent another's
 criteria presuppose comes before the issue that presupposes it. Return the
 unfinished issues with that dependency in view. What the session does with it —
 proposing one to the human, and what happens when no answer comes — is the
-rulebook's, not this skill's.
+rulebook's, not this page's.
 
 A `status:` that says `active` is not proof: check that its `pr:` is empty
 before you take it for the running one. An issue whose pull request is merged
@@ -90,11 +115,11 @@ session its whole orientation.
 
 ## Reading the intent
 
-For a caller that must see no more than what was asked — the test-author
-above all — return only the running issue's `## Intent`, verbatim: the
-problem statement and the numbered acceptance criteria. Nothing else in the
-file, whatever else that caller could technically reach another way; the
-guarantee this operation makes is what it withholds.
+For a caller that must see no more than what was asked — the test-author above
+all — return only the running issue's `## Intent`, verbatim: the problem
+statement and the numbered acceptance criteria. Nothing else in the file,
+whatever else could technically be reached another way; the guarantee this
+operation makes is what it withholds.
 
 The running issue is the same one *orienting a session* finds, above.
 
@@ -157,8 +182,9 @@ its meaning, the migration note belongs here, in prose.
 The same holds for the filename. Two notes exist:
 
 - Earlier setups copied a template into each project as
-  `docs/issues/TEMPLATE.md`. That copy is obsolete — this skill carries the
-  template now — and a project still holding one can delete it.
+  `docs/issues/TEMPLATE.md`, and later ones kept it as an asset beside this
+  page. Both are obsolete — the template is in this page now — and a project
+  still holding a copy can delete it.
 - Issues filed before the date stamp are named `NNNN-slug.md`, a running
   four-digit number. They keep those names: renaming them would break every
   reference from a branch, a pull request or another issue, and buy nothing.
