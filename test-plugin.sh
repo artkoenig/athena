@@ -72,7 +72,7 @@ echo "=== manifests"
 # installation keep its cached copy instead of picking up merged commits.
 node -e '
   const m = require(process.argv[1]);
-  const allowed = new Set(["name","description","author","homepage","repository","license","keywords"]);
+  const allowed = new Set(["name","description","author","homepage","repository","license","keywords","skills","agents"]);
   const problems = [];
   for (const k of Object.keys(m)) if (!allowed.has(k)) problems.push("unknown field: " + k);
   for (const k of ["name","description","author","repository","license"]) if (!m[k]) problems.push("missing field: " + k);
@@ -81,6 +81,43 @@ node -e '
   if (problems.length) { console.error(problems.join("; ")); process.exit(1); }
 ' "$root/.claude-plugin/plugin.json"
 check $? "plugin.json has the documented fields, names athena, pins no version"
+
+# every skill directory in the tree is declared. `skills` normally adds to
+# the default `skills/` scan, but this marketplace entry's source is the
+# repository root, and for that case a declared path replaces the default —
+# so a tree whose skills/ is not listed loses it silently.
+node -e '
+  const fs = require("fs"), path = require("path");
+  const root = process.argv[1];
+  const declared = [].concat(require(path.join(root, ".claude-plugin/plugin.json")).skills || []);
+  const problems = [];
+  const dirsOf = (p) => fs.existsSync(p) ? fs.readdirSync(p, { withFileTypes: true }).filter(e => e.isDirectory()) : [];
+  const holders = new Set();
+  for (const e of dirsOf(path.join(root, "skills"))) holders.add("./skills/");
+  for (const a of dirsOf(path.join(root, "agents")))
+    for (const _ of dirsOf(path.join(root, "agents", a.name, "skills"))) holders.add(`./agents/${a.name}/skills/`);
+  for (const h of holders) if (!declared.includes(h)) problems.push("skills path holding a SKILL.md is not declared: " + h);
+  for (const d of declared) if (!fs.existsSync(path.join(root, d))) problems.push("declared skills path does not exist: " + d);
+  if (problems.length) { console.error(problems.join("; ")); process.exit(1); }
+' "$root"
+check $? "plugin.json declares every directory that holds skills, the default skills/ included"
+
+# every agent file is declared, and nothing else is. `agents` replaces the
+# scan of agents/, and that scan is recursive: undeclared, a skill an agent
+# preloads loads as an agent named after its path; declared but missing from
+# the list, an agent silently disappears from every session.
+node -e '
+  const fs = require("fs"), path = require("path");
+  const root = process.argv[1];
+  const declared = [].concat(require(path.join(root, ".claude-plugin/plugin.json")).agents || []);
+  const tree = fs.readdirSync(path.join(root, "agents"), { withFileTypes: true })
+    .filter(e => e.isFile() && e.name.endsWith(".md")).map(e => `./agents/${e.name}`);
+  const problems = [];
+  for (const f of tree) if (!declared.includes(f)) problems.push("agent in the tree but not declared: " + f);
+  for (const f of declared) if (!tree.includes(f)) problems.push("agent declared but not in the tree: " + f);
+  if (problems.length) { console.error(problems.join("; ")); process.exit(1); }
+' "$root"
+check $? "plugin.json declares exactly the agent files the tree holds"
 
 # the marketplace manifest offers exactly this repository as the
 # athena plugin, and pins no version either.
@@ -152,10 +189,15 @@ details="$tmp/details.txt"
 )
 check $? "the marketplace adds and athena@athena installs from it"
 
+# Agents are not compared here: `claude plugin details` counts the default
+# agents/ scan, and this plugin replaces that scan with an explicit file list
+# in plugin.json, which the inventory view reports as zero even though every
+# session loads all of them. The manifest-against-tree check above is what
+# guards the agent list.
 expected_hooks=1
 node -e '
   const text = require("fs").readFileSync(process.argv[1], "utf8");
-  const want = { Skills: Number(process.argv[2]), Agents: Number(process.argv[3]), Hooks: Number(process.argv[4]) };
+  const want = { Skills: Number(process.argv[2]), Hooks: Number(process.argv[4]) };
   const problems = [];
   for (const [kind, n] of Object.entries(want)) {
     const m = text.match(new RegExp(kind + " \\((\\d+)\\)"));
@@ -163,9 +205,10 @@ node -e '
     else if (Number(m[1]) !== n) problems.push(kind + ": inventory says " + m[1] + ", tree has " + n);
   }
   if (problems.length) { console.error(problems.join("; ")); process.exit(1); }
-' "$details" "$(find "$root/skills" -mindepth 2 -maxdepth 2 -name SKILL.md 2>/dev/null | wc -l | tr -d ' ')" \
+' "$details" "$(( $(find "$root/skills" -mindepth 2 -maxdepth 2 -name SKILL.md 2>/dev/null | wc -l | tr -d ' ') \
+                 + $(find "$root/agents" -mindepth 4 -maxdepth 4 -path '*/skills/*' -name SKILL.md 2>/dev/null | wc -l | tr -d ' ') ))" \
   "$(find "$root/agents" -mindepth 1 -maxdepth 1 -name '*.md' 2>/dev/null | wc -l | tr -d ' ')" "$expected_hooks"
-check $? "the installed inventory equals what the tree holds: skills, agents, one SessionStart hook"
+check $? "the installed inventory equals what the tree holds, agent-owned skills included: skills, one SessionStart hook"
 
 echo
 echo "=== the rulebook reaches the session"
@@ -213,7 +256,8 @@ echo
 echo "=== the self-check reports what is really there"
 
 status="$(hook_status "$tmp/happy.json")"
-real_skills=$(find "$root/skills" -mindepth 2 -maxdepth 2 -name SKILL.md 2>/dev/null | wc -l | tr -d ' ')
+real_skills=$(( $(find "$root/skills" -mindepth 2 -maxdepth 2 -name SKILL.md 2>/dev/null | wc -l | tr -d ' ') \
+              + $(find "$root/agents" -mindepth 4 -maxdepth 4 -path '*/skills/*' -name SKILL.md 2>/dev/null | wc -l | tr -d ' ') ))
 real_agents=$(find "$root/agents" -mindepth 1 -maxdepth 1 -name '*.md' 2>/dev/null | wc -l | tr -d ' ')
 
 # the happy status names the real counts, the delivered rulebook and
@@ -262,6 +306,38 @@ case "$status" in
   *"agent not reachable: nested"*"FAILED"*) ok "an agent that is not a flat .md file is named and success withdrawn" ;;
   *"FAILED"*"agent not reachable: nested"*) ok "an agent that is not a flat .md file is named and success withdrawn" ;;
   *) no "an unreachable agent went unreported: $status" ;;
+esac
+
+# an agent's own directory, <name>/ beside <name>.md, is not a lost agent:
+# it holds the skills that agent preloads, and those reach a session through
+# plugin.json's skills paths. The skill inside is counted like any other.
+own_dir="$tmp/agent-own-dir"
+plugin_copy "$own_dir"
+mkdir -p "$own_dir/agents/keeper/skills/ledger"
+printf -- '---\nname: ledger\ndescription: x\n---\n' >"$own_dir/agents/keeper/skills/ledger/SKILL.md"
+printf -- '---\nname: keeper\ndescription: x\n---\n' >"$own_dir/agents/keeper.md"
+before_skills=$real_skills
+own_project="$tmp/agent-own-project"
+project_repo "$own_project"
+status="$(run_hook "$own_dir" "$own_project" >"$tmp/own-dir.json" && hook_status "$tmp/own-dir.json")"
+case "$status" in
+  *"not reachable"*) no "an agent's own directory was mistaken for a lost agent: $status" ;;
+  "Athena self-check: $((before_skills + 1)) skills and $((real_agents + 1)) agents reachable; rulebook delivered; push guard set; no problems.")
+    ok "an agent's own directory carries its skill into the count and is no defect" ;;
+  *) no "unexpected status for an agent with its own directory: $status" ;;
+esac
+
+# that exception is bounded: a skill directory under an agent that lost its
+# SKILL.md is as invisible as one under skills/, and is named the same way.
+own_lost="$tmp/agent-own-lost"
+plugin_copy "$own_lost"
+mkdir -p "$own_lost/agents/keeper/skills/orphan"
+printf -- '---\nname: keeper\ndescription: x\n---\n' >"$own_lost/agents/keeper.md"
+status="$(run_hook "$own_lost" "$empty_project" >"$tmp/own-lost.json" && hook_status "$tmp/own-lost.json")"
+case "$status" in
+  *"skill without SKILL.md: orphan;"*"FAILED"*) ok "an agent's skill directory without SKILL.md is named and success withdrawn" ;;
+  *"FAILED"*"skill without SKILL.md: orphan;"*) ok "an agent's skill directory without SKILL.md is named and success withdrawn" ;;
+  *) no "an unreachable agent skill went unreported: $status" ;;
 esac
 
 # with the rulebook gone there is nothing to deliver, and the status

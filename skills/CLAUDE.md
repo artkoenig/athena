@@ -4,6 +4,14 @@ One skill is one directory holding a `SKILL.md`. Discovery finds it by that
 file alone: a directory here without one is in the tree and unreachable from a
 session, which the self-check reports as a defect.
 
+A skill only one subagent ever runs does not live here. It belongs to that
+agent, under `agents/<agent>/skills/<skill>/SKILL.md`, and reaches it through
+the agent's `skills:` frontmatter, which injects the whole page at startup
+instead of costing a `Skill` call mid-run. Both locations are listed in
+`plugin.json`'s `skills` field — for this marketplace entry a declared path
+replaces the default scan, so `./skills/` has to stay listed alongside.
+This directory is for the skills a session itself reaches.
+
 ## What a page has to carry
 
 - **Frontmatter**: `name`, `description`, and `user-invocable` where the human

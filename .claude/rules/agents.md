@@ -11,9 +11,18 @@ there would register as a nameless agent and be counted as one by the
 self-check. Path-scoped like this, it loads when a session reads a file under
 `agents/`, which is what a per-directory `CLAUDE.md` would have done.
 
-One agent is one flat `<name>.md` in that directory. Discovery does not
-recurse: a subdirectory there is in the tree and unreachable from a session,
-which the self-check reports as a defect.
+One agent is one flat `<name>.md` in that directory, and every one of them is
+listed in `plugin.json`'s `agents` field. That list is not decoration: agent
+discovery scans `agents/` *recursively*, so without it every `.md` anywhere
+below — a skill an agent preloads, above all — is loaded as an agent of its
+own, named after its path. Declaring the files replaces that scan. Add an
+agent, add its line; the plugin suite fails when the two disagree.
+
+An agent may own a directory beside its page, `<name>/` next to `<name>.md`,
+for what belongs to it alone — the skills it preloads, under
+`<name>/skills/<skill>/SKILL.md`, declared in `plugin.json`'s `skills` field.
+Anything else under `agents/` is in the tree and unreachable, which the
+self-check reports as a defect.
 
 ## What a page has to carry
 
