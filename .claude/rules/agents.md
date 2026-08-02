@@ -35,7 +35,10 @@ implementation, a reviewer that sees only the diff and the intent. An omission
 here becomes a leak in every run.
 
 Give each agent the narrowest tool list that does its job; a read-only role
-gets no writing tools. An agent that reads from or writes to the tracker gets
-`Skill` and orients through the `issue` skill, never through a handed path —
-except a reviewer, whose diff range already bounds what it may see, and which
-would rather derive the intent from git than trust a shared skill's read.
+gets no writing tools. Only the `tracker` reads and writes the whole record;
+give it nothing about the project beyond `docs/issues/`. An agent that needs
+its own narrow read of the running issue — test-author, researcher,
+implementer — finds it itself under `docs/issues/`, by the `status:`/
+`branch:` scan the tracker's own page describes, never through a handed
+path — except a reviewer, whose diff range already bounds what it may see,
+and which derives the intent from git instead.

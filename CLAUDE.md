@@ -108,6 +108,14 @@ fresh context with the same brief: the role is what the rule asks for, a page
 is only how it is delivered. What is actually reachable is named in the
 self-check at session start — read it there, do not assume it.
 
+The tracker keeps the record: dispatch the `tracker` subagent the first time
+a run needs to read from or write to `docs/issues/`, and continue that same
+instance for every tracker operation after — filing, decisions, log,
+checkpoints, retro, orienting a session. A subagent that only needs its own
+narrow read of the running issue — test-author, researcher, implementer —
+finds it directly under `docs/issues/`, the way its own page says; only the
+`tracker` ever writes there.
+
 ## Bookkeeping
 
 - One issue = one branch = one pull request; there are no child issues. `##

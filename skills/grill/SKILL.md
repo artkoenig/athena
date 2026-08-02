@@ -33,7 +33,7 @@ Four places, each as far as the topic reaches into it:
 - **The project's documentation**: the README, the `CLAUDE.md` of every
   directory involved, whatever is under `docs/`. A convention written there
   binds the criteria — it is a constraint, not background reading.
-- **The record**, through the `issue` skill's *read the record on a subject*:
+- **The record**, through the `tracker`'s *read the record on a subject*:
   what past issues settled on it, what was filed and never built, what was
   tried and abandoned. Re-deciding what the record already settled is the
   cheapest mistake available here.
@@ -67,13 +67,14 @@ stays labelled.
 
 ## The output
 
-Two operations of the `issue` skill: **file an issue** with the problem and
-the criteria, and **record a decision** — for every answer the human gave, and
+Two operations of the `tracker`: **file an issue** with the problem and the
+criteria, and **record a decision** — for every answer the human gave, and
 for every fact from the sweep a criterion now rests on, each with the source
 it came from. The human's answers are not the only thing that shaped them, and
-a criterion whose source is gone is one nobody can revisit. The skill knows
-where they go and what form a criterion takes — do not write into the tracker
-yourself.
+a criterion whose source is gone is one nobody can revisit. Dispatch the
+`tracker` for both — continuing it if this run already has one running — it
+knows where they go and what form a criterion takes; do not write into
+`docs/issues/` yourself.
 
 Then show the criteria to the human for approval: this is the first of their
 three steering points, and the one place a run genuinely waits.
