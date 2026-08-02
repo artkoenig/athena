@@ -81,46 +81,21 @@ assumption, a question, or the answer that was asked for. A reply is
 understandable from the conversation alone: naming a document, a rule or an
 issue is allowed only when the sentence carries its content.
 
-## The shelf
-
-Reach for one when the change warrants it, never because a condition fired:
-
-- grilling the idea
-- a plan, when the change spans modules
-- a clean-room second opinion, when you are stuck
-
-For facts about the codebase, dispatch a researcher instead of assuming. Every
-dispatch hands over a reference to the issue, never its content retold — the
-receiving page says how it turns that into what it needs. Add only what no
-page already covers: paths, commands, decisions the dispatch itself
-established. Where a page defines the receiver, it bounds this further:
-whatever that page says the receiver does not get is not handed over,
-whatever the saving would be.
-
-The run names four roles — researcher, test-author, implementer, reviewer.
-Where athena ships a subagent or a skill for one, use it through the interface
-its page declares and leave the inside alone. Where it does not, dispatch a
-fresh context with the same brief: the role is what the rule asks for, a page
-is only how it is delivered. What is actually reachable is named in the
-self-check at session start — read it there, do not assume it.
-
-The tracker keeps the record: dispatch the `tracker` subagent the first time
-a run needs to read from or write to `docs/issues/`, and continue that same
-instance for every tracker operation after — filing, decisions, log,
-checkpoints, retro, orienting a session. A subagent that only needs its own
-narrow read of the running issue — test-author, researcher, implementer —
-finds it directly under `docs/issues/`, the way its own page says; only the
-`tracker` ever writes there.
-
-A dispatch that runs in the background reports when it is done, and so does
-every later message to it: the notice arrives on its own, once per stop. Never
-ask whether it has finished — no second dispatch, no read of what it writes, no
-shell loop. Each ask is a turn at the largest context in the run and learns
-nothing the notice does not carry. Carry on with what does not depend on it;
-act when the notice lands.
-
 ## Bookkeeping
 
+- The tracker keeps the record: dispatch the `tracker` subagent the first time
+  a run needs to read from or write to `docs/issues/`, and continue that same
+  instance for every tracker operation after — filing, decisions, log,
+  heckpoints, retro, orienting a session. A subagent that only needs its own
+  narrow read of the running issue — test-author, researcher, implementer —
+  finds it directly under `docs/issues/`, the way its own page says; only the
+  `tracker` ever writes there.
+- A dispatch that runs in the background reports when it is done, and so does
+  every later message to it: the notice arrives on its own, once per stop. Never
+  ask whether it has finished — no second dispatch, no read of what it writes, no
+  shell loop. Each ask is a turn at the largest context in the run and learns
+  nothing the notice does not carry. Carry on with what does not depend on it;
+  act when the notice lands.
 - One issue = one branch = one pull request; there are no child issues. `##
   Tasks` stays empty by default — Plan says how, Log proves what happened.
   Fill it only when the work needs a state those two cannot hold: the change
@@ -131,7 +106,6 @@ act when the notice lands.
   branched from the current default branch like any other run. Before starting
   one, `git worktree list` says what is already in flight; a run whose worktree
   is gone did not finish, it was thrown away.
-- The tracker is the issue the run belongs to.
 - Documentation mirrors the current state. A change that falsifies a statement
   fixes it in the same change, bounded to what it falsified. When a document and
   a rule disagree, the document is out of date.
@@ -141,6 +115,5 @@ act when the notice lands.
 - Branch each issue from the current default branch, never on an unmerged
   predecessor.
 - Everything checked in and every pull request is written in English.
-- Never push to the default branch.
 - Work found mid-run that serves the current intent joins the task list.
   Anything else is filed as its own issue and waits for its own run.
