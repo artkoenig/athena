@@ -35,5 +35,7 @@ implementation, a reviewer that sees only the diff and the intent. An omission
 here becomes a leak in every run.
 
 Give each agent the narrowest tool list that does its job; a read-only role
-gets no writing tools. An agent that has to write to the tracker gets `Skill`
-and orients through the `issue` skill, never through a handed path.
+gets no writing tools. An agent that reads from or writes to the tracker gets
+`Skill` and orients through the `issue` skill, never through a handed path —
+except a reviewer, whose diff range already bounds what it may see, and which
+would rather derive the intent from git than trust a shared skill's read.

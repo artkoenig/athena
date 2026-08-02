@@ -60,9 +60,10 @@ src/api`, 104 cases, exit 0." An exit code says only what that command
 checked. When no suite or no analysis exists, that absence is the fact —
 report the command that established it.
 
-Decisions, assumptions, surprises and checkpoint answers go into the issue as
-they happen. The next session resumes from the tracker, not from a
-conversation that is gone.
+Decisions, assumptions, surprises, checkpoint answers and what a stage
+produced — a test file's path, a change's scope — go into the issue as they
+happen. The next session, and the next dispatch, resume from the tracker, not
+from a conversation that is gone.
 
 ## The human
 
@@ -93,11 +94,12 @@ Reach for one when the change warrants it, never because a condition fired:
 - a clean-room second opinion, when you are stuck
 
 For facts about the codebase, dispatch a researcher instead of assuming. Every
-dispatch hands over the issue's problem statement and its numbered criteria word
-for word — never retold — plus the paths, commands and decisions already
-established. Where a page defines the receiver, it bounds this: whatever that
-page says the receiver does not get is not handed over, whatever the saving
-would be.
+dispatch hands over a reference to the issue, never its content retold — the
+receiving page says how it turns that into what it needs. Add only what no
+page already covers: paths, commands, decisions the dispatch itself
+established. Where a page defines the receiver, it bounds this further:
+whatever that page says the receiver does not get is not handed over,
+whatever the saving would be.
 
 The run names four roles — researcher, test-author, implementer, reviewer.
 Where athena ships a subagent or a skill for one, use it through the interface

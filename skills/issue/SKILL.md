@@ -1,6 +1,6 @@
 ---
 name: issue
-description: The athena tracker. Every read of and every write to an issue goes through this skill — file an issue, record a decision, an observation, a plan, checkpoint answers, a retro or a task list, set the state, read what the record already says on a subject, or orient a session on the running issue. Hand it the content and name the operation; it knows where that content lands. Not a shelf tool. Trigger on "file an issue", "open an issue", "new issue", "put this in the backlog", "record this in the issue", "what did we already decide about this", "where did we leave off", or whenever you are about to read or write anything in the tracker.
+description: The athena tracker. Every read of and every write to an issue goes through this skill — file an issue, record a decision, an observation, a plan, checkpoint answers, a retro or a task list, set the state, read the intent of the running issue, read what the record already says on a subject, or orient a session on the running issue. Hand it the content and name the operation; it knows where that content lands. Not a shelf tool. Trigger on "file an issue", "open an issue", "new issue", "put this in the backlog", "record this in the issue", "what did we already decide about this", "where did we leave off", "what's the intent", or whenever you are about to read or write anything in the tracker.
 user-invocable: true
 ---
 
@@ -35,6 +35,7 @@ what they are.
 | **record a retro** | what got in the way, what should change |
 | **record a task list** | the steps a change is being landed in — the rulebook says when one is due |
 | **set the state** | which state the issue is now in, and the branch or the pull request if one now exists |
+| **read the intent** | nothing. Returns the running issue's problem statement and numbered acceptance criteria, word for word — nothing else in the file. For a caller that must see no more than what was asked, like the test-author |
 | **read the record on a subject** | a subject, in whatever words the caller has for it. Returns what past issues settled on it, what was filed and never built, and what was tried and abandoned — each with the issue it came from |
 | **orient a session** | nothing. Returns which issue is running and everything the previous session knew about it — or, when none is running, the unfinished issues and how they depend on each other |
 
@@ -86,6 +87,16 @@ A `status:` that says `active` is not proof: check that its `pr:` is empty
 before you take it for the running one. An issue whose pull request is merged
 is finished whatever its status line says, and the wrong path here costs the
 session its whole orientation.
+
+## Reading the intent
+
+For a caller that must see no more than what was asked — the test-author
+above all — return only the running issue's `## Intent`, verbatim: the
+problem statement and the numbered acceptance criteria. Nothing else in the
+file, whatever else that caller could technically reach another way; the
+guarantee this operation makes is what it withholds.
+
+The running issue is the same one *orienting a session* finds, above.
 
 ## Reading the record on a subject
 
