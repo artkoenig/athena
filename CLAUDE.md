@@ -112,6 +112,13 @@ narrow read of the running issue — test-author, researcher, implementer —
 finds it directly under `docs/issues/`, the way its own page says; only the
 `tracker` ever writes there.
 
+A dispatch that runs in the background reports when it is done, and so does
+every later message to it: the notice arrives on its own, once per stop. Never
+ask whether it has finished — no second dispatch, no read of what it writes, no
+shell loop. Each ask is a turn at the largest context in the run and learns
+nothing the notice does not carry. Carry on with what does not depend on it;
+act when the notice lands.
+
 ## Bookkeeping
 
 - One issue = one branch = one pull request; there are no child issues. `##
