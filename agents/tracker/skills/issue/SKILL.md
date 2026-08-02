@@ -33,6 +33,23 @@ checkpoint questions, what a retro says, and when a change gets a task list.
 | **read the record on a subject** | a subject, in whatever words the caller has for it. Returns what past issues settled on it, what was filed and never built, and what was tried and abandoned — each with the issue it came from |
 | **orient a session** | nothing. Returns which issue is running and everything the previous session knew about it — or, when none is running, the unfinished issues and how they depend on each other |
 
+## What is handed over goes in unchanged
+
+Every write operation records its content word for word. The wording is the
+caller's; the placement is the tracker's — which file, which section, and the
+mechanics this page owns: a heading, a list marker, the numbering of a
+criterion, the frontmatter. Nothing else is added and nothing is taken away.
+
+So: no summary, no tightening, no reordering, no criterion made "clearer", no
+finding restated in the tracker's own words, however much better the sentence
+would read. A later session resumes from this file believing it says what was
+actually settled; a paraphrase makes that belief false, and no reader can tell
+from the file that it happened.
+
+Content that does not fit the operation — a decision handed over without its
+source, a checkpoint answer missing — comes back as a question. Filling that
+gap is the one thing the record cannot survive.
+
 ## Filing an issue
 
 1. **Stamp the day.** `YYYY-MM-DD-slug.md` — the day it is filed, then a short
@@ -85,10 +102,12 @@ checkpoint questions, what a retro says, and when a change gets a task list.
    ## Retro
    ```
 
-3. **Fill `## Intent` and nothing else**: the problem and the wanted
-   observable behaviour, solution-free, then numbered acceptance criteria that
-   can each be shown false. Everything below Intent fills in as the run
-   happens, one record-operation at a time.
+3. **Fill `## Intent` and nothing else**, in the caller's words: the problem
+   and the wanted observable behaviour, then the acceptance criteria as they
+   were handed over, numbered. Whether a criterion is solution-free and can be
+   shown false is the caller's to answer before it reaches you — a criterion
+   that is neither still goes in as it came. Everything below Intent fills in
+   as the run happens, one record-operation at a time.
 
 ## Orienting a session
 
