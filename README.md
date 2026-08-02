@@ -7,34 +7,35 @@
 **Athena** is the Greek goddess of wisdom and craft: skill that comes from
 practice, not from instruction. That is the principle, not just the name.
 
-## How it works
+## What it's for
 
-The rulebook is one page: [`AGENTS.md`](AGENTS.md). Its core is **judgment for
-process, mechanics for facts** — everything procedural is the agent's call,
-every time; rules remain only where self-assessment fails. "The tests pass"
-comes from an exit code, never from the agent's impression.
+athena bets on the judgment of a modern Anthropic agent — it assumes at
+least Opus 5 — and builds on that trust rather than around its absence.
+Most agent workflows compensate for a model they don't quite trust with
+process: approval gates, checklists, a human re-checking work the agent
+could have checked itself. athena instead gives the agent the run and asks
+it to decide how much planning a change needs, how to slice it, which
+tools to reach for — and keeps process only for the handful of things a
+model can't reliably judge about its own work, like grading its own tests
+or reviewing a diff it just wrote.
 
-These invariants hold for every change:
+That trust is what makes unattended work possible: a run is meant to go
+from idea to pull request with no human at the keyboard, stepping in only
+where a human actually has to — intent that's genuinely unclear, anything
+irreversible, the merge itself. Everything a run decides or discovers along
+the way is written to an issue as it happens, so a session that picks the
+work back up — hours later, or a different session entirely — resumes from
+that record instead of from a conversation that's gone.
 
-1. The intent — acceptance criteria — is written down before any code.
-2. The tests for it are written first, blind, from the intent alone, and seen
-   to fail; a change with nothing to run says exactly that.
-3. A fresh context checks the diff against the written intent, with a concrete
-   reproduction per finding.
-4. The suite and static analysis prove themselves by exit code; where nothing
-   exists to run, that absence is the reported fact.
-5. Decisions, surprises and checkpoint answers go into the issue as they
-   happen — the record outlives the session.
+**It also improves itself.** After every run, the agent records what got in
+its way; a rule that keeps misfiring becomes a proposed change to the
+rulebook itself, reviewed like any other pull request. Because every wired
+project loads athena fresh at session start, an accepted fix reaches all of
+them with their next session — the workflow gets better at being followed
+without a human rewriting it by hand.
 
-The human steers where it matters and nowhere else: approving the criteria
-when the idea is genuinely unclear, deciding anything irreversible or
-outward-facing, and merging the pull request.
-
-**The workflow corrects itself through the retro.** After every PR the agent
-records what got in the way. A rule that misfired becomes a proposal: a pull
-request against this repository, decided like any other. And because every
-wired project loads athena fresh at session start, an accepted rule change
-reaches all of them with their next session.
+The rules themselves are one page, [`AGENTS.md`](AGENTS.md) — short enough
+to read end to end if you want the specifics; this page won't repeat it.
 
 ## Installing it
 
@@ -63,19 +64,18 @@ To have the retros land in *your* rulebook, fork this repository and point
 
 ## Working in parallel
 
-One run, one worktree. Two sessions running at the same time never share a
-working directory:
+Runs that overlap in time each get their own worktree — the rulebook says
+why, and this is what makes it work:
 
 ```bash
 claude --worktree feature-auth   # its own checkout under .claude/worktrees/
 git worktree list                # what is already in flight
 ```
 
-Every worktree branches from the default branch, not from unpushed work —
-`worktree.baseRef` is pinned to `"fresh"` project-wide for that. The push
+`worktree.baseRef` is pinned to `"fresh"` project-wide, so a new worktree
+branches from the default branch rather than from unpushed work. The push
 guard holds inside a worktree too, because `core.hooksPath` lives in the
-shared `.git` config; a push to `main` from a parallel run is refused just the
-same. Gitignored files a run needs are listed in
+shared `.git` config. Gitignored files a run needs are listed in
 [`.worktreeinclude`](.worktreeinclude) and copied into every new worktree.
 
 Clearing a worktree away is Claude Code's job, not athena's: leaving an
@@ -101,8 +101,6 @@ costs. Alternatively `docker compose up -d` in the same directory.
 ```bash
 bash test.sh
 ```
-
-One command, every suite, exit 0 only when all of them are green.
 
 ## Licence
 
