@@ -9,32 +9,21 @@ practice, not from instruction. That is the principle, not just the name.
 
 ## How it works
 
-The rulebook is one page: [`AGENTS.md`](AGENTS.md). Its core is **judgment for
-process, mechanics for facts** — everything procedural is the agent's call,
-every time; rules remain only where self-assessment fails. "The tests pass"
-comes from an exit code, never from the agent's impression.
+The rulebook is one page: [`AGENTS.md`](AGENTS.md) — the invariants every
+change holds to, the signals that stop a run, where the human steers, and the
+run they add up to. That page is the only place those rules live; this one
+points at it rather than repeating it, so a rule is changed in one file and
+nowhere else.
 
-These invariants hold for every change:
+Its core is **judgment for process, mechanics for facts**: everything
+procedural is the agent's call, every time, and rules remain only where
+self-assessment fails. Read it in full — it is short — to see whether the
+workflow suits you.
 
-1. The intent — acceptance criteria — is written down before any code.
-2. The tests for it are written first, blind, from the intent alone, and seen
-   to fail; a change with nothing to run says exactly that.
-3. A fresh context checks the diff against the written intent, with a concrete
-   reproduction per finding.
-4. The suite and static analysis prove themselves by exit code; where nothing
-   exists to run, that absence is the reported fact.
-5. Decisions, surprises and checkpoint answers go into the issue as they
-   happen — the record outlives the session.
-
-The human steers where it matters and nowhere else: approving the criteria
-when the idea is genuinely unclear, deciding anything irreversible or
-outward-facing, and merging the pull request.
-
-**The workflow corrects itself through the retro.** After every PR the agent
-records what got in the way. A rule that misfired becomes a proposal: a pull
-request against this repository, decided like any other. And because every
-wired project loads athena fresh at session start, an accepted rule change
-reaches all of them with their next session.
+**The workflow corrects itself.** A rule that misfires becomes a proposal: a
+pull request against this repository, decided like any other. And because
+every wired project loads athena fresh at session start, an accepted rule
+change reaches all of them with their next session.
 
 ## Installing it
 
@@ -63,19 +52,18 @@ To have the retros land in *your* rulebook, fork this repository and point
 
 ## Working in parallel
 
-One run, one worktree. Two sessions running at the same time never share a
-working directory:
+Runs that overlap in time each get their own worktree — the rulebook says
+why, and this is what makes it work:
 
 ```bash
 claude --worktree feature-auth   # its own checkout under .claude/worktrees/
 git worktree list                # what is already in flight
 ```
 
-Every worktree branches from the default branch, not from unpushed work —
-`worktree.baseRef` is pinned to `"fresh"` project-wide for that. The push
+`worktree.baseRef` is pinned to `"fresh"` project-wide, so a new worktree
+branches from the default branch rather than from unpushed work. The push
 guard holds inside a worktree too, because `core.hooksPath` lives in the
-shared `.git` config; a push to `main` from a parallel run is refused just the
-same. Gitignored files a run needs are listed in
+shared `.git` config. Gitignored files a run needs are listed in
 [`.worktreeinclude`](.worktreeinclude) and copied into every new worktree.
 
 Clearing a worktree away is Claude Code's job, not athena's: leaving an
@@ -101,8 +89,6 @@ costs. Alternatively `docker compose up -d` in the same directory.
 ```bash
 bash test.sh
 ```
-
-One command, every suite, exit 0 only when all of them are green.
 
 ## Licence
 
