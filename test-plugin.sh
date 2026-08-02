@@ -1,7 +1,9 @@
 #!/bin/bash
 # Tests for the Claude Code plugin this repository packages: the two
-# manifests, the SessionStart hook that delivers the rulebook, and the push
-# guard.
+# manifests, the SessionStart hook, and the push guard. Whether a session has
+# the rulebook at all is not this suite's — `test-launcher.sh` owns both
+# branches of that, and every hook run below is a session started without the
+# launcher, so its status always reports the rulebook missing.
 #
 # Everything runs against scratch directories. The real ~/.claude, the real
 # Claude configuration and this repository's own git config are never
@@ -29,7 +31,7 @@ plugin_copy() {
   local dest="$1"
   mkdir -p "$dest"
   cp -R "$root/.claude-plugin" "$root/hooks" "$root/.githooks" "$dest/"
-  cp "$root/CLAUDE.md" "$dest/"
+  for md in "$root"/*.md; do [ -f "$md" ] && cp "$md" "$dest/"; done
   for optional in skills agents; do
     [ -d "$root/$optional" ] && cp -R "$root/$optional" "$dest/"
   done
@@ -54,7 +56,7 @@ run_hook() {
     bash "$plugin/hooks/session-start.sh" 2>/dev/null
 }
 
-# The status line the hook appends after the rulebook.
+# The status line the hook writes into the session.
 hook_status() {
   node -e '
     const fs = require("fs");
@@ -63,6 +65,20 @@ hook_status() {
     const line = ctx.split("\n").filter(l => l.startsWith("Athena self-check:")).pop();
     process.stdout.write(line || "");
   ' "$1"
+}
+
+# The problems a status reports that are not about the rulebook. Every hook
+# run in this suite is a session started without the launcher, so the rulebook
+# is missing by construction; what these cases check is the counts, the guard,
+# and that nothing else is reported.
+foreign_problems() {
+  local rest
+  case "$1" in
+    *FAILED:*) rest="${1#*FAILED:}" ;;
+    *) return 0 ;;
+  esac
+  rest="${rest%the plugin at*}"
+  printf '%s' "$rest" | tr ';' '\n' | grep -vi 'rulebook' | grep -v '^[[:space:]]*$' || true
 }
 
 echo "=== manifests"
@@ -151,21 +167,21 @@ check $? "claude plugin validate accepts the plugin manifest and its components"
 # the loader ignores (a misspelled `repository`) or one it misses
 # (`description`), or a file that lands in a component directory without
 # being a component — an `agents/CLAUDE.md` registers as an agent with no
-# frontmatter. So the gate is the warning list, not the exit code: two
-# warnings are expected on a defect-free tree, and any third is a defect.
+# frontmatter. So the gate is the warning list, not the exit code.
 #
-# The two: the missing version, and the root CLAUDE.md — the rulebook
-# itself, deliberately not loaded by the CLI's own convention and
-# delivered to sessions of installing projects via the hook instead.
+# The expected one is the missing version. A CLAUDE.md at the plugin root
+# draws a second warning of its own, and whether the tree still has one is not
+# this case's business, so that one is allowed too — anything else is a defect.
 strict_out="$tmp/strict.txt"
 claude plugin validate "$root/.claude-plugin/plugin.json" --strict >"$strict_out" 2>&1
-warnings="$(grep -c '^  > ' "$strict_out")"
 version_warnings="$(grep -c '^  > version: No version specified' "$strict_out")"
-root_md_warnings="$(grep -c '^  > root: CLAUDE.md at the plugin root is not loaded' "$strict_out")"
-if [ "$warnings" = "2" ] && [ "$version_warnings" = "1" ] && [ "$root_md_warnings" = "1" ]; then
-  ok "--strict warns about the missing version and the root CLAUDE.md, and nothing else"
+other_warnings="$(grep '^  > ' "$strict_out" \
+  | grep -v '^  > version: No version specified' \
+  | grep -vc '^  > root: CLAUDE.md at the plugin root is not loaded' || true)"
+if [ "$version_warnings" = "1" ] && [ "$other_warnings" = "0" ]; then
+  ok "--strict warns about the missing version, and about nothing but a root CLAUDE.md besides"
 else
-  no "--strict warns about more than the missing version and the root CLAUDE.md:"
+  no "--strict warns about more than the missing version and a root CLAUDE.md:"
   grep '^  > ' "$strict_out" | sed 's/^/       /'
 fi
 
@@ -211,7 +227,7 @@ node -e '
 check $? "the installed inventory equals what the tree holds, agent-owned skills included: skills, one SessionStart hook"
 
 echo
-echo "=== the rulebook reaches the session"
+echo "=== the hook writes what a session can read"
 
 happy_plugin="$tmp/happy-plugin"
 happy_project="$tmp/happy-project"
@@ -226,16 +242,6 @@ node -e '
   if (typeof out.hookSpecificOutput.additionalContext !== "string") process.exit(1);
 ' "$tmp/happy.json"
 check $? "the hook writes one valid SessionStart hook object to stdout"
-
-# the rulebook text itself is delivered, not a pointer to it — a
-# pointer would leave the session free to skip it.
-node -e '
-  const fs = require("fs");
-  const out = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-  const rulebook = fs.readFileSync(process.argv[2], "utf8");
-  if (!out.hookSpecificOutput.additionalContext.includes(rulebook.trimEnd())) process.exit(1);
-' "$tmp/happy.json" "$root/CLAUDE.md"
-check $? "the whole text of CLAUDE.md arrives verbatim in additionalContext"
 
 # hooks.json registers exactly one SessionStart command hook, and it
 # runs the script this suite exercises, from the plugin root.
@@ -260,11 +266,15 @@ real_skills=$(( $(find "$root/skills" -mindepth 2 -maxdepth 2 -name SKILL.md 2>/
               + $(find "$root/agents" -mindepth 4 -maxdepth 4 -path '*/skills/*' -name SKILL.md 2>/dev/null | wc -l | tr -d ' ') ))
 real_agents=$(find "$root/agents" -mindepth 1 -maxdepth 1 -name '*.md' 2>/dev/null | wc -l | tr -d ' ')
 
-# the happy status names the real counts, the delivered rulebook and
-# the set guard, and reports no failure.
+# the happy status names the real counts and the set guard, and reports
+# no problem of its own.
 case "$status" in
-  "Athena self-check: ${real_skills} skills and ${real_agents} agents reachable; rulebook delivered; push guard set; no problems.")
-    ok "the status names the real counts, the rulebook and the guard, with no problems" ;;
+  "Athena self-check: ${real_skills} skills and ${real_agents} agents reachable;"*"push guard set;"*)
+    if [ -z "$(foreign_problems "$status")" ]; then
+      ok "the status names the real counts and the guard, with no problem of its own"
+    else
+      no "the status reports a problem beyond the missing rulebook: $status"
+    fi ;;
   *) no "unexpected happy status: $status" ;;
 esac
 
@@ -279,7 +289,12 @@ empty_project="$tmp/empty-project"
 project_repo "$empty_project"
 status="$(run_hook "$empty_plugin" "$empty_project" >"$tmp/empty.json" && hook_status "$tmp/empty.json")"
 case "$status" in
-  "Athena self-check: 0 skills and 0 agents reachable;"*"no problems.") ok "no skills and no agents is reported as zero, not as a failure" ;;
+  "Athena self-check: 0 skills and 0 agents reachable;"*)
+    if [ -z "$(foreign_problems "$status")" ]; then
+      ok "no skills and no agents is reported as zero, not as a failure"
+    else
+      no "an empty shelf was reported as a defect: $status"
+    fi ;;
   *) no "an empty shelf was not reported cleanly: $status" ;;
 esac
 
@@ -322,8 +337,12 @@ project_repo "$own_project"
 status="$(run_hook "$own_dir" "$own_project" >"$tmp/own-dir.json" && hook_status "$tmp/own-dir.json")"
 case "$status" in
   *"not reachable"*) no "an agent's own directory was mistaken for a lost agent: $status" ;;
-  "Athena self-check: $((before_skills + 1)) skills and $((real_agents + 1)) agents reachable; rulebook delivered; push guard set; no problems.")
-    ok "an agent's own directory carries its skill into the count and is no defect" ;;
+  "Athena self-check: $((before_skills + 1)) skills and $((real_agents + 1)) agents reachable;"*"push guard set;"*)
+    if [ -z "$(foreign_problems "$status")" ]; then
+      ok "an agent's own directory carries its skill into the count and is no defect"
+    else
+      no "an agent's own directory was reported as a defect: $status"
+    fi ;;
   *) no "unexpected status for an agent with its own directory: $status" ;;
 esac
 
@@ -338,17 +357,6 @@ case "$status" in
   *"skill without SKILL.md: orphan;"*"FAILED"*) ok "an agent's skill directory without SKILL.md is named and success withdrawn" ;;
   *"FAILED"*"skill without SKILL.md: orphan;"*) ok "an agent's skill directory without SKILL.md is named and success withdrawn" ;;
   *) no "an unreachable agent skill went unreported: $status" ;;
-esac
-
-# with the rulebook gone there is nothing to deliver, and the status
-# has to say so rather than report success.
-no_rulebook="$tmp/no-rulebook"
-plugin_copy "$no_rulebook"
-rm -f "$no_rulebook/CLAUDE.md"
-status="$(run_hook "$no_rulebook" "$empty_project" >"$tmp/no-rulebook.json" && hook_status "$tmp/no-rulebook.json")"
-case "$status" in
-  *"rulebook missing"*"FAILED"*) ok "a missing CLAUDE.md is named and success withdrawn" ;;
-  *) no "a missing rulebook went unreported: $status" ;;
 esac
 
 echo
@@ -383,7 +391,12 @@ not_a_repo="$tmp/not-a-repo"
 mkdir -p "$not_a_repo"
 status="$(run_hook "$happy_plugin" "$not_a_repo" >"$tmp/not-a-repo.json" && hook_status "$tmp/not-a-repo.json")"
 case "$status" in
-  *"push guard n/a (project is not a git repository)"*"no problems.") ok "outside a git repository the guard is n/a, not a failure" ;;
+  *"push guard n/a (project is not a git repository)"*)
+    if [ -z "$(foreign_problems "$status")" ]; then
+      ok "outside a git repository the guard is n/a, not a failure"
+    else
+      no "a non-repository project was reported as a guard defect: $status"
+    fi ;;
   *) no "a non-repository project was misreported: $status" ;;
 esac
 

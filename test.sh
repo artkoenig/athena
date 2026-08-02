@@ -23,6 +23,9 @@ run "the repository itself" \
 run "the plugin: manifests, session-start hook, push guard" \
   bash "$root/test-plugin.sh"
 
+run "the rulebook as the system prompt: launcher, hook, documents" \
+  bash "$root/test-launcher.sh"
+
 run "parallel runs: worktrees" \
   bash "$root/test-worktree.sh"
 

@@ -99,8 +99,10 @@ git -C "$worktree" push -q origin HEAD:worktree-parallel-run >/dev/null 2>&1
 check $? "a push to the run's own branch from inside a worktree succeeds"
 
 # A session started with --worktree has the worktree as its project
-# directory, not the main checkout. The hook has to work there too: same
-# rulebook, and a guard state that reports what is actually in effect.
+# directory, not the main checkout. The hook has to work there too: an
+# environment block that names the worktree and the branch it is on — not the
+# checkout it was made from — and a guard state that reports what is actually
+# in effect.
 out="$tmp/worktree-hook.json"
 CLAUDE_PLUGIN_ROOT="$root" CLAUDE_PROJECT_DIR="$worktree" \
   bash "$root/hooks/session-start.sh" >"$out" 2>/dev/null
@@ -110,15 +112,24 @@ status="$(node -e '
   process.stdout.write(ctx.split("\n").filter(l => l.startsWith("Athena self-check:")).pop() || "");
 ' "$out")"
 
-node -e '
+context="$(node -e '
   const fs = require("fs");
-  const ctx = JSON.parse(fs.readFileSync(process.argv[1], "utf8")).hookSpecificOutput.additionalContext;
-  if (!ctx.includes(fs.readFileSync(process.argv[2], "utf8").trimEnd())) process.exit(1);
-' "$out" "$root/CLAUDE.md"
-check $? "the rulebook reaches a session whose project directory is a worktree"
+  process.stdout.write(JSON.parse(fs.readFileSync(process.argv[1], "utf8")).hookSpecificOutput.additionalContext);
+' "$out" 2>/dev/null)"
+problems=""
+case "$context" in *"$worktree"*) ;; *) problems="${problems} the worktree is not named as the working directory;";; esac
+case "$context" in *worktree-parallel-run*) ;; *) problems="${problems} the branch the worktree is on is not named;";; esac
+if [ -z "$problems" ]; then
+  ok "a session whose project directory is a worktree is told the worktree and its branch"
+else
+  no "the environment block does not describe the worktree:$problems"
+fi
 
+# The rulebook itself is not this suite's — `test-launcher.sh` owns both
+# branches of that, and this hook run is a session started without the
+# launcher, so the rulebook is reported missing by construction.
 case "$status" in
-  *"push guard set"*"no problems.") ok "the self-check reports the guard as set from inside a worktree" ;;
+  *"push guard set"*) ok "the self-check reports the guard as set from inside a worktree" ;;
   *) no "unexpected status from inside a worktree: $status" ;;
 esac
 

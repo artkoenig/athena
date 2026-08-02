@@ -84,6 +84,14 @@ Acceptance criteria:
 - **The hook keeps no fallback delivery of the rulebook text.** Default,
   unanswered. Keeping one would put the text in context twice again, which is
   the reason the change exists.
+- **A launcher reached through a symlink must still find its own rulebook.**
+  Default, unanswered; raised by the test-author as an open reading of "always
+  come from the same copy". Kept, because putting the launcher on `PATH` by
+  symlink is the install the README will describe.
+- **A user who passes their own `--system-prompt` to the launcher gets an
+  error, not a silent winner.** Default, unanswered. The launcher puts its flag
+  first and appends the user's arguments, and Claude Code refuses both flags at
+  once — which is the honest outcome, so nothing is done to hide it.
 - **The environment block moves into the hook, not the rulebook.** Default,
   unanswered. A static file cannot know the working directory. The date is
   deliberately not in it: the rulebook already says to take it from `date +%F`.
@@ -130,6 +138,26 @@ Acceptance criteria:
   `~/.claude/plugins/cache/athena/athena/<sha>/`. That cache path is where the
   launcher will run from, which is what makes resolving its own location the
   right way to find the rulebook beside it.
+
+- The test-author wrote the failing tests from the intent alone. New suite
+  `test-launcher.sh`, listed in `test.sh`; one case replaced and one relaxed in
+  `test-worktree.sh`; in `test-plugin.sh` the cases the new intent contradicts
+  were removed or relaxed. The suite finds the launcher and the rulebook by
+  what they are, never by a name — the rulebook is the page carrying
+  `## The run`, `## The shelf` and `## Bookkeeping`; the launcher is the only
+  shipped script outside the suites, `hooks/`, `.githooks/` and `tools/` that
+  starts `claude`. So no filename is prescribed by a test. A stub `claude` on
+  PATH records the invocation; no real session is started.
+- Baseline measured before any implementation: `bash test-launcher.sh`, 15
+  cases, 15 failing. `bash test-worktree.sh`, 9 cases, 1 failing.
+  `bash test-plugin.sh`, 24 cases, exit 0. `bash test-repo.sh`, 5 cases, exit
+  0. `npm --prefix tools/observability test`, 113 cases, exit 0. `bash
+  test.sh`: FAIL, 2 of 5 suites.
+- Two criteria the tests deliberately do not carry, named by the test-author
+  and left to the reviewer: that no section of the default system prompt
+  survives (criterion 1's second half — only a live session shows it), and
+  three of the five wording items in criterion 5, where a test could only guess
+  at phrasing.
 
 ## Checkpoints
 
