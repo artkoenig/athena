@@ -12,10 +12,6 @@ need — for the work and for these texts alike.
 
 ## The run
 
-Track it as tasks: `TaskCreate` one per stage below before starting it, set it
-to completed with `TaskUpdate` the moment its output exists. A session picking
-the work back up reads `TaskList` for where the run stands, instead of asking.
-
 1. **Issue.** Acceptance criteria, written down before any production code —
    grill first only if the idea is genuinely unclear. Opens in front of the
    human: title and numbered criteria, as a table. Fixed from here: no finding

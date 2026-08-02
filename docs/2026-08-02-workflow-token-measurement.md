@@ -85,8 +85,10 @@ including the ones that never review anything.
 
 ## Findings
 
-Each names what was measured, then what follows from it. None of them is fixed
-here; they are the retro this run owes.
+Each names what was measured, then what follows from it. None was fixed in the
+change that measured them; they are the retro this run owes. Where a later
+change on this branch settled one, a closing line says how — the measurement
+above is left as it was taken.
 
 ### 1. `read the intent` withholds nothing
 
@@ -116,6 +118,10 @@ Either the operation ships something that can actually cut the file
 (`assets/` is where the skills page already puts executables), or the page
 stops promising a guarantee and says it is a convention.
 
+*Since measured:* the mechanics moved into the `tracker` subagent, which reads
+the file in its own context and returns the Intent alone. The guarantee is now
+one the design can keep, because a separate context is what withholds.
+
 ### 2. Three round trips to reach the tracker, per dispatch
 
 The same `Skill → ls → Read` triple ran for the implementer. The rulebook
@@ -131,6 +137,10 @@ to perform one operation.
 The interface argument holds for *writing* — the format should stay the skill's.
 It does not hold for *finding the file*. A dispatch that names the path costs
 one `Read`.
+
+*Since measured:* the triple is gone from both ends. A subagent that needs its
+own narrow read finds the file itself and has no `Skill` tool; the tracker gets
+its page preloaded, so no run-time call loads it at all.
 
 ### 3. The reviewer's prescribed lookup cannot work where the run puts it
 
@@ -171,6 +181,9 @@ issue skill's *orient a session* is built on exactly that.
 So the run keeps two records of one thing, and pays 13 round trips at the
 orchestrator's context for the one that evaporates.
 
+*Since measured:* the rulebook no longer asks for the task list. The issue
+file's `## Log` is the only progress record, and *orient a session* reads it.
+
 ### 5. Both tables the rulebook makes mandatory were skipped
 
 *"A run opens with the issue in front of the human: title and its numbered
@@ -197,6 +210,10 @@ for a real thing, not waste. But it is the single biggest line item in the
 run's biggest stage, and it is the one place where batching — one edit per
 stage instead of per thought — would change the number without changing what
 the record says.
+
+*Since measured:* the writing moved out of the orchestrator entirely. The
+`tracker` holds it in its own context and runs on the smallest model athena
+uses, so "as they happen" stays and the price of each one drops twice over.
 
 ### 7. The rulebook is in context twice in athena's own repository
 
