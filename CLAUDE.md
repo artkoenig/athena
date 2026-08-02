@@ -21,21 +21,17 @@ the work back up reads `TaskList` for where the run stands, instead of asking.
    human: title and numbered criteria, as a table. Fixed from here: no finding
    and no feedback may add, edit or reinterpret one.
 2. **Checkpoint 1.** The three questions (below), recorded.
-3. **Test-author.** A context that has not seen the implementation writes the
-   tests from the intent alone and sees them fail — when there is something to
-   run; when there is nothing, saying so is how this stage holds.
-4. **Implementer.** Plans, implements, makes the tests pass, may not edit them.
-5. **Reviewer.** Sees only the diff and the written intent, checks one against
-   the other, a concrete reproduction per finding. For a change that produces
-   no facts by exit code — rulebook, agent page, skill, documentation — this is
-   the only check it gets. Triage every finding by the criterion it violates:
-   fix now, dismiss with a recorded reason, or file for later. A finding
-   without a reproduction is dismissed; one that violates no criterion is
-   filed as its own issue, never fixed here — except where this diff itself
-   made a documentation statement false. After every round, show the human a
-   table: one row per criterion plus one for findings that violate none, one
-   column per round, each cell a count. One waiver: a fix that only touches
-   the tracker record may skip the round.
+3. **Test-author.** Writes the failing tests from the intent alone — skip only
+   when the change has nothing to run.
+4. **Implementer.** Builds it, makes those tests pass, may not edit them.
+5. **Reviewer.** Runs on the diff and the written intent alone. Triage every
+   finding by the criterion it violates: fix now, dismiss with a recorded
+   reason, or file for later. A finding without a reproduction is dismissed;
+   one that violates no criterion is filed as its own issue, never fixed here
+   — except where this diff itself made a documentation statement false.
+   After every round, show the human a table: one row per criterion plus one
+   for findings that violate none, one column per round, each cell a count.
+   One waiver: a fix that only touches the tracker record may skip the round.
 6. **Checkpoint 2.** The three questions again.
 7. **Commit, push, PR.** The human merges.
 8. **Retro.** What got in the way, what should change. A rule here that
@@ -92,7 +88,7 @@ issue is allowed only when the sentence carries its content.
 
 Reach for one when the change warrants it, never because a condition fired:
 
-- grilling the idea, when it is too vague to write criteria
+- grilling the idea
 - a plan, when the change spans modules
 - a clean-room second opinion, when you are stuck
 
@@ -120,8 +116,7 @@ self-check at session start — read it there, do not assume it.
   branched from the current default branch like any other run. Before starting
   one, `git worktree list` says what is already in flight; a run whose worktree
   is gone did not finish, it was thrown away.
-- The tracker is the issue the run belongs to. A subagent that has to write
-  there gets the means to.
+- The tracker is the issue the run belongs to.
 - Documentation mirrors the current state. A change that falsifies a statement
   fixes it in the same change, bounded to what it falsified. When a document and
   a rule disagree, the document is out of date.
