@@ -20,7 +20,7 @@ change without any caller changing.
 Subagents follow the same rule: a subagent that needs the tracker gets the
 `Skill` tool and orients here, instead of being handed a path.
 
-The rulebook (`AGENTS.md`) owns the run — what happens between the states, not
+The rulebook (`CLAUDE.md`) owns the run — what happens between the states, not
 what they are.
 
 ## The operations

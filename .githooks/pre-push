@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # pre-push — refuses any push whose target is the default branch. The default
-# branch advances only through a merged pull request (AGENTS.md, Bookkeeping).
+# branch advances only through a merged pull request (CLAUDE.md, Bookkeeping).
 # Self-contained on purpose: any repo can point core.hooksPath here.
 # Sanctioned override: git push --no-verify.
 set -euo pipefail
