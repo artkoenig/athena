@@ -12,11 +12,13 @@ self-check. Path-scoped like this, it loads when a session reads a file under
 `agents/`, which is what a per-directory `CLAUDE.md` would have done.
 
 One agent is one flat `<name>.md` in that directory, and every one of them is
-listed in `plugin.json`'s `agents` field. That list is not decoration: agent
-discovery scans `agents/` *recursively*, so without it every `.md` anywhere
-below — a skill an agent preloads, above all — is loaded as an agent of its
-own, named after its path. Declaring the files replaces that scan. Add an
-agent, add its line; the plugin suite fails when the two disagree.
+listed in `plugin.json`'s `agents` field. That list is not decoration: for a
+plugin, agent discovery scans `agents/` *recursively*, and a subdirectory
+becomes part of the name — `agents/review/security.md` registers as
+`athena:review:security`. Without the list, every `.md` anywhere below loads
+as an agent of its own — a skill an agent preloads, above all. Declaring the
+files replaces that scan. Add an agent, add its line; the plugin suite fails
+when the two disagree.
 
 An agent may own a directory beside its page, `<name>/` next to `<name>.md`,
 for what belongs to it alone — the skills it preloads, under
@@ -29,7 +31,9 @@ self-check reports as a defect.
 - **Frontmatter**: `name`, `description`, `tools`, `color`. The `description`
   is what a caller reads while deciding — say what the agent does, when to
   dispatch it, and what not to use it for. It is read far more often than the
-  body.
+  body. `model` is left out, so the agent runs on the session's model; name a
+  tier only for an agent whose work is mechanical enough that a smaller one
+  cannot get it wrong, and say on its page why.
 - **The body** is the agent's whole brief: how it works, its boundaries, and
   the shape of its report. It has no other context — a caller's reasoning
   never reaches it.
