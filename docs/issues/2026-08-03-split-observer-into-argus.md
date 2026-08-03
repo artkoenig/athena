@@ -224,6 +224,14 @@ Five commits, each green under `test.sh`.
 
 ## Decisions
 
+- Parked: re-applying the Render blueprint would move the deployment's URL,
+  because step 2 renamed the blueprint's service to `argus`. That is outward-facing,
+  so it is the human's call. Nothing in this change re-applies the blueprint; the
+  rename stays in the file, unapplied. Source: the human.
+- The port probe keeps asking for twelve seconds before it gives up on a busy
+  collector. It stays at twelve. Reason: with the fix below, giving up no longer
+  produces a false claim, so the window stops being load-bearing. Revisit only if the
+  human says otherwise. Source: default, unanswered.
 - Two projects under `tools/`: `argus` for the collector, `argus-ui` for the
   interface. Source: the human.
 - Other projects reach the collector through a `PATH` command plus a user-invocable
@@ -654,12 +662,39 @@ Facts established by measurement, which the criteria rest on:
   restores what they already say and neither needed an edit.
 - **Raised by the implementer, handed to review round 4 rather than fixed unasked.**
   The message cannot tell "this collector keeps nothing on disk" from "I could not
-  find out what it keeps", and it asserts the first. With the patience now uniform,
-  the only way to reach it is the sliver case — health answering very late, leaving
-  too little of the window for config — but the falsehood is independent of any
-  window length, and a message that distinguished the two would remove it without
-  changing a number. It is the same principle already applied to the window-expired
-  message, which is why it is worth a verdict rather than a shrug.
+  find out what it keeps", and it asserts the first. The message is reachable
+  deterministically, with no load and no timing involved, whenever `/api/config`
+  yields no usable body — including a plain 401, because a second `start --background`
+  does not carry the first collector's token while `/api/health` is ungated by design.
+  Three distinct states currently collapse into one null at
+  `tools/argus/bin/argus.mjs:216`: the collector really persists nothing, the
+  collector refused the question, the collector never answered. A message that
+  distinguished these would remove the falsehood without changing a number. It is the
+  same principle already applied to the window-expired message, which is why it is
+  worth a verdict rather than a shrug.
+
+- **Review round 4**, same reviewer context, diff `99ce318..d08e0a7`. `bash test.sh`
+  five suites — repository 6, plugin 39, worktrees 9, argus 115, argus-ui 14 — exit
+  0, 54 s. Still no static analysis.
+
+  | criterion | R1 | R2 | R3 | R4 |
+  | --- | ---: | ---: | ---: | ---: |
+  | 6 — a second start does not create a second collector | 1 | 1 | 2 | 2 |
+  | 14 — the documentation mirrors the result | 1 | 0 | 0 | 0 |
+  | violates none | 5 | 1 | 0 | 0 |
+  | every other criterion | 0 | 0 | 0 | 0 |
+
+- **Stop signal: Hard number.** Finding counts 7 → 2 → 2 → 2. The count has not
+  decreased across three consecutive rounds, so the run stopped and put the state in
+  front of the human. The human did not answer the two checkpoint questions; the run
+  continues under the rulebook's away clause.
+
+- **State.** Working tree clean, branch in sync with origin at `d08e0a7`. `bash
+  test.sh` at that commit: five suites — repository 6 cases, plugin 39, worktrees 9,
+  argus 115, argus-ui 14 — exit 0, 54 s.
+
+- **Next step.** The criterion-6 defect goes test-author → implementer → review
+  round 5 → checkpoint 2 → commit, push, PR → retro.
 
 ## Checkpoints
 
