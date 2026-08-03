@@ -1,6 +1,6 @@
 ---
-status: backlog
-branch:
+status: active
+branch: claude/offenes-issue-umsetzen-lpeuk3
 pr:
 ---
 
@@ -96,26 +96,125 @@ Together ~90 of 327 turns, about a quarter of the run's cost, without dropping
 a single workflow stage. The run does not reach control-run cost, and should
 not: the control run fixed only half the cause.
 
+## Map
+
+Taken at `4bed60a`, the tip of `main` at the start of this run.
+
+- `CLAUDE.md` — the rulebook, injected verbatim into every session of every
+  wired project by the SessionStart hook. Criteria 2, 3, 4, 5 and 7 land here.
+- `agents/reviewer.md` — the reviewer's whole brief: `## What you check`
+  (criterion 1), `## The reproduction rule` (criterion 2), and the read-only
+  claim that `Bash` walks around (criterion 6).
+- `agents/researcher.md` — `## Your report` is where the module map is
+  produced (criterion 3).
+- `agents/test-author.md` — `## How you work` step 1 is where the test
+  conventions are looked for today (criterion 4).
+- `agents/implementer.md` — `## How you work` step 1, the other consumer of
+  the map.
+- `agents/tracker/skills/issue/SKILL.md` — owns the issue file's operations,
+  template and section list; the map needs a section and an operation there.
+- `.claude/rules/agents.md` — path-scoped rules for `agents/`: an agent's page
+  is the interface, so what a dispatch hands over has to be declared on it.
+- `test.sh` → `test-repo.sh`, `test-plugin.sh`, `test-worktree.sh`,
+  `npm --prefix tools/observability test` — the whole suite, one command.
+
 ## Plan
 
 ## Tasks
 
 ## Decisions
 
+- The reviewer keeps `Bash` and the sandbox is written as a boundary on its
+  page, not taken away as a tool. Source: default, unanswered — the suite and
+  the static analysis are exit-code facts and need a shell, and criterion 1
+  makes that one call per round.
+- The module map lands in a new `## Map` section of the issue rather than in
+  `## Plan`. Source: default, unanswered — `## Plan` is what the change will
+  do, the map is what the code is today, and the two go stale at different
+  moments.
+- Criterion 4's consuming-project half is not built here. Source: the
+  criterion itself — "Lands in the consuming project, not in this
+  repository." What lands here is the rule that the workflow produces and
+  consumes those conventions.
+- The tracker subagent did not write this record; the session wrote it
+  directly. Source: default, unanswered — this environment registers no
+  `tracker` agent type and its harness forbids dispatching subagents unasked,
+  so the rulebook's bookkeeping rule could not be followed.
+
 ## Log
+
+- Run started from the human's instruction to implement an open issue
+  directly, without tests. This change is prose only — agent pages, the
+  rulebook and one skill page — so nothing a test could run; step 3 of the run
+  is skipped for the reason the rulebook already names.
+- Criterion 1: `agents/reviewer.md`, check 1 rewritten — both facts come from
+  a single `Bash` call per round, runners chained so each keeps its own exit
+  code, and a re-run to confirm what a call already said is named as waste.
+- Criterion 2: `agents/reviewer.md` gains "a reproduction is a spec, not a
+  file you wrote"; `agents/test-author.md` gains the dispatch that hands it a
+  reviewer's spec instead of the whole intent; `CLAUDE.md` step 5 says the
+  same in one clause.
+- Criterion 3: `agents/researcher.md` — the briefing opens with the module map
+  and the commit from `git rev-parse --short HEAD`.
+  `agents/tracker/skills/issue/SKILL.md` — new *record a module map*
+  operation, `## Map` in the template and in the shape table.
+  `CLAUDE.md` — the map is established once and every later dispatch carries
+  it. `agents/test-author.md`, `agents/implementer.md`, `agents/reviewer.md` —
+  each declares that its prompt may quote the map and that it is a given.
+- Criterion 4: `agents/test-author.md` gets a new step 2 — read the
+  conventions from the `CLAUDE.md` next to the tests, and when there is none,
+  work them out once and close the report with them. `CLAUDE.md`'s
+  conventions bullet says test conventions are conventions.
+- Criterion 5: `CLAUDE.md` — a new bullet, the orchestrator dispatches and
+  does not read the project; the background-dispatch bullet now ends with
+  waiting when nothing independent is pending.
+- Criterion 6: `agents/reviewer.md` — new section "The tree you review is not
+  yours to touch": no `git stash`, no `sed -i`, no `cat >`, no `rm`, and
+  `git worktree add` on a temporary path when another state must actually be
+  run.
+- Criterion 7: `CLAUDE.md` — continuing an agent is `SendMessage` by name, and
+  a schema lookup rides in the same block as the dispatch it will continue.
+- `bash test.sh`, all four suites (the repository itself, the plugin, the
+  worktrees, `tools/observability` at 113 cases), exit 0. No static analysis
+  exists in this repository; `test.sh` is the whole of what a tool checks
+  here.
+- Out of scope, not fixed: `CLAUDE.md`'s bookkeeping bullet spells
+  "heckpoints" for "checkpoints". Violates no criterion of this issue.
 
 ## Checkpoints
 
 ### Before implementation
 
-- Does this match what was asked?
-- What surprised me?
-- What am I assuming without having verified it?
+- Does this match what was asked? Yes — seven criteria, all of them about
+  where the workflow's turns go, all landing in the rulebook and the agent
+  pages. Nothing here changes what a stage does, only how many round trips it
+  takes to do it.
+- What surprised me? Criterion 4 is the only one whose subject sits outside
+  this repository: the conventions file lands in whatever project is being
+  worked on, so what this change can carry is the rule alone.
+- What am I assuming without having verified it? That every one of these
+  criteria is met by prose — no code path enforces a turn count, and the
+  expected savings in the issue are estimates that this change cannot
+  measure. Verifying them takes another measured run like the one that filed
+  the issue.
 
 ### Before the PR
 
-- Does this match what was asked?
-- What surprised me?
-- What am I assuming without having verified it?
+- Does this match what was asked? All seven criteria are met, each in the file
+  the criterion names, and the diff carries nothing else — no stage dropped,
+  no criterion reinterpreted. The human asked for the issue without tests, and
+  a prose-only change has nothing a test could run anyway.
+- What surprised me? Criterion 6's mechanism was already practised without
+  being written down: `docs/2026-08-02-workflow-token-measurement.md` records
+  a reviewer that re-established the log's numbers "in a throwaway worktree it
+  created and removed". The rule now says what the good run did by itself and
+  the measured one did not.
+- What am I assuming without having verified it? That a rule stated on a page
+  changes what a dispatch does — the whole change is prose, so `bash test.sh`
+  proves only that nothing else in the repository broke, never that a run is a
+  quarter cheaper. And that no review round ran on this diff: this environment
+  registers none of athena's own subagents, so the reading here is the
+  implementer's own, which is exactly the check the rulebook says an
+  implementer cannot do for itself.
 
 ## Retro

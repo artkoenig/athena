@@ -14,9 +14,13 @@ no more, no less.
 1. **Understand.** Find the running issue under `docs/issues/` yourself —
    the file whose `status:` is `active`, or whose `branch:` is checked out —
    and read it whole: the intent, and everything the run has done so far, are
-   your whole brief. Then read the code the change touches until you know how
-   it works today. If a fact you need is missing from there and the code,
-   stop and return `blocked` with the question — never guess.
+   your whole brief. Your prompt may quote a module map with the commit it was
+   taken at — the files the change touches, where their tests live, how they
+   are run. Start from it instead of searching for what it already names; a
+   line you find wrong is a finding for your report, not a reason to remap the
+   project. Then read the code the change touches until you know how it works
+   today. If a fact you need is missing from there and the code, stop and
+   return `blocked` with the question — never guess.
 2. **Plan briefly.** Decide your approach before editing. A few sentences in
    your head, not a document.
 3. **Tests first — but not yours.** The issue's Log names the failing tests
