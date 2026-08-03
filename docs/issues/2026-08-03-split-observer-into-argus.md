@@ -637,6 +637,30 @@ Facts established by measurement, which the criteria rest on:
   the stranger reading. If the busy-collector case is the common one, the order
   works against it. It violates no criterion and has no reproduction of harm.
 
+- Round 3's first finding was fixed at the root, as `0018243` (the case) and
+  `849d256` (the change). The patience moved off the health question and onto the
+  probe: `askOnce(url, budget)` puts one question, `askPatiently(url, deadline)`
+  repeats it with the doubling budget until answered or the deadline passes, and
+  `inspectPort` opens **one** deadline the moment the connect probe says the port is
+  held, running both questions against it. A third step added later calls the same
+  function and inherits the same window. The constants were renamed `HEALTH_*` →
+  `PROBE_*` because they are no longer the health question's. `bash test.sh` five
+  suites — repository 6, plugin 39, worktrees 9, argus 115, argus-ui 14 — exit 0;
+  `node --test test/background.test.mjs` three times, 11 cases exit 0 each, 34.9 /
+  34.7 / 34.9 s, the three timing-shaped cases steady to the hundredth: 3.91, 6.30,
+  12.39 s. The mute path did not grow — it never reaches the second question.
+- Verified rather than assumed: `tools/argus/README.md` and `skills/argus/SKILL.md`
+  both promise the directory is named and state no timing anywhere, so the fix
+  restores what they already say and neither needed an edit.
+- **Raised by the implementer, handed to review round 4 rather than fixed unasked.**
+  The message cannot tell "this collector keeps nothing on disk" from "I could not
+  find out what it keeps", and it asserts the first. With the patience now uniform,
+  the only way to reach it is the sliver case — health answering very late, leaving
+  too little of the window for config — but the falsehood is independent of any
+  window length, and a message that distinguished the two would remove it without
+  changing a number. It is the same principle already applied to the window-expired
+  message, which is why it is worth a verdict rather than a shrug.
+
 ## Checkpoints
 
 ### Before implementation
