@@ -17,56 +17,75 @@ though the plugin cache already carries the files.
 Wanted: measure token usage in *other* projects. That needs a command that exists in
 any session, a start that returns to the caller instead of holding a terminal, and
 measurements that survive on disk so two runs can be compared. The tool is taken
-apart into two projects side by side under `tools/`: `argus`, the collector, which
-receives OTLP, aggregates, persists and serves a JSON API; and `argus-ui`, which
-serves the page and reaches a running collector through it.
+apart into two projects side by side under `tools/`:
+
+- **`tools/argus`** — the collector. Receives OTLP, aggregates, persists, serves a
+  JSON API. No web page. This is what other projects use, and the only half that is
+  deployed or distributed.
+- **`tools/argus-ui`** — the interface. Serves the page and reaches a running
+  collector over HTTP. Local only: not shipped to other projects, not deployed, and
+  destined to leave athena later as a project of its own, so it must never grow a
+  dependency on anything inside this repository.
 
 Acceptance criteria:
 
 1. **Two projects.** `tools/argus` and `tools/argus-ui` each have their own
    `package.json`, `README.md`, `CLAUDE.md` and `test/`, and each suite runs on its
    own: `npm --prefix tools/argus test` and `npm --prefix tools/argus-ui test` both
-   exit 0. Neither imports a file from the other.
-2. **Reachable from any project.** With the athena plugin enabled, `argus --help`
-   and `argus-ui --help` both run from a session whose working directory is not an
-   athena checkout, exit 0.
-3. **Started in the background on demand.** `argus start --background` returns to
+   exit 0. Neither imports a file from the other; `argus-ui` knows the collector
+   only through its HTTP API, so it can be lifted out of this repository unchanged.
+2. **The collector is reachable from any project.** With the athena plugin enabled,
+   `argus --help` runs from a session whose working directory is not an athena
+   checkout, exit 0, and a user-invocable `argus` skill carries the procedure —
+   including that Claude Code reads its telemetry configuration at process start, so
+   a session started without the environment block cannot be measured after the
+   fact.
+3. **The interface is not distributed.** `argus-ui` has no entry on the `PATH`, no
+   skill and no mention in the plugin manifest; it is started from an athena
+   checkout. Nothing outside `tools/argus-ui` references it except the root README.
+4. **Started in the background on demand.** `argus start --background` returns to
    its caller with exit 0 while the collector keeps listening, and prints the
    endpoint, the token if there is one, the absolute measurement directory and the
    process id.
-4. **It ends with the session.** When the Claude Code process the background start
+5. **It ends with the session.** When the Claude Code process the background start
    was launched from disappears, the collector shuts itself down within seconds. No
    pidfile, no `stop` command, no registry.
-5. **A second start does not create a second collector.** When the port already
+6. **A second start does not create a second collector.** When the port already
    holds a collector, `start --background` exits 0 and names the directory that
    collector is writing to. When the port holds something else, it exits 1 and says
    so.
-6. **The collector serves no interface.** `GET /` on the collector port answers a
+7. **The collector serves no interface.** `GET /` on the collector port answers a
    JSON 404 naming `argus-ui`. No file from `tools/argus-ui` is reachable through
    the collector's port.
-7. **The interface is its own process.** `argus-ui` serves the page on its own port
+8. **The interface is its own process.** `argus-ui` serves the page on its own port
    and shows a running collector's data including the live stream. It supplies the
    collector's token itself, so on loopback the browser never handles one.
-8. **Persistence is on by default, one directory per measurement.** A `start`
+9. **Persistence is on by default, one directory per measurement.** A `start`
    without a persist flag creates `<cwd>/.athena-telemetry/<YYYY-MM-DDTHH-MM-SS>/`.
    Two starts in the same second get two distinct directories.
-9. **The measured project stays clean.** Creating the `.athena-telemetry` root also
-   writes a `.gitignore` inside it that hides it. No file outside that directory is
-   created or modified in the measured project.
-10. **An old measurement reopens.** `argus start --persist <existing dir>` replays
-    it and the interface shows its sessions, however old they are.
-11. **No session naming, no hook.** The naming hook, its route, the hook block in
+10. **The measured project stays clean.** Creating the `.athena-telemetry` root also
+    writes a `.gitignore` inside it that hides it. No file outside that directory is
+    created or modified in the measured project.
+11. **Reopening is its own option.** `argus start --open <dir>` loads an existing
+    measurement and the interface shows its sessions however old they are; it writes
+    nothing into that directory. `--persist <dir>` only ever writes and never
+    replays. Passing both is refused.
+12. **No session naming, no hook.** The naming hook, its route, the hook block in
     the setup dialog and the name records in persistence are gone; `argus env
     --format settings` emits only the environment block. Naming through the OTel
     resource attribute still works.
-12. **Remote operation stays, headless.** `Dockerfile`, `compose.yaml`,
-    `render.yaml` and the Cloudflare tunnel still run the collector; the interface
-    is pointed at such a collector with `argus-ui --collector <url>`.
-13. **The documentation mirrors the result.** Every statement in the two project
+13. **Remote operation deploys the collector alone.** `Dockerfile`, `compose.yaml`,
+    `render.yaml` and the Cloudflare tunnel run `argus` and nothing else; the
+    interface is run locally and pointed at it with `argus-ui --collector <url>`.
+14. **The documentation mirrors the result.** Every statement in the two project
     READMEs, the two project `CLAUDE.md`s and the root `README.md` that this change
-    makes false is corrected, bounded to what it falsified. No path
-    `tools/observability` survives anywhere in the repository.
-14. **The suite is green.** `bash test.sh` exits 0 and runs five suites, the two new
+    makes false is corrected, bounded to what it falsified. Nothing in the
+    repository still *instructs* a reader to use `tools/observability` — the
+    reproduce command in `docs/2026-08-02-workflow-token-measurement.md` included.
+    Records of what already happened keep the path they were written with: a closed
+    tracker entry and this issue's own map are accounts of the past, not claims
+    about the present.
+15. **The suite is green.** `bash test.sh` exits 0 and runs five suites, the two new
     projects among them.
 
 ## Map
@@ -155,29 +174,36 @@ Five commits, each green under `test.sh`.
    `/api/*` and `/v1/*` over `node:http`, adding the collector's `Authorization`
    header server-side, stripping the browser cookie upstream, and mapping an
    upstream 401 to a 502 that names the cause; `public/`; `test/config.test.mjs`
-   and `test/server.test.mjs` against a fake collector, both on port 0; `CLAUDE.md`
-   and `README.md`. `test.sh` gains the fifth suite.
+   and `test/server.test.mjs` against a fake collector, both on port 0; `README.md`;
+   and a `CLAUDE.md` whose load-bearing rule is that this project never imports from
+   `tools/argus` and never reads its files — it knows the collector only through the
+   HTTP API, so it can be moved out of athena unchanged. `test.sh` gains the fifth
+   suite.
 
    Why a proxy and not CORS on the collector: `EventSource` cannot set an
    `Authorization` header, so a cross-origin interface would have to put the token
    in the query string of every request — the secret in the address bar, which is
    exactly what the current cookie redirect exists to avoid.
-4. **Persist by default.** `runDirName(date)` in `config.mjs` →
+4. **Persist by default, open explicitly.** `runDirName(date)` in `config.mjs` →
    `2026-08-03T14-22-05` from local time, suffixed `-2`, `-3` when the directory
    exists. Default on, under `<cwd>/.athena-telemetry/<name>/`. `--persist <dir>`
-   means exactly that directory, no nesting — which keeps `Dockerfile`'s
+   means exactly that directory, no nesting, write-only — which keeps `Dockerfile`'s
    `ATHENA_OBS_PERSIST=/data` behaving as today. `--no-persist` turns it off.
-   `--retention off` → `Infinity`, defaulted on for an explicitly named existing
-   directory, without which criterion 10 fails silently. `load()` writes
+   `--open <dir>` is the read direction: it replays that directory, turns retention
+   off so nothing is evicted by age, and opens nothing for writing. Without the
+   retention escape criterion 11 fails silently. `--persist` and `--open` together
+   are refused with a message saying which does what. `load()` writes
    `.athena-telemetry/.gitignore` containing `*` when it creates the root — a
    self-ignoring directory, no `git` subprocess, nothing of the measured project
    touched.
-5. **Reachable and backgroundable.** `bin/argus` and `bin/argus-ui` at the
-   repository root: POSIX `sh`, executable bit committed, self-locating from `$0`.
-   No `bin` key in `plugin.json` — the validator warns on it and `test-plugin.sh`
-   rejects unknown fields; the directory alone is what the PATH mechanism uses.
-   `skills/argus/SKILL.md`, user-invocable, opening with the trap rather than the
-   command. New `argus/src/background.mjs` with `spawnBackground({argv,
+5. **Reachable and backgroundable.** `bin/argus` at the repository root: POSIX `sh`,
+   executable bit committed, self-locating from `$0`. No shim for `argus-ui` —
+   criterion 3. No `bin` key in `plugin.json` — the validator warns on it and
+   `test-plugin.sh` rejects unknown fields; the directory alone is what the PATH
+   mechanism uses. `skills/argus/SKILL.md`, user-invocable, opening with the trap
+   rather than the command; it names `argus-ui` in one sentence as the local way to
+   look at the data and does not offer to start it. New
+   `argus/src/background.mjs` with `spawnBackground({argv,
    readyTimeoutMs})` and `exitWhenGone(pid, onGone)`: `start --background` spawns
    the same script with `--ready-fd 3 --exit-with <pid>`, stdio to `<run
    dir>/collector.log`; the child writes one JSON line on fd 3 from inside the
@@ -185,8 +211,8 @@ Five commits, each green under `test.sh`.
    pipe; the parent prints the banner and exits. `--exit-with` defaults to
    `CLAUDE_PID`; the collector polls `process.kill(pid, 0)` every 5 s on an
    `unref`'d timer and runs `shutdown()` on `ESRCH`. New `test/background.test.mjs`;
-   new `test-plugin.sh` cases that run both shims out of the scratch install's
-   plugin cache.
+   new `test-plugin.sh` cases that run the shim out of the scratch install's plugin
+   cache and assert that no `argus-ui` entry exists in `bin/`.
 
 ## Tasks
 
@@ -200,6 +226,18 @@ Five commits, each green under `test.sh`.
 
 - Two projects under `tools/`: `argus` for the collector, `argus-ui` for the
   interface. Source: the human.
+- Other projects reach the collector through a `PATH` command plus a user-invocable
+  skill. A subagent was considered and rejected: measuring is a process to start,
+  not a task to delegate — the agent would issue one shell command and its context
+  would die while the collector kept running. The command alone was rejected too:
+  it cannot carry the trap that telemetry configuration is read at process start.
+  Source: the human, on that argument.
+- The interface is local only. No `PATH` entry, no skill, no manifest mention, and
+  never deployed; it leaves athena later as its own project, which is why its
+  `CLAUDE.md` forbids it from importing anything in this repository. Source: the
+  human.
+- Reopening a measurement is `--open <dir>`, separate from `--persist <dir>`, which
+  only ever writes. Source: the human.
 - The collector is started on demand, never automatically. Source: the human — "der
   observer soll auf zuruf gestartet werden".
 - The user exports the `OTEL_*` block themselves at session start; athena writes no
@@ -263,6 +301,21 @@ Facts established by measurement, which the criteria rest on:
   background process (Claude Code's plugin monitors would fit, but the human wants
   it on demand), and a switch that lets a deployed collector keep serving the page
   (it would leave half the coupling in place).
+- The human amended the intent before step 3 was implemented: reopening gets its own
+  option instead of overloading `--persist`; the interface is never distributed and
+  will leave athena later; other projects use the collector through the `PATH`
+  command and the skill. Criteria 1, 2, 3, 11, 13 carry the amendment; steps 1 and 2
+  are untouched by it. The old numbering shifted by one from criterion 3 onward.
+- Criterion 14 was corrected on the implementer's objection before it was
+  implemented: it demanded that no `tools/observability` path survive *anywhere*,
+  which would have rewritten a closed tracker entry and this issue's own map — both
+  accounts of what was actually run at `99ce318`. It now binds instructions only.
+- The first implementer dispatch could not edit: the session was in plan mode. It
+  returned a read-only analysis and one blocking question, which is the criterion 14
+  correction above. It also established that no static analysis exists in this
+  repository — no lint script in the package, and no `.eslintrc*`,
+  `eslint.config*`, `.prettierrc*` or `.editorconfig` anywhere — so `test.sh` is the
+  whole of what a tool checks here.
 
 ## Checkpoints
 
