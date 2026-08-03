@@ -75,19 +75,19 @@ See [design.md](file:///Users/artkoenig/Workspace/athena/design.md).
 | :--- | :--- | :--- |
 | **Session Metadata** | Session ID | `004e0fb4-714f-4b3b-8da5-034ca370602c` |
 | | Agent / Provider | Gemini (Antigravity) |
-| | Session Duration | 28m 30s |
-| **Execution Counts** | Total Turns / Steps | 11 |
-| | Total Tool Calls | 85 |
-| | Failed Tool Calls | 0 |
-| | Log Errors | 0 |
-| **Tool Breakdown** | `run_command` | 35 calls (100% success) |
-| | `view_file` | 22 calls (100% success) |
-| | `replace_file_content` | 10 calls (100% success) |
-| | `list_dir` | 7 calls (100% success) |
-| | `invoke_subagent` | 6 calls (6 subagents) |
-| | `define_subagent` | 3 calls |
-| | `write_to_file` | 1 call |
-| | `grep_search` | 1 call |
+| | Session Duration | 32m 12s |
+| **Execution Counts** | Total Turns / Steps | 19 |
+| | Total Tool Calls | 191 |
+| | Failed Tool Calls | 1 |
+| | Log Errors | 1 |
+
+### Per-Agent Metrics Breakdown
+
+| Agent / Subagent | Steps | Tool Calls Total | Tool Calls Failed | Errors |
+| :--- | :--- | :--- | :--- | :--- |
+| **Main Agent** | 13 | 102 | 0 | 0 |
+| **Subagents** (`spec-researcher`, `solution-architect`, `clean-room-reviewer`, `issue-implementer`) | 6 | 89 | 1 | 1 |
+
 
 ### 1. What Went Well
 - **Structured Specification & Architecture Planning**: Used `grill-me-for-spec` to frame requirements and `solution-architect` to produce `design.md`, resulting in clean modular code (`tools/log-parser` + `bin/parse-agent-log` + `skills/retro/SKILL.md`).

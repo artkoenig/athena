@@ -23,7 +23,7 @@ When invoked to run a retro for an issue, follow these steps:
    - **What went well**
    - **What didn't go well** (e.g., high token usage, unnecessary tool calls, errors, loops)
    - **What can be optimized**
-   Include a **Session Metrics Summary** table presenting the extracted metrics.
+   Include a **Session Metrics Summary** table and a **Per-Agent Breakdown** table (main agent vs each subagent) presenting the extracted metrics (steps, tool calls, errors, and tokens).
 
 4. **Append the formatted section:**
    Append the formatted Retrospective section directly under the `## Retro` heading in the active issue document at `docs/issues/<issue>/issue.md`.

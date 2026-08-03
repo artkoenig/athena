@@ -1,7 +1,10 @@
 import fs from 'node:fs';
 import readline from 'node:readline';
 
-export async function parseClaudeLog(filePath) {
+export async function parseClaudeLog(filePath, visitedPaths = new Set(), agentName = 'main') {
+  if (visitedPaths.has(filePath)) return [];
+  visitedPaths.add(filePath);
+
   const fileStream = fs.createReadStream(filePath);
   const rl = readline.createInterface({
     input: fileStream,
@@ -9,7 +12,7 @@ export async function parseClaudeLog(filePath) {
   });
 
   const turns = [];
-  let currentTurn = createNewTurn(1);
+  let currentTurn = createNewTurn(1, agentName);
   let stepCounter = 1;
 
   for await (const line of rl) {
@@ -27,21 +30,16 @@ export async function parseClaudeLog(filePath) {
       }
       
       if (obj.role === 'user') {
-        // if previous turn has data, push it and start new turn
         if (currentTurn.userPrompt || currentTurn.toolCalls.length > 0 || currentTurn.thinkingBlocks.length > 0) {
           turns.push(currentTurn);
           stepCounter++;
-          currentTurn = createNewTurn(stepCounter);
+          currentTurn = createNewTurn(stepCounter, agentName);
         }
         
         let promptText = '';
         if (Array.isArray(obj.content)) {
           for (const block of obj.content) {
             if (block.type === 'text') promptText += block.text;
-            if (block.type === 'tool_result') {
-              // find matching tool call from previous turns to update success?
-              // The problem asks to parse it. Let's just assume we record the output.
-            }
           }
         } else if (typeof obj.content === 'string') {
           promptText = obj.content;
@@ -54,19 +52,36 @@ export async function parseClaudeLog(filePath) {
             if (block.type === 'text') assistantText += block.text;
             if (block.type === 'thinking') currentTurn.thinkingBlocks.push(block.thinking);
             if (block.type === 'tool_use') {
-              currentTurn.toolCalls.push({
+              const call = {
                 id: block.id,
                 name: block.name,
                 input: block.input,
                 success: true,
                 output: ''
-              });
+              };
+              currentTurn.toolCalls.push(call);
             }
           }
         }
         currentTurn.assistantText = assistantText;
       }
       
+      // Check tool_result blocks for subagent log file paths
+      if (Array.isArray(obj.content)) {
+        for (const block of obj.content) {
+          if (block.type === 'tool_result' && typeof block.content === 'string') {
+            const match = block.content.match(/(?:file:\/\/)?([^\s"']+\.jsonl)/);
+            if (match && match[1] && fs.existsSync(match[1]) && !visitedPaths.has(match[1])) {
+              const subTurns = await parseClaudeLog(match[1], visitedPaths, 'subagent');
+              for (const subTurn of subTurns) {
+                subTurn.step = stepCounter++;
+                turns.push(subTurn);
+              }
+            }
+          }
+        }
+      }
+
       // API errors
       if (obj.error) {
         currentTurn.errors.push({ errorType: obj.error.type, message: obj.error.message });
@@ -84,9 +99,11 @@ export async function parseClaudeLog(filePath) {
   return turns;
 }
 
-function createNewTurn(step) {
+function createNewTurn(step, agentName = 'main') {
   return {
     step,
+    agentName,
+    isSubagent: agentName !== 'main',
     timestamp: new Date().toISOString(),
     userPrompt: '',
     thinkingBlocks: [],

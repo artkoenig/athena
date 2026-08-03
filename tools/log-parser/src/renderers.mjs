@@ -19,6 +19,14 @@ export function renderMarkdown(sessionTranscript) {
   md += `| Errors | ${metrics.counts.errorCount} |\n`;
   md += `| Step Count | ${metrics.counts.stepCount} |\n\n`;
 
+  md += `### Per-Agent Breakdown\n\n`;
+  md += `| Agent / Subagent | Steps | Tool Calls (Failed) | Errors | Total Tokens |\n`;
+  md += `| :--- | :--- | :--- | :--- | :--- |\n`;
+  for (const [agentName, stats] of Object.entries(metrics.agentBreakdown || {})) {
+    md += `| **${agentName}** | ${stats.stepCount} | ${stats.toolCallsTotal} (${stats.toolCallsFailed}) | ${stats.errorCount} | ${stats.tokens.totalTokens.toLocaleString()} |\n`;
+  }
+  md += `\n`;
+
   md += `### Tool Breakdown\n\n`;
   for (const [toolName, stats] of Object.entries(metrics.toolBreakdown)) {
     md += `- **${toolName}**: ${stats.total} calls (${stats.success} success, ${stats.failed} failed)\n`;

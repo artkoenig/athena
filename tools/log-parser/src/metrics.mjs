@@ -23,6 +23,7 @@ export function createEmptyMetrics() {
       totalTokens: 0
     },
     toolBreakdown: {},
+    agentBreakdown: {},
     errors: []
   };
 }
@@ -43,11 +44,26 @@ export function aggregateMetrics(turns, format, provider) {
   metrics.counts.stepCount = turns.length;
   
   for (const turn of turns) {
+    const agentName = turn.agentName || (turn.isSubagent ? (turn.subagentRole || 'subagent') : 'main');
+    if (!metrics.agentBreakdown[agentName]) {
+      metrics.agentBreakdown[agentName] = {
+        stepCount: 0,
+        toolCallsTotal: 0,
+        toolCallsFailed: 0,
+        errorCount: 0,
+        tokens: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, totalTokens: 0 }
+      };
+    }
+    const agentStats = metrics.agentBreakdown[agentName];
+    agentStats.stepCount++;
+
     if (turn.errors && turn.errors.length > 0) {
       metrics.counts.errorCount += turn.errors.length;
+      agentStats.errorCount += turn.errors.length;
       turn.errors.forEach(err => {
         metrics.errors.push({
           step: turn.step,
+          agent: agentName,
           tool: err.tool || 'unknown',
           errorType: err.errorType || 'unknown',
           message: err.message || err
@@ -58,8 +74,10 @@ export function aggregateMetrics(turns, format, provider) {
     if (turn.toolCalls) {
       for (const call of turn.toolCalls) {
         metrics.counts.toolCallsTotal++;
+        agentStats.toolCallsTotal++;
         if (!call.success) {
           metrics.counts.toolCallsFailed++;
+          agentStats.toolCallsFailed++;
         }
         
         if (!metrics.toolBreakdown[call.name]) {
@@ -73,16 +91,23 @@ export function aggregateMetrics(turns, format, provider) {
         }
       }
     }
-  }
 
-  // Token aggregation should be passed separately if parsed, or we can assume it's attached to turns.
-  // Wait, tokens can be global per turn. Let's say turn.tokens is an object.
-  for (const turn of turns) {
     if (turn.tokens) {
-      metrics.tokens.inputTokens += turn.tokens.inputTokens || 0;
-      metrics.tokens.outputTokens += turn.tokens.outputTokens || 0;
-      metrics.tokens.cacheReadTokens += turn.tokens.cacheReadTokens || 0;
-      metrics.tokens.cacheCreationTokens += turn.tokens.cacheCreationTokens || 0;
+      const inp = turn.tokens.inputTokens || 0;
+      const out = turn.tokens.outputTokens || 0;
+      const read = turn.tokens.cacheReadTokens || 0;
+      const create = turn.tokens.cacheCreationTokens || 0;
+
+      metrics.tokens.inputTokens += inp;
+      metrics.tokens.outputTokens += out;
+      metrics.tokens.cacheReadTokens += read;
+      metrics.tokens.cacheCreationTokens += create;
+
+      agentStats.tokens.inputTokens += inp;
+      agentStats.tokens.outputTokens += out;
+      agentStats.tokens.cacheReadTokens += read;
+      agentStats.tokens.cacheCreationTokens += create;
+      agentStats.tokens.totalTokens = agentStats.tokens.inputTokens + agentStats.tokens.outputTokens + agentStats.tokens.cacheReadTokens + agentStats.tokens.cacheCreationTokens;
     }
   }
   
