@@ -31,6 +31,12 @@ node bin/argus.mjs             # collector on http://127.0.0.1:4318
 node scripts/demo-emit.mjs     # synthetic sessions, no real agent needed
 ```
 
+Outside a checkout the same entry is reached as `argus`: the repository's
+`bin/argus` shim is on the `PATH` of every session with the plugin enabled, and
+`skills/argus/SKILL.md` carries the procedure. Both live at the repository root
+because that is where the plugin's delivery surface is — a change to this
+project's CLI that changes what a user types belongs in that skill too.
+
 ## Tests
 
 ```bash

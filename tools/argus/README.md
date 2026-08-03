@@ -24,18 +24,32 @@ service, no running costs. The telemetry stays where it is produced — see
 ## Quick start
 
 ```bash
-cd tools/argus
+# 1. Start the collector in the project you want to measure
+argus start --background          # returns to the shell, keeps listening
 
-# 1. Start the collector
-node bin/argus.mjs                # http://127.0.0.1:4318
-
-# 2. In a second shell: point an agent at it and start a NEW session
-eval "$(node bin/argus.mjs env)"
+# 2. Point an agent at it — and start a NEW session, not this one
+eval "$(argus env)"
 claude -p "What does this repo do?"
 
-# 3. Look at it: the interface is its own process
-node ../argus-ui/bin/argus-ui.mjs           # http://127.0.0.1:4319
+# 3. Look at it: the interface is its own process, from an athena checkout
+node tools/argus-ui/bin/argus-ui.mjs        # http://127.0.0.1:4319
 ```
+
+`argus` is on the `PATH` of any session with the athena plugin enabled, in any
+project — the plugin's `bin/` is what puts it there. From a checkout the same
+thing is `node tools/argus/bin/argus.mjs`.
+
+`--background` prints the endpoint, the token if there is one, the measurement
+directory and the process id, then returns. The collector shuts itself down when
+the session it was started from ends (`--exit-with <pid>`, defaulting to
+`$CLAUDE_PID`), so there is no stop command and nothing to clean up. A second
+`start --background` on a port that already holds a collector starts nothing and
+names the directory that one is writing to.
+
+**Telemetry is read at process start.** A session already running cannot be
+measured after the fact, whatever is exported into it — what gets measured is
+always the next one. The `argus` skill carries that procedure for a session to
+follow.
 
 Without a real agent run, the store can be filled with synthetic data:
 
@@ -413,6 +427,8 @@ exactly these routes and nothing else.
 | `-p, --port`            | `ATHENA_OBS_PORT`            | `4318`         | Port for OTLP ingest **and** the JSON API        |
 | `-h, --host`            | `ATHENA_OBS_HOST`            | `127.0.0.1`    | Bind address                                     |
 | `-t, --token`           | `ATHENA_OBS_TOKEN`           | –              | Require `Authorization: Bearer …`                |
+| `--background`          | –                            | –              | Start and return to the caller                   |
+| `--exit-with <pid>`     | `CLAUDE_PID`                 | the session    | Shut down when that process is gone              |
 | `--tunnel [binary]`     | –                            | –              | Open a Cloudflare tunnel, generate a token, print the block |
 | `--tunnel-protocol <p>` | –                            | both           | Pin the transport: `quic` or `http2`             |
 | `--public-url <url>`    | `ATHENA_OBS_PUBLIC_URL`      | –              | Announced URL behind a tunnel/proxy              |
@@ -484,7 +500,8 @@ src/otlp/schema.mjs      field descriptors for opentelemetry-proto v1
 src/otlp/decode.mjs      OTLP (protobuf & JSON) → flat records
 src/claude.mjs           Claude Code domain knowledge: metric, event and span names
 src/store.mjs            in-memory store, session aggregation, trace tree, queries
-src/persist.mjs          optional JSONL append + replay
+src/persist.mjs          JSONL append, replay, one directory per measurement
+src/background.mjs       start in the background, end with the session
 src/server.mjs           OTLP ingest, JSON API, SSE
 scripts/demo-emit.mjs    synthetic sessions as real OTLP protobuf
 ```

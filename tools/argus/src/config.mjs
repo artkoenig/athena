@@ -108,6 +108,13 @@ export function resolveConfig(flags = {}, env = process.env) {
     // `.athena-telemetry/` is to be created at start.
     persist: persistOff ? null : explicitPersist,
     persistDefault: !persistOff && explicitPersist === null,
+    // The process this collector belongs to. CLAUDE_PID is the session's own,
+    // exported into every command it runs, which is what "it ends with the
+    // session" means in practice.
+    exitWith: parseCount(flags['exit-with'] ?? env.CLAUDE_PID, 0) || null,
+    // Where a background start listens for the "I am up" line. Set by that
+    // start on the child it spawns, never by a person.
+    readyFd: flags['ready-fd'] === undefined ? null : parseCount(flags['ready-fd'], 0) || null,
     host: flags.host ?? env.ATHENA_OBS_HOST ?? '127.0.0.1',
     // Bare PORT is how every PaaS assigns one — Render, Railway, Fly, Heroku all
     // inject it and route to whatever binds it. It ranks below the namespaced

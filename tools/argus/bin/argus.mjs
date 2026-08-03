@@ -12,7 +12,9 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
+import { exitWhenGone, spawnBackground, withoutFlags } from '../src/background.mjs';
 import { TelemetryStore } from '../src/store.mjs';
 import { createRunDir, JsonlPersistence } from '../src/persist.mjs';
 import { createServer } from '../src/server.mjs';
@@ -43,6 +45,11 @@ Options
                                 of trying both
       --public-url <url>        Advertise this URL instead of the bind address
                                 (behind a tunnel or reverse proxy)
+      --background              Start the collector and return to the caller.
+                                It ends when the process it was started from
+                                does, so a session takes its collector with it
+      --exit-with <pid>         Shut down when that process is gone
+                                (default $CLAUDE_PID, the session itself)
       --persist <dir>           Write the measurement into exactly this directory
                                 instead of <cwd>/.athena-telemetry/<timestamp>.
                                 Write-only: it never replays what is there
@@ -82,6 +89,112 @@ function renderEnv(env, format) {
         .map(([key, value]) => `export ${key}="${value}"`)
         .join('\n');
   }
+}
+
+/** What is answering on that address: nothing, a collector, or a stranger. */
+async function inspectPort(base, token) {
+  let response;
+  try {
+    response = await fetch(`${base}/api/health`, { signal: AbortSignal.timeout(3000) });
+  } catch {
+    return { kind: 'free' };
+  }
+  let health = null;
+  try {
+    health = await response.json();
+  } catch {
+    return { kind: 'stranger' };
+  }
+  // /api/health answers without a token by design, and names the process. Both
+  // are what make "is this one of ours" answerable from the outside.
+  if (!response.ok || health?.ok !== true || typeof health.instance !== 'string') return { kind: 'stranger' };
+
+  let persist = null;
+  try {
+    const url = `${base}/api/config${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+    const config = await fetch(url, { signal: AbortSignal.timeout(3000) });
+    if (config.ok) persist = (await config.json()).persist ?? null;
+  } catch {
+    // Its measurement directory is worth naming, not worth failing over.
+  }
+  return { kind: 'collector', persist };
+}
+
+/**
+ * `start --background`: hand the caller its shell back with a collector still
+ * listening. The child is this same script, started with `--ready-fd 3` so it
+ * can say when it is up, and `--exit-with` so it ends with the session.
+ */
+async function startInBackground(argv, config, endpoint) {
+  const local = endpointFor({ host: config.host, port: config.port });
+
+  // A second start is not a second collector. The port already holding one is
+  // the answer to "am I measuring?", so say where that one writes and stop.
+  const found = await inspectPort(local, config.token);
+  if (found.kind === 'collector') {
+    console.error(`\n  argus is already listening on ${local}`);
+    console.error(`  Measurement ${found.persist ?? '(this collector keeps nothing on disk)'}`);
+    console.error('  Nothing was started; that collector keeps running.\n');
+    return;
+  }
+  if (found.kind === 'stranger') {
+    console.error(
+      `argus: port ${config.port} is held by something that is not a collector. ` +
+        'Stop it, or start on another port with --port.',
+    );
+    process.exitCode = 1;
+    return;
+  }
+
+  const runDir = config.open || !config.persistDefault
+    ? config.persist
+    : createRunDir(path.resolve(process.cwd(), PERSIST_ROOT));
+
+  // stdout and stderr of a backgrounded process have to land somewhere it can
+  // be read afterwards; inside the measurement is where someone will look.
+  let logFile = null;
+  let logFd = 'ignore';
+  if (runDir) {
+    fs.mkdirSync(runDir, { recursive: true });
+    logFile = path.join(runDir, 'collector.log');
+    logFd = fs.openSync(logFile, 'a');
+  }
+
+  const exitWith = config.exitWith;
+  const childArgv = [
+    fileURLToPath(import.meta.url),
+    ...withoutFlags(argv, ['background', 'ready-fd', 'exit-with', 'persist', 'no-persist', 'open']),
+    '--ready-fd',
+    '3',
+    ...(exitWith ? ['--exit-with', String(exitWith)] : []),
+    ...(config.open ? ['--open', config.open] : runDir ? ['--persist', runDir] : ['--no-persist']),
+  ];
+
+  let announced;
+  try {
+    announced = await spawnBackground({ argv: childArgv, stdio: ['ignore', logFd, logFd] });
+  } catch (error) {
+    throw new Error(
+      `${error.message} on port ${config.port}` + (logFile ? ` — its output is in ${logFile}` : ''),
+    );
+  } finally {
+    if (logFd !== 'ignore') fs.closeSync(logFd);
+  }
+
+  console.error(`\n  argus listening on ${announced.endpoint ?? local}`);
+  if (config.token) console.error(`  Token       ${config.token}`);
+  console.error(`  Measurement ${announced.persist ?? '(nothing is kept on disk)'}`);
+  console.error(`  pid ${announced.pid}`);
+  if (exitWith) console.error(`  It stops when process ${exitWith} does — the session it was started from.`);
+  else console.error('  Nothing will stop it but you: no --exit-with was given and CLAUDE_PID is not set.');
+  console.error('\n  Point an agent at it, then start a NEW session:\n');
+  console.error(
+    renderEnv(otelEnvFor(endpoint, { traces: config.traces, token: config.token }), 'shell')
+      .split('\n')
+      .map((line) => `    ${line}`)
+      .join('\n'),
+  );
+  console.error('');
 }
 
 async function main(argv) {
@@ -139,6 +252,11 @@ async function main(argv) {
   if (config.open && !fs.existsSync(config.open)) {
     console.error(`argus: no measurement at ${config.open} — --open replays a directory that already exists`);
     process.exitCode = 1;
+    return;
+  }
+
+  if (flags.background) {
+    await startInBackground(argv, config, endpoint);
     return;
   }
 
@@ -205,6 +323,27 @@ async function main(argv) {
   });
 
   server.listen(config.port, config.host, async () => {
+    // One JSON line on the readiness descriptor, from inside the listen
+    // callback, and then it is closed: the caller waiting on it gets its shell
+    // back at the first moment the collector can actually be used.
+    if (config.readyFd !== null) {
+      try {
+        fs.writeSync(
+          config.readyFd,
+          `${JSON.stringify({
+            ready: true,
+            pid: process.pid,
+            port: config.port,
+            endpoint,
+            token: config.token,
+            persist: runDir,
+          })}\n`,
+        );
+      } finally {
+        fs.closeSync(config.readyFd);
+      }
+    }
+
     const bound = `${config.host}:${config.port}`;
     console.error(`\n  argus listening on ${endpoint}${config.publicUrl ? `  (bound to ${bound})` : ''}`);
     console.error(`  OTLP ingest ${endpoint}/v1/{traces,metrics,logs}  (http/protobuf and http/json)`);
@@ -272,6 +411,15 @@ async function main(argv) {
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
+
+  // It ends with the session. Nothing else stops a backgrounded collector: the
+  // shell that started it is long gone, and there is no pidfile to find it by.
+  if (config.exitWith) {
+    exitWhenGone(config.exitWith, () => {
+      console.error(`\n  argus: process ${config.exitWith} is gone — shutting down.\n`);
+      shutdown();
+    });
+  }
 }
 
 main(process.argv.slice(2)).catch((error) => {

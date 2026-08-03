@@ -92,9 +92,13 @@ until `git worktree remove`.
 | [`argus-ui`](tools/argus-ui/)   | The page that shows what a collector holds. Local only — started from a checkout, never deployed.                 |
 
 ```bash
-cd tools/argus && node bin/argus.mjs         # collector, http://127.0.0.1:4318
+argus start --background                     # collector, http://127.0.0.1:4318
 node tools/argus-ui/bin/argus-ui.mjs         # interface, http://127.0.0.1:4319
 ```
+
+`argus` is on the `PATH` of every session with the plugin enabled, so a project
+that is not this one can measure itself; the `argus` skill carries the
+procedure. The interface is not distributed — it is started from a checkout.
 
 Runs on your own machine — no account, no third-party service, no running
 costs. Alternatively `docker compose up -d` in `tools/argus` for the collector.
