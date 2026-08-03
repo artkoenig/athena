@@ -13,6 +13,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
 import { exitWhenGone, spawnBackground, withoutFlags } from '../src/background.mjs';
@@ -94,13 +95,27 @@ function renderEnv(env, format) {
 
 // How long a port may take to answer, by question. The connection is the one
 // that decides whether the port is free, so it is the only one a free port
-// pays — and a refused connection on loopback comes back at once. The health
-// request is asked only of a port that already accepted a connection, so its
-// budget is what a listener that never answers costs before it is called a
-// stranger; a collector on the same machine answers /api/health in
-// milliseconds.
+// pays — and a refused connection on loopback comes back at once.
+//
+// The health question is asked only of a port that already accepted a
+// connection, and no single deadline can settle it. A collector decoding a
+// large OTLP export blocks its own event loop: measured under four concurrent
+// 19.8 MB exports, /api/health came back between 481 ms and 3051 ms. A
+// listener that will never answer looks exactly the same to one deadline, so
+// the number only picks which of the two is misread. So the question is asked
+// again until the window is spent, and only an expired window means stranger:
+// a collector whose loop frees up between chunks answers on some attempt, a
+// silent listener never does. Each attempt gets twice the budget of the one
+// before, starting at the second a healthy collector needs — the later
+// attempts are each longer than the slowest answer ever measured here. Twelve
+// seconds of window covers that 3051 ms with its retries several times over
+// and still returns long before a caller gives up. Only a held port pays it,
+// which is where seconds belong: calling a working collector a stranger tells
+// the human to kill the thing that is doing the job.
 const CONNECT_TIMEOUT_MS = 3000;
-const HEALTH_TIMEOUT_MS = 1000;
+const HEALTH_WINDOW_MS = 12_000;
+const HEALTH_FIRST_ATTEMPT_MS = 1000;
+const HEALTH_RETRY_GAP_MS = 250;
 
 /**
  * Does anything accept a connection there? Refused is the ordinary "free port"
@@ -119,7 +134,40 @@ function accepts(host, port) {
   });
 }
 
-/** What is answering on that address: nothing, a collector, or a stranger. */
+/**
+ * One /api/health question, with a budget. Three outcomes, and only one of
+ * them is worth asking again: `{ answered: false }` means nothing came back
+ * inside the budget, which a busy collector and a mute listener both produce.
+ * An answer settles it either way — asking a second time gets the same one.
+ */
+async function askHealth(base, budgetMs) {
+  let response;
+  let body;
+  try {
+    response = await fetch(`${base}/api/health`, { signal: AbortSignal.timeout(budgetMs) });
+    // Read to the end under the same budget: half an answer is no answer, and
+    // an abort in the middle of one has to be retried like silence.
+    body = await response.text();
+  } catch {
+    return { answered: false };
+  }
+  let health = null;
+  try {
+    health = JSON.parse(body);
+  } catch {
+    // It said something, and it was not JSON. That is an answer.
+  }
+  // /api/health answers without a token by design, and names the process. Both
+  // are what make "is this one of ours" answerable from the outside.
+  const ours = response.ok && health?.ok === true && typeof health.instance === 'string';
+  return { answered: true, health: ours ? health : null };
+}
+
+/**
+ * What is answering on that address: nothing, a collector, or something else.
+ * `kind: 'stranger'` carries `silent`, which says whether that verdict was
+ * heard or only inferred from a window that ran out.
+ */
 async function inspectPort(base, token) {
   // The connection classifies the port, not the request. A listener that
   // accepts and then says nothing would time the health request out, and
@@ -128,22 +176,19 @@ async function inspectPort(base, token) {
   const { hostname, port } = new URL(base);
   if (!(await accepts(hostname, Number(port)))) return { kind: 'free' };
 
-  let response;
-  try {
-    response = await fetch(`${base}/api/health`, { signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS) });
-  } catch {
-    // Something holds the port and did not answer as a collector does.
-    return { kind: 'stranger' };
+  // Something holds it. Ask until the window is spent; one unanswered request
+  // is a collector that is busy just as often as it is a stranger.
+  const deadline = Date.now() + HEALTH_WINDOW_MS;
+  for (let budget = HEALTH_FIRST_ATTEMPT_MS; ; budget *= 2) {
+    const left = deadline - Date.now();
+    if (left <= 0) return { kind: 'stranger', silent: true };
+    const attempt = await askHealth(base, Math.min(budget, left));
+    if (attempt.answered) {
+      if (!attempt.health) return { kind: 'stranger', silent: false };
+      break;
+    }
+    await delay(HEALTH_RETRY_GAP_MS);
   }
-  let health = null;
-  try {
-    health = await response.json();
-  } catch {
-    return { kind: 'stranger' };
-  }
-  // /api/health answers without a token by design, and names the process. Both
-  // are what make "is this one of ours" answerable from the outside.
-  if (!response.ok || health?.ok !== true || typeof health.instance !== 'string') return { kind: 'stranger' };
 
   let persist = null;
   try {
@@ -174,9 +219,16 @@ async function startInBackground(argv, config, endpoint) {
     return;
   }
   if (found.kind === 'stranger') {
+    // A window that ran out says less than an answer did. It cannot tell a
+    // stranger from a collector that never freed its loop, so it says both and
+    // leaves the choice to the one person who can see the machine.
     console.error(
-      `argus: port ${config.port} is held by something that is not a collector. ` +
-        'Stop it, or start on another port with --port.',
+      found.silent
+        ? `argus: port ${config.port} is held and nothing on it answered in ` +
+            `${Math.round(HEALTH_WINDOW_MS / 1000)}s: it is not a collector, or it is one too busy ` +
+            'to answer. Stop it, or start on another port with --port.'
+        : `argus: port ${config.port} is held by something that is not a collector. ` +
+            'Stop it, or start on another port with --port.',
     );
     process.exitCode = 1;
     return;
