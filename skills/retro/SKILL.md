@@ -1,12 +1,12 @@
 ---
 name: retro
-description: Generates a Retrospective for the current issue by analyzing session JSONL log metrics and inserting "Was lief gut", "Was lief nicht gut", and "Wie können wir den Workflow optimieren" into the issue file under docs/issues/. Use this skill whenever the user asks for a retrospective or "retro" on an issue.
+description: Generates a Retrospective for the current issue by analyzing session JSONL log metrics (including subagents) and inserting "What went well", "What didn't go well", and "How can we optimize the workflow" into the issue file under docs/issues/. Use this skill whenever the user asks for a retrospective or "retro" on an issue.
 user-invocable: true
 ---
 
 # Retro Skill
 
-Generates an automated Retrospective for an issue based on JSONL session transcripts.
+Generates an automated Retrospective for an issue based on main and subagent JSONL session transcripts.
 
 ## Procedure
 
@@ -20,30 +20,30 @@ Generates an automated Retrospective for an issue based on JSONL session transcr
      python3 skills/retro/assets/parse_transcript.py --branch "<branch_name>"
      ```
    - Receive JSON containing:
-     - `metrics`: tool calls count, errors, retry loops, duration.
-     - `summary`: recent tool events and error messages.
+     - `metrics`: total tool calls (main + subagents), total errors, retry loops, subagent count.
+     - `summary`: recent tool events (labeled by source) and error messages.
 
 3. **Synthesize Retrospective**:
    Formulate three concrete, empirical sections based on the parsed transcript:
-   - `### Was lief gut`: Successful implementations, clean test runs, quick resolutions.
-   - `### Was lief nicht gut`: Command failures, retry loops, missing permissions, unexpected errors.
-   - `### Wie können wir den Workflow optimieren`: Actionable improvements to processes, skills, rules, or configurations.
+   - `### What went well`: Successful implementations, clean test runs, quick resolutions.
+   - `### What didn't go well`: Command failures, retry loops, missing permissions, unexpected errors.
+   - `### How can we optimize the workflow`: Actionable improvements to processes, skills, rules, or configurations.
 
 4. **Update Issue File**:
    - Read target `issue.md`.
    - Locate or append `## Retro`.
-   - Insert/replace content under `## Retro` with the three subsections:
+   - Insert/replace content under `## Retro` with the three English subsections:
 
 ```markdown
 ## Retro
 
-### Was lief gut
+### What went well
 - [Points]
 
-### Was lief nicht gut
+### What didn't go well
 - [Points]
 
-### Wie können wir den Workflow optimieren
+### How can we optimize the workflow
 - [Points]
 ```
 
