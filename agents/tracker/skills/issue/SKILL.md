@@ -22,6 +22,7 @@ checkpoint questions, what a retro says, and when a change gets a task list.
 | operation | what the caller hands over |
 | --- | --- |
 | **file an issue** | the problem and the observable behaviour it wants, plus the acceptance criteria |
+| **record a module map** | the map — the files the change touches, one line each — and the commit it was taken at |
 | **record a decision** | what was settled, and the source it derives from — a document, a human's answer, or "default, unanswered" |
 | **record an observation** | what happened in the run: a review round and its triage, a failed attempt, a surprise |
 | **record a plan** | the modules the change touches, the contracts between them stated concretely, and one sentence per non-obvious choice saying why — a page at most, never a document of its own |
@@ -76,6 +77,8 @@ gap is the one thing the record cannot survive.
    Acceptance criteria:
 
    1.
+
+   ## Map
 
    ## Plan
 
@@ -165,6 +168,7 @@ than nothing, because the caller will build criteria on it.
 | frontmatter | three lines, no more. `status` — one of the four states below. `branch` — the branch carrying this issue, set as soon as one exists. `pr` — its pull request, set when the PR is opened. |
 | `# <title>` | one H1, the issue in a phrase |
 | `## Intent` | the problem and the wanted observable behaviour, solution-free, then the numbered acceptance criteria — observable and falsifiable, "when X, then Y" |
+| `## Map` | optional content: the researcher's module map and the commit it was taken at, so every later dispatch can be handed it instead of searching for the same files again. An empty one says nobody researched this change |
 | `## Plan` | optional content: the *record a plan* operation above says what belongs in it, and the rulebook says when a change warrants one |
 | `## Tasks` | optional content, and the rulebook says when a change gets one |
 | `## Decisions` | what was settled and why, each with its source; questions to the human and their answers. Nothing else — a mid-run reader must find the decisions without wading through process |

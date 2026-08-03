@@ -20,7 +20,9 @@ need — for the work and for these texts alike.
 3. **Test-author.** Writes the failing tests from the intent alone — skip only
    when the change has nothing to run.
 4. **Implementer.** Builds it, makes those tests pass, may not edit them.
-5. **Reviewer.** Runs on the diff and the written intent alone. Triage every
+5. **Reviewer.** Runs on the diff and the written intent alone, and never
+   writes into the tree it reviews — a reproduction that needs a test is a
+   spec, and the test-author writes it. Triage every
    finding by the criterion it violates: fix now, dismiss with a recorded
    reason, or file for later. A finding without a reproduction is dismissed;
    one that violates no criterion is filed as its own issue, never fixed here
@@ -95,7 +97,21 @@ issue is allowed only when the sentence carries its content.
   ask whether it has finished — no second dispatch, no read of what it writes, no
   shell loop. Each ask is a turn at the largest context in the run and learns
   nothing the notice does not carry. Carry on with what does not depend on it;
-  act when the notice lands.
+  act when the notice lands — and when nothing independent is pending, wait
+  instead of filling the time.
+- You dispatch; you do not read the project. Your context is the run's most
+  expensive one and it lasts the whole run, so a source file you open is paid
+  for on every turn after it. A question about the code goes to the
+  researcher, whose context is disposable; reading the same file yourself
+  while that agent answers the same question buys nothing.
+- The researcher's map is established once and quoted after that. Its briefing
+  opens with the files the change touches and the commit it was taken at; that
+  goes into the issue, and every dispatch after it carries the map in its
+  prompt. Nobody rediscovers what the cheapest stage has already established.
+  A map whose commit is behind the checkout is re-taken, not trusted.
+- Continuing an agent is `SendMessage`, by that name. Where its schema has to
+  be looked up first, the lookup rides in the same block as the dispatch it
+  will continue — never a turn of its own.
 - One issue = one branch = one pull request; there are no child issues. `##
   Tasks` stays empty by default — Plan says how, Log proves what happened.
   Fill it only when the work needs a state those two cannot hold: the change
@@ -111,7 +127,12 @@ issue is allowed only when the sentence carries its content.
   a rule disagree, the document is out of date.
 - Conventions live next to the code they govern. A rule that holds for one
   subsystem belongs in that directory's `CLAUDE.md`, not in the root file every
-  run pays for. Only what holds everywhere stays at the root.
+  run pays for. Only what holds everywhere stays at the root. How a test is
+  written is such a convention — framework, layout, naming, the command that
+  runs the suite — and it belongs in the `CLAUDE.md` next to the tests. The
+  test-author reads it there; where a project has none, it reports what it had
+  to work out and that report lands there in the same change. Otherwise every
+  dispatch pays again to find out what the last one knew.
 - Branch each issue from the current default branch, never on an unmerged
   predecessor.
 - Everything checked in and every pull request is written in English.
