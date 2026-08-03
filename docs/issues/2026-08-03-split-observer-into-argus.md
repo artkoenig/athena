@@ -392,11 +392,71 @@ Facts established by measurement, which the criteria rest on:
 - Open, raised with the human and unanswered: step 2 renamed the Render **service**,
   so re-applying the blueprint would move the deployment's URL. The only
   outward-facing item in this change.
-- Recorded as a default and worth a reviewer's eye: `argus-ui --token` gates `/api/*`
-  only, exactly as decided, which leaves `/v1/*` ungated. Harmless on a loopback
-  bind; on a token-protected non-loopback bind it means OTLP ingest can be relayed
-  through the interface without the interface's token. No test covers it and the
-  implementer did not widen the gate beyond the decision.
+- **Corrected — this record was wrong.** It said `argus-ui --token` gates `/api/*`
+  only and leaves `/v1/*` open to relayed ingest. The reviewer refuted it from the
+  code and reproduced the opposite: `PROXIED` covers `/api/` and `/v1/` alike and
+  the token check sits inside that branch, so an unauthenticated `POST /v1/metrics`,
+  `/v1/traces` and `/api/config` all answer 401. There is no hole. What is true is
+  only the second half: no test covers the `/v1/` gate.
+- Also on this branch, and outside this issue's criteria: two findings were filed as
+  their own issues — `docs/issues/2026-08-03-commit-signing-unverifiable.md` and
+  `docs/issues/2026-08-03-licence-check-misses-and-overreaches.md` — and the closed
+  issue `2026-08-02-workflow-tool-call-efficiency.md` had its frontmatter corrected
+  from `active` with no pull request to `done` with `pr: 22`, which its merged branch
+  had made true. Without that a session orienting itself would have resumed the
+  wrong issue.
+- Criteria 3 and 7 conflict when 3 is read literally: 3 forbids anything outside the
+  interface from referencing it, 7 requires the collector's 404 to name it. The
+  reading that holds, and that the shell case encodes, is the distribution surface —
+  `bin/`, `.claude-plugin/`, `skills/`, `agents/`, `hooks/`. Documentation and the
+  404 may name the interface. Recorded rather than reinterpreted: the criteria are
+  fixed, and this says which of two readings was always the coherent one.
+
+- **Review round 1**, fresh context, whole diff `99ce318..86daf95`. Suite established
+  independently: `bash test.sh`, five suites — repository 6, plugin 39, worktrees 9,
+  argus 112, argus-ui 14 — exit 0, nothing skipped. No static analysis exists;
+  confirmed by a wider search than the implementer's, adding `prettier.config*`,
+  `biome.json` and `tsconfig.json`, all absent, and no root package.
+
+  | criterion | findings |
+  | --- | ---: |
+  | 6 — a second start does not create a second collector | 1 |
+  | 14 — the documentation mirrors the result | 1 |
+  | violates none | 5 |
+  | every other criterion | 0 |
+
+  Triage:
+  - **Criterion 6, fix now.** `inspectPort` classifies the port by fetching
+    `/api/health` with a 3 s timeout, and *any* failure of that fetch returns
+    "free". A listener that accepts the connection and never answers is therefore
+    diagnosed as an empty port: the start proceeds, the child dies, exit 1 comes
+    after ~3.3 s with the wrong message, a stray measurement directory is left
+    behind, and the intended "held by something that is not a collector" is buried
+    in `collector.log`. The existing case uses an HTTP squatter, which is why the
+    silent one was never exercised. Reproduction handed to the test-author as a
+    spec.
+  - **Criterion 14, fix now.** Write-only `--persist` was corrected in the README's
+    Docker paragraph but not its Render one, which still argues for the paid plan
+    because the disk preserves history across a restart. With a write-only
+    `--persist` the disk keeps the files while the running collector no longer
+    replays them, and nothing in a deployment can reach them.
+  - **`render.yaml`'s header comment, fix now.** It makes the same claim as the
+    Render paragraph and this diff made it false. It violates no criterion —
+    criterion 14 enumerates the READMEs and the `CLAUDE.md`s — but the rulebook's
+    exception covers exactly a documentation statement this diff falsified.
+  - **The interface's page title, fix now, bounded.** `public/index.html` and
+    `public/styles.css` still name "athena · observe". Pre-existing text, but this
+    diff is what renamed the product, so the page now titles itself after something
+    that no longer exists. Same exception; bounded to the title, the header and the
+    file comment.
+  - **The false `/v1/` note, fixed in the record** — see the corrected entry above.
+    A tracker-only fix, so this round is not repeated for it.
+  - **Two out-of-scope traps, filed for their own run**: a bare `--open` or
+    `--persist` with no value parses to `true`, resolves to no directory and
+    silently starts an ordinary default-persist collector instead of refusing; and
+    `start --background --tunnel` lets the child generate a tunnel token that never
+    reaches the caller, because the parent prints its own null token. Neither
+    violates a criterion here.
 
 ## Checkpoints
 
