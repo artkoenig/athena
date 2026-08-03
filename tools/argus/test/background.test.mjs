@@ -226,6 +226,78 @@ test('a second start on a live collector names its directory instead of starting
   }
 });
 
+test('a collector whose event loop is blocked past one probe is still a collector', async () => {
+  const first = projectDir();
+  const second = projectDir();
+  const port = await freePort();
+  const session = sacrificialProcess();
+  // Signalling a process that has already gone is not a failure of this case.
+  const signal = (pid, sig) => {
+    try {
+      process.kill(pid, sig);
+    } catch {
+      /* already gone */
+    }
+  };
+  let collectorPid = 0;
+
+  try {
+    const started = await runBackground(first, ['--port', String(port), '--exit-with', String(session.pid)]);
+    const runs = fs.readdirSync(path.join(first, '.athena-telemetry')).filter((name) => name !== '.gitignore');
+    assert.equal(runs.length, 1);
+    const runDir = path.join(first, '.athena-telemetry', runs[0]);
+
+    const printed = started.out.match(/\bpid\b[^0-9]{0,12}(\d+)/i);
+    assert.ok(printed, 'the banner has to name the process id');
+    collectorPid = Number(printed[1]);
+
+    // A collector that is busy decoding an export answers nothing while it
+    // works, but the kernel keeps accepting connections on its listening
+    // socket: the port is held, and one probe in that window goes unanswered.
+    // SIGSTOP produces exactly that shape on the real collector, deterministically
+    // and without pushing megabytes through it. A stub server would have to
+    // reproduce whatever exchange tells a second start where the first one
+    // writes — an exchange no criterion names — so the real thing is used.
+    signal(collectorPid, 'SIGSTOP');
+    const secondStart = runBackground(second, [
+      '--port',
+      String(port),
+      '--exit-with',
+      String(session.pid),
+    ]).then(
+      (ok) => ok,
+      (failure) => failure,
+    );
+
+    // 3500 ms: longer than the 3051 ms slowest health answer measured under
+    // real ingest load, so no single attempt of a sane length outlives this
+    // block — and far inside any total window generous enough to tolerate that
+    // same 3051 ms plus retries. A slow machine only shortens the part of the
+    // block the second start actually sees, so load cannot turn this red.
+    await delay(3500);
+    signal(collectorPid, 'SIGCONT');
+
+    const result = await secondStart;
+    const out = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+    assert.ok(
+      !(result instanceof Error),
+      `one unanswered probe must not decide: exit ${result.code}, output: ${out.trim()}`,
+    );
+    assert.ok(
+      result.out.includes(runDir),
+      `a busy collector is still a collector, so its directory (${runDir}) has to be named: ${result.out.trim()}`,
+    );
+    assert.ok(await collectorAnswers(port), 'and it was answering all along, once its loop was free');
+  } finally {
+    if (collectorPid) signal(collectorPid, 'SIGCONT');
+    session.kill('SIGKILL');
+    if (collectorPid) signal(collectorPid, 'SIGKILL');
+    await waitForSilence(port, 20_000);
+    fs.rmSync(first, { recursive: true, force: true });
+    fs.rmSync(second, { recursive: true, force: true });
+  }
+});
+
 test('a port held by something that is not a collector is an error, not an attach', async () => {
   const cwd = projectDir();
   const port = await freePort();
@@ -249,7 +321,7 @@ test('a port held by something that is not a collector is an error, not an attac
   }
 });
 
-test('a port held by a listener that never answers is the same error, said promptly and without a run directory', async () => {
+test('a port held by a listener that never answers is the same error, and leaves no run directory', async () => {
   const cwd = projectDir();
   const port = await freePort();
   // Accepts the connection and then says nothing at all — the case an HTTP
@@ -259,12 +331,10 @@ test('a port held by a listener that never answers is the same error, said promp
   await new Promise((resolve) => mute.listen(port, '127.0.0.1', resolve));
 
   try {
-    const started = Date.now();
     const error = await runBackground(cwd, ['--port', String(port)]).then(
       () => null,
       (failure) => failure,
     );
-    const took = Date.now() - started;
 
     assert.ok(error, 'a listener that never answers is not a free port');
     assert.notEqual(error.code, 0);
@@ -275,12 +345,13 @@ test('a port held by a listener that never answers is the same error, said promp
     assert.match(out, new RegExp(String(port)), 'it has to say which port');
     assert.match(out, /not a collector/i, `it has to say what is wrong, got: ${out.trim()}`);
 
-    // 2 s: well above the few hundred milliseconds a node start plus a loopback
-    // connect needs, and below the 3 s a health request is given before it is
-    // abandoned — so meeting this bound proves the port was classified without
-    // sitting out that request.
-    assert.ok(took < 2000, `the diagnosis waited on a request timeout instead of the connection: ${took} ms`);
-
+    // No wall-clock bound here on purpose. Telling a silent listener apart from
+    // a busy collector costs time by construction — the port is only a stranger
+    // once the whole retry window has expired — so this path is meant to be
+    // slow. Timing it would also time an `execFile` of node: spawn, module load,
+    // connect and exit, which is a measurement of the machine and goes red under
+    // load with nothing changed. The one deadline that stays is `runBackground`'s
+    // own: the command has to come back to its caller by itself, not be killed.
     const telemetry = path.join(cwd, '.athena-telemetry');
     const left = fs.existsSync(telemetry)
       ? fs.readdirSync(telemetry).filter((name) => name !== '.gitignore')
