@@ -75,9 +75,9 @@ See [design.md](file:///Users/artkoenig/Workspace/athena/design.md).
 | :--- | :--- | :--- |
 | **Session Metadata** | Session ID | `004e0fb4-714f-4b3b-8da5-034ca370602c` |
 | | Agent / Provider | Gemini (Antigravity) |
-| | Session Duration | 32m 12s |
-| **Execution Counts** | Total Turns / Steps | 19 |
-| | Total Tool Calls | 191 |
+| | Session Duration | 48m 51s |
+| **Execution Counts** | Total Turns / Steps | 25 |
+| | Total Tool Calls | 217 |
 | | Failed Tool Calls | 1 |
 | | Log Errors | 1 |
 
@@ -85,7 +85,7 @@ See [design.md](file:///Users/artkoenig/Workspace/athena/design.md).
 
 | Agent / Subagent | Steps | Tool Calls Total | Tool Calls Failed | Errors |
 | :--- | :--- | :--- | :--- | :--- |
-| **Main Agent** | 13 | 102 | 0 | 0 |
+| **Main Agent** | 19 | 128 | 0 | 0 |
 | **Subagents** (`spec-researcher`, `solution-architect`, `clean-room-reviewer`, `issue-implementer`) | 6 | 89 | 1 | 1 |
 
 ### Session Sequence Diagram
