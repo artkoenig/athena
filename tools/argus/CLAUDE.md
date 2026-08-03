@@ -48,3 +48,11 @@ repository's `test.sh` runs this through the package's own `test` script, so
 the suite it runs stays the suite the package declares. A test binds to port 0
 and asks the OS which port it got — a hard-coded port makes the suite fail
 against whatever else is running.
+
+A case that needs a collector to answer one route normally and another
+abnormally puts a front server on the probed port: it proxies everything
+through to a real backgrounded collector and overrides only the one route —
+`/api/config` in `test/background.test.mjs`. The identifying exchange over
+`/api/health` stays the real one, while a 404 or a request that is never
+answered becomes deterministic, which no real collector can be made to produce
+on demand.

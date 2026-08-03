@@ -183,7 +183,9 @@ async function askPatiently(url, deadline) {
 /**
  * What is answering on that address: nothing, a collector, or something else.
  * `kind: 'stranger'` carries `silent`, which says whether that verdict was
- * heard or only inferred from a window that ran out.
+ * heard or only inferred from a window that ran out. `kind: 'collector'`
+ * carries `persistKnown`, which says whether `persist` is what the collector
+ * said or merely what was not learned — see describePersistence.
  */
 async function inspectPort(base, token) {
   // The connection classifies the port, not the request. A listener that
@@ -214,7 +216,35 @@ async function inspectPort(base, token) {
     `${base}/api/config${token ? `?token=${encodeURIComponent(token)}` : ''}`,
     deadline,
   );
-  return { kind: 'collector', persist: config?.ok ? (config.body?.persist ?? null) : null };
+
+  // Patience is not the only way this question goes unanswered. A refusal is
+  // instant and deterministic: a second start carries its own token, not the
+  // running collector's, and /api/config is gated while /api/health is not —
+  // so the collector is identified and its configuration is still 401. A route
+  // that is not there answers just as certainly and says just as little. None
+  // of these is the collector saying "I keep nothing"; only a body carrying the
+  // field is, which is why the field's presence, not its value, decides.
+  const persistKnown = Boolean(config?.ok && config.body && 'persist' in config.body);
+  return {
+    kind: 'collector',
+    persist: persistKnown ? (config.body.persist ?? null) : null,
+    persistKnown,
+  };
+}
+
+/**
+ * What to print for "where does that collector write?". Three states, and only
+ * one of them is "nothing on disk": a question that was refused or never
+ * answered says nothing about persistence at all, and reporting either as an
+ * answer asserts the opposite of the truth over a collector that is recording.
+ * Refusal and silence get one sentence because the caller's next move is the
+ * same for both — look at the collector itself.
+ */
+function describePersistence(found) {
+  if (!found.persistKnown) {
+    return '(not known — its configuration could not be read; it may well be recording)';
+  }
+  return found.persist ?? '(this collector keeps nothing on disk)';
 }
 
 /**
@@ -230,7 +260,7 @@ async function startInBackground(argv, config, endpoint) {
   const found = await inspectPort(local, config.token);
   if (found.kind === 'collector') {
     console.error(`\n  argus is already listening on ${local}`);
-    console.error(`  Measurement ${found.persist ?? '(this collector keeps nothing on disk)'}`);
+    console.error(`  Measurement ${describePersistence(found)}`);
     console.error('  Nothing was started; that collector keeps running.\n');
     return;
   }
