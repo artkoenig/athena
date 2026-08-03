@@ -237,6 +237,11 @@ Five commits, each green under `test.sh`.
   wording of the replacement sentence is left to the implementer — the tests assert
   the absence of the false claim, not any particular phrasing. Source: test-author,
   no question needed.
+- A JSON 200 that is not an object makes the second start attach rather than refuse.
+  Reason: `/api/health` has already identified a collector, and a body that says
+  nothing about persistence says nothing about the port being held by a stranger
+  either, so refusing would discard a fact the probe already has. Source: implementer,
+  the tests deliberately left this open.
 - Two projects under `tools/`: `argus` for the collector, `argus-ui` for the
   interface. Source: the human.
 - Other projects reach the collector through a `PATH` command plus a user-invocable
@@ -830,6 +835,58 @@ Facts established by measurement, which the criteria rest on:
   defect, and the failure would read "start --background never returned to its caller".
   Round 2 recorded this shape for the mute-stranger case; the new one sits nearer the
   bound.
+
+- **Test-author produced for findings 2 and 3:** Two new cases in
+  `tools/argus/test/background.test.mjs`, committed as `dcec322`. One is the
+  reviewer's exact reproduction, a `/api/config` answering 200 with the body `"nope"`.
+  The other walks eight bodies against one held port — `"nope"`, `""`, `42`, `0`,
+  `true`, `null`, `[]`, `[{"persist":"/somewhere"}]` — and afterwards asserts the
+  collector still holds its one measurement directory. Proof they failed: `node --test
+  test/background.test.mjs` → 17 tests, 15 pass, 2 fail, 77 s; exactly the two new
+  ones, all pre-existing cases keeping their verdict.
+
+- **Assumption recorded by test-author, confirmed by implementer measurement:** Five
+  of the eight bodies already reached an allowed outcome before the fix, because the
+  old code short-circuited on the falsy ones and `'persist' in []` is merely false.
+  Exactly three — `"nope"`, `42`, `true` — produced the crash. `null` is the
+  load-bearing one: the obvious guard keyed on `typeof` alone throws on it exactly as
+  the old code threw on a string, so a fix that looked right would have turned a
+  passing shape red.
+
+- **Implementer produced for findings 2 and 3:** Committed as `2e7fd0a`:
+  `tools/argus/bin/argus.mjs` (the `persistKnown` guard alone), `tools/argus/README.md`
+  (the one sentence), `skills/argus/SKILL.md` (the one paragraph),
+  `tools/argus/CLAUDE.md` (two paragraphs under "Tests"). The body is shape-tested
+  before the field lookup; both documents now name the directory conditionally, on
+  being able to read the collector's configuration, with the token as the named reason
+  otherwise. `tools/argus/README.md:45-47` and `skills/argus/SKILL.md` promised the
+  directory unconditionally, which the token-gated configuration made false; both were
+  bounded to the statement that broke.
+
+- **Decision recorded for finding 3.** A JSON 200 that is not an object makes the
+  second start attach rather than refuse. Reason: `/api/health` has already identified
+  a collector, and a body that says nothing about persistence says nothing about the
+  port being held by a stranger either, so refusing would discard a fact the probe
+  already has. The tests deliberately left this open. Source: implementer, on the code
+  path.
+
+- **Assumption recorded for finding 3.** The guard treats arrays as objects. It does
+  not matter today, since no array carries a `persist` own key, and narrowing it
+  further would be a rule the tests do not ask for.
+
+- **Facts.** `cd tools/argus && npm test` → 121 tests, 121 pass, 0 fail, 0 skipped,
+  exit 0, 77 s. `bash test.sh` → exit 0, five suites: repository 6, plugin 39,
+  worktrees 9, argus 121, argus-ui 14. The suite went 119 → 121 for exactly the two
+  new cases. Static analysis: none exists, established by `git ls-files | grep -iE
+  "eslint|prettier|biome|tsconfig|editorconfig|golangci|ruff|stylelint"` with no
+  match, exit 1, no root `package.json`, and `tools/argus/package.json` declaring
+  scripts start, dev, test, demo with no lint.
+
+- **Also record, without acting on it.** The scalar-body path now reaches the
+  `Measurement` banner label by a fourth route — that label is already filed as its
+  own issue. And the eight-body case runs ~5.3 s inside `runBackground`'s 25 s
+  per-command timeout, well clear of it, but that bound now has two consumers whose
+  costs move for different reasons; the "never answers" case sits at 15.3 s.
 
 ## Checkpoints
 
