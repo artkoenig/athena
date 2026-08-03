@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { otelEnvFor, sessionNameHook, sessionNameOf } from '../src/claude.mjs';
+import { otelEnvFor, sessionNameOf } from '../src/claude.mjs';
 
 test('a session name is read from the resource, and from metric attributes', () => {
   assert.equal(sessionNameOf({ resource: { 'session.name': 'athena-refactor' } }), 'athena-refactor');
@@ -29,26 +29,15 @@ test('long names are capped', () => {
 });
 
 test('the env block stays free of naming configuration', () => {
-  // Naming is the hook's job — it works out the name per session, so there is
-  // nothing to bake into an env block that gets pasted into many of them.
+  // A name belongs to one session; this block gets pasted into many, so it
+  // carries no OTEL_RESOURCE_ATTRIBUTES for anyone to forget to change.
   const env = otelEnvFor('http://localhost:4318');
   assert.ok(!('OTEL_RESOURCE_ATTRIBUTES' in env));
 });
 
-test('the settings hook points at the shipped script and needs no arguments', async () => {
-  const { SessionStart } = sessionNameHook();
-  const command = SessionStart[0].hooks[0].command;
-  assert.equal(SessionStart[0].hooks[0].type, 'command');
-  assert.match(command, /^node "\/.*hooks\/session-name\.mjs"$/);
-  // The path is real, not assembled from a guess about the install layout.
-  const file = command.match(/"(.+)"/)[1];
-  const { access } = await import('node:fs/promises');
-  await access(file);
-});
-
-test('the env block carries the collector address under a hook-visible name', () => {
-  // Claude Code strips OTEL_* from the environment it gives hook commands, so
-  // the naming hook would otherwise have no idea where its collector is.
+test('the env block carries the collector address under its own stable name', () => {
+  // The OTEL_* variables say where an agent sends telemetry; ATHENA_OBS_* say
+  // where the collector is, which is what this tool's own commands read.
   const open = otelEnvFor('http://localhost:4318');
   assert.equal(open.ATHENA_OBS_URL, 'http://localhost:4318');
   assert.ok(!('ATHENA_OBS_TOKEN' in open), 'no token, nothing to pass on');

@@ -25,7 +25,6 @@ import {
   EMPTY_TOKENS,
   bool,
   num,
-  normalizeSessionName,
   serviceNameOf,
   sessionIdOf,
   sessionNameOf,
@@ -108,9 +107,6 @@ function estimateTokensFromBytes(bytes) {
 function newSession(id, now) {
   return {
     id,
-    // Set out of band by the SessionStart hook (see setSessionName). A name the
-    // session exported itself outranks it — that one was chosen deliberately.
-    assignedName: null,
     serviceName: 'claude-code',
     resource: {},
     attrs: {},
@@ -168,7 +164,7 @@ function newSession(id, now) {
 
 /** What the UI puts where the id used to be, or null if nothing named it. */
 function nameOf(session) {
-  return sessionNameOf(session) ?? session.assignedName ?? null;
+  return sessionNameOf(session) ?? null;
 }
 
 /** Stable identity for one metric time series (metric name + attribute set). */
@@ -255,52 +251,6 @@ export class TelemetryStore {
     };
     this.#emit(change);
     return { count: records.length, sessionIds: change.sessionIds };
-  }
-
-  /**
-   * Name a session from outside the telemetry stream.
-   *
-   * This is how the SessionStart hook labels a session: the OTel resource is
-   * built once at process start, so nothing running *inside* a session can add
-   * a `session.name` attribute to what it exports (see sessionNameOf). The hook
-   * knows the session id and the collector's address, and says so directly.
-   *
-   * The session usually does not exist yet when this arrives — the hook runs
-   * before the first export — so it is created here. That is deliberate: a
-   * session shows up in the list the moment it starts, instead of only once it
-   * has spent a token.
-   *
-   * @param {string} id `session.id` as the CLI reports it
-   * @param {string|null} name the label, or an empty value to drop it again
-   * @param {{replay?: boolean, timeMs?: number}} opts `replay` suppresses
-   *   re-persisting on hydrate; `timeMs` is when the name was assigned, so a
-   *   replayed name recreates the session at its original age instead of
-   *   resurrecting it as brand new.
-   */
-  setSessionName(id, name, opts = {}) {
-    const sessionId = String(id ?? '').trim();
-    if (!sessionId) throw Object.assign(new Error('session id required'), { status: 400 });
-    const timeMs = opts.timeMs || Date.now();
-    let session = this.sessions.get(sessionId);
-    const created = !session;
-    if (!session) {
-      session = newSession(sessionId, timeMs);
-      this.sessions.set(sessionId, session);
-    }
-    session.assignedName = normalizeSessionName(name);
-    // Only after the name is in place: a replayed name older than the retention
-    // window is meant to be dropped here rather than resurface as a session.
-    if (created) this.#evict();
-    const change = {
-      signal: 'names',
-      records: [],
-      names: [{ id: sessionId, name: session.assignedName, timeMs }],
-      sessionIds: [sessionId],
-      seq: ++this.seq,
-      replay: Boolean(opts.replay),
-    };
-    this.#emit(change);
-    return { id: sessionId, name: nameOf(session) };
   }
 
   #session(id, record) {

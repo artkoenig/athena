@@ -59,7 +59,7 @@ export OTEL_TRACES_EXPORTER="otlp"
 export OTEL_METRIC_EXPORT_INTERVAL="1000"        # the 60s default is too sluggish for short runs
 export OTEL_LOGS_EXPORT_INTERVAL="1000"
 export OTEL_TRACES_EXPORT_INTERVAL="1000"
-export ATHENA_OBS_URL="http://127.0.0.1:4318"    # dieselbe Adresse für den Namens-Hook
+export ATHENA_OBS_URL="http://127.0.0.1:4318"    # the same address under this tool's own name
 ```
 
 `--format json` and `--format dotenv` give the same values for `options.env`
@@ -68,54 +68,29 @@ snippets for both SDKs.
 
 ### Naming sessions
 
-Claude Code exports **no** session name: `session.id` is a UUID, and the standard attribute
-set holds neither a title nor a summary nor a working directory. So athena-observe brings a
-SessionStart hook that names every session automatically — after repository and branch, i.e.
-`athena · main`. Nothing about it is configured; the hook sits in the settings block that
-[Switching it on for good](#switching-it-on-for-good) writes:
+Claude Code exports **no** session name of its own: `session.id` is a UUID, and the standard
+attribute set holds neither a title nor a summary nor a working directory. What it does
+forward is `OTEL_RESOURCE_ATTRIBUTES`, so a session started with
 
-```json
-{
-  "hooks": {
-    "SessionStart": [
-      { "hooks": [{ "type": "command", "command": "node /path/to/hooks/session-name.mjs" }] }
-    ]
-  }
-}
+```bash
+export OTEL_RESOURCE_ATTRIBUTES="session.name=nightly%20run"
 ```
 
-Why a hook does not simply set an environment variable: the OTel resource is read once at
-process start, and a hook runs after that. There is `CLAUDE_ENV_FILE` — a SessionStart hook
-may write `export` lines into it — but the documentation is explicit about who that
-reaches: "available in all subsequent Bash commands that Claude Code executes during the
-session". Later subprocesses, that is, not the running CLI process and certainly not its
-already-initialised exporter. Measured: a session whose SessionStart hook writes
-`OTEL_RESOURCE_ATTRIBUTES` into `CLAUDE_ENV_FILE` still exports without `session.name` —
-the **next** session started from that shell has it.
+carries that label on every record it exports, and the UI shows it where the ID would be.
+US-ASCII only, spaces and umlauts percent-encoded, several attributes separated by commas.
 
-So the hook sends the name straight to the collector (`POST /api/sessions/<id>/name`), with
-the `session_id` every hook is handed anyway. It reads address and token from
-`ATHENA_OBS_URL` / `ATHENA_OBS_TOKEN`, which the env block sets. Not from
-`OTEL_EXPORTER_OTLP_ENDPOINT`: **Claude Code strips every `OTEL_*` variable from the
-environment it gives hook commands** (measured against 2.1.220 — `CLAUDE_CODE_ENABLE_TELEMETRY`
-and arbitrary variables of your own come through, `OTEL_*` does not). A hook therefore never
-sees where its session exports to. Without `ATHENA_OBS_URL` it does nothing.
+It has to be set **before** the session starts. The OTel resource is built once at process
+start, so nothing running inside an already-started session can add the attribute — not a
+hook either. There is `CLAUDE_ENV_FILE`, which a SessionStart hook may write `export` lines
+into, but the documentation is explicit about who that reaches: "available in all subsequent
+Bash commands that Claude Code executes during the session". Later subprocesses, that is,
+not the running CLI process and certainly not its already-initialised exporter. Measured: a
+session whose SessionStart hook writes `OTEL_RESOURCE_ATTRIBUTES` into `CLAUDE_ENV_FILE`
+still exports without `session.name` — the **next** session started from that shell has it.
 
-Because the name arrives before the first export, a session shows up in the list as soon as
-it starts — not only once it has spent its first token.
-
-Two things can be changed:
-
-- `ATHENA_OBS_SESSION_NAME` overrides the derived name. Useful for CI jobs (build number)
-  or SDK fleets that name their runs themselves.
-- `OTEL_RESOURCE_ATTRIBUTES="session.name=…"` set **before** the start wins against the
-  hook — that is the manual route when a session should be called something other than its
-  branch. US-ASCII only, spaces percent-encoded (`nightly%20run`), several attributes
-  separated by commas.
-
-Without the hook and without the attribute, the session is still tracked by its ID. The ID
-does not disappear for named sessions either — it sits under the name and remains what API
-paths and search point at.
+Without the attribute a session is still tracked, by its ID. The ID does not disappear for
+named sessions either — it sits under the name and remains what API paths and search point
+at.
 
 ### Switching it on for good
 
@@ -129,11 +104,10 @@ So that nobody has to remember it, the block belongs in the personal project set
 node bin/athena-observe.mjs env --format settings > ../../.claude/settings.local.json
 ```
 
-That writes `{"env": {…}, "hooks": {…}}` — the export block plus the SessionStart hook from
-[Naming sessions](#naming-sessions) — and Claude Code applies it to every session in this
-project. Deliberately `settings.local.json` and not `settings.json`: the latter is versioned
-and would have every contributor exporting to a collector they do not run, once a second.
-`settings.local.json` is in `.gitignore`.
+That writes `{"env": {…}}` — the export block and nothing else — and Claude Code applies it
+to every session in this project. Deliberately `settings.local.json` and not `settings.json`:
+the latter is versioned and would have every contributor exporting to a collector they do
+not run, once a second. `settings.local.json` is in `.gitignore`.
 
 > If the file already has content, `>` overwrites it. Paste the `env` block in by hand
 > instead of redirecting.
@@ -429,8 +403,8 @@ Two things hold for all of these variants:
 ## What the UI shows
 
 - **Sessions** — list of all sessions, sorted by last activity, with cost, tokens and error
-  count; live sessions are marked. With the hook installed the name leads and the ID sits
-  below it, otherwise the ID leads (see [Naming sessions](#naming-sessions)).
+  count; live sessions are marked. For a session that exported a name it leads and the ID
+  sits below it, otherwise the ID leads (see [Naming sessions](#naming-sessions)).
 - **Overview** — grid of figures (cost, tokens by type including cache hit rate,
   interactions, LLM requests, tool calls, lines of code, commits/PRs, active time) plus
   tables per model (requests, latency, TTFT, errors) and per tool (calls, failures,
@@ -515,7 +489,6 @@ src/claude.mjs           Claude Code domain knowledge: metric, event and span na
 src/store.mjs            in-memory store, session aggregation, trace tree, queries
 src/persist.mjs          optional JSONL append + replay
 src/server.mjs           OTLP ingest, JSON API, SSE, static serving
-hooks/session-name.mjs   SessionStart hook: names the session in the collector
 public/                  UI (vanilla JS, no build)
 scripts/demo-emit.mjs    synthetic sessions as real OTLP protobuf
 ```
@@ -535,15 +508,14 @@ and new Claude Code attributes.
 | `GET /api/metrics`       | Metric points (`session`, `name`)                          |
 | `GET /api/stats`         | Totals, top models, top tools, buffer sizes                |
 | `GET /api/facets`        | Event and metric names that occur, with frequency          |
-| `POST /api/sessions/:id/name` | Name a session (`{"name": "…"}`), from the SessionStart hook |
-| `GET /api/config`        | Endpoint, limits, ready-made `OTEL_*` block, hook block     |
+| `GET /api/config`        | Endpoint, limits, ready-made `OTEL_*` block                 |
 | `GET /api/stream`        | Server-Sent Events on ingest                               |
 | `DELETE /api/data`       | Empty the store                                            |
 
 ## Tests
 
 ```bash
-npm test          # wire format, decoder, store, persistence, config, probe, tunnel, HTTP, hook
+npm test          # wire format, decoder, store, persistence, config, probe, tunnel, HTTP
 npm run demo      # emit a synthetic session
 ```
 
@@ -599,31 +571,17 @@ order:
 
 ### Sessions arrive, but without a name
 
-The name is the one thing that does not travel with the telemetry (see
-[Naming sessions](#naming-sessions)), so it can be missing while everything else is
-there. In order:
+A name reaches the collector only as a resource attribute the session itself exports (see
+[Naming sessions](#naming-sessions)), so it can be missing while everything else is there.
+In order:
 
-1. **Is the hook installed, and is `ATHENA_OBS_URL` in the environment?**
-   `.claude/settings.local.json` (or the cloud session's environment settings) needs both:
-   the `hooks.SessionStart` block and `ATHENA_OBS_URL` in the `env` block. Without the
-   variable the hook cannot find the collector — it never sees the `OTEL_*` variables,
-   Claude Code filters those out of the hook environment. A file written before this
-   feature has neither: print `env --format settings` again and install it.
-2. **Does the collector know the route?** `athena-observe check` has a step of its own for
-   this: `✗ naming … predates session naming` means the collector runs an older build.
-   Redeploy or restart it — with `autoDeploy: false` on Render that does not happen by
-   itself.
-3. **Was a new session started?** The hook fires at startup. Running sessions do not get a
-   name retroactively.
-4. **What does the hook itself say?** Run it by hand, with the same environment as the
-   session:
-
-   ```bash
-   echo "{\"session_id\":\"probe\",\"cwd\":\"$PWD\"}" | node tools/observability/hooks/session-name.mjs
-   ```
-
-   No output means it named the session (check `/api/sessions?search=probe`). Otherwise it
-   writes the reason to stderr — a missing `ATHENA_OBS_URL` in the environment, the
-   collector's HTTP status, a timeout. As a hook the same lines show up under
-   `claude --debug`; to keep them, append `2>>/tmp/hook.err` to the hook command in the
-   settings.
+1. **Was `OTEL_RESOURCE_ATTRIBUTES="session.name=…"` in the environment?** Nothing else
+   names a session. Check it in the session itself, not in the shell you set it from.
+2. **Was it set before the session started?** The OTel resource is built once at process
+   start. A running session does not get a name retroactively — the next one does.
+3. **Is the value encoded?** The value is restricted to US-ASCII and comma-separated, so a
+   space, a comma or an umlaut has to be percent-encoded (`nightly%20run`). An unencoded
+   one truncates the attribute or drops it.
+4. **Does the session's own record carry it?** Open the session in the UI, tab
+   "Attributes": if `session.name` is not among the resource attributes, it never left the
+   agent.

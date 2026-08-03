@@ -75,12 +75,11 @@ test('the settings format nests the env block the way Claude Code expects', asyn
   const parsed = JSON.parse(stdout);
   assert.deepEqual(
     Object.keys(parsed),
-    ['env', 'hooks'],
-    'settings.local.json keys live under "env", the naming hook under "hooks"',
+    ['env'],
+    'the environment block is the whole of what this format emits',
   );
   assert.equal(parsed.env.CLAUDE_CODE_ENABLE_TELEMETRY, '1');
   assert.equal(parsed.env.OTEL_EXPORTER_OTLP_ENDPOINT, 'http://127.0.0.1:4318');
-  assert.match(parsed.hooks.SessionStart[0].hooks[0].command, /session-name\.mjs/);
 });
 
 test('parseDuration accepts the documented units', () => {

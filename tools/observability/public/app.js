@@ -813,7 +813,6 @@ function renderSetupModal() {
   const shell = Object.entries(env)
     .map(([key, value]) => `export ${key}="${value}"`)
     .join('\n');
-  const hooks = JSON.stringify({ hooks: state.config?.hooks ?? {} }, null, 2);
   const ts = `const otelEnv = ${JSON.stringify(env, null, 2)};
 
 for await (const message of query({
@@ -833,17 +832,11 @@ options = ClaudeAgentOptions(env=OTEL_ENV)`;
         <button type="button" class="ghost-button" data-copy="env-shell">Copy</button></div>
       <pre id="env-shell">${esc(shell)}</pre>
     </div>
-    <h3>Session names</h3>
-    <div class="env-block">
-      <div class="env-block-head"><span>.claude/settings.json — SessionStart hook</span>
-        <button type="button" class="ghost-button" data-copy="env-hook">Copy</button></div>
-      <pre id="env-hook">${esc(hooks)}</pre>
-    </div>
     <p class="muted">
-      Claude Code exports no session name, and the OTel resource that could carry one is built
-      before any hook runs — so the hook tells this collector directly, keyed by the session id.
-      It names sessions after repository and branch, and takes endpoint and token from the
-      environment above. Without it, sessions are listed by their id.
+      Claude Code exports no session name of its own. To give a session one, add
+      <code>OTEL_RESOURCE_ATTRIBUTES="session.name=…"</code> to the block above <em>before</em>
+      starting it — the OTel resource is built once at process start, so it cannot be set
+      afterwards. Without it, sessions are listed by their id.
     </p>
     <h3>TypeScript SDK</h3>
     <div class="env-block">

@@ -8,8 +8,6 @@
  * of the code never has to string-match inline.
  */
 
-import { fileURLToPath } from 'node:url';
-
 export const METRIC = {
   session: 'claude_code.session.count',
   linesOfCode: 'claude_code.lines_of_code.count',
@@ -155,10 +153,9 @@ export function normalizeSessionName(value) {
  * is why both are checked.
  *
  * It has to be set before the process starts, because the OTel resource is built
- * once at init. That is exactly what the SessionStart hook cannot do — it runs
- * inside an already-configured process — so the hook names sessions through the
- * collector's API instead, and this stays the manual override (see
- * TelemetryStore#setSessionName).
+ * once at init. Nothing running *inside* a session can add the attribute after
+ * the fact, so this is the only way a session arrives under a label rather than
+ * a UUID — and an unnamed session is still tracked, by its id.
  */
 export function sessionNameOf(record) {
   return normalizeSessionName(
@@ -236,22 +233,6 @@ export function describeEvent(log) {
 }
 
 /**
- * Settings block that makes sessions arrive with a name instead of only a UUID.
- *
- * It belongs next to the env block rather than behind a flag: the name is
- * derived per session (repository and branch), so there is nothing to configure
- * — and a collector that lists twenty UUIDs is the state everyone wants fixed
- * anyway. The hook reads the endpoint and token straight out of the environment
- * the env block sets, which is why the two are handed out together.
- */
-export function sessionNameHook() {
-  const script = fileURLToPath(new URL('../hooks/session-name.mjs', import.meta.url));
-  return {
-    SessionStart: [{ hooks: [{ type: 'command', command: `node ${JSON.stringify(script)}` }] }],
-  };
-}
-
-/**
  * Environment block that points a Claude Agent SDK / Claude Code run at this
  * collector. Rendered by `athena-observe env` and shown in the UI so the whole
  * setup is copy-pasteable.
@@ -270,11 +251,12 @@ export function otelEnvFor(endpoint, { traces = true, token = null, fastFlush = 
     env.OTEL_TRACES_EXPORTER = 'otlp';
   }
   if (token) env.OTEL_EXPORTER_OTLP_HEADERS = `Authorization=Bearer ${token}`;
-  // The same address again, under a name that survives the trip to a hook.
-  // Claude Code strips every OTEL_* variable from the environment it gives hook
-  // commands (measured against 2.1.220: CLAUDE_CODE_ENABLE_TELEMETRY and
-  // unrelated variables come through, OTEL_* does not), so the naming hook has
-  // no way to learn where to send a name from the exporter configuration alone.
+  // The same address and secret once more, under the stable names this tool's
+  // own commands read. The OTEL_* variables belong to the exporter and say where
+  // an agent *sends* telemetry; ATHENA_OBS_* say where the collector is, which is
+  // the question anything talking to it has to answer. resolveConfig already
+  // reads ATHENA_OBS_TOKEN, so exporting this block also configures a collector
+  // started in the same shell.
   env.ATHENA_OBS_URL = endpoint;
   if (token) env.ATHENA_OBS_TOKEN = token;
   if (fastFlush) {

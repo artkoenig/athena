@@ -16,13 +16,6 @@ import path from 'node:path';
 import readline from 'node:readline';
 
 const SIGNALS = ['traces', 'metrics', 'logs'];
-/**
- * Session names live in their own file: they do not come from an exporter, and
- * a name has to outlive the records that were in the store when it was set —
- * otherwise a restart would leave named sessions labelled by id again, with no
- * SessionStart hook left to fire and fix it.
- */
-const NAMES = 'names';
 const DEFAULT_MAX_BYTES = 64 * 1024 * 1024;
 
 export class JsonlPersistence {
@@ -120,27 +113,14 @@ export class JsonlPersistence {
         restored += batch.length;
       }
     }
-    // After the records, so that a name set for a session whose telemetry has
-    // since aged out is the one thing that decides whether it exists at all.
-    for await (const entry of this.#read(NAMES)) {
-      if (!entry?.id) continue;
-      store.setSessionName(entry.id, entry.name ?? null, { replay: true, timeMs: entry.timeMs });
-    }
     return restored;
   }
 
   /** Persist every future non-replay ingest. */
   attach(store) {
     fs.mkdirSync(this.dir, { recursive: true });
-    this.unsubscribe = store.subscribe(({ signal, records, names, replay }) => {
+    this.unsubscribe = store.subscribe(({ signal, records, replay }) => {
       if (replay) return;
-      if (signal === NAMES) {
-        this.#append(
-          NAMES,
-          (names ?? []).map((entry) => `${JSON.stringify(entry)}\n`),
-        );
-        return;
-      }
       if (!records?.length) return;
       this.#append(
         signal,

@@ -14,7 +14,7 @@ import { TelemetryStore } from '../src/store.mjs';
 import { JsonlPersistence } from '../src/persist.mjs';
 import { createServer } from '../src/server.mjs';
 import { endpointFor, parseArgs, resolveConfig } from '../src/config.mjs';
-import { otelEnvFor, sessionNameHook } from '../src/claude.mjs';
+import { otelEnvFor } from '../src/claude.mjs';
 import { probeCollector } from '../src/probe.mjs';
 import { startTunnel } from '../src/tunnel.mjs';
 
@@ -47,9 +47,7 @@ Options
       --max-sessions <n>        Sessions kept in memory              (default 500)
       --traces false            Leave traces out of the printed env block
       --format <fmt>            Output format for "env": shell (default), json,
-                                dotenv, settings (.claude/settings.local.json,
-                                includes the SessionStart hook that names
-                                sessions in the UI)
+                                dotenv, settings (.claude/settings.local.json)
       --help                    Show this message
 
 Environment
@@ -64,10 +62,8 @@ function renderEnv(env, format) {
       return JSON.stringify(env, null, 2);
     // Ready to drop into .claude/settings.local.json, which applies the block to
     // every session in the project without anyone having to remember an export.
-    // The SessionStart hook rides along: it is what makes those sessions show up
-    // under a name rather than a UUID, and it needs no configuration of its own.
     case 'settings':
-      return JSON.stringify({ env, hooks: sessionNameHook() }, null, 2);
+      return JSON.stringify({ env }, null, 2);
     case 'dotenv':
       return Object.entries(env)
         .map(([key, value]) => `${key}=${value}`)
@@ -107,10 +103,9 @@ async function main(argv) {
     for (const step of result.steps) {
       console.error(`  ${step.ok ? '✓' : '✗'} ${step.name.padEnd(10)} ${step.detail}`);
     }
-    // Some failures are their own verdict: the export itself works, so saying it
-    // does not arrive would be wrong — but so would calling this healthy. A split
-    // endpoint shows only the share of telemetry that lands on one instance; a
-    // collector too old to name sessions shows all of it, under UUIDs.
+    // One failure is its own verdict: the export itself works, so saying it does
+    // not arrive would be wrong — but so would calling this healthy. A split
+    // endpoint shows only the share of telemetry that lands on one instance.
     const failed = result.steps.filter((step) => !step.ok).map((step) => step.name);
     const only = (name) => failed.length === 1 && failed[0] === name;
     console.error(
@@ -118,9 +113,7 @@ async function main(argv) {
         ? `\n  Telemetry from this environment reaches ${result.endpoint}.\n`
         : only('single')
           ? `\n  Telemetry reaches ${result.endpoint}, but only one instance of several will ever show it.\n`
-          : only('naming')
-            ? `\n  Telemetry reaches ${result.endpoint}, but it cannot name sessions — they stay listed by their id.\n`
-            : `\n  Telemetry from this environment does NOT reach ${result.endpoint}.\n`,
+          : `\n  Telemetry from this environment does NOT reach ${result.endpoint}.\n`,
     );
     if (!result.ok) process.exitCode = 1;
     return;
