@@ -232,6 +232,11 @@ Five commits, each green under `test.sh`.
   collector. It stays at twelve. Reason: with the fix below, giving up no longer
   produces a false claim, so the window stops being load-bearing. Revisit only if the
   human says otherwise. Source: default, unanswered.
+- Refusal and silence share one expectation on the probe's banner. Neither may claim
+  nothing is kept, and nothing requires them to read as two different sentences. The
+  wording of the replacement sentence is left to the implementer — the tests assert
+  the absence of the false claim, not any particular phrasing. Source: test-author,
+  no question needed.
 - Two projects under `tools/`: `argus` for the collector, `argus-ui` for the
   interface. Source: the human.
 - Other projects reach the collector through a `PATH` command plus a user-invocable
@@ -695,6 +700,37 @@ Facts established by measurement, which the criteria rest on:
 
 - **Next step.** The criterion-6 defect goes test-author → implementer → review
   round 5 → checkpoint 2 → commit, push, PR → retro.
+
+- **Test-author produced:** `tools/argus/test/background.test.mjs`, new file.
+  Four new tests, plus four helpers and one shared regex. All four are against
+  criterion 6: a 401 refusal (the reviewer's exact reproduction — two starts,
+  different tokens); a 404 where the route answered but said nothing about
+  persistence; a `/api/config` that never answers inside the probe window; and one
+  case asserting that the three states read as three different sentences while a
+  known directory is still named. Committed as `3cda471`, pushed together with the
+  round-4 record at `eb031ac`. Proof they fail: `cd tools/argus && npm test --silent`
+  → 119 tests, 115 pass, 4 fail, exit 1. Exactly the four new ones fail, no
+  pre-existing test changed verdict. All four are assertion failures on the printed
+  banner, not setup errors.
+
+- **Decision recorded by test-author, no question needed:** refusal and silence
+  share one expectation. Neither may claim nothing is kept, and nothing requires them
+  to read as two different sentences. The wording of the replacement sentence is left
+  to the implementer — the tests assert the absence of the false claim, not any
+  particular phrasing.
+
+- **Assumption recorded:** states a and e (genuine no-persistence, and a named
+  directory) are pinned inside the fourth test rather than as tests of their own,
+  because on their own they pass today. The defect is the collapse, so the assertion
+  that carries it is pairwise distinctness.
+
+- **Convention to record in `tools/argus/CLAUDE.md`:** a case that needs a collector
+  to answer `/api/health` normally but `/api/config` abnormally puts a front server
+  on the probed port that proxies everything through to a real backgrounded collector
+  and overrides only `/api/config`. This keeps the health exchange real — the
+  objection recorded against a full stub in the older cases — while making 404 and
+  never-answers deterministic, which no real collector can be made to produce on
+  demand.
 
 ## Checkpoints
 
