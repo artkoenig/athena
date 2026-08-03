@@ -1,5 +1,5 @@
 ---
-status: active
+status: waiting
 branch: claude/athena-observer-background-04t663
 pr:
 ---
@@ -216,11 +216,11 @@ Five commits, each green under `test.sh`.
 
 ## Tasks
 
-- [ ] 1. Remove session naming
-- [ ] 2. Rename to `tools/argus`
-- [ ] 3. Split the interface into `tools/argus-ui`
-- [ ] 4. Persist by default
-- [ ] 5. Reachable and backgroundable
+- [x] 1. Remove session naming
+- [x] 2. Rename to `tools/argus`
+- [x] 3. Split the interface into `tools/argus-ui`
+- [x] 4. Persist by default
+- [x] 5. Reachable and backgroundable
 
 ## Decisions
 
