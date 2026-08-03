@@ -93,29 +93,33 @@ function renderEnv(env, format) {
   }
 }
 
-// How long a port may take to answer, by question. The connection is the one
-// that decides whether the port is free, so it is the only one a free port
-// pays — and a refused connection on loopback comes back at once.
+// How long a port may take to answer. The connection is what decides whether
+// the port is free, so it is the only thing a free port pays — and a refused
+// connection on loopback comes back at once.
 //
-// The health question is asked only of a port that already accepted a
-// connection, and no single deadline can settle it. A collector decoding a
+// Everything after that connection is asked of a port that already accepted
+// one, and no single deadline can settle any of it. A collector decoding a
 // large OTLP export blocks its own event loop: measured under four concurrent
 // 19.8 MB exports, /api/health came back between 481 ms and 3051 ms. A
 // listener that will never answer looks exactly the same to one deadline, so
-// the number only picks which of the two is misread. So the question is asked
-// again until the window is spent, and only an expired window means stranger:
-// a collector whose loop frees up between chunks answers on some attempt, a
-// silent listener never does. Each attempt gets twice the budget of the one
-// before, starting at the second a healthy collector needs — the later
-// attempts are each longer than the slowest answer ever measured here. Twelve
-// seconds of window covers that 3051 ms with its retries several times over
-// and still returns long before a caller gives up. Only a held port pays it,
-// which is where seconds belong: calling a working collector a stranger tells
-// the human to kill the thing that is doing the job.
+// the number only picks which of the two is misread. So a question is asked
+// again until the window is spent, and each attempt gets twice the budget of
+// the one before, starting at the second a healthy collector needs — the later
+// attempts are each longer than the slowest answer ever measured here.
+//
+// This patience belongs to the probe, not to one question in it. The loop that
+// blocks the health question blocks the one after it just as hard, and a step
+// that asks once is a step that reports a recording collector as keeping
+// nothing on disk. So every question of a held port goes through askPatiently
+// against one shared window: whatever is asked, and whatever is added later,
+// is exactly as patient as the first question, and the whole probe still ends
+// inside those twelve seconds. Only a held port pays them, which is where
+// seconds belong: calling a working collector a stranger tells the human to
+// kill the thing that is doing the job.
 const CONNECT_TIMEOUT_MS = 3000;
-const HEALTH_WINDOW_MS = 12_000;
-const HEALTH_FIRST_ATTEMPT_MS = 1000;
-const HEALTH_RETRY_GAP_MS = 250;
+const PROBE_WINDOW_MS = 12_000;
+const PROBE_FIRST_ATTEMPT_MS = 1000;
+const PROBE_RETRY_GAP_MS = 250;
 
 /**
  * Does anything accept a connection there? Refused is the ordinary "free port"
@@ -135,32 +139,45 @@ function accepts(host, port) {
 }
 
 /**
- * One /api/health question, with a budget. Three outcomes, and only one of
- * them is worth asking again: `{ answered: false }` means nothing came back
- * inside the budget, which a busy collector and a mute listener both produce.
- * An answer settles it either way — asking a second time gets the same one.
+ * One question, with a budget. Two outcomes, and only one of them is worth
+ * asking again: `null` means nothing came back inside the budget, which a busy
+ * collector and a mute listener both produce. Anything that came back settles
+ * it — asking a second time gets the same answer.
  */
-async function askHealth(base, budgetMs) {
+async function askOnce(url, budgetMs) {
   let response;
-  let body;
+  let text;
   try {
-    response = await fetch(`${base}/api/health`, { signal: AbortSignal.timeout(budgetMs) });
+    response = await fetch(url, { signal: AbortSignal.timeout(budgetMs) });
     // Read to the end under the same budget: half an answer is no answer, and
     // an abort in the middle of one has to be retried like silence.
-    body = await response.text();
+    text = await response.text();
   } catch {
-    return { answered: false };
+    return null;
   }
-  let health = null;
+  let body = null;
   try {
-    health = JSON.parse(body);
+    body = JSON.parse(text);
   } catch {
-    // It said something, and it was not JSON. That is an answer.
+    // It said something, and it was not JSON. That is still an answer.
   }
-  // /api/health answers without a token by design, and names the process. Both
-  // are what make "is this one of ours" answerable from the outside.
-  const ours = response.ok && health?.ok === true && typeof health.instance === 'string';
-  return { answered: true, health: ours ? health : null };
+  return { ok: response.ok, body };
+}
+
+/**
+ * The same question until it is answered or the probe's window is spent. The
+ * budget doubles per attempt and is clamped to what is left, so a healthy
+ * collector answers on the first one and a loop that frees up later still gets
+ * caught. `null` means the window ran out with nothing said.
+ */
+async function askPatiently(url, deadline) {
+  for (let budget = PROBE_FIRST_ATTEMPT_MS; ; budget *= 2) {
+    const left = deadline - Date.now();
+    if (left <= 0) return null;
+    const answer = await askOnce(url, Math.min(budget, left));
+    if (answer) return answer;
+    await delay(PROBE_RETRY_GAP_MS);
+  }
 }
 
 /**
@@ -176,29 +193,28 @@ async function inspectPort(base, token) {
   const { hostname, port } = new URL(base);
   if (!(await accepts(hostname, Number(port)))) return { kind: 'free' };
 
-  // Something holds it. Ask until the window is spent; one unanswered request
-  // is a collector that is busy just as often as it is a stranger.
-  const deadline = Date.now() + HEALTH_WINDOW_MS;
-  for (let budget = HEALTH_FIRST_ATTEMPT_MS; ; budget *= 2) {
-    const left = deadline - Date.now();
-    if (left <= 0) return { kind: 'stranger', silent: true };
-    const attempt = await askHealth(base, Math.min(budget, left));
-    if (attempt.answered) {
-      if (!attempt.health) return { kind: 'stranger', silent: false };
-      break;
-    }
-    await delay(HEALTH_RETRY_GAP_MS);
+  // Something holds it, and one window now covers every question put to it:
+  // one unanswered request is a collector that is busy just as often as it is
+  // a stranger, and that is as true of the second question as of the first.
+  const deadline = Date.now() + PROBE_WINDOW_MS;
+
+  const health = await askPatiently(`${base}/api/health`, deadline);
+  if (!health) return { kind: 'stranger', silent: true };
+  // /api/health answers without a token by design, and names the process. Both
+  // are what make "is this one of ours" answerable from the outside.
+  if (!(health.ok && health.body?.ok === true && typeof health.body.instance === 'string')) {
+    return { kind: 'stranger', silent: false };
   }
 
-  let persist = null;
-  try {
-    const url = `${base}/api/config${token ? `?token=${encodeURIComponent(token)}` : ''}`;
-    const config = await fetch(url, { signal: AbortSignal.timeout(3000) });
-    if (config.ok) persist = (await config.json()).persist ?? null;
-  } catch {
-    // Its measurement directory is worth naming, not worth failing over.
-  }
-  return { kind: 'collector', persist };
+  // Where it writes is the second question, asked of the same loop that made
+  // the first one hard. Its answer is worth naming, not worth failing over —
+  // but an unasked one prints "keeps nothing on disk" over a collector that is
+  // recording, which is worse than saying nothing, so it gets the same patience.
+  const config = await askPatiently(
+    `${base}/api/config${token ? `?token=${encodeURIComponent(token)}` : ''}`,
+    deadline,
+  );
+  return { kind: 'collector', persist: config?.ok ? (config.body?.persist ?? null) : null };
 }
 
 /**
@@ -225,7 +241,7 @@ async function startInBackground(argv, config, endpoint) {
     console.error(
       found.silent
         ? `argus: port ${config.port} is held and nothing on it answered in ` +
-            `${Math.round(HEALTH_WINDOW_MS / 1000)}s: it is not a collector, or it is one too busy ` +
+            `${Math.round(PROBE_WINDOW_MS / 1000)}s: it is not a collector, or it is one too busy ` +
             'to answer. Stop it, or start on another port with --port.'
         : `argus: port ${config.port} is held by something that is not a collector. ` +
             'Stop it, or start on another port with --port.',
