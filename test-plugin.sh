@@ -252,6 +252,100 @@ node -e '
 check $? "the installed inventory equals what the tree holds, agent-owned skills included: skills, one SessionStart hook"
 
 echo
+echo "=== the collector reaches other projects, the interface does not"
+
+# the shim is in the tree and executable. A plugin's bin/ is what the PATH
+# mechanism picks up; a file without the executable bit is on the PATH and
+# unrunnable.
+[ -f "$root/bin/argus" ] && [ -x "$root/bin/argus" ]
+check $? "bin/argus exists and is executable"
+
+# POSIX sh, not bash: it runs out of a plugin cache in whatever shell the
+# platform hands it.
+head -1 "$root/bin/argus" 2>/dev/null | grep -q '^#!/bin/sh'
+check $? "bin/argus is a POSIX sh script"
+
+sh -n "$root/bin/argus" 2>/dev/null
+check $? "bin/argus parses as POSIX sh"
+
+# CLAUDE_PLUGIN_ROOT is not set for Bash commands, so the shim has to find its
+# own tree from $0 — nothing in it may name a path inside a checkout.
+[ -f "$root/bin/argus" ] \
+  && grep -qE '\$\{?0' "$root/bin/argus" \
+  && ! grep -q 'CLAUDE_PLUGIN_ROOT' "$root/bin/argus"
+check $? "bin/argus locates itself from \$0, not from CLAUDE_PLUGIN_ROOT"
+
+# criterion 2: the command runs out of the installed plugin cache, from a
+# working directory that is not an athena checkout. That is the whole point —
+# the files already shipped, the reachability did not.
+installed_argus="$(find "$install_home" "$install_cfg" -type f -path '*/bin/argus' 2>/dev/null | head -1)"
+outside="$tmp/not-an-athena-checkout"
+mkdir -p "$outside"
+if [ -n "$installed_argus" ]; then
+  ( cd "$outside" && "$installed_argus" --help ) >"$tmp/argus-help.txt" 2>&1
+  check $? "argus --help runs from the installed plugin cache outside an athena checkout, exit 0"
+  grep -qi 'argus' "$tmp/argus-help.txt"
+  check $? "the help names the command it belongs to"
+else
+  no "bin/argus is not in the installed plugin cache"
+  no "bin/argus is not in the installed plugin cache (help not run)"
+fi
+
+# criterion 2: a user-invocable skill carries the procedure, and with it the
+# trap — Claude Code reads its telemetry configuration at process start, so a
+# session started without the environment block cannot be measured after the
+# fact. A bare command cannot carry that; the skill is where it lives.
+node -e '
+  const fs = require("fs");
+  const page = process.argv[1];
+  if (!fs.existsSync(page)) { console.error("skills/argus/SKILL.md is missing"); process.exit(1); }
+  const text = fs.readFileSync(page, "utf8");
+  const fm = text.match(/^---\n([\s\S]*?)\n---\n/);
+  const problems = [];
+  if (!fm) problems.push("no frontmatter");
+  else {
+    if (!/^name:\s*argus\s*$/m.test(fm[1])) problems.push("frontmatter does not name the skill argus");
+    if (!/^description:\s*\S/m.test(fm[1])) problems.push("no description");
+    if (!/^user-invocable:\s*true\s*$/m.test(fm[1])) problems.push("not user-invocable");
+  }
+  const body = fm ? text.slice(fm[0].length) : text;
+  if (!/process start/i.test(body)) problems.push("does not carry the trap: telemetry is configured at process start");
+  if (problems.length) { console.error(problems.join("; ")); process.exit(1); }
+' "$root/skills/argus/SKILL.md"
+check $? "skills/argus/SKILL.md is user-invocable and carries the process-start trap"
+
+# criterion 3: the interface is never distributed. The PATH mechanism is the
+# directory itself, so an entry there would ship it; a skill or a manifest
+# mention would too.
+node -e '
+  const fs = require("fs"), path = require("path");
+  const root = process.argv[1];
+  const problems = [];
+  const bin = path.join(root, "bin");
+  if (!fs.existsSync(bin)) problems.push("bin/ does not exist");
+  else {
+    const entries = fs.readdirSync(bin);
+    if (!entries.includes("argus")) problems.push("bin/ has no argus entry");
+    if (entries.includes("argus-ui")) problems.push("bin/ has an argus-ui entry — the interface is never on the PATH");
+  }
+  const walk = (dir, found = []) => {
+    if (!fs.existsSync(dir)) return found;
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) walk(full, found);
+      else if (e.isFile()) found.push(full);
+    }
+    return found;
+  };
+  for (const dir of [".claude-plugin", "skills", "agents", "hooks"])
+    for (const file of walk(path.join(root, dir)))
+      if (/argus-ui/.test(fs.readFileSync(file, "utf8")))
+        problems.push(path.relative(root, file) + " mentions argus-ui");
+  if (problems.length) { console.error(problems.join("; ")); process.exit(1); }
+' "$root"
+check $? "bin/ carries the collector alone, and no skill, agent, hook or manifest mentions argus-ui"
+
+echo
 echo "=== the rulebook reaches the session"
 
 happy_plugin="$tmp/happy-plugin"

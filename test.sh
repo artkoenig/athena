@@ -32,6 +32,9 @@ run "parallel runs: worktrees" \
 run "tools/argus" \
   npm --prefix "$root/tools/argus" test --silent
 
+run "tools/argus-ui" \
+  npm --prefix "$root/tools/argus-ui" test --silent
+
 if [ "$failed" -eq 0 ]; then
   echo "PASS: all $total suites"
 else

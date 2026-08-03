@@ -82,6 +82,49 @@ test('the settings format nests the env block the way Claude Code expects', asyn
   assert.equal(parsed.env.OTEL_EXPORTER_OTLP_ENDPOINT, 'http://127.0.0.1:4318');
 });
 
+test('a measurement is named by its local wall clock, zero padded', async () => {
+  // Imported dynamically so a missing export fails this case alone instead of
+  // taking the whole file down with it.
+  const config = await import('../src/config.mjs');
+  assert.equal(typeof config.runDirName, 'function', 'config.mjs must export runDirName');
+
+  // Local time, not UTC: the directory name is what a person reads off their
+  // own clock when comparing two runs.
+  assert.equal(config.runDirName(new Date(2026, 7, 3, 14, 22, 5)), '2026-08-03T14-22-05');
+  assert.equal(config.runDirName(new Date(2026, 0, 5, 0, 0, 0)), '2026-01-05T00-00-00');
+  assert.equal(config.runDirName(new Date(2026, 11, 31, 23, 59, 59)), '2026-12-31T23-59-59');
+});
+
+test('--persist and --open together are refused, naming what each does', async () => {
+  const { execFile } = await import('node:child_process');
+  const { promisify } = await import('node:util');
+  const net = await import('node:net');
+  const bin = new URL('../bin/argus.mjs', import.meta.url).pathname;
+
+  // A port nobody holds, so a refusal cannot be confused with a failed bind.
+  const probe = net.createServer();
+  await new Promise((resolve) => probe.listen(0, '127.0.0.1', resolve));
+  const port = probe.address().port;
+  await new Promise((resolve) => probe.close(resolve));
+
+  const started = Date.now();
+  const error = await promisify(execFile)(
+    process.execPath,
+    [bin, 'start', '--port', String(port), '--persist', '/tmp/argus-write-here', '--open', '/tmp/argus-read-that'],
+    { timeout: 8000 },
+  ).then(
+    () => null,
+    (failure) => failure,
+  );
+
+  assert.ok(error, 'one writes and the other replays — the pair has no meaning, so it must not start');
+  assert.ok(Date.now() - started < 5000, 'it refuses up front rather than running until something stops it');
+  assert.equal(error.code, 1);
+  const said = `${error.stdout ?? ''}${error.stderr ?? ''}`;
+  assert.match(said, /--persist/, 'the message has to say which flag does what');
+  assert.match(said, /--open/);
+});
+
 test('parseDuration accepts the documented units', () => {
   assert.equal(parseDuration('90m'), 90 * 60_000);
   assert.equal(parseDuration('24h'), 86_400_000);

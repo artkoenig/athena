@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import os from 'node:os';
+import path from 'node:path';
 import zlib from 'node:zlib';
 
 import { TelemetryStore } from '../src/store.mjs';
@@ -248,46 +250,48 @@ test('/api/config returns a ready-to-paste agent environment', async () => {
   });
 });
 
-test('a token gates the data but not the app shell', async () => {
-  await withServer({ token: 'secret' }, async ({ base }) => {
-    // A browser puts the token on the document request because it is in the URL,
-    // but the <link> and <script> that document pulls in are fetched without it —
-    // sub-resource requests do not inherit the query string. Gating them served
-    // 401 for app.js, leaving a page with no script: the static markup, an empty
-    // env block, and nothing able to explain itself.
-    for (const asset of ['/', '/app.js', '/styles.css']) {
-      assert.equal((await fetch(`${base}${asset}`)).status, 200, `${asset} must load unauthenticated`);
-    }
-    // The data behind it stays shut.
-    assert.equal((await fetch(`${base}/api/sessions`)).status, 401);
-    assert.equal((await fetch(`${base}/api/stream`)).status, 401);
+test('/api/config names the run directory, so a second start can find it', async () => {
+  // This is how `start --background` reports what an already-running collector
+  // is writing to instead of starting a second one.
+  const dir = path.join(os.tmpdir(), 'argus-run-dir-fixture');
+  await withServer({ persist: dir }, async ({ base }) => {
+    const config = await (await fetch(`${base}/api/config`)).json();
+    assert.equal(config.persist, dir);
+  });
+
+  await withServer({}, async ({ base }) => {
+    const config = await (await fetch(`${base}/api/config`)).json();
+    assert.equal(config.persist, null, 'no persistence is reported as null, not left out');
   });
 });
 
-test('the browser trades the token for a cookie and drops it from the URL', async () => {
+test('with a token set, everything but GET /api/health is gated', async () => {
   await withServer({ token: 'secret' }, async ({ base }) => {
-    // Carrying the token in the query on every visit means keeping a secret in
-    // history and in every copied link, for something the operator already
-    // configured on the server. One visit is enough.
-    const handoff = await fetch(`${base}/?token=secret`, { redirect: 'manual' });
-    assert.equal(handoff.status, 302);
-    assert.equal(handoff.headers.get('location'), '/', 'the token has to leave the address bar');
+    // There is no app shell here any more, so the reason the page and its
+    // sub-resources used to be exempt is gone with it: what is left is data and
+    // ingest, and all of it is behind the token.
+    for (const gated of ['/', '/index.html', '/app.js', '/styles.css', '/api/sessions', '/api/stream', '/api/config']) {
+      assert.equal((await fetch(`${base}${gated}`)).status, 401, `${gated} must be gated`);
+    }
+    // Container healthchecks and uptime probes have no token to offer.
+    assert.equal((await fetch(`${base}/api/health`)).status, 200);
+  });
+});
 
-    const cookie = handoff.headers.get('set-cookie');
-    assert.match(cookie, /^athena_obs_token=secret;/);
-    // HttpOnly keeps it away from scripts; SameSite=Strict is what stops another
-    // site from reaching ingest or /api/data with the user's own credentials.
-    assert.match(cookie, /HttpOnly/);
-    assert.match(cookie, /SameSite=Strict/);
+test('the collector keeps no browser session: it issues no cookie and accepts none', async () => {
+  await withServer({ token: 'secret' }, async ({ base }) => {
+    // The cookie existed to keep a secret out of a browser's address bar. The
+    // browser is a separate process now and never talks to this port, so the
+    // whole trade goes — leaving Bearer for agents and ?token= for `check`.
+    const visit = await fetch(`${base}/?token=secret`, { redirect: 'manual' });
+    assert.equal(visit.headers.get('set-cookie'), null, 'the collector must not start a browser session');
+    assert.equal(visit.status, 404, 'an authorized request for a page is still a request for nothing');
 
-    const jar = { cookie: 'athena_obs_token=secret' };
-    assert.equal((await fetch(`${base}/api/sessions`, { headers: jar })).status, 200);
-    assert.equal((await fetch(`${base}/api/stats`, { headers: jar })).status, 200);
-    // A wrong cookie is no better than none, and must not be traded for a good one.
-    const wrong = await fetch(`${base}/?token=nope`, { redirect: 'manual', headers: jar });
-    assert.equal(wrong.status, 200, 'a bad token in the query just serves the page');
-    assert.equal(wrong.headers.get('set-cookie'), null);
-    assert.equal((await fetch(`${base}/api/stats`, { headers: { cookie: 'athena_obs_token=nope' } })).status, 401);
+    assert.equal(
+      (await fetch(`${base}/api/stats`, { headers: { cookie: 'athena_obs_token=secret' } })).status,
+      401,
+      'a cookie is not a credential here',
+    );
   });
 });
 
@@ -340,14 +344,19 @@ test('health identifies the process, so several instances behind one URL are vis
   });
 });
 
-test('the UI is served from the same port as ingest', async () => {
+test('the collector serves no interface: every path outside the API is a JSON 404 naming argus-ui', async () => {
   await withServer({}, async ({ base }) => {
-    const page = await fetch(`${base}/`);
-    assert.equal(page.status, 200);
-    assert.match(page.headers.get('content-type'), /text\/html/);
-    assert.match(await page.text(), /athena/);
-    assert.equal((await fetch(`${base}/app.js`)).status, 200);
-    assert.equal((await fetch(`${base}/../package.json`)).status, 404);
+    for (const pathname of ['/', '/index.html', '/app.js', '/styles.css', '/whatever']) {
+      const response = await fetch(`${base}${pathname}`);
+      assert.equal(response.status, 404, `${pathname} must not be served`);
+      assert.match(response.headers.get('content-type'), /application\/json/, `${pathname} answers JSON`);
+      const body = await response.json();
+      assert.match(
+        JSON.stringify(body),
+        /argus-ui/,
+        `${pathname} has to say where the interface actually lives`,
+      );
+    }
   });
 });
 
