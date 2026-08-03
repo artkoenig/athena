@@ -31,24 +31,25 @@ export async function parseGeminiLog(filePath) {
           stepCounter++;
           currentTurn = createNewTurn(stepCounter);
         }
-        currentTurn.userPrompt = obj.message || obj.text || '';
-        currentTurn.timestamp = obj.timestamp || currentTurn.timestamp;
+        currentTurn.userPrompt = obj.content || obj.message || obj.text || '';
+        currentTurn.timestamp = obj.created_at || obj.timestamp || currentTurn.timestamp;
       }
       
       if (obj.type === 'PLANNER_RESPONSE') {
-        if (obj.thought) {
-          currentTurn.thinkingBlocks.push(obj.thought);
+        if (obj.thinking || obj.thought) {
+          currentTurn.thinkingBlocks.push(obj.thinking || obj.thought);
         }
-        if (obj.text) {
-          currentTurn.assistantText += obj.text + '\n';
+        if (obj.content || obj.text) {
+          currentTurn.assistantText += (obj.content || obj.text) + '\n';
         }
-        if (obj.toolCalls) {
-          for (const call of obj.toolCalls) {
+        const calls = obj.tool_calls || obj.toolCalls;
+        if (Array.isArray(calls)) {
+          for (const call of calls) {
              currentTurn.toolCalls.push({
                 id: call.id || Math.random().toString(36).substring(7),
                 name: call.name || call.function,
                 input: call.args || call.input || {},
-                success: true,
+                success: obj.status !== 'ERROR',
                 output: ''
              });
           }
@@ -58,15 +59,15 @@ export async function parseGeminiLog(filePath) {
         }
       }
 
-      if (obj.type === 'TOOL_RESPONSE') {
-        // Find matching tool call
-        const matchingCall = currentTurn.toolCalls.find(tc => tc.name === (obj.name || obj.function));
-        if (matchingCall) {
-           matchingCall.output = obj.response || obj.output || '';
-           if (obj.error) {
-              matchingCall.success = false;
-              currentTurn.errors.push(obj.error);
-           }
+      // Tool responses / execution outputs
+      if (obj.type === 'TOOL_RESPONSE' || (obj.type !== 'USER_INPUT' && obj.type !== 'PLANNER_RESPONSE' && obj.content)) {
+        const lastCall = currentTurn.toolCalls[currentTurn.toolCalls.length - 1];
+        if (lastCall) {
+          lastCall.output = obj.content || obj.response || obj.output || '';
+          if (obj.status === 'ERROR' || obj.error) {
+            lastCall.success = false;
+            if (obj.error) currentTurn.errors.push(typeof obj.error === 'string' ? obj.error : JSON.stringify(obj.error));
+          }
         }
       }
     } catch (e) {
