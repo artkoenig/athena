@@ -88,6 +88,38 @@ See [design.md](file:///Users/artkoenig/Workspace/athena/design.md).
 | **Main Agent** | 13 | 102 | 0 | 0 |
 | **Subagents** (`spec-researcher`, `solution-architect`, `clean-room-reviewer`, `issue-implementer`) | 6 | 89 | 1 | 1 |
 
+### Session Sequence Diagram
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User
+    participant Main as Main Agent
+    participant Sub_researcher as Subagent: spec-researcher
+    participant Sub_architect as Subagent: solution-architect
+    participant Sub_reviewer as Subagent: clean-room-reviewer
+    participant Sub_implementer as Subagent: issue-implementer
+    participant Tools as Tools & System
+
+    User->>Main: Request Retro & Log Parser Skill
+    Main->>Tools: run_command (git status)
+    Main->>Sub_researcher: invoke_subagent (Codebase Researcher)
+    Sub_researcher-->>Main: Existing Patterns & Setup
+    Main->>User: Grilling Session Questions
+    User-->>Main: Approval of Target Architecture
+    Main->>Sub_architect: invoke_subagent (Solution Architect)
+    Sub_architect-->>Main: Module Architecture (design.md)
+    Main->>Sub_reviewer: invoke_subagent (Clean-Room Reviewer)
+    Sub_reviewer-->>Main: Architectural Feedback
+    Main->>Sub_implementer: invoke_subagent (Tool Implementer)
+    Sub_implementer->>Tools: Create log-parser & skill files
+    Sub_implementer-->>Main: Implementation Completed
+    Main->>Tools: run_command (node --test & git push)
+    Tools-->>Main: Tests Passed & PR Updated
+    Main->>User: English Retrospective & Sequence Diagram
+```
+
+
 
 ### 1. What Went Well
 - **Structured Specification & Architecture Planning**: Used `grill-me-for-spec` to frame requirements and `solution-architect` to produce `design.md`, resulting in clean modular code (`tools/log-parser` + `bin/parse-agent-log` + `skills/retro/SKILL.md`).
