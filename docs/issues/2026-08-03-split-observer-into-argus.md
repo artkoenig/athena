@@ -578,6 +578,65 @@ Facts established by measurement, which the criteria rest on:
   sentence, not another production of this one, and where the reviewer's
   unreproduced `--host 0.0.0.0` note would land.
 
+- **Review round 3**, same reviewer context, diff `99ce318..e0f41d5`. `bash test.sh`
+  five suites — repository 6, plugin 39, worktrees 9, argus 114, argus-ui 14 — exit
+  0, nothing skipped, 46 s. Still no static analysis.
+
+  | criterion | R1 | R2 | R3 |
+  | --- | ---: | ---: | ---: |
+  | 6 — a second start does not create a second collector | 1 | 1 | 2 |
+  | 14 — the documentation mirrors the result | 1 | 0 | 0 |
+  | violates none | 5 | 1 | 0 |
+  | every other criterion | 0 | 0 | 0 |
+
+  Rounds 1 and 2 are confirmed closed. The reviewer repeated its own round-2 load —
+  four concurrent 15.4 MB exports — and got exit 0 naming the directory in 2262 ms,
+  8 of 8 correct at moderate sustained load. The retimed case is no longer flaky:
+  under the same 24-way contention on four CPUs that failed it 2 in 8 before, 3 of 3
+  pass at 12.7–13.4 s against the helper's 25 s. The doubling budget's arithmetic
+  was checked and holds: 1000, 2000, 4000, then 4250 of the remaining window, four
+  250 ms gaps, 12 250 ms total, two attempts exceeding the 3051 ms slowest measured
+  answer.
+
+- **Finding, fix now — criterion 6.** The retry was applied to `/api/health` and not
+  to the step after it. `bin/argus.mjs` still fetches `/api/config` once, on a 3 s
+  budget, with no retry — so health can survive a blocked loop across 12 s of
+  patient retries, return `collector`, and the very next request on that same
+  blocked loop falls into the catch and leaves `persist` null. The second start then
+  exits 0 and prints **"this collector keeps nothing on disk"** while it is
+  recording. Reproduced under real load — five concurrent 29 MB exports, one run in
+  eight — and deterministically: `SIGSTOP` the collector, `SIGCONT` for a 15 ms blip
+  after the first attempt expires, `SIGSTOP` again; a 40 ms blip lets both requests
+  through and the directory is named, which isolates the cause. Worse than silence:
+  it asserts the opposite of the truth, and it makes `tools/argus/README.md` and
+  `skills/argus/SKILL.md` conditionally false where both promise the directory is
+  named.
+
+- **Finding — criterion 6, put to the human.** The 12 s window can still expire
+  against a live collector under sustained saturation: one run in six, five
+  concurrent 29 MB exports, exit 1 with the window-expired message while the
+  collector is ingesting. Its limits, stated by the reviewer: not reproducible at
+  moderate load (0 of 8 with three concurrent 15 MB exports), needs a collector
+  saturated far beyond what a Claude Code session produces, and the message is
+  honest — it names "or it is one too busy to answer" rather than asserting a
+  stranger.
+
+- **Stop signal: Repetition, second firing.** Criterion 6 has carried a finding in
+  all three rounds, from three distinct defects — one deadline too generous, one too
+  tight, and one step that never got the treatment at all. Finding counts 7 → 2 → 2:
+  decreasing, then flat. The decision this time is split rather than another single
+  approach change: the root of both round-3 findings is one shape — *a multi-step
+  probe where only the first step was made patient* — so the fix makes the whole
+  probe patient rather than patching a second timeout, and the question of how long
+  "long enough" should be goes to the human, because it trades a rare wrong answer
+  against how long a second start may block.
+
+- Observation, not a finding, recorded rather than fixed: in the window-expired
+  message the destructive remedy comes first ("Stop it") and the safe one second
+  ("or start on another port"), while the clause a skimming reader meets first is
+  the stranger reading. If the busy-collector case is the common one, the order
+  works against it. It violates no criterion and has no reproduction of harm.
+
 ## Checkpoints
 
 ### Before implementation
