@@ -354,6 +354,50 @@ Facts established by measurement, which the criteria rest on:
 - Not session naming and untouched: `SPAN.hook`, `session.counts.hooks` and
   `.span-bar[data-kind="hook"]` are the `claude_code.hook` telemetry span kind.
 
+- Tests for steps 3 to 5 landed as `fadcdf4`, written from the intent alone before
+  any of it existed: `npm --prefix tools/argus test` 105 cases 15 fail exit 1, `npm
+  --prefix tools/argus-ui test` 4 cases 4 fail exit 1, `bash test-plugin.sh` 39
+  cases 8 fail, `bash test-repo.sh` 6 cases 1 fail, `bash test.sh` four of five
+  suites red, exit 1.
+- The test-author returned six questions rather than guessing. Five confirmed what
+  it had encoded; one was undecided and is now settled: `--open` on a directory that
+  is not there is an error, exits non-zero promptly, names the absolute path it
+  could not find, and does not create it. Silently starting an empty collector would
+  make a typo indistinguishable from a measurement that recorded nothing.
+- Step 3 landed as `e53da1b`: the interface's own suite 14 cases exit 0, the
+  collector 105 cases 95 pass exit 1 (the ten red belong to the next two commits),
+  `test-repo.sh` 6 cases exit 0.
+- Step 4 landed as `3f204d8`: the collector 105 cases 104 pass exit 1, only
+  `test/background.test.mjs` left.
+- Step 5 landed as `646519a`: the collector 112 cases exit 0 — 105 to 112 because
+  `background.test.mjs`'s eight cases now run instead of counting as one failed
+  file — the interface 14 cases exit 0, `test-plugin.sh` 39 cases exit 0,
+  `test-repo.sh` 6 cases exit 0, and `bash test.sh` all five suites (repository 6,
+  plugin 39, worktrees 9, argus 112, argus-ui 14), exit 0.
+- Surprise, and the plan was wrong: it claimed `--persist` would keep the container's
+  `ATHENA_OBS_PERSIST=/data` behaving as before. It does not. Today that replays on
+  restart; criterion 11 makes `--persist` write-only, so a restarted container now
+  begins a fresh measurement in the same directory and reads the old one back with
+  `--open`. The Docker paragraph of the collector's README was corrected rather than
+  the behaviour, because the behaviour is what the criterion asks for.
+- Surprise, and the plan lost to the test: step 5 said the skill would name
+  `argus-ui` in one sentence, while criterion 3 says nothing outside the interface
+  may reference it and the shell case encodes exactly that over `skills/`, `agents/`,
+  `hooks/` and the manifest. The implementer followed the criterion; the skill points
+  at the JSON API instead.
+- Criterion 3 read absolutely conflicts with criterion 7, which requires the
+  collector's 404 to name `argus-ui`, and with documenting the split at all. Read as
+  the distribution surface the test encodes, both hold: the collector's README,
+  `CLAUDE.md` and 404 do name the interface.
+- Open, raised with the human and unanswered: step 2 renamed the Render **service**,
+  so re-applying the blueprint would move the deployment's URL. The only
+  outward-facing item in this change.
+- Recorded as a default and worth a reviewer's eye: `argus-ui --token` gates `/api/*`
+  only, exactly as decided, which leaves `/v1/*` ungated. Harmless on a loopback
+  bind; on a token-protected non-loopback bind it means OTLP ingest can be relayed
+  through the interface without the interface's token. No test covers it and the
+  implementer did not widen the gate beyond the decision.
+
 ## Checkpoints
 
 ### Before implementation
