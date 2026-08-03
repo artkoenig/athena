@@ -86,12 +86,12 @@ until `git worktree remove`.
 
 ## tools/
 
-| Tool                                    | Purpose                                                                                                            |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| [`observability`](tools/observability/) | OpenTelemetry collector + web UI for watching agent sessions live: traces, tokens, cost, tool calls, errors.        |
+| Tool                      | Purpose                                                                                                     |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| [`argus`](tools/argus/)   | OpenTelemetry collector + web UI for watching agent sessions live: traces, tokens, cost, tool calls, errors. |
 
 ```bash
-cd tools/observability && node bin/athena-observe.mjs   # http://127.0.0.1:4318
+cd tools/argus && node bin/argus.mjs   # http://127.0.0.1:4318
 ```
 
 Runs on your own machine — no account, no third-party service, no running

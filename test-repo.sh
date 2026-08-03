@@ -18,7 +18,7 @@ echo "=== the licence"
 # because nothing compared them.
 declare -a claims=(
   ".claude-plugin/plugin.json"
-  "tools/observability/package.json"
+  "tools/argus/package.json"
   "README.md"
 )
 

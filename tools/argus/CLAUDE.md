@@ -1,4 +1,4 @@
-# tools/observability
+# tools/argus
 
 An OpenTelemetry collector and a web UI in one process, for watching agent
 sessions live. `README.md` here is the user-facing page; this file is for
@@ -7,8 +7,8 @@ changing the code.
 ## Conventions
 
 - **Zero runtime dependencies, deliberately.** The tool has to start in any
-  sandbox with `node bin/athena-observe.mjs`, without `npm install` ever having
-  run. Adding a dependency is not a coding decision — it changes what the tool
+  sandbox with `node bin/argus.mjs`, without `npm install` ever having run.
+  Adding a dependency is not a coding decision — it changes what the tool
   promises, so it goes to the human first. `package-lock.json` stays empty of
   runtime packages.
 - **ESM only, `.mjs`, Node ≥ 20.11.** Use what the platform ships — `node:test`,
@@ -23,14 +23,14 @@ changing the code.
 ## Running it
 
 ```bash
-node bin/athena-observe.mjs            # collector + UI on http://127.0.0.1:4318
-node scripts/demo-emit.mjs             # synthetic sessions, no real agent needed
+node bin/argus.mjs             # collector + UI on http://127.0.0.1:4318
+node scripts/demo-emit.mjs     # synthetic sessions, no real agent needed
 ```
 
 ## Tests
 
 ```bash
-npm --prefix tools/observability test
+npm --prefix tools/argus test
 ```
 
 `node --test` over `test/*.test.mjs`, one file per module in `src/`. The

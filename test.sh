@@ -29,8 +29,8 @@ run "parallel runs: worktrees" \
 # Through the package's own `test` script rather than a `node --test` line
 # repeated here, so the suite this runs stays the suite the tool declares.
 # Zero-dependency, so no install step is needed first.
-run "tools/observability" \
-  npm --prefix "$root/tools/observability" test --silent
+run "tools/argus" \
+  npm --prefix "$root/tools/argus" test --silent
 
 if [ "$failed" -eq 0 ]; then
   echo "PASS: all $total suites"

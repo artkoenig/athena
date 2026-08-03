@@ -234,7 +234,7 @@ export function describeEvent(log) {
 
 /**
  * Environment block that points a Claude Agent SDK / Claude Code run at this
- * collector. Rendered by `athena-observe env` and shown in the UI so the whole
+ * collector. Rendered by `argus env` and shown in the UI so the whole
  * setup is copy-pasteable.
  */
 export function otelEnvFor(endpoint, { traces = true, token = null, fastFlush = true } = {}) {

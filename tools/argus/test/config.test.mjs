@@ -70,7 +70,7 @@ test('a PaaS can hand over the port and the public URL without extra config', ()
 test('the settings format nests the env block the way Claude Code expects', async () => {
   const { execFile } = await import('node:child_process');
   const { promisify } = await import('node:util');
-  const bin = new URL('../bin/athena-observe.mjs', import.meta.url).pathname;
+  const bin = new URL('../bin/argus.mjs', import.meta.url).pathname;
   const { stdout } = await promisify(execFile)(process.execPath, [bin, 'env', '--format', 'settings']);
   const parsed = JSON.parse(stdout);
   assert.deepEqual(

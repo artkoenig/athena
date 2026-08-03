@@ -74,7 +74,7 @@ function resource(sessionId) {
   };
 }
 
-const scope = { name: 'athena-observe-demo', version: '0.1.0' };
+const scope = { name: 'argus-demo', version: '0.1.0' };
 
 function span({ traceId, spanId, parentSpanId, name, startMs, durationMs, attributes, error }) {
   return {

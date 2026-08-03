@@ -1,12 +1,12 @@
-# athena · observe
+# argus
 
 An OpenTelemetry collector **and** a web UI in one process, for watching Claude Agent SDK
 and Claude Code sessions: which tools ran, how long each model request took, how many
 tokens flowed, what it cost and where something failed.
 
 No dependencies, no build step, no database — just Node ≥ 20.11. That is deliberate: the
-tool is meant to start in any sandbox container with `node bin/athena-observe.mjs`, even
-without `npm install`.
+tool is meant to start in any sandbox container with `node bin/argus.mjs`, even without
+`npm install`.
 
 Built to run yourself, on your own machine: no sign-up, no account, no third-party
 service, no running costs. The telemetry stays where it is produced — see
@@ -14,7 +14,7 @@ service, no running costs. The telemetry stays where it is produced — see
 
 ```
 ┌──────────────┐  OTLP/HTTP   ┌────────────────────────────┐
-│ Claude Code  │─────────────▶│  athena-observe :4318      │
+│ Claude Code  │─────────────▶│  argus :4318               │
 │ / Agent SDK  │  protobuf    │  /v1/traces /v1/metrics    │
 └──────────────┘  or json     │  /v1/logs   +  Web UI  /   │
                               └────────────────────────────┘
@@ -23,13 +23,13 @@ service, no running costs. The telemetry stays where it is produced — see
 ## Quick start
 
 ```bash
-cd tools/observability
+cd tools/argus
 
 # 1. Start collector + UI (ingest and UI share one port)
-node bin/athena-observe.mjs                # http://127.0.0.1:4318
+node bin/argus.mjs                # http://127.0.0.1:4318
 
 # 2. In a second shell: point an agent at the collector
-eval "$(node bin/athena-observe.mjs env)"
+eval "$(node bin/argus.mjs env)"
 claude -p "What does this repo do?"
 
 # 3. Open http://127.0.0.1:4318 in a browser
@@ -38,13 +38,13 @@ claude -p "What does this repo do?"
 Without a real agent run, the UI can be filled with synthetic data:
 
 ```bash
-node bin/athena-observe.mjs &
+node bin/argus.mjs &
 node scripts/demo-emit.mjs --sessions 3      # or --live for a continuous supply
 ```
 
 ## Wiring up an agent
 
-`athena-observe env` prints exactly the block the
+`argus env` prints exactly the block the
 [Observability](https://code.claude.com/docs/en/agent-sdk/observability) documentation
 page asks for:
 
@@ -101,7 +101,7 @@ fact — what gets captured is always the next one.
 So that nobody has to remember it, the block belongs in the personal project settings:
 
 ```bash
-node bin/athena-observe.mjs env --format settings > ../../.claude/settings.local.json
+node bin/argus.mjs env --format settings > ../../.claude/settings.local.json
 ```
 
 That writes `{"env": {…}}` — the export block and nothing else — and Claude Code applies it
@@ -133,7 +133,7 @@ counted twice. The UI writes the source under every figure.
 
 ## Self-hosting
 
-athena-observe is built for everyone to run on their own machine: no registration, no
+argus is built for everyone to run on their own machine: no registration, no
 account, no third-party service, no running costs. The telemetry never leaves your own
 machine. There are four shapes, depending on where the agent runs — and, for the last
 one, on how permanent it should be.
@@ -149,7 +149,7 @@ For anyone who would rather not run Node directly: the image installs nothing, i
 just a Node runtime plus the sources.
 
 ```bash
-cd tools/observability
+cd tools/argus
 docker compose up -d          # http://127.0.0.1:4318, data in the "telemetry" volume
 ```
 
@@ -166,14 +166,14 @@ session's environment**.
 #### One command
 
 ```bash
-node bin/athena-observe.mjs --tunnel
+node bin/argus.mjs --tunnel
 ```
 
 That does all of it at once: start the collector, generate a token, open a Cloudflare
 tunnel, wait until the public URL really answers, and print the finished block.
 
 ```
-  athena-observe listening on http://127.0.0.1:4318
+  argus listening on http://127.0.0.1:4318
   UI          http://127.0.0.1:4318/?token=21c934f71106a6ffebf187510d233744
 
   Opening a Cloudflare quick tunnel …
@@ -245,7 +245,7 @@ reachable.
 When nothing arrives, the exporter stays silent. So check **inside the cloud session**:
 
 ```bash
-node tools/observability/bin/athena-observe.mjs check
+node tools/argus/bin/argus.mjs check
 ```
 
 Without arguments, `check` takes what is actually configured in this environment
@@ -253,7 +253,7 @@ Without arguments, `check` takes what is actually configured in this environment
 sends a real OTLP span and reads it back:
 
 ```
-  ✓ reachable  https://obs.example.ts.net is an athena-observe collector
+  ✓ reachable  https://obs.example.ts.net is an argus collector
   ✓ single     one collector process answers this URL
   ✓ ingest     OTLP span accepted
   ✓ stored     probe session athena-check-16f7537d is in the store
@@ -322,10 +322,10 @@ dashboard under *Environment*.
 Then check from the environment the agent runs in:
 
 ```bash
-node bin/athena-observe.mjs check \
-  --public-url https://athena-observe.onrender.com --token <token>
+node bin/argus.mjs check \
+  --public-url https://argus.onrender.com --token <token>
 
-  ✓ reachable  … is an athena-observe collector
+  ✓ reachable  … is an argus collector
   ✓ single     one collector process answers this URL
   ✓ ingest     OTLP span accepted
   ✓ stored     probe session athena-check-… is in the store
@@ -337,12 +337,12 @@ After the deploy the finished variables are in the first lines of the log, with 
 public address already filled in:
 
 ```
-  athena-observe listening on https://athena-observe.onrender.com  (bound to 0.0.0.0:10000)
-  UI          https://athena-observe.onrender.com/?token=…
+  argus listening on https://argus.onrender.com  (bound to 0.0.0.0:10000)
+  UI          https://argus.onrender.com/?token=…
 
   Point an agent at it:
 
-    export OTEL_EXPORTER_OTLP_ENDPOINT="https://athena-observe.onrender.com"
+    export OTEL_EXPORTER_OTLP_ENDPOINT="https://argus.onrender.com"
     export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer …"
 ```
 
@@ -470,7 +470,7 @@ next start — useful in containers that get restarted. The files rotate at 64 M
 By default Claude Code exports structure only: durations, model names, tool names, token
 counts. Prompts, tool arguments and API bodies arrive only with
 `OTEL_LOG_USER_PROMPTS=1`, `OTEL_LOG_TOOL_DETAILS=1`, `OTEL_LOG_TOOL_CONTENT=1` and
-`OTEL_LOG_RAW_API_BODIES`. `athena-observe env` deliberately does **not** set these. Anyone
+`OTEL_LOG_RAW_API_BODIES`. `argus env` deliberately does **not** set these. Anyone
 who switches them on should know that prompt and file contents then live in the
 collector's memory and — with `--persist` — on disk.
 
@@ -480,7 +480,7 @@ in the UI under "Attributes".
 ## Architecture
 
 ```
-bin/athena-observe.mjs   CLI: arguments, start, env output, shutdown
+bin/argus.mjs            CLI: arguments, start, env output, shutdown
 src/config.mjs           defaults < environment < flags
 src/otlp/protobuf.mjs    schema-driven protobuf reader/writer (wire format)
 src/otlp/schema.mjs      field descriptors for opentelemetry-proto v1
@@ -555,7 +555,7 @@ When nothing arrives, the CLI exports silently into the void. The first move is 
 check, from the agent's own environment, whether the path stands at all:
 
 ```bash
-node tools/observability/bin/athena-observe.mjs check
+node tools/argus/bin/argus.mjs check
 ```
 
 `CLAUDE_CODE_OTEL_DIAG_STDERR=1` additionally turns on exporter diagnostics on stderr

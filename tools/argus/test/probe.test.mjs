@@ -65,7 +65,7 @@ test('something else answering on the endpoint is not mistaken for a collector',
   try {
     const result = await probeCollector(`http://127.0.0.1:${other.address().port}`, {});
     assert.equal(result.ok, false);
-    assert.match(result.steps[0].detail, /not an athena-observe collector/);
+    assert.match(result.steps[0].detail, /not an argus collector/);
   } finally {
     await new Promise((resolve) => other.close(resolve));
   }

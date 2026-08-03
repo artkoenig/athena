@@ -1,4 +1,4 @@
-# athena-observe has no dependencies and no build step, so the image is just a
+# argus has no dependencies and no build step, so the image is just a
 # Node runtime plus the sources — nothing to install, nothing to compile.
 FROM node:22-alpine
 
@@ -23,4 +23,4 @@ VOLUME /data
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s \
   CMD wget -qO- http://127.0.0.1:4318/api/health >/dev/null || exit 1
 
-CMD ["node", "bin/athena-observe.mjs"]
+CMD ["node", "bin/argus.mjs"]

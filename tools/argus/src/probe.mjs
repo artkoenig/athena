@@ -24,7 +24,7 @@ function probePayload(sessionId, traceId) {
       resourceSpans: [
         {
           resource: {
-            attributes: [attr('service.name', 'athena-observe-check'), attr('session.id', sessionId)],
+            attributes: [attr('service.name', 'argus-check'), attr('session.id', sessionId)],
           },
           scopeSpans: [
             {
@@ -32,7 +32,7 @@ function probePayload(sessionId, traceId) {
                 {
                   traceId,
                   spanId: crypto.randomBytes(8).toString('hex'),
-                  name: 'athena_observe.check',
+                  name: 'argus.check',
                   startTimeUnixNano: now,
                   endTimeUnixNano: now + 1_000_000n,
                   attributes: [attr('session.id', sessionId)],
@@ -92,9 +92,9 @@ export async function probeCollector(endpoint, { token = null, timeoutMs = DEFAU
     } else if (!response.ok) {
       record('reachable', false, `${base}/api/health answered HTTP ${response.status}`);
     } else if (!body.includes('"ok"')) {
-      record('reachable', false, `${base} answered, but it is not an athena-observe collector`);
+      record('reachable', false, `${base} answered, but it is not an argus collector`);
     } else {
-      reachable = record('reachable', true, `${base} is an athena-observe collector`);
+      reachable = record('reachable', true, `${base} is an argus collector`);
     }
   } catch (error) {
     const cause = error.name === 'AbortError' ? `no answer within ${timeoutMs} ms` : error.message;

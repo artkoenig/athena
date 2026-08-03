@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 /**
- * athena-observe — OpenTelemetry collector and web UI for Claude Agent SDK and
+ * argus — OpenTelemetry collector and web UI for Claude Agent SDK and
  * Claude Code sessions.
  *
  * Usage:
- *   athena-observe [start] [options]   start the collector + UI
- *   athena-observe env [options]       print the OTEL_* variables agents need
+ *   argus [start] [options]   start the collector + UI
+ *   argus env [options]       print the OTEL_* variables agents need
  */
 
 import crypto from 'node:crypto';
@@ -19,11 +19,11 @@ import { probeCollector } from '../src/probe.mjs';
 import { startTunnel } from '../src/tunnel.mjs';
 
 const HELP = `
-athena-observe — monitor Claude Agent SDK / Claude Code sessions over OpenTelemetry
+argus — monitor Claude Agent SDK / Claude Code sessions over OpenTelemetry
 
-  athena-observe [start]        Start the OTLP collector and the web UI.
-  athena-observe env            Print the OTEL_* variables that point an agent here.
-  athena-observe check          Verify a collector is reachable from *here* and
+  argus [start]                 Start the OTLP collector and the web UI.
+  argus env                     Print the OTEL_* variables that point an agent here.
+  argus check                   Verify a collector is reachable from *here* and
                                 actually stores what it accepts. Run it inside the
                                 environment the agent runs in.
 
@@ -135,7 +135,7 @@ async function main(argv) {
     const restored = await persistence.load(store);
     persistence.attach(store);
     console.error(
-      `athena-observe: persisting to ${config.persist}` +
+      `argus: persisting to ${config.persist}` +
         (restored ? ` (replayed ${restored} records)` : ''),
     );
   }
@@ -160,11 +160,11 @@ async function main(argv) {
   server.on('error', (error) => {
     if (error.code === 'EADDRINUSE') {
       console.error(
-        `athena-observe: port ${config.port} is already in use. ` +
+        `argus: port ${config.port} is already in use. ` +
           'Pick another with --port, or stop the process holding it.',
       );
     } else {
-      console.error(`athena-observe: ${error.message}`);
+      console.error(`argus: ${error.message}`);
     }
     process.exit(1);
   });
@@ -179,7 +179,7 @@ async function main(argv) {
 
   server.listen(config.port, config.host, async () => {
     const bound = `${config.host}:${config.port}`;
-    console.error(`\n  athena-observe listening on ${endpoint}${config.publicUrl ? `  (bound to ${bound})` : ''}`);
+    console.error(`\n  argus listening on ${endpoint}${config.publicUrl ? `  (bound to ${bound})` : ''}`);
     console.error(`  UI          ${localUi}`);
     console.error(`  OTLP ingest ${endpoint}/v1/{traces,metrics,logs}  (http/protobuf and http/json)`);
 
@@ -212,7 +212,7 @@ async function main(argv) {
       console.error(`    tailscale funnel ${config.port}                          # stable URL, needs an account`);
       console.error(`    ngrok http ${config.port}                                # needs an account`);
       console.error('\n  Each prints a URL. Restart with it:\n');
-      console.error(`    node bin/athena-observe.mjs --public-url <url> --token ${config.token}\n`);
+      console.error(`    node bin/argus.mjs --public-url <url> --token ${config.token}\n`);
       console.error('  Or skip tunnelling entirely and deploy the collector — see "Selbst hosten"');
       console.error('  in the README. Then the public address is the deployment, and this');
       console.error('  machine never has to be reachable at all.\n');
@@ -222,7 +222,7 @@ async function main(argv) {
     tunnel.process.on('exit', () => {
       // The advertised URL is dead once the tunnel is gone; say so rather than
       // letting the UI keep handing out an endpoint that no longer resolves.
-      console.error('\n  athena-observe: the tunnel closed — the public URL is no longer reachable.\n');
+      console.error('\n  argus: the tunnel closed — the public URL is no longer reachable.\n');
       advertised = endpoint;
     });
 
@@ -231,7 +231,7 @@ async function main(argv) {
     console.error('\n  Set these in the cloud session environment, then start a NEW session:\n');
     printEnv('dotenv');
     console.error('\n  Verify from inside that session with:\n');
-    console.error('    node tools/observability/bin/athena-observe.mjs check\n');
+    console.error('    node tools/argus/bin/argus.mjs check\n');
   });
 
   const shutdown = () => {
@@ -248,6 +248,6 @@ async function main(argv) {
 }
 
 main(process.argv.slice(2)).catch((error) => {
-  console.error(`athena-observe: ${error.message}`);
+  console.error(`argus: ${error.message}`);
   process.exit(1);
 });

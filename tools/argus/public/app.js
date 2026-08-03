@@ -3,7 +3,7 @@
  *
  * Reads the collector's JSON API and keeps itself current from an SSE stream.
  * There is no framework and no build step on purpose: the whole tool has to be
- * runnable with `node bin/athena-observe.mjs` inside a throwaway sandbox.
+ * runnable with `node bin/argus.mjs` inside a throwaway sandbox.
  */
 
 const TOKEN = new URLSearchParams(location.search).get('token');

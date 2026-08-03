@@ -1,5 +1,5 @@
 {
-  "name": "@athena/observability",
+  "name": "@athena/argus",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -9,7 +9,7 @@
     "node": ">=20.11"
   },
   "bin": {
-    "athena-observe": "./bin/athena-observe.mjs"
+    "argus": "./bin/argus.mjs"
   },
   "files": [
     "bin",
@@ -17,8 +17,8 @@
     "public"
   ],
   "scripts": {
-    "start": "node bin/athena-observe.mjs",
-    "dev": "node --watch bin/athena-observe.mjs",
+    "start": "node bin/argus.mjs",
+    "dev": "node --watch bin/argus.mjs",
     "test": "node --test \"test/*.test.mjs\"",
     "demo": "node scripts/demo-emit.mjs"
   }
