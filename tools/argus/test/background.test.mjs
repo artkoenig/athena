@@ -298,6 +298,103 @@ test('a collector whose event loop is blocked past one probe is still a collecto
   }
 });
 
+test('a collector that frees its loop for one request and no more is still named with its directory', async () => {
+  const first = projectDir();
+  const second = projectDir();
+  const port = await freePort();
+  const session = sacrificialProcess();
+  // Signalling a process that has already gone is not a failure of this case.
+  const signal = (pid, sig) => {
+    try {
+      process.kill(pid, sig);
+    } catch {
+      /* already gone */
+    }
+  };
+  // The blip is spun, not slept. A timer that fires late widens the window, and
+  // a wider window is exactly what lets the second request through — this case
+  // would then pass on a tool that only ever asks once. A spin is exact to well
+  // under a millisecond, and this process has nothing else to do while the
+  // collector has its moment.
+  const runFor = (pid, ms) => {
+    signal(pid, 'SIGCONT');
+    const until = Date.now() + ms;
+    while (Date.now() < until) {
+      /* hold this loop so the blip is the length it says it is */
+    }
+    signal(pid, 'SIGSTOP');
+  };
+  let collectorPid = 0;
+
+  try {
+    const started = await runBackground(first, ['--port', String(port), '--exit-with', String(session.pid)]);
+    const runs = fs.readdirSync(path.join(first, '.athena-telemetry')).filter((name) => name !== '.gitignore');
+    assert.equal(runs.length, 1);
+    const runDir = path.join(first, '.athena-telemetry', runs[0]);
+
+    const printed = started.out.match(/\bpid\b[^0-9]{0,12}(\d+)/i);
+    assert.ok(printed, 'the banner has to name the process id');
+    collectorPid = Number(printed[1]);
+
+    // Same shape as the case above — a real collector whose loop is taken away
+    // by SIGSTOP — but this time the loop comes back for one moment only.
+    signal(collectorPid, 'SIGSTOP');
+    const secondStart = runBackground(second, [
+      '--port',
+      String(port),
+      '--exit-with',
+      String(session.pid),
+    ]).then(
+      (ok) => ok,
+      (failure) => failure,
+    );
+
+    // 2000 ms: past any first probe of a sane length (the slowest health answer
+    // ever measured here was 3051 ms, so a first attempt is at least a second
+    // and starts within a few hundred ms of the spawn) and well short of a
+    // second attempt's expiry. The point is only that the blip lands while the
+    // start is waiting on an unanswered request, not on a particular attempt.
+    await delay(2000);
+
+    // 15 ms: enough for the collector to answer the request already sitting in
+    // its socket, far too little for the round trip that would carry a *second*
+    // request there and back. That is the whole case — a loop that frees up for
+    // one request must not leave the start half-informed. 40 ms would admit both
+    // and prove nothing.
+    runFor(collectorPid, 15);
+
+    // Blocked again for longer than any single request budget, so a second
+    // request that is only ever asked once cannot succeed by waiting.
+    await delay(4000);
+    signal(collectorPid, 'SIGCONT');
+
+    const result = await secondStart;
+    const out = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+    assert.ok(
+      !(result instanceof Error),
+      `the port holds a collector, so a second start exits 0: exit ${result.code}, output: ${out.trim()}`,
+    );
+    assert.ok(
+      result.out.includes(runDir),
+      `every step of finding out who holds the port has to be as patient as the first, or the answer is worse than silence — it names no directory while the first collector records into ${runDir}: ${result.out.trim()}`,
+    );
+
+    const telemetry = path.join(second, '.athena-telemetry');
+    const left = fs.existsSync(telemetry)
+      ? fs.readdirSync(telemetry).filter((name) => name !== '.gitignore')
+      : [];
+    assert.deepEqual(left, [], 'and no second measurement of its own');
+    assert.ok(await collectorAnswers(port), 'the first collector is left running');
+  } finally {
+    if (collectorPid) signal(collectorPid, 'SIGCONT');
+    session.kill('SIGKILL');
+    if (collectorPid) signal(collectorPid, 'SIGKILL');
+    await waitForSilence(port, 20_000);
+    fs.rmSync(first, { recursive: true, force: true });
+    fs.rmSync(second, { recursive: true, force: true });
+  }
+});
+
 test('a port held by something that is not a collector is an error, not an attach', async () => {
   const cwd = projectDir();
   const port = await freePort();
