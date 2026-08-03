@@ -1,0 +1,5 @@
+{"type":"message","usage":{"input_tokens":100,"output_tokens":50,"cache_read_input_tokens":10},"role":"user","content":[{"type":"text","text":"Hello Claude"}]}
+{"role":"assistant","content":[{"type":"thinking","thinking":"I should say hello."},{"type":"text","text":"Hello there!"},{"type":"tool_use","id":"tool_1","name":"get_weather","input":{"location":"Seattle"}}]}
+{"role":"user","content":[{"type":"text","text":"What about tomorrow?"}]}
+{"role":"assistant","content":[{"type":"text","text":"I don't know."}]}
+{"error":{"type":"api_error","message":"Some error"}}

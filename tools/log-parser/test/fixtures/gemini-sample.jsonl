@@ -1,0 +1,5 @@
+{"type":"USER_INPUT","message":"Hello Gemini","timestamp":"2026-08-03T12:00:00Z","usageMetadata":{"promptTokenCount":120,"candidatesTokenCount":60,"totalTokenCount":180,"cachedContentTokenCount":20}}
+{"type":"PLANNER_RESPONSE","thought":"Thinking about hello","text":"Hi!","toolCalls":[{"id":"call_1","name":"get_weather","args":{"city":"Seattle"}}]}
+{"type":"TOOL_RESPONSE","name":"get_weather","response":"It is raining"}
+{"type":"USER_INPUT","message":"And Portland?"}
+{"type":"PLANNER_RESPONSE","text":"Also raining","error":{"errorType":"api_error","message":"Timeout"}}
