@@ -11,6 +11,7 @@
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -91,13 +92,48 @@ function renderEnv(env, format) {
   }
 }
 
+// How long a port may take to answer, by question. The connection is the one
+// that decides whether the port is free, so it is the only one a free port
+// pays — and a refused connection on loopback comes back at once. The health
+// request is asked only of a port that already accepted a connection, so its
+// budget is what a listener that never answers costs before it is called a
+// stranger; a collector on the same machine answers /api/health in
+// milliseconds.
+const CONNECT_TIMEOUT_MS = 3000;
+const HEALTH_TIMEOUT_MS = 1000;
+
+/**
+ * Does anything accept a connection there? Refused is the ordinary "free port"
+ * answer; anything accepted holds the port, whether or not it ever says a word.
+ */
+function accepts(host, port) {
+  return new Promise((resolve) => {
+    const socket = net.connect({ host, port });
+    const done = (answer) => {
+      socket.destroy();
+      resolve(answer);
+    };
+    socket.setTimeout(CONNECT_TIMEOUT_MS, () => done(false));
+    socket.once('connect', () => done(true));
+    socket.once('error', () => done(false));
+  });
+}
+
 /** What is answering on that address: nothing, a collector, or a stranger. */
 async function inspectPort(base, token) {
+  // The connection classifies the port, not the request. A listener that
+  // accepts and then says nothing would time the health request out, and
+  // calling that a free port is how a start proceeds onto a port it cannot
+  // have: the child dies on EADDRINUSE and the caller is told the wrong thing.
+  const { hostname, port } = new URL(base);
+  if (!(await accepts(hostname, Number(port)))) return { kind: 'free' };
+
   let response;
   try {
-    response = await fetch(`${base}/api/health`, { signal: AbortSignal.timeout(3000) });
+    response = await fetch(`${base}/api/health`, { signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS) });
   } catch {
-    return { kind: 'free' };
+    // Something holds the port and did not answer as a collector does.
+    return { kind: 'stranger' };
   }
   let health = null;
   try {

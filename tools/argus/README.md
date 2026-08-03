@@ -404,9 +404,12 @@ second. A platform with one process and one disk is the shorter road.
 Two things hold for all of these variants:
 
 - **It costs.** Render's free tier has no disk and puts the service to sleep after ~15
-  minutes of quiet. Both erase the history, and an agent that exports into a cold start
-  loses its telemetry silently — exactly the case `check` exists for. That is why the
-  blueprint is on `starter`.
+  minutes of quiet, and an agent that exports into a cold start loses its telemetry
+  silently — exactly the case `check` exists for. That is why the blueprint is on
+  `starter`. The disk does not bring a restarted collector's history back either:
+  `--persist` only ever writes, so the service comes up on a fresh measurement while the
+  earlier records stay on the volume, unread — reading one back needs `--open` on a
+  process that has that disk. Without a disk they are gone instead.
 - **The data then lives there.** With `CLAUDE_CODE_ENHANCED_TELEMETRY_BETA` switched on,
   prompts and answers flow through the collector as well. On your own machine that has no
   consequences; on someone else's infrastructure it is a decision. See
