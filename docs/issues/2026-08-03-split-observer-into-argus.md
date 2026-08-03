@@ -317,6 +317,36 @@ Facts established by measurement, which the criteria rest on:
   `eslint.config*`, `.prettierrc*` or `.editorconfig` anywhere — so `test.sh` is the
   whole of what a tool checks here.
 
+- Step 1 landed as `70e5b23`, "Remove session naming and its hook". `npm --prefix
+  tools/observability test`, 93 cases (was 113), exit 0; `bash test.sh`, four suites
+  — repository 5, plugin 31, worktrees 9, collector 93 — exit 0. Twenty cases went:
+  six with `test/hook.test.mjs`, five in `store`, four in `server`, two in
+  `persist`, one each in `claude` and `probe`; `config` and the surviving
+  `claude`/`probe` cases were rewritten in place.
+- Step 2 landed as `06ac6e1`, "Rename the collector to tools/argus". `npm --prefix
+  tools/argus test`, 93 cases — unchanged, which is the move's own proof — exit 0;
+  `bash test.sh` exit 0. Thirty-one files moved with `git mv`, twelve of them also
+  changed content; outside the project `.gitignore`, `README.md`, `render.yaml`,
+  `test-repo.sh`, `test.sh`, and line 296 only of
+  `docs/2026-08-02-workflow-token-measurement.md` — the live reproduce command, not
+  the account of the measurement.
+- Recorded as a default in step 2: the command name follows its file, so every
+  `athena-observe` string in help text, log prefixes and `check` output became
+  `argus` in the same commit. That also renamed the probe's synthetic service and
+  span, and the Render **service name**, which is the one outward-facing item in
+  these two commits — re-applying the blueprint would move the deployment's URL.
+  Raised with the human.
+- `ATHENA_OBS_*`, the `athena_obs_token` cookie and `.athena-telemetry` keep their
+  names; nothing in these two steps falsifies them. The tool README keeps two
+  mentions of a SessionStart hook, in the paragraph explaining why a hook *cannot*
+  set the resource attribute — still true, and it stops the hook being reinvented.
+- Surprise, out of scope: `package-lock.json` says `"license": "Apache-2.0"` while
+  `package.json` says `GPL-3.0-or-later`. Pre-existing. `test-repo.sh`'s licence
+  block only inspects `package.json`, so the lockfile slipped through the check
+  written to catch exactly this. Violates no criterion here; filed for its own run.
+- Not session naming and untouched: `SPAN.hook`, `session.counts.hooks` and
+  `.span-bar[data-kind="hook"]` are the `claude_code.hook` telemetry span kind.
+
 ## Checkpoints
 
 ### Before implementation
