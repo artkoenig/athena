@@ -138,3 +138,17 @@ issue is allowed only when the sentence carries its content.
 - Everything checked in and every pull request is written in English.
 - Work found mid-run that serves the current intent joins the task list.
   Anything else is filed as its own issue and waits for its own run.
+
+## Agent skills
+
+### Issue tracker
+This project tracks work as local markdown issues under `docs/issues/`, managed
+through the `issue-tracker` skill. A top-level `NN-<slug>/` directory is a
+**main-issue** — one branch `issue/<slug>`, one worktree, one pull request — and
+its `issue.md` holds the spec; the directories nested inside it are its
+**child-issues**, the vertical slices of that one PR. Do not edit issue files by
+hand — use the `issue-tracker` skill so status transitions and blocker rules
+stay valid.
+
+See `docs/agents/issue-tracker.md` for the state model and the workflow for
+implementing tracked issues.
