@@ -70,6 +70,86 @@ async function runBackground(cwd, args) {
   return { ...result, out: `${result.stdout}${result.stderr}` };
 }
 
+/** The one measurement directory a start left in that project, absolute. */
+function runDirOf(cwd) {
+  const root = path.join(cwd, '.athena-telemetry');
+  const runs = fs.existsSync(root) ? fs.readdirSync(root).filter((name) => name !== '.gitignore') : [];
+  assert.equal(runs.length, 1, `expected exactly one measurement directory under ${root}, got ${runs.length}`);
+  return path.join(root, runs[0]);
+}
+
+/** What a start left behind in that project, minus the .gitignore. */
+function measurementsIn(cwd) {
+  const root = path.join(cwd, '.athena-telemetry');
+  return fs.existsSync(root) ? fs.readdirSync(root).filter((name) => name !== '.gitignore') : [];
+}
+
+/**
+ * A real collector, reached through a front on `port` that passes everything
+ * through untouched except `/api/config`, which the case decides. Identifying
+ * the collector stays the real exchange — only the answer to "where do you
+ * write?" is the variable, which is the whole subject of these cases and the
+ * one thing no real collector can be made to get wrong on demand.
+ */
+async function frontedCollector({ cwd, session, port, config }) {
+  const inner = await freePort();
+  const started = await runBackground(cwd, ['--port', String(inner), '--exit-with', String(session.pid)]);
+  const printed = started.out.match(/\bpid\b[^0-9]{0,12}(\d+)/i);
+  assert.ok(printed, 'the banner has to name the process id');
+
+  const held = new Set();
+  const front = http.createServer((req, res) => {
+    const { pathname } = new URL(req.url, 'http://127.0.0.1');
+    if (pathname === '/api/config') {
+      config(req, res);
+      return;
+    }
+    fetch(`http://127.0.0.1:${inner}${req.url}`)
+      .then(async (upstream) => {
+        const body = Buffer.from(await upstream.arrayBuffer());
+        res.writeHead(upstream.status, {
+          'content-type': upstream.headers.get('content-type') ?? 'application/json',
+        });
+        res.end(body);
+      })
+      .catch(() => {
+        res.writeHead(502);
+        res.end();
+      });
+  });
+  front.on('connection', (socket) => held.add(socket));
+  await new Promise((resolve) => front.listen(port, '127.0.0.1', resolve));
+
+  return {
+    inner,
+    pid: Number(printed[1]),
+    runDir: runDirOf(cwd),
+    close: async () => {
+      for (const socket of held) socket.destroy();
+      await new Promise((resolve) => front.close(resolve));
+    },
+  };
+}
+
+/** Run a second start that is expected to attach, and give back its output. */
+async function secondStart(cwd, args) {
+  const result = await runBackground(cwd, args).then(
+    (ok) => ok,
+    (failure) => failure,
+  );
+  const out = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+  assert.ok(
+    !(result instanceof Error),
+    `the port holds a collector, so a second start exits 0: exit ${result.code}, output: ${out.trim()}`,
+  );
+  return result.out;
+}
+
+// The sentence the defect prints over a collector that is recording. It is
+// asserted against as an absence, not as a wording: a state that was never
+// heard from must not be reported as a collector that answered.
+const CLAIMS_NOTHING_KEPT = /keeps nothing on disk|nothing is kept on disk/i;
+
 /* ----------------------------- the mechanism ---------------------------- */
 
 test('spawnBackground returns what the child announced on its readiness descriptor', async () => {
@@ -392,6 +472,226 @@ test('a collector that frees its loop for one request and no more is still named
     await waitForSilence(port, 20_000);
     fs.rmSync(first, { recursive: true, force: true });
     fs.rmSync(second, { recursive: true, force: true });
+  }
+});
+
+/* --------- what a second start says about where the first one writes ------ */
+
+test('a second start without the running collector’s token must not report it as keeping nothing on disk', async () => {
+  const first = projectDir();
+  const second = projectDir();
+  const port = await freePort();
+  const session = sacrificialProcess();
+
+  try {
+    // The first collector persists, and guards its API with its own token.
+    await runBackground(first, [
+      '--port',
+      String(port),
+      '--token',
+      'secretA',
+      '--exit-with',
+      String(session.pid),
+    ]);
+    const runDir = runDirOf(first);
+    assert.ok(fs.existsSync(runDir), 'the first collector is recording into a directory on disk');
+
+    // The second start carries a different token. /api/health is ungated, so the
+    // collector is still correctly identified; /api/config answers 401, so where
+    // it writes is refused, not denied.
+    const out = await secondStart(second, [
+      '--port',
+      String(port),
+      '--token',
+      'secretB',
+      '--exit-with',
+      String(session.pid),
+    ]);
+
+    assert.doesNotMatch(
+      out,
+      CLAIMS_NOTHING_KEPT,
+      `the collector is recording into ${runDir}; a refused question about it must not be reported as an answer: ${out.trim()}`,
+    );
+    assert.deepEqual(measurementsIn(second), [], 'and no second measurement of its own');
+    assert.ok(await collectorAnswers(port), 'the first collector is left running');
+  } finally {
+    session.kill('SIGKILL');
+    await waitForSilence(port, 20_000);
+    fs.rmSync(first, { recursive: true, force: true });
+    fs.rmSync(second, { recursive: true, force: true });
+  }
+});
+
+test('a collector whose /api/config is not there must not be reported as keeping nothing on disk', async () => {
+  const first = projectDir();
+  const second = projectDir();
+  const port = await freePort();
+  const session = sacrificialProcess();
+  // An older collector on the port has no such route: the question is answered,
+  // and the answer says nothing about persistence either way.
+  const held = await frontedCollector({
+    cwd: first,
+    session,
+    port,
+    config: (_req, res) => {
+      res.writeHead(404, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: 'not found' }));
+    },
+  });
+
+  try {
+    assert.ok(fs.existsSync(held.runDir), 'the collector behind the front is recording into a directory');
+
+    const out = await secondStart(second, ['--port', String(port), '--exit-with', String(session.pid)]);
+
+    assert.doesNotMatch(
+      out,
+      CLAIMS_NOTHING_KEPT,
+      `a route that is not there says nothing about persistence, and the collector is recording into ${held.runDir}: ${out.trim()}`,
+    );
+    assert.deepEqual(measurementsIn(second), [], 'and no second measurement of its own');
+  } finally {
+    await held.close();
+    session.kill('SIGKILL');
+    await waitForSilence(held.inner, 20_000);
+    fs.rmSync(first, { recursive: true, force: true });
+    fs.rmSync(second, { recursive: true, force: true });
+  }
+});
+
+test('a collector whose /api/config never answers must not be reported as keeping nothing on disk', async () => {
+  const first = projectDir();
+  const second = projectDir();
+  const port = await freePort();
+  const session = sacrificialProcess();
+  // Accepts the request and says nothing for as long as the probe is willing to
+  // wait — silence, which is the one state that is never an answer.
+  const held = await frontedCollector({
+    cwd: first,
+    session,
+    port,
+    config: () => {
+      /* never answers */
+    },
+  });
+
+  try {
+    assert.ok(fs.existsSync(held.runDir), 'the collector behind the front is recording into a directory');
+
+    // No wall-clock assertion: the probe is meant to spend its window on a
+    // question that goes unanswered, and timing an execFile of node measures the
+    // machine. runBackground's own timeout is the bound that stays — the command
+    // has to come back to its caller by itself.
+    const out = await secondStart(second, ['--port', String(port), '--exit-with', String(session.pid)]);
+
+    assert.doesNotMatch(
+      out,
+      CLAIMS_NOTHING_KEPT,
+      `nothing came back, so nothing was said about persistence, and the collector is recording into ${held.runDir}: ${out.trim()}`,
+    );
+    assert.deepEqual(measurementsIn(second), [], 'and no second measurement of its own');
+  } finally {
+    await held.close();
+    session.kill('SIGKILL');
+    await waitForSilence(held.inner, 20_000);
+    fs.rmSync(first, { recursive: true, force: true });
+    fs.rmSync(second, { recursive: true, force: true });
+  }
+});
+
+test('the three things a second start can learn about persistence read as three different answers', async () => {
+  const dirs = [projectDir(), projectDir(), projectDir(), projectDir(), projectDir(), projectDir()];
+  const [firstNone, secondNone, firstRefused, secondRefused, firstKept, secondKept] = dirs;
+  const ports = [await freePort(), await freePort(), await freePort()];
+  const [portNone, portRefused, portKept] = ports;
+  const session = sacrificialProcess();
+  // The port is the only thing that differs between the three banners by
+  // construction, so it is taken out before they are compared.
+  const withoutPort = (out, port) => out.split(String(port)).join('<port>').trim();
+
+  try {
+    // a. It answered, and it genuinely keeps nothing.
+    await runBackground(firstNone, [
+      '--port',
+      String(portNone),
+      '--no-persist',
+      '--exit-with',
+      String(session.pid),
+    ]);
+    const said = withoutPort(
+      await secondStart(secondNone, ['--port', String(portNone), '--exit-with', String(session.pid)]),
+      portNone,
+    );
+
+    // b. It answered, and refused the question.
+    await runBackground(firstRefused, [
+      '--port',
+      String(portRefused),
+      '--token',
+      'secretA',
+      '--exit-with',
+      String(session.pid),
+    ]);
+    const refusedDir = runDirOf(firstRefused);
+    const refused = withoutPort(
+      await secondStart(secondRefused, [
+        '--port',
+        String(portRefused),
+        '--token',
+        'secretB',
+        '--exit-with',
+        String(session.pid),
+      ]),
+      portRefused,
+    );
+
+    // c. It answered, and named the directory.
+    await runBackground(firstKept, [
+      '--port',
+      String(portKept),
+      '--token',
+      'secretA',
+      '--exit-with',
+      String(session.pid),
+    ]);
+    const keptDir = runDirOf(firstKept);
+    const kept = withoutPort(
+      await secondStart(secondKept, [
+        '--port',
+        String(portKept),
+        '--token',
+        'secretA',
+        '--exit-with',
+        String(session.pid),
+      ]),
+      portKept,
+    );
+
+    assert.ok(
+      kept.includes(keptDir),
+      `a collector that named its directory has to be reported with it (${keptDir}): ${kept}`,
+    );
+    assert.notEqual(
+      refused,
+      said,
+      `a collector that refused the question about ${refusedDir} is not a collector that said it keeps nothing — the two must not read the same`,
+    );
+    assert.notEqual(refused, kept, 'and a refusal is not a directory either');
+    assert.notEqual(said, kept, 'and keeping nothing is not a directory either');
+
+    for (const [cwd, port] of [
+      [secondNone, portNone],
+      [secondRefused, portRefused],
+      [secondKept, portKept],
+    ]) {
+      assert.deepEqual(measurementsIn(cwd), [], 'no second start creates a measurement of its own');
+      assert.ok(await collectorAnswers(port), 'and every first collector is left running');
+    }
+  } finally {
+    session.kill('SIGKILL');
+    for (const port of ports) await waitForSilence(port, 20_000);
+    for (const dir of dirs) fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
