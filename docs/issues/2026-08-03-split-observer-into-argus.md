@@ -696,7 +696,7 @@ Facts established by measurement, which the criteria rest on:
 
 - **State.** Working tree clean, branch in sync with origin at `d08e0a7`. `bash
   test.sh` at that commit: five suites — repository 6 cases, plugin 39, worktrees 9,
-  argus 115, argus-ui 14 — exit 0, 54 s.
+  argus 119, argus-ui 14 — exit 0, 54 s.
 
 - **Next step.** The criterion-6 defect goes test-author → implementer → review
   round 5 → checkpoint 2 → commit, push, PR → retro.
@@ -707,7 +707,7 @@ Facts established by measurement, which the criteria rest on:
   different tokens); a 404 where the route answered but said nothing about
   persistence; a `/api/config` that never answers inside the probe window; and one
   case asserting that the three states read as three different sentences while a
-  known directory is still named. Committed as `3cda471`, pushed together with the
+  known directory is still named. Committed as `3c99cb7`, pushed together with the
   round-4 record at `eb031ac`. Proof they fail: `cd tools/argus && npm test --silent`
   → 119 tests, 115 pass, 4 fail, exit 1. Exactly the four new ones fail, no
   pre-existing test changed verdict. All four are assertion failures on the printed
@@ -731,6 +731,47 @@ Facts established by measurement, which the criteria rest on:
   objection recorded against a full stub in the older cases — while making 404 and
   never-answers deterministic, which no real collector can be made to produce on
   demand.
+
+- **Implementer produced:** `tools/argus/bin/argus.mjs` and `tools/argus/CLAUDE.md`.
+  `inspectPort` no longer collapses "the collector said it keeps nothing" into "the
+  question was not answered": it returns `persistKnown`, decided by the presence of
+  the `persist` field in an ok config body rather than by its value, so a 401, a 404,
+  a non-JSON 200 and a spent window all leave it false. A new `describePersistence`
+  turns the three states into three lines where the banner is printed — the absolute
+  directory when known, "keeps nothing on disk" only when the collector said so, and
+  "not known — its configuration could not be read; it may well be recording" for
+  refusal and silence alike. The probe window, the connect probe and `askPatiently`
+  are untouched. `CLAUDE.md` gained the front-server pattern under "Tests". Commits:
+  test-author record `bcf9560`, implementation `7129448`, both pushed.
+
+- **Facts.** Before the change, `node --test test/background.test.mjs` in
+  `tools/argus`: 15 cases, 11 pass, 4 fail, exit 1. After: same command 15 cases
+  exit 0 in 66 s; `cd tools/argus && npm test` 119 cases exit 0; `bash test.sh` from
+  the root, five suites — repository 6, plugin 39, worktrees 9, argus 119, argus-ui
+  14 — exit 0, run twice, exit 0 both times. Static analysis: none exists, established
+  by a `find` for eslint, prettier, biome, tsconfig and editorconfig configurations
+  outside `node_modules` (zero hits) and by `tools/argus/package.json` having scripts
+  start, dev, test, demo and no lint.
+
+- **Assumptions.** The wording of the third sentence in `describePersistence` is the
+  implementer's, since the tests deliberately do not pin it; the clause "it may well be
+  recording" is there because the caller's wrong move is to conclude nothing is being
+  recorded. A real collector's `/api/config` always carries the `persist` key
+  (`src/server.mjs:172` emits `persist: persist ?? null` unconditionally), so keying
+  "known" on the field's presence keeps a genuine `--no-persist` collector reporting
+  that it keeps nothing.
+
+- **Surprise.** The argus suite is 119 cases, not the 115 in the state entry written
+  before the implementer ran. The four new cases account for the difference; nothing
+  regressed. The state entry is corrected above.
+
+- **No user-facing document falsified.** `README.md` and `skills/argus/SKILL.md`
+  promise only that the directory is named, which still holds whenever it is known.
+
+- **Filed for later, violating no criterion — file as its own issue.** The
+  `Measurement` label can now introduce a parenthetical that is not a measurement. It
+  reads fine, but anything that machine-parses this banner has three shapes to handle
+  rather than two.
 
 ## Checkpoints
 
