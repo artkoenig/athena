@@ -905,7 +905,7 @@ Facts established by measurement, which the criteria rest on:
   | --- | ---: | ---: | ---: | ---: | ---: | ---: |
   | 6 — a second start does not create a second collector | 1 | 1 | 2 | 2 | 2 | 1 |
   | 14 — the documentation mirrors the result | 1 | 0 | 0 | 0 | 1 | 0 |
-  | violates none | 5 | 1 | 0 | 0 | 2 | 0 |
+  | violates none | 5 | 1 | 0 | 0 | 2 | 3 |
   | every other criterion | 0 | 0 | 0 | 0 | 0 | 0 |
 
   Triage:
