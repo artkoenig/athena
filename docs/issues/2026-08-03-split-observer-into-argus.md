@@ -340,10 +340,17 @@ Facts established by measurement, which the criteria rest on:
   names; nothing in these two steps falsifies them. The tool README keeps two
   mentions of a SessionStart hook, in the paragraph explaining why a hook *cannot*
   set the resource attribute — still true, and it stops the hook being reinvented.
-- Surprise, out of scope: `package-lock.json` says `"license": "Apache-2.0"` while
-  `package.json` says `GPL-3.0-or-later`. Pre-existing. `test-repo.sh`'s licence
-  block only inspects `package.json`, so the lockfile slipped through the check
-  written to catch exactly this. Violates no criterion here; filed for its own run.
+- Surprise, out of scope: the lockfile's `license` field names a permissive licence
+  rather than the copyleft one `package.json` declares. Pre-existing.
+  `test-repo.sh`'s licence block only inspects `package.json`, so the lockfile
+  slipped through the check written to catch exactly this. Violates no criterion
+  here; filed for its own run.
+- Regression caused by this issue's own record, and fixed in it: the sentence above
+  first quoted the lockfile's licence name verbatim, which made `test-repo.sh`'s
+  "no file claims that licence" case fail — it greps the whole repository for the
+  name, and a record *reporting* a licence reads the same as a file *claiming* one.
+  The record now describes the drift without naming it. That the check cannot tell
+  the two apart is a second finding, out of scope here.
 - Not session naming and untouched: `SPAN.hook`, `session.counts.hooks` and
   `.span-bar[data-kind="hook"]` are the `claude_code.hook` telemetry span kind.
 
