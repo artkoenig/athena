@@ -481,6 +481,75 @@ Facts established by measurement, which the criteria rest on:
   and `tools/argus/compose.yaml` still names its service `observe`. Handed to review
   round 2 rather than fixed unasked.
 
+- **Review round 2**, same reviewer context continuing, diff `99ce318..53f2efb`.
+  Suite established independently: `bash test.sh`, five suites — repository 6,
+  plugin 39, worktrees 9, argus 113, argus-ui 14 — exit 0, nothing skipped. Still no
+  static analysis.
+
+  | criterion | R1 | R2 |
+  | --- | ---: | ---: |
+  | 6 — a second start does not create a second collector | 1 | 1 |
+  | 14 — the documentation mirrors the result | 1 | 0 |
+  | violates none | 5 | 1 |
+  | every other criterion | 0 | 0 |
+
+  Round 1's other findings are confirmed fixed: the silent squatter now exits 1 with
+  the right message in 1147 ms and creates no directory; both falsified
+  documentation statements are true and complete; the page carries no `observe`
+  anywhere. `render.yaml`'s inline plan comment and `compose.yaml`'s service key
+  were examined and are **not** falsified — the first speaks only about the free
+  tier, the second is a key rather than a statement — so both correctly stayed. The
+  `/athena/i` assertion does not violate criterion 1: it is neither an import nor
+  knowledge of the collector, and it lives inside the interface project, so the
+  project lifts out with page and test together.
+
+- **Stop signal: Repetition.** Criterion 6 has now been missed in two consecutive
+  rounds by two different defects, in opposite directions. Recorded as the rulebook
+  requires, and the decision is to change approach rather than adjust the same
+  number again.
+
+  The round 2 finding: cutting the health budget to 1000 ms and treating any failure
+  of that request as *stranger* turns a live collector under load into a squatter.
+  Reproduced end to end with four concurrent 19.8 MB OTLP exports — under the 32 MB
+  cap — while `handleIngest` decodes synchronously and blocks the event loop: the
+  second start exits 1 with "port … is held by something that is not a collector",
+  names no directory, and tells the human to stop their own collector, while
+  `/api/health` on that port answers `{"ok":true,…}` moments later. Both budgets
+  probed at the same instant under the same load: 1000 ms → stranger, 3000 ms →
+  collector. Measured health latencies under that shape of load ranged 481 ms to
+  3051 ms, so the misclassified band sits inside the operating range. It is a
+  regression: this was classified correctly at `86daf95`.
+
+  **The approach that was wrong**: a single deadline as the discriminator. It cannot
+  separate "a collector whose event loop is busy" from "a listener that will never
+  answer" — moving the number only chooses which of the two is misread. Round 1
+  chose one direction, round 2 the other.
+
+  **The approach now**: ask repeatedly over a generous total window with a short
+  budget per attempt, and call it a stranger only when the window expires. A
+  collector whose loop frees up between chunks answers on some attempt; a silent
+  listener never does. The free case is untouched and stays instant, because a free
+  port refuses the connection rather than accepting it — the rare, slow path is the
+  held one, which is the right place to spend seconds. Asymmetry of cost decides the
+  window: a wrong *stranger* tells the human to kill a collector that is working,
+  a slow correct answer costs a few seconds. Source: default, unanswered.
+
+- Second round 2 finding, violating no criterion and fixed with the above: the new
+  case's `took < 2000` bound measures the wall clock of a whole `execFile` of node
+  — spawn, module load, connect, exit — so it measures machine speed. The reviewer
+  reproduced two failures in eight runs on a loaded four-CPU box, at 2135 ms, 3375
+  ms and 4589 ms, against 1147–1465 ms unloaded. It is the one thing in the diff
+  that can turn criterion 15 red with no code changing, and its message would point
+  the next reader at a classification defect that is not there. It also contradicts
+  the new approach, whose stranger path is deliberately slower. The test-author
+  rewrites it to assert the outcome rather than the wall clock.
+
+- Not reduced to a reproduction, so not a finding, but recorded: a collector bound
+  to a specific non-loopback interface, with a second start using `--host 0.0.0.0`,
+  would probe `localhost`, be refused, be called free, and fall through to the
+  `EADDRINUSE` backstop with the old wrong message. The reviewer could not bind a
+  second interface in this environment to demonstrate it.
+
 ## Checkpoints
 
 ### Before implementation
