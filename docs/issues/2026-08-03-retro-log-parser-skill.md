@@ -122,23 +122,23 @@ sequenceDiagram
 
 
 ### 1. Rulebook & Process Friction
-- Rebase conflict handling required explicit `GIT_EDITOR=true` environment overrides due to terminal environment restrictions.
-- Initial invocation of `test-plugin.sh` failed because the host environment lacked a global `claude` executable, requiring a fallback mock bin setup.
+- **Which process rule or automated hook created disproportionate friction?** Rebase conflict handling required explicit `GIT_EDITOR=true` environment overrides due to non-interactive terminal restrictions.
+- **Where did the agent apply rules too rigidly or incorrectly, causing unnecessary overhead?** Initial `test-plugin.sh` execution failed because the script attempted to call `claude plugin validate` without checking if the `claude` binary existed on PATH, requiring a fallback mock bin.
 
 ### 2. Subagent Efficiency & Delegation
-- Delegating requirements analysis to `spec-researcher`, architecture design to `solution-architect`, gut-checking to `clean-room-reviewer`, and file edits to `issue-implementer` kept the main context clean and isolated.
-- Subagent transcripts were parsed recursively and integrated into quantitative session metrics.
+- **Did delegating to subagents conserve context, or was the handoff/briefing overhead larger than the gain?** Delegating research (`spec-researcher`), planning (`solution-architect`), gut-checking (`clean-room-reviewer`), and implementation (`issue-implementer`) kept hundreds of log lines and temporary outputs out of the main context window.
+- **Were there redundancies or repeated research between the main conversation and subagent runs?** No; each subagent performed a distinct single-pass role and returned structured findings back to the main session.
 
 ### 3. Specification & Planning Quality
-- `grill-me-for-spec` successfully framed log parser inputs and retro output requirements upfront.
-- `solution-architect` generated a single-module `design.md` architecture that was strictly followed during code generation without breaking changes.
+- **Were all critical requirement gaps uncovered upfront during grilling/specifying, or did ambiguities surface late during implementation?** The `grill-me-for-spec` session correctly identified the need for dual Claude and Gemini log support, `--latest` auto-resolution, and English retro generation.
+- **Was the architecture plan strictly followed, or were there unauthorized deviations?** `solution-architect` defined a single-module package (`tools/log-parser`) with zero external runtime dependencies that was strictly adhered to during code generation.
 
 ### 4. Token & Latency Optimization
-- Streaming line-by-line JSONL parsing kept memory footprint at $O(1)$ across large session transcripts.
-- 191 total tool calls across main and subagents completed with high execution reliability.
+- **Where did token spikes, redundant tool loops, or uncompacted outputs occur?** Initial live log parsing returned 0 steps due to schema mismatch between `message` and `content` fields in Antigravity transcripts, which was quickly corrected.
+- **How efficient was context cache utilization across steps?** Memory footprint remained $O(1)$ due to Node streaming line-by-line `readline` parsing.
 
 ### 5. Tooling & Automation Opportunities
-- Created `bin/parse-agent-log` CLI tool and `skills/retro/SKILL.md` to automate session log extraction, subagent metric aggregation, and Mermaid sequence diagram generation.
-- Added pre-flight host executable checks for integration test suites.
+- **Which recurring manual steps should be encapsulated into dedicated CLI tools or scripts?** Log format detection, subagent transcript aggregation, and Mermaid sequence diagram rendering were encapsulated into `bin/parse-agent-log`.
+- **Which errors were caused by missing environment pre-requisites before test execution?** Integration test failures caused by uninstalled host binaries (`claude`) were resolved by adding fallback mocks in `test-plugin.sh`.
 
 
