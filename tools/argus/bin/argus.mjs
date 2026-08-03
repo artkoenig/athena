@@ -10,11 +10,13 @@
  */
 
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 
 import { TelemetryStore } from '../src/store.mjs';
-import { JsonlPersistence } from '../src/persist.mjs';
+import { createRunDir, JsonlPersistence } from '../src/persist.mjs';
 import { createServer } from '../src/server.mjs';
-import { endpointFor, parseArgs, resolveConfig } from '../src/config.mjs';
+import { endpointFor, parseArgs, PERSIST_ROOT, resolveConfig } from '../src/config.mjs';
 import { otelEnvFor } from '../src/claude.mjs';
 import { probeCollector } from '../src/probe.mjs';
 import { startTunnel } from '../src/tunnel.mjs';
@@ -41,7 +43,12 @@ Options
                                 of trying both
       --public-url <url>        Advertise this URL instead of the bind address
                                 (behind a tunnel or reverse proxy)
-      --persist [dir]           Append records to JSONL and replay them on restart
+      --persist <dir>           Write the measurement into exactly this directory
+                                instead of <cwd>/.athena-telemetry/<timestamp>.
+                                Write-only: it never replays what is there
+      --no-persist              Keep nothing on disk
+      --open <dir>              Replay an existing measurement and show it,
+                                retention off, writing nothing into it
       --retention <duration>    Drop records older than this          (default 24h)
       --max-spans <n>           Span buffer size                     (default 50000)
       --max-logs <n>            Event buffer size                    (default 50000)
@@ -127,19 +134,40 @@ async function main(argv) {
     return;
   }
 
+  // A measurement that is not there has to be said out loud: a typo would
+  // otherwise look exactly like a run that recorded nothing.
+  if (config.open && !fs.existsSync(config.open)) {
+    console.error(`argus: no measurement at ${config.open} — --open replays a directory that already exists`);
+    process.exitCode = 1;
+    return;
+  }
+
   const store = new TelemetryStore(config);
   let persistence = null;
-  if (config.persist) {
-    persistence = new JsonlPersistence(config.persist, {
+  // Where this collector writes, absolute — null when it keeps nothing. The
+  // default is a timestamped directory in the project being measured, so two
+  // runs can be compared instead of one overwriting the other.
+  let runDir = config.persist;
+  if (!config.open && config.persistDefault) {
+    runDir = createRunDir(path.resolve(process.cwd(), PERSIST_ROOT));
+  }
+
+  if (config.open) {
+    // Read direction: replay it and let go of it. Nothing is attached, so
+    // nothing this collector receives is written back into what it opened.
+    const archive = new JsonlPersistence(config.open);
+    const restored = await archive.load(store);
+    archive.close();
+    console.error(`argus: opened ${config.open} (replayed ${restored} records, retention off)`);
+  } else if (runDir) {
+    persistence = new JsonlPersistence(runDir, {
       maxBytes: config.persistMaxBytes,
       log: (message) => console.error(message),
     });
-    const restored = await persistence.load(store);
+    // Write direction only. Replaying here would mix an older measurement into
+    // the one being recorded; `--open` is how an old one is looked at.
     persistence.attach(store);
-    console.error(
-      `argus: persisting to ${config.persist}` +
-        (restored ? ` (replayed ${restored} records)` : ''),
-    );
+    console.error(`argus: persisting to ${runDir}`);
   }
 
   // A tunnel puts the collector on the public internet, so it must not be open.
@@ -152,7 +180,7 @@ async function main(argv) {
     store,
     token: config.token,
     endpoint: () => advertised,
-    persist: config.persist,
+    persist: runDir,
   });
   let tunnel = null;
 

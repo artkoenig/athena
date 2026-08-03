@@ -156,8 +156,11 @@ cd tools/argus
 docker compose up -d          # http://127.0.0.1:4318, data in the "telemetry" volume
 ```
 
-The published port is deliberately bound to `127.0.0.1`. Persistence is preset in the
-container (`ATHENA_OBS_PERSIST=/data`), so a restart loses nothing.
+The published port is deliberately bound to `127.0.0.1`. The persistence directory is
+preset in the container (`ATHENA_OBS_PERSIST=/data`), so every record is on the volume
+rather than only in the process. A restart starts a fresh measurement in the same
+directory — what is already on the volume is read back by starting a collector on it with
+`--open /data`, not by restarting.
 
 ### 3. Agent in a cloud session (Claude Code on the web, Actions, containers)
 
@@ -413,7 +416,9 @@ exactly these routes and nothing else.
 | `--tunnel [binary]`     | –                            | –              | Open a Cloudflare tunnel, generate a token, print the block |
 | `--tunnel-protocol <p>` | –                            | both           | Pin the transport: `quic` or `http2`             |
 | `--public-url <url>`    | `ATHENA_OBS_PUBLIC_URL`      | –              | Announced URL behind a tunnel/proxy              |
-| `--persist [dir]`       | `ATHENA_OBS_PERSIST`         | –              | JSONL on disk, replay at start                   |
+| `--persist <dir>`       | `ATHENA_OBS_PERSIST`         | –              | Write into exactly this directory instead of the default one |
+| `--no-persist`          | –                            | –              | Keep nothing on disk                             |
+| `--open <dir>`          | –                            | –              | Replay an existing measurement, write nothing    |
 | `--retention <duration>`| `ATHENA_OBS_RETENTION`       | `24h`          | Age at which raw data is discarded               |
 | `--max-spans <n>`       | `ATHENA_OBS_MAX_SPANS`       | `50000`        | Span buffer                                      |
 | `--max-logs <n>`        | `ATHENA_OBS_MAX_LOGS`        | `50000`        | Event buffer                                     |
@@ -435,9 +440,25 @@ Two lifetimes, deliberately separated:
 - **Session aggregates** (tokens, cost, counters per model and tool) are cumulative and
   stay correct even once the raw data has long rolled out.
 
-With `--persist <dir>` every normalized record is appended as JSONL and replayed at the
-next start — useful in containers that get restarted. The files rotate at 64 MB
-(`<signal>.jsonl` → `<signal>.1.jsonl`).
+**Persistence is on by default.** A `start` creates
+`<cwd>/.athena-telemetry/<YYYY-MM-DDTHH-MM-SS>/` in the project being measured and appends
+every normalized record there as JSONL; two starts get two directories, so runs can be
+compared instead of one overwriting the other. Creating that root also writes a
+`.gitignore` holding `*` inside it, so the measured project's `git status` stays clean and
+no file outside the directory is touched. The files rotate at 64 MB (`<signal>.jsonl` →
+`<signal>.1.jsonl`).
+
+`--persist <dir>` puts the measurement in exactly that directory, with no timestamp
+nesting, and `--no-persist` keeps nothing at all. Both only ever write.
+
+**Reading one back is `--open <dir>`.** It replays that directory into a collector, turns
+retention off so a measurement from last week survives its own replay, and opens nothing
+for writing — a reopened measurement cannot be changed by what happens while you look at
+it. `--persist` and `--open` together are refused.
+
+```bash
+argus start --open .athena-telemetry/2026-08-03T14-22-05
+```
 
 `DELETE /api/data` empties the store at runtime.
 

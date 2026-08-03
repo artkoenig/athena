@@ -1,10 +1,12 @@
 /**
- * Optional append-only persistence.
+ * Append-only persistence, one directory per measurement.
  *
- * Cloud sandboxes get recycled, and losing a session's telemetry to a container
- * restart defeats the point of watching it. When `--persist <dir>` is set, every
- * normalized record is appended as JSONL and replayed into the store on the next
- * start, so session history survives a restart without introducing a database.
+ * Every normalized record is appended as JSONL, so a measurement outlives the
+ * process that took it and two of them can be compared. The two directions are
+ * kept apart deliberately: a running collector only ever appends (`attach`),
+ * and reading an old measurement back is a `load` into a store that writes
+ * nowhere — which is what makes a reopened measurement impossible to alter by
+ * looking at it.
  *
  * Files rotate at a size cap: `<signal>.jsonl` is the live file, `<signal>.1.jsonl`
  * the previous generation. Anything older is dropped, which bounds disk use the
@@ -15,8 +17,38 @@ import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 
+import { runDirName } from './config.mjs';
+
 const SIGNALS = ['traces', 'metrics', 'logs'];
 const DEFAULT_MAX_BYTES = 64 * 1024 * 1024;
+
+/**
+ * Create the directory this measurement writes into: `<root>/<timestamp>`,
+ * suffixed `-2`, `-3` … when that name is taken, so two runs never share one.
+ *
+ * The root gets a `.gitignore` holding `*` — a directory that ignores itself.
+ * Measuring a project must not show up in its `git status`, and arranging that
+ * from here costs nothing, where editing the project's own `.gitignore` would
+ * be a change to a file the measurement has no business touching.
+ */
+export function createRunDir(root, { now = new Date() } = {}) {
+  fs.mkdirSync(root, { recursive: true });
+  const ignore = path.join(root, '.gitignore');
+  if (!fs.existsSync(ignore)) fs.writeFileSync(ignore, '*\n');
+
+  const base = runDirName(now);
+  for (let attempt = 1; ; attempt++) {
+    const dir = path.join(root, attempt === 1 ? base : `${base}-${attempt}`);
+    try {
+      // Not `recursive`: the EEXIST is the point — it is what makes two starts
+      // in the same second pick two names rather than share one.
+      fs.mkdirSync(dir);
+      return dir;
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+    }
+  }
+}
 
 export class JsonlPersistence {
   constructor(dir, { maxBytes = DEFAULT_MAX_BYTES, log = () => {} } = {}) {
