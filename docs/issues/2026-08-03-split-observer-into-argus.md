@@ -458,6 +458,29 @@ Facts established by measurement, which the criteria rest on:
     reaches the caller, because the parent prints its own null token. Neither
     violates a criterion here.
 
+- Round 1's four fixes landed as `248a3ab`, after the test-author pinned the defect
+  in `3e6fab5`. `inspectPort` now classifies the port from a TCP connect rather than
+  from the health request: refused means free and answers immediately, so the
+  ordinary case pays no timeout; accepted means held, and only then is
+  `/api/health` asked, on a 1000 ms budget, with any failure now meaning *stranger*
+  instead of *free*. The stray directory goes with the misclassification, because
+  free now means nothing accepted a connection. `node --test
+  test/background.test.mjs` 9 cases exit 0, the new case at 1360 ms against its
+  2000 ms bound. `bash test.sh` five suites — repository 6, plugin 39, worktrees 9,
+  argus 113, argus-ui 14 — exit 0.
+- Regression during that commit, caused and corrected inside it: renaming the page
+  to `argus · ui` turned a green case red. `tools/argus-ui/test/server.test.mjs`
+  asserts the served HTML matches `/athena/i` as its proof that the page came back
+  at all. Tests are not the implementer's to edit, so the page became `athena ·
+  argus` instead; only "observe" is gone. Worth naming because that assertion pins
+  the word "athena" into a project whose own `CLAUDE.md` says it must be liftable
+  out of this repository unchanged — a future rename has to go through the
+  test-author. Out of scope here.
+- Two more of the same falsehood were left standing, both outside the triage:
+  `render.yaml`'s inline plan comment makes a weaker version of the replay claim,
+  and `tools/argus/compose.yaml` still names its service `observe`. Handed to review
+  round 2 rather than fixed unasked.
+
 ## Checkpoints
 
 ### Before implementation
