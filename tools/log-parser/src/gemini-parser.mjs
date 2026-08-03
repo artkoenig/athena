@@ -1,7 +1,10 @@
 import fs from 'node:fs';
 import readline from 'node:readline';
 
-export async function parseGeminiLog(filePath) {
+export async function parseGeminiLog(filePath, visitedPaths = new Set()) {
+  if (visitedPaths.has(filePath)) return [];
+  visitedPaths.add(filePath);
+
   const fileStream = fs.createReadStream(filePath);
   const rl = readline.createInterface({
     input: fileStream,
@@ -67,6 +70,19 @@ export async function parseGeminiLog(filePath) {
           if (obj.status === 'ERROR' || obj.error) {
             lastCall.success = false;
             if (obj.error) currentTurn.errors.push(typeof obj.error === 'string' ? obj.error : JSON.stringify(obj.error));
+          }
+        }
+
+        // Subagent log discovery
+        if (typeof obj.content === 'string') {
+          const match = obj.content.match(/file:\/\/(.+\/transcript\.jsonl)/);
+          if (match && match[1] && fs.existsSync(match[1]) && !visitedPaths.has(match[1])) {
+            const subTurns = await parseGeminiLog(match[1], visitedPaths);
+            for (const subTurn of subTurns) {
+              subTurn.isSubagent = true;
+              subTurn.step = stepCounter++;
+              turns.push(subTurn);
+            }
           }
         }
       }
