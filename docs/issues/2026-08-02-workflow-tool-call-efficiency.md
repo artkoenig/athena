@@ -1,7 +1,7 @@
 ---
-status: active
+status: done
 branch: claude/offenes-issue-umsetzen-lpeuk3
-pr:
+pr: 22
 ---
 
 # The workflow spends more tool calls than the work needs

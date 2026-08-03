@@ -1,0 +1,21 @@
+{
+  "name": "@athena/argus-ui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Zero-dependency web interface for an argus collector, reached over its HTTP API",
+  "license": "GPL-3.0-or-later",
+  "engines": {
+    "node": ">=20.11"
+  },
+  "files": [
+    "bin",
+    "src",
+    "public"
+  ],
+  "scripts": {
+    "start": "node bin/argus-ui.mjs",
+    "dev": "node --watch bin/argus-ui.mjs",
+    "test": "node --test \"test/*.test.mjs\""
+  }
+}

@@ -9,7 +9,7 @@ node_modules/
 # every worktree shows up as untracked in the main checkout.
 .claude/worktrees/
 
-# athena-observe persistence (--persist)
+# argus persistence (--persist)
 .athena-telemetry/
 telemetry/
 

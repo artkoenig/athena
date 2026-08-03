@@ -18,7 +18,7 @@ echo "=== the licence"
 # because nothing compared them.
 declare -a claims=(
   ".claude-plugin/plugin.json"
-  "tools/observability/package.json"
+  "tools/argus/package.json"
   "README.md"
 )
 
@@ -49,6 +49,32 @@ if [ -z "$strays" ]; then
 else
   no "these files still claim the Apache licence:"
   echo "$strays" | sed 's/^/       /'
+fi
+
+echo
+echo "=== remote operation deploys the collector alone"
+
+# Dockerfile, compose.yaml and render.yaml build and run argus. The interface
+# is local only: it is never packaged into the image, never named by the
+# blueprint, and the collector no longer carries the files it serves.
+node -e '
+  const fs = require("fs"), path = require("path");
+  const root = process.argv[1];
+  const problems = [];
+  const pkg = JSON.parse(fs.readFileSync(path.join(root, "tools/argus/package.json"), "utf8"));
+  if ((pkg.files || []).includes("public")) problems.push("tools/argus/package.json still ships public/");
+  if (fs.existsSync(path.join(root, "tools/argus/public"))) problems.push("tools/argus/public still exists");
+  for (const file of ["tools/argus/Dockerfile", "tools/argus/compose.yaml", "render.yaml"]) {
+    const text = fs.readFileSync(path.join(root, file), "utf8");
+    if (/argus-ui/.test(text)) problems.push(file + " deploys the interface");
+    if (/public\//.test(text)) problems.push(file + " still references public/");
+  }
+  if (problems.length) { console.error(problems.join("; ")); process.exit(1); }
+' "$root"
+if [ $? -eq 0 ]; then
+  ok "the image, the compose file and the blueprint carry the collector and no interface"
+else
+  no "the deployment still carries the interface"
 fi
 
 echo

@@ -293,7 +293,7 @@ Stated as plainly as the findings, because it is the same measurement.
 
 ```bash
 # collector
-node tools/observability/bin/athena-observe.mjs
+node tools/argus/bin/argus.mjs
 
 # one measured run, own session id so the collector can separate it
 env -u CLAUDE_CODE_SESSION_ID \

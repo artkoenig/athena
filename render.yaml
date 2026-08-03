@@ -1,4 +1,4 @@
-# Render Blueprint for athena-observe (tools/observability).
+# Render Blueprint for argus (tools/argus).
 #
 # Render only reads blueprints from the repository root, which is why this file
 # sits here rather than next to the tool it deploys. `rootDir` below keeps the
@@ -6,18 +6,20 @@
 #
 # To use it: render.com → New → Blueprint → pick this repository.
 #
-# The disk is what makes this worth doing at all: without it the store lives
-# only in the process, and every deploy or restart takes the session history
-# with it. A disk also pins the service to a single instance, which is exactly
+# The disk keeps what a restart drops. The store lives only in the process, and
+# `--persist` only ever writes, so a deploy or restart comes up on a fresh
+# measurement either way — with the disk the earlier records are still on it,
+# to be read back with `--open` from a process that has it; without one they
+# are gone. A disk also pins the service to a single instance, which is exactly
 # what this app needs — the store is in memory, so a second instance does not
-# share the load, it hides half the telemetry. `athena-observe check` measures
-# that and says so.
+# share the load, it hides half the telemetry. `argus check` measures that and
+# says so.
 
 services:
   - type: web
-    name: athena-observe
+    name: argus
     runtime: docker
-    rootDir: tools/observability
+    rootDir: tools/argus
     dockerfilePath: ./Dockerfile
     plan: starter # free has no disk and sleeps when idle; both lose the history
     region: frankfurt

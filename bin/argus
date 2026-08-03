@@ -1,0 +1,33 @@
+#!/bin/sh
+# argus, reachable from any session.
+#
+# A plugin's bin/ is appended to the PATH of the shell a session runs commands
+# in, which is what makes the collector usable in a project that is not an
+# athena checkout. Those commands are handed no variable naming the plugin's
+# own root — that exists for hooks and MCP servers only — so this locates its
+# tree from $0 and nothing else.
+set -eu
+
+self="$0"
+# Follow symlinks: a PATH entry may well be one, and the tool has to be found
+# relative to the real file, not to the link.
+while [ -L "$self" ]; do
+  link="$(readlink "$self")"
+  case "$link" in
+    /*) self="$link" ;;
+    *) self="$(dirname "$self")/$link" ;;
+  esac
+done
+here="$(CDPATH='' cd -- "$(dirname -- "$self")" && pwd -P)"
+collector="$here/../tools/argus/bin/argus.mjs"
+
+if [ ! -f "$collector" ]; then
+  echo "argus: cannot find the collector at $collector" >&2
+  exit 1
+fi
+if ! command -v node >/dev/null 2>&1; then
+  echo "argus: needs Node >= 20.11 on the PATH" >&2
+  exit 1
+fi
+
+exec node "$collector" "$@"
