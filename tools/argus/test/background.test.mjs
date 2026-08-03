@@ -150,6 +150,45 @@ async function secondStart(cwd, args) {
 // heard from must not be reported as a collector that answered.
 const CLAIMS_NOTHING_KEPT = /keeps nothing on disk|nothing is kept on disk/i;
 
+// What a JavaScript runtime error looks like once it has reached the caller as
+// a message. A probe that falls over on what came back has not classified the
+// port at all, so this is asserted as an absence in every case below — the
+// wording of whatever the fix does say is deliberately not pinned.
+const JS_RUNTIME_ERROR =
+  /\b(?:TypeError|ReferenceError|RangeError|SyntaxError)\b|Cannot use '[a-z]+' operator|Cannot read (?:property|properties)|Cannot convert |is not a function|is not iterable|is not defined/i;
+
+/**
+ * Criterion 6 leaves a held port two outcomes and no third: attach — exit 0,
+ * and say where the collector on it writes — or refuse — exit 1, and say so.
+ * Which of the two an unusable answer deserves is the fix's to choose; this
+ * only says that one of them has to be reached, with the port named, without a
+ * crash, without the false claim that a recording collector keeps nothing, and
+ * without a measurement of the second start's own.
+ *
+ * Complaints come back as a list rather than as a throw, so a caller checking a
+ * family of bodies reports every one of them instead of the first.
+ */
+function allowedOutcomeProblems({ label, result, port, cwd, runDir }) {
+  const out = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+  const failed = result instanceof Error;
+  const code = failed ? (result.code ?? `signal ${result.signal}`) : 0;
+  const problems = [];
+  const note = (why) => problems.push(`${label}: ${why} — exit ${code}, output: ${out.trim()}`);
+
+  if (JS_RUNTIME_ERROR.test(out)) {
+    note('the probe fell over on the body instead of classifying the port, and a JavaScript runtime error is neither outcome');
+  } else if (code === 0) {
+    if (CLAIMS_NOTHING_KEPT.test(out)) {
+      note(`the collector on that port is recording into ${runDir}, so a body that says nothing about persistence must not be reported as one that said nothing is kept`);
+    }
+  } else if (code !== 1) {
+    note('the two outcomes are exit 0, having attached, and exit 1, having refused; this is neither');
+  }
+  if (!out.includes(String(port))) note('whichever way it goes, it has to say which port it is about');
+  if (measurementsIn(cwd).length) note('a second start must not create a measurement of its own, whichever way it goes');
+  return problems;
+}
+
 /* ----------------------------- the mechanism ---------------------------- */
 
 test('spawnBackground returns what the child announced on its readiness descriptor', async () => {
@@ -692,6 +731,134 @@ test('the three things a second start can learn about persistence read as three 
     session.kill('SIGKILL');
     for (const port of ports) await waitForSilence(port, 20_000);
     for (const dir of dirs) fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a collector whose /api/config answers a JSON string is classified, not crashed on', async () => {
+  const first = projectDir();
+  const second = projectDir();
+  const port = await freePort();
+  const session = sacrificialProcess();
+  // 200, well-formed JSON, and not an object: the route answered, and what came
+  // back carries no fields to look in. Nothing in the criteria makes an answer
+  // of this shape anything but an answer that says nothing about persistence.
+  const held = await frontedCollector({
+    cwd: first,
+    session,
+    port,
+    config: (_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify('nope'));
+    },
+  });
+
+  try {
+    assert.ok(fs.existsSync(held.runDir), 'the collector behind the front is recording into a directory');
+
+    const result = await runBackground(second, [
+      '--port',
+      String(port),
+      '--exit-with',
+      String(session.pid),
+    ]).then(
+      (ok) => ok,
+      (failure) => failure,
+    );
+
+    assert.deepEqual(
+      allowedOutcomeProblems({
+        label: 'a body of "nope"',
+        result,
+        port,
+        cwd: second,
+        runDir: held.runDir,
+      }),
+      [],
+      'a 200 whose body is a string is still an answer, and criterion 6 has an outcome for it',
+    );
+    assert.ok(await collectorAnswers(held.inner), 'and the collector it asked is left running');
+  } finally {
+    await held.close();
+    session.kill('SIGKILL');
+    await waitForSilence(held.inner, 20_000);
+    fs.rmSync(first, { recursive: true, force: true });
+    fs.rmSync(second, { recursive: true, force: true });
+  }
+});
+
+test('every JSON body that is not an object is classified the same way, over and over on the same port', async () => {
+  const first = projectDir();
+  const port = await freePort();
+  const session = sacrificialProcess();
+  // The whole family a scalar body belongs to, empty members included: what a
+  // JSON document can be when it is not an object. The truthy ones and the
+  // falsy ones are both here because a body is looked at, not weighed — and
+  // `null` is here twice over, since it is the one non-object that a type test
+  // most easily mistakes for an object.
+  const shapes = [
+    { label: 'a string body', json: '"nope"' },
+    { label: 'an empty string body', json: '""' },
+    { label: 'a number body', json: '42' },
+    { label: 'the number zero', json: '0' },
+    { label: 'a boolean body', json: 'true' },
+    { label: 'a null body', json: 'null' },
+    { label: 'an empty array body', json: '[]' },
+    { label: 'an array of objects', json: '[{"persist":"/somewhere"}]' },
+  ];
+
+  // One front, one held port, one body at a time: the second start is run once
+  // per shape against the same collector, which also puts the repeat under
+  // test — probing a held port eight times must leave it exactly as it was.
+  let body = 'null';
+  const held = await frontedCollector({
+    cwd: first,
+    session,
+    port,
+    config: (_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(body);
+    },
+  });
+  const seconds = [];
+
+  try {
+    assert.ok(fs.existsSync(held.runDir), 'the collector behind the front is recording into a directory');
+
+    const problems = [];
+    for (const shape of shapes) {
+      body = shape.json;
+      const cwd = projectDir();
+      seconds.push(cwd);
+      const result = await runBackground(cwd, [
+        '--port',
+        String(port),
+        '--exit-with',
+        String(session.pid),
+      ]).then(
+        (ok) => ok,
+        (failure) => failure,
+      );
+      problems.push(...allowedOutcomeProblems({ label: shape.label, result, port, cwd, runDir: held.runDir }));
+      if (!(await collectorAnswers(held.inner))) {
+        problems.push(`${shape.label}: the collector that already held the port has to be left running`);
+      }
+    }
+
+    assert.deepEqual(
+      problems,
+      [],
+      `a second start has to reach one of criterion 6's two outcomes for every one of these:\n  ${problems.join('\n  ')}`,
+    );
+    assert.equal(
+      fs.readdirSync(path.join(first, '.athena-telemetry')).filter((name) => name !== '.gitignore').length,
+      1,
+      'and eight probes of a held port leave the collector on it with the one measurement it started with',
+    );
+  } finally {
+    await held.close();
+    session.kill('SIGKILL');
+    await waitForSilence(held.inner, 20_000);
+    for (const dir of [first, ...seconds]) fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
