@@ -550,6 +550,34 @@ Facts established by measurement, which the criteria rest on:
   `EADDRINUSE` backstop with the old wrong message. The reviewer could not bind a
   second interface in this environment to demonstrate it.
 
+- Round 2's fix landed as `57596f6` (the cases) and `d28f0b0` (the change). The
+  connect probe is untouched — refused still means free, instantly. Once something
+  accepts, `/api/health` is asked repeatedly across a 12 s window, 250 ms apart,
+  each attempt getting twice the budget of the one before it starting at 1000 ms and
+  clamped to what is left. Only an expired window means *stranger*.
+  `bash test.sh`, five suites — repository 6, plugin 39, worktrees 9, argus 114,
+  argus-ui 14 — exit 0. `node --test test/background.test.mjs` three times: 10 cases,
+  exit 0 each, 28.5 / 28.4 / 28.7 s. Stable.
+- **The implementer deviated from the brief and was right to.** The brief asked for
+  a short fixed budget per attempt. A fixed budget does not fix the defect: health
+  answered between 481 ms and 3051 ms under load, so a collector whose loop stays
+  blocked across the window fails a 1000 ms attempt every time and is called a
+  stranger again — the same defect one timescale up. Doubling means the first
+  attempt is all a healthy collector ever needs, while two later attempts each
+  exceed the slowest answer ever measured, at zero cost on the common path.
+- Decided here rather than by a test, because criterion 6 does not decide it: when
+  the window expires the tool cannot tell a stranger from a collector that never
+  freed its loop, so the message no longer asserts the false half — "port N is held
+  and nothing on it answered in 12s: it is not a collector, or it is one too busy to
+  answer. Stop it, or start on another port with `--port`." A completed answer that
+  is not a collector's keeps the old, certain sentence.
+- Recorded, out of scope: the mute path now spends 12.4 s of the test helper's 25 s
+  deadline. Anyone shortening that helper or widening the window turns that case red
+  for a reason that is not a classification defect. And the foreground `start` still
+  prints the older `EADDRINUSE` message from its own code path — a different
+  sentence, not another production of this one, and where the reviewer's
+  unreproduced `--host 0.0.0.0` note would land.
+
 ## Checkpoints
 
 ### Before implementation
