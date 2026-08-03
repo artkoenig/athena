@@ -770,20 +770,27 @@ Facts established by measurement, which the criteria rest on:
   before the implementer ran. The four new cases account for the difference; nothing
   regressed. The state entry is corrected above.
 
-- **No user-facing document falsified.** `README.md` and `skills/argus/SKILL.md`
-  promise only that the directory is named, which still holds whenever it is known.
+- **Refuted — no user-facing document falsified.** At commit `c9f03ee`, both
+  `tools/argus/README.md:45-47` and `skills/argus/SKILL.md` promised the directory
+  unconditionally. Round 5's triage ordered both fixed as false. Commit `2e7fd0a`
+  fixed them: both now name the directory conditionally, on being able to read the
+  collector's configuration.
 
 - **Filed for later, violating no criterion — file as its own issue.** The
-  `Measurement` label can now introduce a parenthetical that is not a measurement. It
-  reads fine, but anything that machine-parses this banner has three shapes to handle
-  rather than two.
+  `Measurement` label already introduces a parenthetical from "keeps nothing on disk".
+  The scalar-body fix introduces a third shape: a parenthetical wrapping an
+  informational sentence about configuration. It reads fine for humans, but anything
+  that machine-parses this banner has three distinct shapes to handle rather than
+  two.
 
-- **Review round 5**, same reviewer context, diff `99ce318..9862a22`. `bash test.sh`
-  five suites — repository 6, plugin 39, worktrees 9, argus 119 (0 failed, 0 skipped,
-  66.4 s), argus-ui 14 — exit 0. Static analysis: none exists, established by `ls` for
-  eslint, prettier, biome, tsconfig and root `package.json` (all absent) and `git
-  ls-tree -r --name-only | grep -iE "eslint|prettier|biome|tsconfig|editorconfig|lint"`
-  with no match, exit 1.
+- **Review round 5**, fresh reviewer context, diff `99ce318..7129448`, HEAD at `c9f03ee`.
+  `bash test.sh` five suites — repository 6, plugin 39, worktrees 9, argus 119
+  (0 failed, 0 skipped, 66.4 s), argus-ui 14 — exit 0. Static analysis: none exists,
+  established by `ls` for eslint, prettier, biome, tsconfig and root `package.json`
+  (all absent) and `git ls-tree -r --name-only | grep -iE
+  "eslint|prettier|biome|tsconfig|editorconfig|lint"` with no match, exit 1.
+  `9862a22` is a later record-only commit holding the implementer-stage entry and the
+  filed banner issue, neither of which this round saw.
 
   | criterion | R1 | R2 | R3 | R4 | R5 |
   | --- | ---: | ---: | ---: | ---: | ---: |
@@ -887,6 +894,52 @@ Facts established by measurement, which the criteria rest on:
   own issue. And the eight-body case runs ~5.3 s inside `runBackground`'s 25 s
   per-command timeout, well clear of it, but that bound now has two consumers whose
   costs move for different reasons; the "never answers" case sits at 15.3 s.
+
+- **Review round 6**, continuing round 5's context, diff `99ce318..2e7fd0a`. `bash
+  test.sh` five suites — repository 6, plugin 39, worktrees 9, argus 121 (0 failed,
+  0 skipped, 77.3 s), argus-ui 14 (0.29 s) — exit 0. Static analysis still none.
+  `git diff --name-only c9f03ee..2e7fd0a -- tools/argus/src tools/argus-ui` → zero
+  files, so the token gate and `/api/health` were not moved under the parked question.
+
+  | criterion | R1 | R2 | R3 | R4 | R5 | R6 |
+  | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+  | 6 — a second start does not create a second collector | 1 | 1 | 2 | 2 | 2 | 1 |
+  | 14 — the documentation mirrors the result | 1 | 0 | 0 | 0 | 1 | 0 |
+  | violates none | 5 | 1 | 0 | 0 | 2 | 0 |
+  | every other criterion | 0 | 0 | 0 | 0 | 0 | 0 |
+
+  Triage:
+  - **Criterion 6, PARKED with the human, second parked state on the same criterion.**
+    A listener that impersonates `/api/health` is attached instead of refused.
+    Reproduction, run by the reviewer: a plain HTTP server answering `GET /api/health`
+    with `{"ok":true,"instance":"abc123"}` and `GET /api/config` with 200 and body
+    `"nope"`, with no collector behind it at all. `argus start --background --port
+    <p>` prints "argus is already listening on …", the "not known" persistence
+    sentence, "Nothing was started", and exits 0. Criterion 6's second branch asks
+    for exit 1 saying the port holds something else; instead nothing is measuring
+    afterwards while the caller has been told a collector is. An impostor answering
+    `/api/config` with `{"persist":"/x"}` gets exit 0 and a named directory. This is
+    the identification rule at `bin/argus.mjs:203-207`, where health alone decides
+    "one of ours" — not the scalar branch, which only changed which wrong outcome the
+    impostor gets. Not introduced by this change: present throughout the range, and
+    rounds 1 to 5 did not raise it. Closing it needs a stronger identifying exchange,
+    which is a design decision, so it parks with the same human decision as the token
+    state.
+
+- **Verified fixed in round 6:** the crash, checked by hand over seven body shapes,
+  every one exit 0 with the port named and no runtime error; both documents, with the
+  mechanism checked rather than trusted — `otelEnvFor` exports the token at
+  `src/claude.mjs:261` and `resolveConfig` defaults from it at `src/config.mjs:123`,
+  so a session without `eval "$(argus env)"` is exactly the "could not be read" case;
+  the five task boxes; the stale hash. The two new `CLAUDE.md` paragraphs are accurate,
+  and the four remaining wall-clock bounds in the project are all off the probe path.
+
+- **Breakage notes for round 6:** Nothing machine-reads the new sentence — `git grep`
+  at `2e7fd0a` finds it in `bin/argus.mjs` and the issue records only. The argus
+  suite went 66.4 s to 77.3 s; the two new cases cost 5.24 s and 5.40 s, both far
+  from the 25 s per-command bound, while the "never answers" case at ~15 s remains
+  the near one. `inspectPort` still has one caller, so `probe.mjs`, `check`, the
+  foreground `start` and the interface cannot be reached by this change.
 
 ## Checkpoints
 

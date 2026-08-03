@@ -8,7 +8,11 @@ pr:
 
 ## Intent
 
-The `Measurement` label in the argus probe banner can now introduce a parenthetical that is not a measurement. While it reads fine for humans, anything that machine-parses this banner has three shapes to handle rather than two.
+The `Measurement` label in the argus probe banner already introduces a parenthetical
+from the message "keeps nothing on disk". The scalar-body fix introduces a third shape:
+a parenthetical wrapping an informational sentence about configuration. While it reads
+fine for humans, anything that machine-parses this banner has three distinct shapes to
+handle rather than two.
 
 Acceptance criteria:
 
