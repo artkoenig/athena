@@ -742,7 +742,7 @@ Facts established by measurement, which the criteria rest on:
   "not known — its configuration could not be read; it may well be recording" for
   refusal and silence alike. The probe window, the connect probe and `askPatiently`
   are untouched. `CLAUDE.md` gained the front-server pattern under "Tests". Commits:
-  test-author record `bcf9560`, implementation `7129448`, both pushed.
+  test-author record `bcf9560`, implementation `c9f03ee`, both pushed.
 
 - **Facts.** Before the change, `node --test test/background.test.mjs` in
   `tools/argus`: 15 cases, 11 pass, 4 fail, exit 1. After: same command 15 cases
@@ -772,6 +772,64 @@ Facts established by measurement, which the criteria rest on:
   `Measurement` label can now introduce a parenthetical that is not a measurement. It
   reads fine, but anything that machine-parses this banner has three shapes to handle
   rather than two.
+
+- **Review round 5**, same reviewer context, diff `99ce318..9862a22`. `bash test.sh`
+  five suites — repository 6, plugin 39, worktrees 9, argus 119 (0 failed, 0 skipped,
+  66.4 s), argus-ui 14 — exit 0. Static analysis: none exists, established by `ls` for
+  eslint, prettier, biome, tsconfig and root `package.json` (all absent) and `git
+  ls-tree -r --name-only | grep -iE "eslint|prettier|biome|tsconfig|editorconfig|lint"`
+  with no match, exit 1.
+
+  | criterion | R1 | R2 | R3 | R4 | R5 |
+  | --- | ---: | ---: | ---: | ---: | ---: |
+  | 6 — a second start does not create a second collector | 1 | 1 | 2 | 2 | 2 |
+  | 14 — the documentation mirrors the result | 1 | 0 | 0 | 0 | 1 |
+  | violates none | 5 | 1 | 0 | 0 | 2 |
+  | every other criterion | 0 | 0 | 0 | 0 | 0 |
+
+  Triage:
+  - **Criterion 6, PARKED for the human, not fixed here.** A second `start --background`
+    still does not name the collector's directory when it does not carry that
+    collector's token. Reproduction: project A starts a collector on port 4718 with
+    `--token secretA`, recording into a real directory; project B runs `argus start
+    --background --port 4718`, with no token or with a different one. Actual: exit 0
+    and "not known — its configuration could not be read; it may well be recording".
+    Criterion 6 asks it to exit 0 and name the directory. Deterministic, no load and
+    no timing: `/api/health` is ungated by design and identifies the collector,
+    `/api/config` is gated, and `tools/argus/bin/argus.mjs:227` can only learn
+    `persist` from that gated route. Reachable in the ordinary flow — a session that
+    has not run `eval "$(argus env)"` carries no token. Parked because every way to
+    close it is material and outward-facing: either the ungated health route starts
+    carrying a filesystem path, or the collector writes a discoverable record outside
+    its own directory. That is the human's call.
+  - **Criterion 14, fix now, bounded to what became false.** Two documents state the
+    naming unconditionally and are false in the first finding's state:
+    `tools/argus/README.md:45-47` and `skills/argus/SKILL.md`. Both get qualified to
+    match what the code does today. If the human later decides the first finding, these
+    change back.
+  - **Criterion 6, fix now.** `tools/argus/bin/argus.mjs:227` tests `'persist' in
+    config.body`; `in` throws on a primitive, so a `/api/config` answering 200 with a
+    non-object JSON body crashes the probe with `argus: Cannot use 'in' operator to
+    search for 'persist' in nope`, exit 1, no run directory. Criterion 6 allows exit 0
+    with a sentence about persistence, or exit 1 saying the port is held by a stranger;
+    a type error is neither. Not reachable through a real collector — `tools/argus/src/server.mjs:164-178`
+    always answers with an object. The test-author is writing the case now.
+  - **Violates no criterion, tracker record only.** `## Tasks` holds five unchecked
+    boxes over five steps the Log records as landed (`70e5b23`, `06ac6e1`, `e53da1b`,
+    `3f204d8`, `646519a`). Check them.
+  - **Violates no criterion, already fixed.** The record named `3cda471`, unreachable
+    from the branch. Corrected to `3c99cb7` in `9862a22`, after the reviewer took its
+    snapshot at `c9f03ee`. Record it as fixed, and note that the same slip recurred
+    with `c9f03ee` — a commit hash written into the record before the signature amend
+    is stale by the time it is read.
+
+- **Breakage risk outside the criteria, worth recording.** The new "`/api/config` never
+  answers" case takes 15.3 s inside `runBackground`'s 25 s per-command timeout — the
+  largest consumer in the suite, most of it the twelve-second probe window. Widening
+  that window or shortening the helper turns the case red for a reason that is not a
+  defect, and the failure would read "start --background never returned to its caller".
+  Round 2 recorded this shape for the mute-stranger case; the new one sits nearer the
+  bound.
 
 ## Checkpoints
 
