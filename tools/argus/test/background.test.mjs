@@ -248,3 +248,47 @@ test('a port held by something that is not a collector is an error, not an attac
     fs.rmSync(cwd, { recursive: true, force: true });
   }
 });
+
+test('a port held by a listener that never answers is the same error, said promptly and without a run directory', async () => {
+  const cwd = projectDir();
+  const port = await freePort();
+  // Accepts the connection and then says nothing at all — the case an HTTP
+  // squatter cannot produce, because it always answers.
+  const accepted = new Set();
+  const mute = net.createServer((socket) => accepted.add(socket));
+  await new Promise((resolve) => mute.listen(port, '127.0.0.1', resolve));
+
+  try {
+    const started = Date.now();
+    const error = await runBackground(cwd, ['--port', String(port)]).then(
+      () => null,
+      (failure) => failure,
+    );
+    const took = Date.now() - started;
+
+    assert.ok(error, 'a listener that never answers is not a free port');
+    assert.notEqual(error.code, 0);
+
+    // The caller has to read the diagnosis from the command it ran, not from a
+    // file the command left somewhere.
+    const out = `${error.stdout ?? ''}${error.stderr ?? ''}`;
+    assert.match(out, new RegExp(String(port)), 'it has to say which port');
+    assert.match(out, /not a collector/i, `it has to say what is wrong, got: ${out.trim()}`);
+
+    // 2 s: well above the few hundred milliseconds a node start plus a loopback
+    // connect needs, and below the 3 s a health request is given before it is
+    // abandoned — so meeting this bound proves the port was classified without
+    // sitting out that request.
+    assert.ok(took < 2000, `the diagnosis waited on a request timeout instead of the connection: ${took} ms`);
+
+    const telemetry = path.join(cwd, '.athena-telemetry');
+    const left = fs.existsSync(telemetry)
+      ? fs.readdirSync(telemetry).filter((name) => name !== '.gitignore')
+      : [];
+    assert.deepEqual(left, [], 'a start that never started must leave no measurement directory behind');
+  } finally {
+    for (const socket of accepted) socket.destroy();
+    await new Promise((resolve) => mute.close(resolve));
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
