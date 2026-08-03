@@ -43,8 +43,11 @@ thing is `node tools/argus/bin/argus.mjs`.
 directory and the process id, then returns. The collector shuts itself down when
 the session it was started from ends (`--exit-with <pid>`, defaulting to
 `$CLAUDE_PID`), so there is no stop command and nothing to clean up. A second
-`start --background` on a port that already holds a collector starts nothing and
-names the directory that one is writing to.
+`start --background` on a port that already holds a collector starts nothing. It
+names the directory that one is writing to when it can read that collector's
+configuration; reading it needs that collector's token, so a call without it —
+a session that has not run `eval "$(argus env)"`, say — is told the directory
+could not be read instead of being told a wrong one.
 
 **Telemetry is read at process start.** A session already running cannot be
 measured after the fact, whatever is exported into it — what gets measured is

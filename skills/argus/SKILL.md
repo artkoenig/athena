@@ -28,9 +28,11 @@ there is one, the absolute measurement directory, and the process id. The
 collector keeps listening and ends by itself when this session's process does —
 there is no stop command, and there is nothing to clean up.
 
-Started twice on the same port, the second call starts nothing: it names the
-directory the collector already there is writing to. That is also how to answer
-"is anything measuring right now?".
+Started twice on the same port, the second call starts nothing. It names the
+directory the collector already there is writing to when it can read that
+collector's configuration; that needs the collector's token, so without it the
+call says the directory could not be read rather than naming one. Either way it
+answers "is anything measuring right now?" — that is what it is for.
 
 Measurements land in `<project>/.athena-telemetry/<timestamp>/`, one directory
 per run, and that directory ignores itself in git — nothing else in the

@@ -224,7 +224,15 @@ async function inspectPort(base, token) {
   // that is not there answers just as certainly and says just as little. None
   // of these is the collector saying "I keep nothing"; only a body carrying the
   // field is, which is why the field's presence, not its value, decides.
-  const persistKnown = Boolean(config?.ok && config.body && 'persist' in config.body);
+  //
+  // The field can only be looked for in something that has fields. A 200
+  // carrying `"nope"`, `42`, `true` or `null` is an answer that says nothing
+  // about persistence, exactly like a 401 does — and `in` throws on every one
+  // of them, which would turn a held port into a crash rather than a verdict.
+  // `typeof null` is `'object'`, so the null check is not decoration.
+  const body = config?.ok ? config.body : null;
+  const hasFields = body !== null && typeof body === 'object';
+  const persistKnown = hasFields && 'persist' in body;
   return {
     kind: 'collector',
     persist: persistKnown ? (config.body.persist ?? null) : null,

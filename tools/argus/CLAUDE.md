@@ -56,3 +56,16 @@ through to a real backgrounded collector and overrides only the one route —
 `/api/health` stays the real one, while a 404 or a request that is never
 answered becomes deterministic, which no real collector can be made to produce
 on demand.
+
+A message is asserted as an absence, never as a wording: that a recording
+collector is not described as keeping nothing, that a crash is not offered as a
+classification. Which sentence the tool prints is the implementer's, so a test
+that pinned the phrasing would fail on a better one — what a criterion fixes is
+what may not be said.
+
+No case asserts a wall-clock duration on a probe path. Timing an `execFile` of
+node measures spawn, module load and the machine's load at that moment, not the
+probe: such a bound went red twice on a busy four-CPU box with nothing changed
+in the code, and it would point the next reader at a defect that is not there.
+Assert the outcome instead; the per-command timeout in the test helper is the
+only clock.
