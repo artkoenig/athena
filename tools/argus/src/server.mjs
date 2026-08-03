@@ -1,38 +1,21 @@
 /**
- * HTTP surface: an OTLP receiver and the monitoring UI on the same port.
+ * HTTP surface: an OTLP receiver and the JSON API over what it collected.
  *
- * Running both on one listener is what makes the setup a single line of config —
- * `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318` also happens to be the URL
- * you open in a browser. `/v1/*` is the OTLP ingest path (as the OTLP/HTTP spec
- * mandates), `/api/*` is the read API for the UI, everything else is static.
+ * `/v1/*` is the OTLP ingest path (as the OTLP/HTTP spec mandates) and `/api/*`
+ * is the read API. Nothing else is served: the web page lives in its own
+ * process (`tools/argus-ui`) and reaches this one over exactly that API, so a
+ * deployed collector carries no browser-facing file at all.
  */
 
 import http from 'node:http';
 import crypto from 'node:crypto';
-import fs from 'node:fs';
-import path from 'node:path';
 import zlib from 'node:zlib';
-import { fileURLToPath } from 'node:url';
 
 import { decodeExportRequest } from './otlp/decode.mjs';
 import { attributionOf, describeEvent, otelEnvFor } from './claude.mjs';
 
-const PUBLIC_DIR = fileURLToPath(new URL('../public/', import.meta.url));
 const MAX_BODY_BYTES = 32 * 1024 * 1024;
 const SSE_FLUSH_MS = 250;
-
-/*
- * A token in the query string is a poor way to hold a browser session: it sits
- * in history, gets copied along with any link, and has to be re-pasted on every
- * visit — for a secret the operator already configured once on the server. So it
- * is accepted once and immediately traded for a cookie, which the browser then
- * attaches to everything by itself. HttpOnly keeps it away from scripts, and
- * SameSite=Strict means another site cannot make an authenticated request with
- * it, which is what keeps the ingest and delete endpoints safe from a page the
- * user merely happens to visit.
- */
-const TOKEN_COOKIE = 'athena_obs_token';
-const TOKEN_COOKIE_MAX_AGE = 30 * 24 * 60 * 60;
 
 /*
  * Identifies this process, so a caller can tell whether the URL it is talking to
@@ -43,14 +26,9 @@ const TOKEN_COOKIE_MAX_AGE = 30 * 24 * 60 * 60;
  */
 const INSTANCE_ID = crypto.randomBytes(6).toString('hex');
 
-const MIME = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.svg': 'image/svg+xml',
-  '.json': 'application/json; charset=utf-8',
-  '.ico': 'image/x-icon',
-};
+/** What a request for a page is answered with, since there is no page here. */
+const NO_INTERFACE =
+  'this is the argus collector, which serves data and no interface — run argus-ui and point it here';
 
 const SIGNAL_BY_PATH = {
   '/v1/traces': 'traces',
@@ -111,7 +89,7 @@ function intParam(params, key, fallback, max = Number.MAX_SAFE_INTEGER) {
   return Math.min(value, max);
 }
 
-export function createServer({ store, token = null, endpoint = '', log = console.error } = {}) {
+export function createServer({ store, token = null, endpoint = '', persist = null, log = console.error } = {}) {
   // A tunnel URL only exists once the tunnel is up, after the server is already
   // listening, so the endpoint may be supplied as a getter and resolved per request.
   const endpointOf = () => (typeof endpoint === 'function' ? endpoint() : endpoint);
@@ -160,49 +138,15 @@ export function createServer({ store, token = null, endpoint = '', log = console
     flushTimer ??= setTimeout(flush, SSE_FLUSH_MS);
   });
 
-  const cookieToken = (req) => {
-    for (const part of (req.headers.cookie ?? '').split(';')) {
-      const index = part.indexOf('=');
-      if (index > 0 && part.slice(0, index).trim() === TOKEN_COOKIE) {
-        return decodeURIComponent(part.slice(index + 1).trim());
-      }
-    }
-    return null;
-  };
-
+  /*
+   * Two ways in, both for a program: the header an OTLP exporter sets, and the
+   * query parameter `check` uses. No browser session — nothing here is opened
+   * in a browser, so there is no cookie to issue and none to accept.
+   */
   const authorized = (req, url) => {
     if (!token) return true;
-    const header = req.headers.authorization ?? '';
-    // How an agent authenticates. Everything below exists because a browser
-    // cannot set this header on the requests it makes on its own.
-    if (header === `Bearer ${token}`) return true;
-    // How a browser authenticates once it has been here: the cookie rides on
-    // every request the page makes, including sub-resources and EventSource.
-    if (cookieToken(req) === token) return true;
-    // How it gets that cookie in the first place — one visit carrying the token,
-    // after which the query parameter is traded for the cookie and dropped.
+    if ((req.headers.authorization ?? '') === `Bearer ${token}`) return true;
     return url.searchParams.get('token') === token;
-  };
-
-  const serveStatic = (req, res, pathname) => {
-    const relative = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');
-    const file = path.join(PUBLIC_DIR, relative);
-    if (!file.startsWith(PUBLIC_DIR)) {
-      sendJson(res, 403, { error: 'forbidden' });
-      return;
-    }
-    fs.readFile(file, (error, content) => {
-      if (error) {
-        sendJson(res, 404, { error: 'not found' });
-        return;
-      }
-      res.writeHead(200, {
-        'content-type': MIME[path.extname(file)] ?? 'application/octet-stream',
-        'content-length': content.length,
-        'cache-control': 'no-cache',
-      });
-      res.end(content);
-    });
   };
 
   const handleIngest = async (req, res, signal) => {
@@ -222,6 +166,10 @@ export function createServer({ store, token = null, endpoint = '', log = console
       sendJson(res, 200, {
         endpoint,
         requiresToken: Boolean(token),
+        // The measurement directory this collector writes to, absolute, or null
+        // when it keeps nothing. A second `start` reads it here to say where the
+        // collector already on this port is putting its records.
+        persist: persist ?? null,
         retentionMs: store.options.retentionMs,
         limits: {
           spans: store.options.maxSpans,
@@ -344,16 +292,10 @@ export function createServer({ store, token = null, endpoint = '', log = console
       return;
     }
 
-    // The app shell is not gated, only the data is. A browser sends the token on
-    // the document request — it is in the URL — but not on the <link> and
-    // <script> it then goes and fetches, because sub-resource requests do not
-    // inherit the query string. Gating those served a 401 for styles.css and
-    // app.js, which left a page with no script at all: the static markup, an
-    // empty env block and nothing that could explain itself. index.html, app.js
-    // and styles.css are identical for every visitor and contain neither
-    // telemetry nor the token, so there is nothing to protect there.
-    const needsAuth = Boolean(signal) || url.pathname.startsWith('/api/');
-    if (!ok && needsAuth) {
+    // Everything but that one probe is gated. The exemption the page and its
+    // sub-resources used to have went with the page: what is left on this port
+    // is telemetry going in and telemetry coming out.
+    if (!ok) {
       res.setHeader('www-authenticate', 'Bearer');
       sendJson(res, 401, { error: 'unauthorized' });
       return;
@@ -395,23 +337,9 @@ export function createServer({ store, token = null, endpoint = '', log = console
       return;
     }
 
-    // One visit carrying the token is enough. Hand back a cookie and bounce to
-    // the same page without it, so the secret leaves the address bar and the
-    // history entry, and the next visit needs nothing at all.
-    if (token && url.searchParams.get('token') === token) {
-      url.searchParams.delete('token');
-      const secure = req.headers['x-forwarded-proto'] === 'https' || Boolean(req.socket.encrypted);
-      res.writeHead(302, {
-        'set-cookie':
-          `${TOKEN_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Strict; ` +
-          `Max-Age=${TOKEN_COOKIE_MAX_AGE}${secure ? '; Secure' : ''}`,
-        location: `${url.pathname}${url.search}${url.hash}`,
-      });
-      res.end();
-      return;
-    }
-
-    serveStatic(req, res, url.pathname);
+    // No page, and saying so beats an empty 404: someone who opened this port
+    // in a browser is one process away from what they were looking for.
+    sendJson(res, 404, { error: 'not found', hint: NO_INTERFACE });
   });
 
   server.on('close', () => {

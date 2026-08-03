@@ -1,9 +1,10 @@
 /**
- * athena · observe — front end.
+ * argus-ui — front end.
  *
- * Reads the collector's JSON API and keeps itself current from an SSE stream.
- * There is no framework and no build step on purpose: the whole tool has to be
- * runnable with `node bin/argus.mjs` inside a throwaway sandbox.
+ * Reads the JSON API of its own server, which forwards to a collector, and
+ * keeps itself current from an SSE stream. There is no framework and no build
+ * step on purpose: the whole tool has to be runnable with
+ * `node bin/argus-ui.mjs` inside a throwaway sandbox.
  */
 
 const TOKEN = new URLSearchParams(location.search).get('token');
@@ -745,7 +746,7 @@ function renderRawTab() {
 const TOKEN_PROMPT = `
   <form class="token-form">
     <input name="token" type="password" autocomplete="current-password"
-      placeholder="ATHENA_OBS_TOKEN" aria-label="Access token" />
+      placeholder="access token" aria-label="Access token" />
     <button type="submit" class="ghost-button">Unlock</button>
   </form>`;
 
@@ -764,11 +765,11 @@ function renderEmptyState() {
         <h1>${state.authError ? 'Token required' : 'Collector unreachable'}</h1>
         <p>${
           state.authError
-            ? 'This collector is protected. Enter the token it was started with — the value of ' +
-              'ATHENA_OBS_TOKEN, which it also prints on startup. It is stored in a cookie, so ' +
-              'this is asked once per browser.'
-            : 'The page loaded but the collector did not answer. It may have stopped, or be ' +
-              'reachable at a different address than the one this page was opened from.'
+            ? 'This interface is protected. Enter the token it was started with — the value ' +
+              'of --token, which it also prints on startup. It is stored in a cookie, so this ' +
+              'is asked once per browser.'
+            : 'The page loaded but the collector did not answer. It may have stopped, or this ' +
+              'interface may be pointed at a different address than the one it runs on.'
         }</p>
         ${state.authError ? TOKEN_PROMPT : ''}
       </div>`;
@@ -804,7 +805,7 @@ function renderSetupModal() {
       <p>${
         state.authError
           ? 'The environment block cannot be shown because this page is not authorized. ' +
-            'Enter the token this collector was started with and it will be included below.'
+            'Enter the token this interface was started with and it will be included below.'
           : 'The collector did not answer, so there is no endpoint to point an agent at yet.'
       }</p>
       ${state.authError ? TOKEN_PROMPT : ''}`;

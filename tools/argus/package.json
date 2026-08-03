@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Zero-dependency OpenTelemetry collector and web UI for monitoring Claude Agent SDK / Claude Code sessions",
+  "description": "Zero-dependency OpenTelemetry collector for Claude Agent SDK / Claude Code sessions: ingest, aggregation, persistence and a JSON API",
   "license": "GPL-3.0-or-later",
   "engines": {
     "node": ">=20.11"
@@ -13,8 +13,7 @@
   },
   "files": [
     "bin",
-    "src",
-    "public"
+    "src"
   ],
   "scripts": {
     "start": "node bin/argus.mjs",

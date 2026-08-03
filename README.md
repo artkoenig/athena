@@ -86,16 +86,18 @@ until `git worktree remove`.
 
 ## tools/
 
-| Tool                      | Purpose                                                                                                     |
-| ------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| [`argus`](tools/argus/)   | OpenTelemetry collector + web UI for watching agent sessions live: traces, tokens, cost, tool calls, errors. |
+| Tool                            | Purpose                                                                                                          |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| [`argus`](tools/argus/)         | OpenTelemetry collector for agent sessions: traces, tokens, cost, tool calls, errors. Ingests, aggregates, serves JSON. |
+| [`argus-ui`](tools/argus-ui/)   | The page that shows what a collector holds. Local only — started from a checkout, never deployed.                 |
 
 ```bash
-cd tools/argus && node bin/argus.mjs   # http://127.0.0.1:4318
+cd tools/argus && node bin/argus.mjs         # collector, http://127.0.0.1:4318
+node tools/argus-ui/bin/argus-ui.mjs         # interface, http://127.0.0.1:4319
 ```
 
 Runs on your own machine — no account, no third-party service, no running
-costs. Alternatively `docker compose up -d` in the same directory.
+costs. Alternatively `docker compose up -d` in `tools/argus` for the collector.
 
 ## Tests
 

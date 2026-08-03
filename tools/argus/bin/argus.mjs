@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 /**
- * argus — OpenTelemetry collector and web UI for Claude Agent SDK and
- * Claude Code sessions.
+ * argus — OpenTelemetry collector for Claude Agent SDK and Claude Code
+ * sessions. It ingests, aggregates, persists and serves JSON; the page that
+ * displays all that is a separate process (argus-ui).
  *
  * Usage:
- *   argus [start] [options]   start the collector + UI
+ *   argus [start] [options]   start the collector
  *   argus env [options]       print the OTEL_* variables agents need
  */
 
@@ -21,14 +22,15 @@ import { startTunnel } from '../src/tunnel.mjs';
 const HELP = `
 argus — monitor Claude Agent SDK / Claude Code sessions over OpenTelemetry
 
-  argus [start]                 Start the OTLP collector and the web UI.
+  argus [start]                 Start the OTLP collector. It serves data, not a
+                                page: run argus-ui to look at what it collects.
   argus env                     Print the OTEL_* variables that point an agent here.
   argus check                   Verify a collector is reachable from *here* and
                                 actually stores what it accepts. Run it inside the
                                 environment the agent runs in.
 
 Options
-  -p, --port <n>                Port for OTLP ingest and the UI      (default 4318)
+  -p, --port <n>                Port for OTLP ingest and the API     (default 4318)
   -h, --host <addr>             Bind address                         (default 127.0.0.1)
   -t, --token <secret>          Require "Authorization: Bearer <secret>"
       --tunnel [binary]         Open a Cloudflare quick tunnel, generate a token
@@ -146,7 +148,12 @@ async function main(argv) {
   }
 
   let advertised = endpoint;
-  const server = createServer({ store, token: config.token, endpoint: () => advertised });
+  const server = createServer({
+    store,
+    token: config.token,
+    endpoint: () => advertised,
+    persist: config.persist,
+  });
   let tunnel = null;
 
   const printEnv = (format, indent = '    ') =>
@@ -169,19 +176,11 @@ async function main(argv) {
     process.exit(1);
   });
 
-  // With a tunnel the process is on this machine, so the loopback address is the
-  // better thing to click — it skips the hop and keeps working if the tunnel
-  // drops. Deployed somewhere (a PaaS setting RENDER_EXTERNAL_URL, a reverse
-  // proxy, --public-url) there is no "here" to browse, so the public URL is the
-  // only one that opens anything.
-  const uiBase = config.publicUrl && !flags.tunnel ? endpoint : endpointFor({ host: config.host, port: config.port });
-  const localUi = `${uiBase}${config.token ? `/?token=${config.token}` : '/'}`;
-
   server.listen(config.port, config.host, async () => {
     const bound = `${config.host}:${config.port}`;
     console.error(`\n  argus listening on ${endpoint}${config.publicUrl ? `  (bound to ${bound})` : ''}`);
-    console.error(`  UI          ${localUi}`);
     console.error(`  OTLP ingest ${endpoint}/v1/{traces,metrics,logs}  (http/protobuf and http/json)`);
+    console.error(`  JSON API    ${endpoint}/api/…  — the page that reads it is argus-ui`);
 
     if (!flags.tunnel) {
       console.error('\n  Point an agent at it:\n');
@@ -221,7 +220,7 @@ async function main(argv) {
     advertised = tunnel.url;
     tunnel.process.on('exit', () => {
       // The advertised URL is dead once the tunnel is gone; say so rather than
-      // letting the UI keep handing out an endpoint that no longer resolves.
+      // keep handing out an endpoint that no longer resolves.
       console.error('\n  argus: the tunnel closed — the public URL is no longer reachable.\n');
       advertised = endpoint;
     });

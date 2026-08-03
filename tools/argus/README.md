@@ -1,8 +1,9 @@
 # argus
 
-An OpenTelemetry collector **and** a web UI in one process, for watching Claude Agent SDK
-and Claude Code sessions: which tools ran, how long each model request took, how many
-tokens flowed, what it cost and where something failed.
+An OpenTelemetry collector for Claude Agent SDK and Claude Code sessions: which tools ran,
+how long each model request took, how many tokens flowed, what it cost and where something
+failed. It receives, aggregates, persists and serves JSON. The page that displays all that
+is a second process, [`argus-ui`](../argus-ui/), which reads this one over its HTTP API.
 
 No dependencies, no build step, no database — just Node ≥ 20.11. That is deliberate: the
 tool is meant to start in any sandbox container with `node bin/argus.mjs`, even without
@@ -13,10 +14,10 @@ service, no running costs. The telemetry stays where it is produced — see
 [Self-hosting](#self-hosting).
 
 ```
-┌──────────────┐  OTLP/HTTP   ┌────────────────────────────┐
-│ Claude Code  │─────────────▶│  argus :4318               │
-│ / Agent SDK  │  protobuf    │  /v1/traces /v1/metrics    │
-└──────────────┘  or json     │  /v1/logs   +  Web UI  /   │
+┌──────────────┐  OTLP/HTTP   ┌────────────────────────────┐   HTTP   ┌──────────┐
+│ Claude Code  │─────────────▶│  argus :4318               │◀─────────│ argus-ui │
+│ / Agent SDK  │  protobuf    │  /v1/traces /v1/metrics    │   JSON   │  :4319   │
+└──────────────┘  or json     │  /v1/logs   +  /api/…      │   + SSE  └──────────┘
                               └────────────────────────────┘
 ```
 
@@ -25,19 +26,21 @@ service, no running costs. The telemetry stays where it is produced — see
 ```bash
 cd tools/argus
 
-# 1. Start collector + UI (ingest and UI share one port)
+# 1. Start the collector
 node bin/argus.mjs                # http://127.0.0.1:4318
 
-# 2. In a second shell: point an agent at the collector
+# 2. In a second shell: point an agent at it and start a NEW session
 eval "$(node bin/argus.mjs env)"
 claude -p "What does this repo do?"
 
-# 3. Open http://127.0.0.1:4318 in a browser
+# 3. Look at it: the interface is its own process
+node ../argus-ui/bin/argus-ui.mjs           # http://127.0.0.1:4319
 ```
 
-Without a real agent run, the UI can be filled with synthetic data:
+Without a real agent run, the store can be filled with synthetic data:
 
 ```bash
+cd tools/argus
 node bin/argus.mjs &
 node scripts/demo-emit.mjs --sessions 3      # or --live for a continuous supply
 ```
@@ -63,7 +66,7 @@ export ATHENA_OBS_URL="http://127.0.0.1:4318"    # the same address under this t
 ```
 
 `--format json` and `--format dotenv` give the same values for `options.env`
-(TypeScript/Python SDK) or a `.env` file. The setup dialog in the UI shows ready-made
+(TypeScript/Python SDK) or a `.env` file. The setup dialog in `argus-ui` shows ready-made
 snippets for both SDKs.
 
 ### Naming sessions
@@ -76,7 +79,7 @@ forward is `OTEL_RESOURCE_ATTRIBUTES`, so a session started with
 export OTEL_RESOURCE_ATTRIBUTES="session.name=nightly%20run"
 ```
 
-carries that label on every record it exports, and the UI shows it where the ID would be.
+carries that label on every record it exports, and the interface shows it where the ID would be.
 US-ASCII only, spaces and umlauts percent-encoded, several attributes separated by commas.
 
 It has to be set **before** the session starts. The OTel resource is built once at process
@@ -122,14 +125,14 @@ container — see
 
 Three signals, three independent switches — each works on its own:
 
-| Signal     | Switch                                                     | What the UI builds from it                             |
+| Signal     | Switch                                                     | What is built from it                                  |
 | ---------- | ---------------------------------------------------------- | ------------------------------------------------------ |
 | Metrics    | `OTEL_METRICS_EXPORTER=otlp`                               | Tokens, cost, lines of code, commits, active time       |
 | Log events | `OTEL_LOGS_EXPORTER=otlp`                                  | Event timeline, tool results, API errors, audit trail   |
 | Traces     | `OTEL_TRACES_EXPORTER=otlp` + `…ENHANCED_TELEMETRY_BETA=1` | Waterfall per interaction                               |
 
 With metrics **and** events active, the metric wins for tokens and cost — nothing is
-counted twice. The UI writes the source under every figure.
+counted twice. The interface writes the source under every figure.
 
 ## Self-hosting
 
@@ -174,7 +177,7 @@ tunnel, wait until the public URL really answers, and print the finished block.
 
 ```
   argus listening on http://127.0.0.1:4318
-  UI          http://127.0.0.1:4318/?token=21c934f71106a6ffebf187510d233744
+  OTLP ingest http://127.0.0.1:4318/v1/{traces,metrics,logs}
 
   Opening a Cloudflare quick tunnel …
   Got https://fewer-cube-selective-physiology.trycloudflare.com, waiting for it to serve …
@@ -270,25 +273,18 @@ Then start a **new** session; the running one does not re-read its configuration
 > As soon as the collector is reachable beyond `127.0.0.1`, it needs a token in front of
 > it — otherwise anyone who knows the address can pour telemetry in and read yours.
 > Exempt are `/api/health`, which answers without a token so that health checks work (it
-> only reveals that the process is running), and the three static files of the interface —
-> they are the same for everyone and contain nothing.
+> only reveals that the process is running). Everything else on this port needs the token.
 
-### The token in a browser
+### The token and the browser
 
-An agent sends `Authorization: Bearer …`. A browser cannot — it sets no headers on the
-files it loads itself. So **one** visit with the token in the address is enough:
+No browser ever talks to this port: the collector accepts `Authorization: Bearer …` (what
+an OTLP exporter sends) and `?token=…` (what `check` uses), and issues no cookie. The
+interface is a separate process that holds the token itself and adds it to every request
+it forwards, so a deployed collector's token never has to reach a browser at all:
 
+```bash
+node tools/argus-ui/bin/argus-ui.mjs --collector https://obs.example.com --collector-token <secret>
 ```
-http://127.0.0.1:4318/?token=<your-token>
-```
-
-The collector exchanges it for a cookie and sends you back to the same page without the
-parameter. After that the bare address is enough — for 30 days, per browser. The cookie
-is `HttpOnly` (no script can reach it) and `SameSite=Strict`, so no foreign page can pour
-in or delete data with your rights.
-
-Open the address without a token and you get an input field instead of an empty page.
-That sets the cookie as well, and then it is quiet.
 
 > Whether the session container is allowed out at all is decided by the environment's
 > network policy. `check` tells you in its first line.
@@ -300,10 +296,10 @@ machine and the URL changes on every start. For a fixed address, put the collect
 somewhere a process simply keeps running.
 
 Only one thing matters: **a platform for processes, not one for functions.** The store
-lives in the memory of a single, long-lived process, and the SSE stream works because
-ingest and UI share that process. Serverless breaks both: there, every instance counts a
-part of the cost, and the UI reads from one that knows nothing — what that looks like and
-how to measure it is below. For the same reason the service must **not scale to several
+lives in the memory of a single, long-lived process, and the SSE stream hangs off that
+process. Serverless breaks both: there, every instance counts a part of the cost, and a
+reader is answered by one that knows nothing — what that looks like and how to measure it
+is below. For the same reason the service must **not scale to several
 instances**; on Render an attached disk enforces that anyway.
 
 For Render there is a ready-made blueprint at the repository root (`render.yaml`) — there
@@ -338,7 +334,6 @@ public address already filled in:
 
 ```
   argus listening on https://argus.onrender.com  (bound to 0.0.0.0:10000)
-  UI          https://argus.onrender.com/?token=…
 
   Point an agent at it:
 
@@ -400,38 +395,19 @@ Two things hold for all of these variants:
   consequences; on someone else's infrastructure it is a decision. See
   [Sensitive data](#sensitive-data).
 
-## What the UI shows
+## What comes out of it
 
-- **Sessions** — list of all sessions, sorted by last activity, with cost, tokens and error
-  count; live sessions are marked. For a session that exported a name it leads and the ID
-  sits below it, otherwise the ID leads (see [Naming sessions](#naming-sessions)).
-- **Overview** — grid of figures (cost, tokens by type including cache hit rate,
-  interactions, LLM requests, tool calls, lines of code, commits/PRs, active time) plus
-  tables per model (requests, latency, TTFT, errors) and per tool (calls, failures,
-  rejects, duration).
-- **Tasks** — current state of `TodoWrite` (the full list per call) as well as
-  `TaskCreate`/`TaskUpdate` (tasks by ID, plus separately those newly created tasks whose
-  ID the telemetry does not carry — see [Limits](#limits)). Needs
-  `OTEL_LOG_TOOL_DETAILS=1`, otherwise content and status stay empty. The tab deliberately
-  has no counter in its label: completed and deleted tasks stay in the reconstructed state
-  (see [Limits](#limits)), so a number would only grow and say nothing about the current
-  state.
-- **Traces** — waterfall per interaction: `interaction` → `llm_request` / `tool` →
-  `tool.blocked_on_user` + `tool.execution`, coloured by span type, clicking a bar shows
-  all attributes and span events. Subagent spans hang under the parent agent's `tool`
-  span, so the delegation chain is one trace.
-- **Events** — filterable event timeline (name, full text across all attributes, "errors
-  only"), every row expandable to the complete attribute set.
-- **Metrics** — all buffered data points, grouped by metric and attribute combination.
-- **Attributes** — resource and standard attributes of the session.
-
-The UI updates over Server-Sent Events; bursts are coalesced into 250 ms.
+The JSON API below is the whole surface: sessions with their aggregates, traces, events,
+metric points, totals and facets, plus a Server-Sent Events stream that fires on ingest
+(bursts coalesced into 250 ms). What that looks like as a page — sessions, overview,
+tasks, traces, events, metrics, attributes — is [`argus-ui`](../argus-ui/), which reads
+exactly these routes and nothing else.
 
 ## Options
 
 | Flag                    | Env                          | Default        | Meaning                                          |
 | ----------------------- | ---------------------------- | -------------- | ------------------------------------------------ |
-| `-p, --port`            | `ATHENA_OBS_PORT`            | `4318`         | Port for OTLP ingest **and** UI                  |
+| `-p, --port`            | `ATHENA_OBS_PORT`            | `4318`         | Port for OTLP ingest **and** the JSON API        |
 | `-h, --host`            | `ATHENA_OBS_HOST`            | `127.0.0.1`    | Bind address                                     |
 | `-t, --token`           | `ATHENA_OBS_TOKEN`           | –              | Require `Authorization: Bearer …`                |
 | `--tunnel [binary]`     | –                            | –              | Open a Cloudflare tunnel, generate a token, print the block |
@@ -475,7 +451,7 @@ who switches them on should know that prompt and file contents then live in the
 collector's memory and — with `--persist` — on disk.
 
 `user.email`, `user.account_uuid` and `organization.id` are standard attributes and appear
-in the UI under "Attributes".
+in the interface under "Attributes".
 
 ## Architecture
 
@@ -488,8 +464,7 @@ src/otlp/decode.mjs      OTLP (protobuf & JSON) → flat records
 src/claude.mjs           Claude Code domain knowledge: metric, event and span names
 src/store.mjs            in-memory store, session aggregation, trace tree, queries
 src/persist.mjs          optional JSONL append + replay
-src/server.mjs           OTLP ingest, JSON API, SSE, static serving
-public/                  UI (vanilla JS, no build)
+src/server.mjs           OTLP ingest, JSON API, SSE
 scripts/demo-emit.mjs    synthetic sessions as real OTLP protobuf
 ```
 
@@ -508,7 +483,7 @@ and new Claude Code attributes.
 | `GET /api/metrics`       | Metric points (`session`, `name`)                          |
 | `GET /api/stats`         | Totals, top models, top tools, buffer sizes                |
 | `GET /api/facets`        | Event and metric names that occur, with frequency          |
-| `GET /api/config`        | Endpoint, limits, ready-made `OTEL_*` block                 |
+| `GET /api/config`        | Endpoint, limits, measurement directory, `OTEL_*` block     |
 | `GET /api/stream`        | Server-Sent Events on ingest                               |
 | `DELETE /api/data`       | Empty the store                                            |
 
@@ -582,6 +557,6 @@ In order:
 3. **Is the value encoded?** The value is restricted to US-ASCII and comma-separated, so a
    space, a comma or an umlaut has to be percent-encoded (`nightly%20run`). An unencoded
    one truncates the attribute or drops it.
-4. **Does the session's own record carry it?** Open the session in the UI, tab
+4. **Does the session's own record carry it?** Open the session in the interface, tab
    "Attributes": if `session.name` is not among the resource attributes, it never left the
    agent.
