@@ -31,8 +31,8 @@ export async function parseClaudeLog(filePath, visitedPaths = new Set(), agentNa
       
       if (obj.role === 'user') {
         if (currentTurn.userPrompt || currentTurn.toolCalls.length > 0 || currentTurn.thinkingBlocks.length > 0) {
+          currentTurn.step = stepCounter++;
           turns.push(currentTurn);
-          stepCounter++;
           currentTurn = createNewTurn(stepCounter, agentName);
         }
         
@@ -72,7 +72,19 @@ export async function parseClaudeLog(filePath, visitedPaths = new Set(), agentNa
           if (block.type === 'tool_result' && typeof block.content === 'string') {
             const match = block.content.match(/(?:file:\/\/)?([^\s"']+\.jsonl)/);
             if (match && match[1] && fs.existsSync(match[1]) && !visitedPaths.has(match[1])) {
-              const subTurns = await parseClaudeLog(match[1], visitedPaths, 'subagent');
+              let subagentRole = 'subagent';
+              if (block.tool_use_id) {
+                for (let i = turns.length - 1; i >= 0; i--) {
+                  const call = turns[i].toolCalls.find(c => c.id === block.tool_use_id);
+                  if (call) {
+                    if (call.name === 'invoke_subagent' && call.input?.Subagents?.[0]?.TypeName) {
+                      subagentRole = call.input.Subagents[0].TypeName;
+                    }
+                    break;
+                  }
+                }
+              }
+              const subTurns = await parseClaudeLog(match[1], visitedPaths, subagentRole);
               for (const subTurn of subTurns) {
                 subTurn.step = stepCounter++;
                 turns.push(subTurn);
@@ -93,6 +105,7 @@ export async function parseClaudeLog(filePath, visitedPaths = new Set(), agentNa
   }
 
   if (currentTurn.userPrompt || currentTurn.toolCalls.length > 0 || currentTurn.thinkingBlocks.length > 0) {
+    currentTurn.step = stepCounter++;
     turns.push(currentTurn);
   }
 

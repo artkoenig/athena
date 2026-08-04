@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import readline from 'node:readline';
 
-export async function parseGeminiLog(filePath, visitedPaths = new Set()) {
+export async function parseGeminiLog(filePath, visitedPaths = new Set(), agentName = 'main') {
   if (visitedPaths.has(filePath)) return [];
   visitedPaths.add(filePath);
 
@@ -12,7 +12,8 @@ export async function parseGeminiLog(filePath, visitedPaths = new Set()) {
   });
 
   const turns = [];
-  let currentTurn = createNewTurn(1);
+  let pendingSubTurns = [];
+  let currentTurn = createNewTurn(1, agentName);
   let stepCounter = 1;
 
   for await (const line of rl) {
@@ -30,9 +31,14 @@ export async function parseGeminiLog(filePath, visitedPaths = new Set()) {
 
       if (obj.type === 'USER_INPUT') {
         if (currentTurn.userPrompt || currentTurn.toolCalls.length > 0 || currentTurn.thinkingBlocks.length > 0) {
+          currentTurn.step = stepCounter++;
           turns.push(currentTurn);
-          stepCounter++;
-          currentTurn = createNewTurn(stepCounter);
+          for (const st of pendingSubTurns) {
+            st.step = stepCounter++;
+            turns.push(st);
+          }
+          pendingSubTurns = [];
+          currentTurn = createNewTurn(stepCounter, agentName);
         }
         currentTurn.userPrompt = obj.content || obj.message || obj.text || '';
         currentTurn.timestamp = obj.created_at || obj.timestamp || currentTurn.timestamp;
@@ -74,14 +80,17 @@ export async function parseGeminiLog(filePath, visitedPaths = new Set()) {
         }
 
         // Subagent log discovery
-        if (typeof obj.content === 'string') {
-          const match = obj.content.match(/file:\/\/(.+\/transcript\.jsonl)/);
+        const outputStr = obj.content || obj.response || obj.output;
+        if (typeof outputStr === 'string') {
+          const match = outputStr.match(/(?:file:\/\/)?([^\s"']+\.jsonl)/);
           if (match && match[1] && fs.existsSync(match[1]) && !visitedPaths.has(match[1])) {
-            const subTurns = await parseGeminiLog(match[1], visitedPaths);
+            let subagentRole = 'subagent';
+            if (lastCall && lastCall.name === 'invoke_subagent' && lastCall.input?.Subagents?.[0]?.TypeName) {
+              subagentRole = lastCall.input.Subagents[0].TypeName;
+            }
+            const subTurns = await parseGeminiLog(match[1], visitedPaths, subagentRole);
             for (const subTurn of subTurns) {
-              subTurn.isSubagent = true;
-              subTurn.step = stepCounter++;
-              turns.push(subTurn);
+              pendingSubTurns.push(subTurn);
             }
           }
         }
@@ -92,15 +101,22 @@ export async function parseGeminiLog(filePath, visitedPaths = new Set()) {
   }
 
   if (currentTurn.userPrompt || currentTurn.toolCalls.length > 0 || currentTurn.thinkingBlocks.length > 0) {
+    currentTurn.step = stepCounter++;
     turns.push(currentTurn);
+    for (const st of pendingSubTurns) {
+      st.step = stepCounter++;
+      turns.push(st);
+    }
   }
 
   return turns;
 }
 
-function createNewTurn(step) {
+function createNewTurn(step, agentName = 'main') {
   return {
     step,
+    agentName,
+    isSubagent: agentName !== 'main',
     timestamp: new Date().toISOString(),
     userPrompt: '',
     thinkingBlocks: [],
