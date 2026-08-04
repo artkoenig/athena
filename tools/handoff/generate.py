@@ -33,15 +33,15 @@ def get_issue_directory():
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--agent', required=True)
-    parser.add_argument('--context', required=True)
+    parser.add_argument('--json-data', required=True)
     args = parser.parse_args()
 
     import sys
+    from pydantic import ValidationError
     project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     if project_root not in sys.path:
         sys.path.insert(0, project_root)
     from tools.handoff.models import DispatcherHandoff, ImplementerHandoff, ReviewerHandoff, TestAuthorHandoff
-    from google import genai
 
     agent_model_map = {
         'dispatcher': DispatcherHandoff,
@@ -51,36 +51,38 @@ def main():
     }
 
     if args.agent not in agent_model_map:
-        raise ValueError(f"Unknown agent: {args.agent}")
+        print(f"Unknown agent: {args.agent}", file=sys.stderr)
+        sys.exit(1)
 
     model_class = agent_model_map[args.agent]
     
-    if os.environ.get('TEST_MOCK_API') == '1':
-        import unittest.mock
-        client = unittest.mock.MagicMock()
-        mock_response = unittest.mock.MagicMock()
-        mock_response.text = '{"status": "mocked"}'
-        client.models.generate_content.return_value = mock_response
-    else:
-        client = genai.Client()
-    
-    prompt = f"You are the {args.agent} agent. Generate a structured handoff based on the following context:\n\n{args.context}"
-    
-    response = client.models.generate_content(
-        model='gemini-2.5-flash',
-        contents=prompt,
-        config=genai.types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=model_class
-        )
-    )
+    json_string = args.json_data
+    if os.path.isfile(args.json_data):
+        try:
+            with open(args.json_data, 'r') as f:
+                json_string = f.read()
+        except Exception as e:
+            print(f"Error reading file {args.json_data}: {e}", file=sys.stderr)
+            sys.exit(1)
+            
+    try:
+        json_obj = json.loads(json_string)
+    except json.JSONDecodeError as e:
+        print(f"JSON decode error: {e}", file=sys.stderr)
+        sys.exit(1)
+        
+    try:
+        validated_model = model_class.model_validate(json_obj)
+    except ValidationError as e:
+        print(f"Validation error:\n{e}", file=sys.stderr)
+        sys.exit(1)
     
     issue_dir = get_issue_directory()
     out_name = get_next_filename(issue_dir, args.agent)
     out_path = os.path.join(issue_dir, out_name)
     
     with open(out_path, 'w') as f:
-        f.write(response.text)
+        f.write(validated_model.model_dump_json(indent=2))
         
     print(f"Handoff saved to {out_path}")
 
