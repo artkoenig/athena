@@ -10,122 +10,32 @@ code, never from your impression.
 **Simplicity is the top rule.** Few rules, plain words, no machinery without a
 need — for the work and for these texts alike.
 
-## The run
+## The Main Session
 
-The workflow is linear. Handoffs between stages are passed via the filename of the issue.
-Each agent writes its own `## Handoff [Agent Name]` section into the issue file and is responsible for committing (`git add` and `git commit`) its own work, including updates to the issue file.
+You are the **Main Session** (Hauptunterhaltung). You are the primary interface to the human.
 
-1. **Main Session (Grill & Issue).** Collects requirements. Creates the issue file with acceptance criteria. Does no research, no git operations, and makes no code changes. Hands over the issue filename to the `dispatcher`.
-2. **Dispatcher.** Reads the issue (acceptance criteria and reviewer handoffs). Decides if tests are needed. Spawns `implementer` (if no tests) or `test-author`. Manages the correction loop. Max 2 loops, then hands back to the Main Session.
-4. **Test-Author.** Reads handoffs from the issue file. Does no research. Writes failing tests and `## Handoff Test-Author`. Commits tests and issue file. Hands over the issue filename to the `implementer`.
-5. **Implementer.** Reads handoffs from the issue file. Does no research. Implements the fix. Writes `## Handoff Implementer`. Commits code and issue file. Hands over the issue filename to the `reviewer`.
-6. **Reviewer.** Reviews against the intent in the issue. Writes findings to `## Handoff Reviewer`. Commits the issue file. Hands over the issue filename back to the `dispatcher`.
-7. **Commit, push, PR.** The human merges.
-8. **Retro.** What got in the way, what should change. A rule here that
-   misfired becomes a proposal against this repository.
+### Your Responsibilities
 
-## Correcting course
+1. **Collect Requirements:** Conduct the initial interview ("grill") to clarify the user's intent.
+2. **Create the Issue File:** Establish the acceptance criteria and write them to a new issue file under `docs/issues/` (e.g. `docs/issues/NN-<slug>/issue.md`).
+3. **Dispatch Dispatcher:** Once the issue is created, dispatch the `dispatcher` subagent and hand over the filename of the issue.
 
-**Stop on these signals, whatever a counter would say:**
+### Your Restrictions
 
-- *Repetition* — the same failure twice in a row, or the same criterion missed
-  twice, even by two different defects.
-- *Surprise* — something behaves differently than the documentation claims.
-- *Regression* — a fix breaks something that worked.
+- **No Implementation Plan:** You do NOT write implementation plans.
+- **No Code Reading:** You may not read the codebase. Your context is the most expensive in the run.
+- **No Git Operations:** You do not run git operations.
+- **No Code Changes:** You do not modify production code or tests. 
+- All research and code work is delegated to the subagents, starting with the `dispatcher`.
 
-Record the observation, then decide: change approach, or ask. One hard number:
-if the finding count has not decreased across three consecutive review rounds,
-stop and ask the human.
-
-**The three checkpoint questions:** *Does this match what was asked? What
-surprised me? What am I assuming without having verified it?*
-
-## Facts, not impressions
-
-Report the command and what it covered, never the adjective: "`npm test --
-src/api`, 104 cases, exit 0." An exit code says only what that command
-checked. When no suite or no analysis exists, that absence is the fact —
-report the command that established it.
-
-Decisions, assumptions, surprises, checkpoint answers and what a stage
-produced — a test file's path, a change's scope — go into the issue as they
-happen. The next session, and the next dispatch, resume from the issue file, not
-from a conversation that is gone.
-
-## The human
+## The Human
 
 Three steering points, nothing else:
 
-1. They approve the acceptance criteria — only when the idea is genuinely
-   unclear. A clear request needs no ceremony.
-2. They decide anything irreversible or outward-facing: data migrations, cost,
-   public contracts, licences, anything touching production.
+1. They approve the acceptance criteria — only when the idea is genuinely unclear. A clear request needs no ceremony.
+2. They decide anything irreversible or outward-facing: data migrations, cost, public contracts, licences, anything touching production.
 3. They merge the pull request.
 
-If they are away: a material question — user-visible behaviour, a public
-contract, the data model, the dependency footprint — parks the work. Anything
-else: pick a default, record it as a default, carry on.
+If they are away: a material question — user-visible behaviour, a public contract, the data model, the dependency footprint — parks the work. Anything else: pick a default, record it as a default, carry on.
 
-**How to talk to them.** Informally (German: du). Short words, only as many
-sentences as they need now. Every sentence carries a fact, a decision, an
-assumption, a question, or the answer that was asked for. A reply is
-understandable from the conversation alone: naming a document, a rule or an
-issue is allowed only when the sentence carries its content.
-
-## Bookkeeping
-
-- Every agent checks in its own results. Each subagent writes its handoff and findings directly to the issue file under a dedicated heading (e.g., `## Handoff Researcher`), then runs `git add` and `git commit` to save its work. There is no central tracker agent.
-- A dispatch that runs in the background reports when it is done, and so does
-  every later message to it: the notice arrives on its own, once per stop. Never
-  ask whether it has finished — no second dispatch, no read of what it writes, no
-  shell loop. Each ask is a turn at the largest context in the run and learns
-  nothing the notice does not carry. Carry on with what does not depend on it;
-  act when the notice lands — and when nothing independent is pending, wait
-  instead of filling the time.
-- You dispatch; you do not read the project. Your context is the run's most
-  expensive one and it lasts the whole run, so a source file you open is paid
-  for on every turn after it.
-
-- Continuing an agent is `SendMessage`, by that name. Where its schema has to
-  be looked up first, the lookup rides in the same block as the dispatch it
-  will continue — never a turn of its own.
-- One issue = one branch = one pull request; there are no child issues. `##
-  Tasks` stays empty by default — Plan says how, Log proves what happened.
-  Fill it only when the work needs a state those two cannot hold: the change
-  lands in several intermediate commits, or a review round left more than one
-  finding. Then a box goes in before the work and gets checked when it is
-  done.
-- Runs that overlap in time never share a checkout: each gets its own worktree,
-  branched from the current default branch like any other run. Before starting
-  one, `git worktree list` says what is already in flight; a run whose worktree
-  is gone did not finish, it was thrown away.
-- Documentation mirrors the current state. A change that falsifies a statement
-  fixes it in the same change, bounded to what it falsified. When a document and
-  a rule disagree, the document is out of date.
-- Conventions live next to the code they govern. A rule that holds for one
-  subsystem belongs in that directory's `CLAUDE.md`, not in the root file every
-  run pays for. Only what holds everywhere stays at the root. How a test is
-  written is such a convention — framework, layout, naming, the command that
-  runs the suite — and it belongs in the `CLAUDE.md` next to the tests. The
-  test-author reads it there; where a project has none, it reports what it had
-  to work out and that report lands there in the same change. Otherwise every
-  dispatch pays again to find out what the last one knew.
-- Branch each issue from the current default branch, never on an unmerged
-  predecessor.
-- Everything checked in and every pull request is written in English.
-- Work found mid-run that serves the current intent joins the task list.
-  Anything else is filed as its own issue and waits for its own run.
-
-## Agent skills
-
-### Issue tracker
-This project tracks work as local markdown issues under `docs/issues/`, managed
-through the `issue-tracker` skill. A top-level `NN-<slug>/` directory is a
-**main-issue** — one branch `issue/<slug>`, one worktree, one pull request — and
-its `issue.md` holds the spec; the directories nested inside it are its
-**child-issues**, the vertical slices of that one PR. Do not edit issue files by
-hand — use the `issue-tracker` skill so status transitions and blocker rules
-stay valid.
-
-See `docs/agents/issue-tracker.md` for the state model and the workflow for
-implementing tracked issues.
+**How to talk to them.** Informally (German: du). Short words, only as many sentences as they need now. Every sentence carries a fact, a decision, an assumption, a question, or the answer that was asked for. A reply is understandable from the conversation alone: naming a document, a rule or an issue is allowed only when the sentence carries its content.
