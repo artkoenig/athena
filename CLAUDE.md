@@ -12,25 +12,15 @@ need — for the work and for these texts alike.
 
 ## The run
 
-1. **Issue.** Acceptance criteria, written down before any production code —
-   grill first only if the idea is genuinely unclear. Opens in front of the
-   human: title and numbered criteria, as a table. Fixed from here: no finding
-   and no feedback may add, edit or reinterpret one.
-2. **Checkpoint 1.** The three questions (below), recorded.
-3. **Test-author.** Writes the failing tests from the intent alone — skip only
-   when the change has nothing to run.
-4. **Implementer.** Builds it, makes those tests pass, may not edit them.
-5. **Reviewer.** Runs on the diff and the written intent alone, and never
-   writes into the tree it reviews — a reproduction that needs a test is a
-   spec, and the test-author writes it. Triage every
-   finding by the criterion it violates: fix now, dismiss with a recorded
-   reason, or file for later. A finding without a reproduction is dismissed;
-   one that violates no criterion is filed as its own issue, never fixed here
-   — except where this diff itself made a documentation statement false.
-   After every round, show the human a table: one row per criterion plus one
-   for findings that violate none, one column per round, each cell a count.
-   One waiver: a fix that only touches the tracker record may skip the round.
-6. **Checkpoint 2.** The three questions again.
+The workflow is linear. Handoffs between stages are passed via the filename of the issue.
+Each agent writes its own `## Handoff [Agent Name]` section into the issue file and is responsible for committing (`git add` and `git commit`) its own work, including updates to the issue file.
+
+1. **Main Session (Grill & Issue).** Collects requirements. Creates the issue file with acceptance criteria. Does no research, no git operations, and makes no code changes. Hands over the issue filename to the `researcher`.
+2. **Researcher.** Investigates the codebase. Writes `## Handoff Researcher` (detailed solution description) to the issue. Commits the issue file. Hands over the issue filename to the `dispatcher`.
+3. **Dispatcher.** Reads the issue (researcher and reviewer handoffs). Decides if tests are needed. Spawns `implementer` (if no tests) or `test-author`. Manages the correction loop. Max 2 loops, then hands back to the Main Session.
+4. **Test-Author.** Reads handoffs from the issue file. Does no research. Writes failing tests and `## Handoff Test-Author`. Commits tests and issue file. Hands over the issue filename to the `implementer`.
+5. **Implementer.** Reads handoffs from the issue file. Does no research. Implements the fix. Writes `## Handoff Implementer`. Commits code and issue file. Hands over the issue filename to the `reviewer`.
+6. **Reviewer.** Reviews against the intent in the issue. Writes findings to `## Handoff Reviewer`. Commits the issue file. Hands over the issue filename back to the `dispatcher`.
 7. **Commit, push, PR.** The human merges.
 8. **Retro.** What got in the way, what should change. A rule here that
    misfired becomes a proposal against this repository.
@@ -60,7 +50,7 @@ report the command that established it.
 
 Decisions, assumptions, surprises, checkpoint answers and what a stage
 produced — a test file's path, a change's scope — go into the issue as they
-happen. The next session, and the next dispatch, resume from the tracker, not
+happen. The next session, and the next dispatch, resume from the issue file, not
 from a conversation that is gone.
 
 ## The human
@@ -85,13 +75,7 @@ issue is allowed only when the sentence carries its content.
 
 ## Bookkeeping
 
-- The tracker keeps the record: dispatch the `tracker` subagent the first time
-  a run needs to read from or write to `docs/issues/`, and continue that same
-  instance for every tracker operation after — filing, decisions, log,
-  heckpoints, retro, orienting a session. A subagent that only needs its own
-  narrow read of the running issue — test-author, researcher, implementer —
-  finds it directly under `docs/issues/`, the way its own page says; only the
-  `tracker` ever writes there.
+- Every agent checks in its own results. Each subagent writes its handoff and findings directly to the issue file under a dedicated heading (e.g., `## Handoff Researcher`), then runs `git add` and `git commit` to save its work. There is no central tracker agent.
 - A dispatch that runs in the background reports when it is done, and so does
   every later message to it: the notice arrives on its own, once per stop. Never
   ask whether it has finished — no second dispatch, no read of what it writes, no
