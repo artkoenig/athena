@@ -21,7 +21,6 @@
   "agents": [
     "./agents/dispatcher.md",
     "./agents/implementer.md",
-    "./agents/researcher.md",
     "./agents/reviewer.md",
     "./agents/test-author.md"
   ]

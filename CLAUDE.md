@@ -15,9 +15,8 @@ need — for the work and for these texts alike.
 The workflow is linear. Handoffs between stages are passed via the filename of the issue.
 Each agent writes its own `## Handoff [Agent Name]` section into the issue file and is responsible for committing (`git add` and `git commit`) its own work, including updates to the issue file.
 
-1. **Main Session (Grill & Issue).** Collects requirements. Creates the issue file with acceptance criteria. Does no research, no git operations, and makes no code changes. Hands over the issue filename to the `researcher`.
-2. **Researcher.** Investigates the codebase. Writes `## Handoff Researcher` (detailed solution description) to the issue. Commits the issue file. Hands over the issue filename to the `dispatcher`.
-3. **Dispatcher.** Reads the issue (researcher and reviewer handoffs). Decides if tests are needed. Spawns `implementer` (if no tests) or `test-author`. Manages the correction loop. Max 2 loops, then hands back to the Main Session.
+1. **Main Session (Grill & Issue).** Collects requirements. Creates the issue file with acceptance criteria. Does no research, no git operations, and makes no code changes. Hands over the issue filename to the `dispatcher`.
+2. **Dispatcher.** Reads the issue (acceptance criteria and reviewer handoffs). Decides if tests are needed. Spawns `implementer` (if no tests) or `test-author`. Manages the correction loop. Max 2 loops, then hands back to the Main Session.
 4. **Test-Author.** Reads handoffs from the issue file. Does no research. Writes failing tests and `## Handoff Test-Author`. Commits tests and issue file. Hands over the issue filename to the `implementer`.
 5. **Implementer.** Reads handoffs from the issue file. Does no research. Implements the fix. Writes `## Handoff Implementer`. Commits code and issue file. Hands over the issue filename to the `reviewer`.
 6. **Reviewer.** Reviews against the intent in the issue. Writes findings to `## Handoff Reviewer`. Commits the issue file. Hands over the issue filename back to the `dispatcher`.
@@ -85,14 +84,8 @@ issue is allowed only when the sentence carries its content.
   instead of filling the time.
 - You dispatch; you do not read the project. Your context is the run's most
   expensive one and it lasts the whole run, so a source file you open is paid
-  for on every turn after it. A question about the code goes to the
-  researcher, whose context is disposable; reading the same file yourself
-  while that agent answers the same question buys nothing.
-- The researcher's map is established once and quoted after that. Its briefing
-  opens with the files the change touches and the commit it was taken at; that
-  goes into the issue, and every dispatch after it carries the map in its
-  prompt. Nobody rediscovers what the cheapest stage has already established.
-  A map whose commit is behind the checkout is re-taken, not trusted.
+  for on every turn after it.
+
 - Continuing an agent is `SendMessage`, by that name. Where its schema has to
   be looked up first, the lookup rides in the same block as the dispatch it
   will continue — never a turn of its own.
