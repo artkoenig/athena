@@ -1,6 +1,6 @@
 ---
 name: retro
-description: Generate a structured English session retrospective from Claude Code or Gemini/Antigravity log files and append it to the active issue document (Issues/<timestamp>-<slug>/issue.md).
+description: Generate a structured English session retrospective from Claude Code or Gemini/Antigravity log files and append it to the active issue document (`Issues/<timestamp>-<slug>/issue.md` or `docs/issues/.../issue.md`).
 user-invocable: true
 ---
 
@@ -44,5 +44,5 @@ When invoked to run a retro for an issue, follow these steps:
    Include a **Session Metrics Summary** table, a **Per-Agent Breakdown** table (main agent vs each subagent), and a **Mermaid Sequence Diagram** illustrating the interaction flow between User, Main Agent, Subagents, and Tools/System.
 
 4. **Append the formatted section:**
-   Append the formatted Retrospective section directly under the `## Retro` heading in the active issue document at `Issues/<timestamp>-<slug>/issue.md`.
+   Append the formatted Retrospective section directly under the `## Retro` heading in the active issue document (e.g. at `Issues/<timestamp>-<slug>/issue.md` or under `docs/issues/`).
 

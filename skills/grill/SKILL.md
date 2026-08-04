@@ -38,7 +38,7 @@ Ask the user to clarify the problem statement. The main session does NO research
 
 ## The output
 
-Write the issue directly to a file under `Issues/<timestamp>-<slug>/issue.md`. Create a markdown file with the problem and the criteria, and **record a decision** — for every answer the human gave. The human's answers are not the only thing that shaped them, and a criterion whose source is gone is one nobody can revisit. 
+Write the issue directly to a file under `Issues/<timestamp>-<slug>/issue.md` (or `docs/issues/` for older issues). Create a markdown file with the problem and the criteria, and **record a decision** — for every answer the human gave. The human's answers are not the only thing that shaped them, and a criterion whose source is gone is one nobody can revisit. 
 
 Do NOT use git to commit this issue file. The main session does no git operations.
 Once the file is created and the human has approved the criteria, hand over the issue filename to the `researcher` subagent to begin the linear workflow.

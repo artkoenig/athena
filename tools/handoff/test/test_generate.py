@@ -17,7 +17,9 @@ class TestGenerateScript(unittest.TestCase):
         if not os.path.exists(self.script_path):
             self.fail("generate.py does not exist")
             
-        result = subprocess.run(['python3', self.script_path, '--agent', 'dispatcher', '--context', 'test context'], capture_output=True, text=True)
+        env = os.environ.copy()
+        env['TEST_MOCK_API'] = '1'
+        result = subprocess.run(['python3', self.script_path, '--agent', 'dispatcher', '--context', 'test context'], capture_output=True, text=True, env=env)
         self.assertEqual(result.returncode, 0, f"generate.py failed to execute: {result.stderr}")
 
     @unittest.mock.patch('google.genai.Client')

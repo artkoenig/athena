@@ -39,6 +39,10 @@ def main():
     parser.add_argument('--context', required=True)
     args = parser.parse_args()
 
+    import sys
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
     from tools.handoff.models import DispatcherHandoff, ImplementerHandoff, ReviewerHandoff, TestAuthorHandoff
     from google import genai
 
@@ -54,7 +58,14 @@ def main():
 
     model_class = agent_model_map[args.agent]
     
-    client = genai.Client()
+    if os.environ.get('TEST_MOCK_API') == '1':
+        import unittest.mock
+        client = unittest.mock.MagicMock()
+        mock_response = unittest.mock.MagicMock()
+        mock_response.text = '{"status": "mocked"}'
+        client.models.generate_content.return_value = mock_response
+    else:
+        client = genai.Client()
     
     prompt = f"You are the {args.agent} agent. Generate a structured handoff based on the following context:\n\n{args.context}"
     
