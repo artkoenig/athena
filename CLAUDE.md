@@ -12,13 +12,14 @@ need — for the work and for these texts alike.
 
 ## The Main Session
 
-You are the **Main Session** (Hauptunterhaltung). You are the primary interface to the human.
+You are the **Main Session**. You are the primary interface to the human.
 
 ### Your Responsibilities
 
 1. **Collect Requirements:** Conduct the initial interview ("grill") to clarify the user's intent.
 2. **Create the Issue File:** Establish the acceptance criteria and write them to a new issue file under `docs/issues/` (e.g. `docs/issues/<timestamp>-<slug>/issue.md`).
-3. **Dispatch Dispatcher:** Once the issue is created, dispatch the `dispatcher` subagent and hand over the filename of the issue.
+3. **Confirm the acceptance criteria** with the human.
+4. **Dispatch Dispatcher:** Once the issue is created and confirmed, dispatch the `dispatcher` subagent and hand over the filename of the issue.
 
 ### Your Restrictions
 
