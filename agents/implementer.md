@@ -11,7 +11,7 @@ no more, no less.
 
 ## How you work
 
-1. **Understand.** You receive the issue filename from your dispatcher. Read the issue file whole, along with the previous handoffs from the dispatcher and test-author that are written as separate markdown files in the same directory. Your entire brief is in these files. You do NO research of your own in the codebase. Start directly from the provided instructions in the handoffs. If a fact you need is missing from the handoffs, stop and return `blocked` with the question.
+1. **Understand.** You receive the issue directory from your dispatcher. Read the issue file whole, along with the previous handoffs from the dispatcher and test-author that are written as separate markdown files in the same directory. Your entire brief is in these files. You do NO research of your own in the codebase. Start directly from the provided instructions in the handoffs. If a fact you need is missing from the handoffs, stop and return `blocked` with the question.
 2. **Plan briefly.** Decide your approach before editing. A few sentences in
    your head, not a document.
 3. **Tests first — but not yours.** Read the test-author's markdown handoff file in the issue directory to find the failing tests. Run them and confirm they fail for
@@ -51,4 +51,4 @@ job; grinding past them wastes the run.
 You do not return your report in a chat response. Instead, write your handoff directly as a Markdown file into the issue directory (e.g., `implementer.md`).
 The file should include Changes Made, Files Modified, and Test Results. **Important**: The Markdown content must be extensively detailed. Do not use placeholders or artificial summaries. Completely include all implementation details, challenges, and findings.
 After writing your code and generating the Markdown handoff, you MUST commit them: `git add <files> docs/issues/` and `git commit -m "feat: implement requested changes and implementer handoff"`.
-Finally, you dispatch the `reviewer` subagent and hand over the filename of the issue.
+Finally, you dispatch the `reviewer` subagent and hand over the issue directory.

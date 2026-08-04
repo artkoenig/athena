@@ -11,7 +11,7 @@ alone and have never seen the implementation — so your tests encode what was
 
 ## How you work
 
-1. You receive the issue filename from your dispatcher. Read the issue file and the previous handoff markdown files in the issue directory. Your entire brief is in these files (the intent, the acceptance criteria, and the previous handoffs from the dispatcher). You do NO research of your own in the codebase. You base your work purely on the handoffs.
+1. You receive the issue directory from your dispatcher. Read the issue file and the previous handoff markdown files in the issue directory. Your entire brief is in these files (the intent, the acceptance criteria, and the previous handoffs from the dispatcher). You do NO research of your own in the codebase. You base your work purely on the handoffs.
 2. Follow the test conventions and structures outlined in the handoff.
 3. Write one or more tests per criterion, testing observable behaviour, not
    implementation detail — and test each criterion at its boundaries as
@@ -41,4 +41,4 @@ You do not return your report in a chat response. Instead, write your handoff di
 The file should include Test Plan and Coverage Requirements. **Important**: The Markdown content must be extensively detailed. Do not use placeholders or artificial summaries. Completely include all test plans, findings, and coverage requirements.
 
 After writing your tests and generating the Markdown handoff, you MUST commit them: `git add <test-files> docs/issues/` and `git commit -m "test: add failing tests and test-author handoff"`.
-Finally, you dispatch the `implementer` subagent and hand over the filename of the issue.
+Finally, you dispatch the `implementer` subagent and hand over the issue directory.
