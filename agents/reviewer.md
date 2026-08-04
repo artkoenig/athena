@@ -89,10 +89,8 @@ that is a fact for your report, not a licence.
 
 ## Your output and handoff
 
-You do not return your report in a chat response. Instead, you structure your handoff as JSON matching the `ReviewerHandoff` model in `tools/handoff/models.py`. **Important**: The JSON fields must be filled out extensively and in detail. Do not use placeholders or artificial summaries. Completely include all findings, reproduced issues, and reviews.
-Write this JSON into a temporary file (e.g., `handoff.json`).
-You invoke `python3 tools/handoff/generate.py --agent reviewer --json-data handoff.json` passing the path to the temporary file.
+You do not return your report in a chat response. Instead, write your handoff directly as a Markdown file into the issue directory (e.g., `reviewer.md`).
+The file should include Review Status and Findings. **Important**: The Markdown content must be extensively detailed. Do not use placeholders or artificial summaries. Completely include all findings, reproduced issues, and reviews.
 
-After successful validation by the script, delete the temporary JSON file (`rm handoff.json`).
-After generating the JSON handoff, you MUST commit it: `git add docs/issues/` and `git commit -m "docs: add reviewer handoff"`.
+After generating the Markdown handoff, you MUST commit it: `git add docs/issues/` and `git commit -m "docs: add reviewer handoff"`.
 Finally, you dispatch the `dispatcher` subagent and hand over the filename of the issue.

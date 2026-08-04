@@ -38,8 +38,6 @@ run "tools/argus-ui" \
 run "tools/log-parser" \
   npm --prefix "$root/tools/log-parser" test --silent
 
-run "tools/handoff" \
-  python3 -m unittest discover -s "$root/tools/handoff/test" -p "test_*.py"
 
 if [ "$failed" -eq 0 ]; then
   echo "PASS: all $total suites"

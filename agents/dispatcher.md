@@ -13,10 +13,8 @@ You are the dispatcher. You receive the issue filename as input. You are respons
    - Read the issue file containing the acceptance criteria.
    - Research the codebase based on those requirements.
    - Establish a module map (name the files the change touches, their paths, what they hold, and the entry points).
-   - Structure your handoff as JSON matching the `DispatcherHandoff` model in `tools/handoff/models.py`. **Important**: The JSON fields must be filled out extensively and in detail. Do not use placeholders or artificial summaries. Completely include all technical details, architectural decisions, research results, module maps, etc.
-   - Write this JSON into a temporary file (e.g., `handoff.json`).
-   - Invoke `python3 tools/handoff/generate.py --agent dispatcher --json-data handoff.json` passing the path to the temporary file.
-   - Wait for the script to validate and save the JSON handoff file, then delete the temporary JSON file (`rm handoff.json`).
+   - Write your handoff directly as a Markdown file into the issue directory (e.g., `dispatcher.md` or `dispatcher-v<X>.md`).
+   - The file should include a Technical Specification, Module Map, and Next Steps. Ensure all technical details, architectural decisions, research results, and module maps are completely and extensively detailed. Do not use placeholders or artificial summaries.
    - Run `git add docs/issues/` and `git commit -m "docs: add dispatcher handoff"`.
 2. **Decide the next step**:
    - Evaluate if the task requires tests.
