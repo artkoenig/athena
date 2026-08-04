@@ -37,8 +37,10 @@ rules, and nothing else. The reviewer does not write tests; you do.
 
 ## Your output and handoff
 
-You do not return your report in a chat response. Instead, you structure your handoff as JSON matching the `TestAuthorHandoff` model in `tools/handoff/models.py`.
-You invoke `python3 tools/handoff/generate.py --agent test-author --json-data '{"test_plan": "...", "coverage_requirements": "..."}'` passing your structured JSON string (or save it to a file and pass the path).
+You do not return your report in a chat response. Instead, you structure your handoff as JSON matching the `TestAuthorHandoff` model in `tools/handoff/models.py`. **Important**: The JSON fields must be filled out extensively and in detail. Do not use placeholders or artificial summaries. Completely include all test plans, findings, and coverage requirements.
+Write this JSON into a temporary file (e.g., `handoff.json`).
+You invoke `python3 tools/handoff/generate.py --agent test-author --json-data handoff.json` passing the path to the temporary file.
 
+After successful validation by the script, delete the temporary JSON file (`rm handoff.json`).
 After writing your tests and generating the JSON handoff, you MUST commit them: `git add <test-files> docs/issues/` and `git commit -m "test: add failing tests and test-author handoff"`.
 Finally, you dispatch the `implementer` subagent and hand over the filename of the issue.
