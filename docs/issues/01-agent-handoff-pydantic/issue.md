@@ -44,3 +44,8 @@ Der aktuelle Agent-Handoff-Prozess muss überarbeitet werden. Handoffs sollen al
    - Add instructions to invoke `tools/handoff/generate.py` with their findings and decisions.
 4. **Issue Directory Restructuring**:
    - Update any scripts creating issues to use the new `Issues/<timestamp>-<slug>/` directory instead of `docs/issues/`.
+
+## Handoff Test-Author
+- Criteria 1-5 (directory, JSON files, naming, versioning): `tools/handoff/test/test_generate.py` -> `AssertionError: generate.py does not exist` and `AssertionError: Could not import get_next_filename from tools.handoff.generate`
+- Criteria 6 (Pydantic models): `tools/handoff/test/test_models.py` -> `AssertionError: Could not import Pydantic models: No module named 'tools.handoff.models'`
+- Criteria 7 (Agent prompts): `tools/handoff/test/test_prompts.py` -> `AssertionError: 'tools/handoff/generate.py' not found in [...] dispatcher.md does not instruct the agent to use tools/handoff/generate.py`
