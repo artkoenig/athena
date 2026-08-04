@@ -1,5 +1,6 @@
 {"type":"USER_INPUT","message":"Hello Gemini","timestamp":"2026-08-03T12:00:00Z","usageMetadata":{"promptTokenCount":120,"candidatesTokenCount":60,"totalTokenCount":180,"cachedContentTokenCount":20}}
-{"type":"PLANNER_RESPONSE","thought":"Thinking about hello","text":"Hi!","toolCalls":[{"id":"call_1","name":"get_weather","args":{"city":"Seattle"}}]}
+{"type":"PLANNER_RESPONSE","thought":"Thinking about hello","text":"Hi!","toolCalls":[{"id":"call_1","name":"get_weather","args":{"city":"Seattle"}},{"id":"call_sub_1","name":"invoke_subagent","args":{"Subagents":[{"TypeName":"test-author"}]}}]}
 {"type":"TOOL_RESPONSE","name":"get_weather","response":"It is raining"}
+{"type":"TOOL_RESPONSE","name":"invoke_subagent","response":"file://{{GEMINI_SUBAGENT_PATH}}"}
 {"type":"USER_INPUT","message":"And Portland?"}
 {"type":"PLANNER_RESPONSE","text":"Also raining","error":{"errorType":"api_error","message":"Timeout"}}

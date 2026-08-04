@@ -1,0 +1,2 @@
+{"type":"USER_INPUT","message":"Subagent Hello","usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5,"totalTokenCount":15}}
+{"type":"PLANNER_RESPONSE","text":"Subagent Hi"}

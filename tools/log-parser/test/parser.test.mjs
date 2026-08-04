@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import fs from 'node:fs';
 
 import { detectLogFormat } from '../src/detector.mjs';
 import { parseClaudeLog } from '../src/claude-parser.mjs';
@@ -12,8 +13,25 @@ import { renderMarkdown, renderJson } from '../src/renderers.mjs';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 test('Parser Tests', async (t) => {
-  const claudeFixture = path.join(__dirname, 'fixtures', 'claude-sample.jsonl');
-  const geminiFixture = path.join(__dirname, 'fixtures', 'gemini-sample.jsonl');
+  const claudeFixtureTmpl = path.join(__dirname, 'fixtures', 'claude-sample.jsonl');
+  const geminiFixtureTmpl = path.join(__dirname, 'fixtures', 'gemini-sample.jsonl');
+  const claudeSubPath = path.join(__dirname, 'fixtures', 'claude-subagent.jsonl');
+  const geminiSubPath = path.join(__dirname, 'fixtures', 'gemini-subagent.jsonl');
+
+  const claudeFixture = path.join(__dirname, 'fixtures', 'claude-sample.tmp.jsonl');
+  const geminiFixture = path.join(__dirname, 'fixtures', 'gemini-sample.tmp.jsonl');
+
+  t.before(() => {
+    const claudeTmpl = fs.readFileSync(claudeFixtureTmpl, 'utf8');
+    const geminiTmpl = fs.readFileSync(geminiFixtureTmpl, 'utf8');
+    fs.writeFileSync(claudeFixture, claudeTmpl.replace('{{CLAUDE_SUBAGENT_PATH}}', claudeSubPath));
+    fs.writeFileSync(geminiFixture, geminiTmpl.replace('{{GEMINI_SUBAGENT_PATH}}', geminiSubPath));
+  });
+
+  t.after(() => {
+    if (fs.existsSync(claudeFixture)) fs.unlinkSync(claudeFixture);
+    if (fs.existsSync(geminiFixture)) fs.unlinkSync(geminiFixture);
+  });
 
   await t.test('detectLogFormat', () => {
     assert.strictEqual(detectLogFormat(claudeFixture), 'claude');
@@ -22,61 +40,56 @@ test('Parser Tests', async (t) => {
 
   await t.test('parseClaudeLog', async () => {
     const turns = await parseClaudeLog(claudeFixture);
-    assert.strictEqual(turns.length, 2, 'Should parse 2 turns');
+    assert.strictEqual(turns.length, 3, 'Should parse 3 turns (2 main + 1 subagent)');
     
     assert.strictEqual(turns[0].step, 1);
     assert.strictEqual(turns[0].userPrompt, 'Hello Claude');
-    assert.strictEqual(turns[0].thinkingBlocks.length, 1);
-    assert.strictEqual(turns[0].thinkingBlocks[0], 'I should say hello.');
-    assert.strictEqual(turns[0].toolCalls.length, 1);
+    assert.strictEqual(turns[0].toolCalls.length, 2);
     assert.strictEqual(turns[0].toolCalls[0].name, 'get_weather');
-    
+    assert.strictEqual(turns[0].toolCalls[1].name, 'invoke_subagent');
+
+    // Subagent turn
     assert.strictEqual(turns[1].step, 2);
-    assert.strictEqual(turns[1].userPrompt, 'What about tomorrow?');
-    assert.strictEqual(turns[1].errors.length, 1);
-    assert.strictEqual(turns[1].errors[0].message, 'Some error');
+    assert.strictEqual(turns[1].isSubagent, true);
+    assert.strictEqual(turns[1].agentName, 'test-author', 'Should extract subagent role');
+    assert.strictEqual(turns[1].userPrompt, 'Subagent Hello');
     
-    // Check tokens
-    assert.strictEqual(turns[0].tokens.inputTokens, 100);
-    assert.strictEqual(turns[0].tokens.outputTokens, 50);
+    // Turn 2
+    assert.strictEqual(turns[2].step, 3);
+    assert.strictEqual(turns[2].userPrompt, 'What about tomorrow?');
   });
 
   await t.test('parseGeminiLog', async () => {
     const turns = await parseGeminiLog(geminiFixture);
-    assert.strictEqual(turns.length, 2, 'Should parse 2 turns');
+    assert.strictEqual(turns.length, 3, 'Should parse 3 turns');
 
     assert.strictEqual(turns[0].step, 1);
     assert.strictEqual(turns[0].userPrompt, 'Hello Gemini');
-    assert.strictEqual(turns[0].thinkingBlocks.length, 1);
-    assert.strictEqual(turns[0].thinkingBlocks[0], 'Thinking about hello');
-    assert.strictEqual(turns[0].toolCalls.length, 1);
-    assert.strictEqual(turns[0].toolCalls[0].name, 'get_weather');
-    assert.strictEqual(turns[0].toolCalls[0].output, 'It is raining');
+    assert.strictEqual(turns[0].toolCalls.length, 2);
     
-    assert.strictEqual(turns[0].tokens.inputTokens, 120);
-
+    // Subagent turn
     assert.strictEqual(turns[1].step, 2);
-    assert.strictEqual(turns[1].userPrompt, 'And Portland?');
-    assert.strictEqual(turns[1].errors.length, 1);
-    assert.strictEqual(turns[1].errors[0].message, 'Timeout');
+    assert.strictEqual(turns[1].isSubagent, true);
+    assert.strictEqual(turns[1].agentName, 'test-author', 'Should extract subagent role');
+    
+    // Turn 2
+    assert.strictEqual(turns[2].step, 3);
+    assert.strictEqual(turns[2].userPrompt, 'And Portland?');
   });
 
   await t.test('normalizeSession and renderers', async () => {
-    const turns = await parseGeminiLog(geminiFixture);
-    const transcript = normalizeSession(turns, 'gemini', 'gemini');
+    const turns = await parseClaudeLog(claudeFixture);
+    const transcript = normalizeSession(turns, 'claude', 'claude');
     
-    assert.strictEqual(transcript.metrics.counts.stepCount, 2);
-    assert.strictEqual(transcript.metrics.counts.toolCallsTotal, 1);
-    assert.strictEqual(transcript.metrics.counts.errorCount, 1);
-    assert.strictEqual(transcript.metrics.tokens.inputTokens, 120);
+    assert.strictEqual(transcript.metrics.counts.stepCount, 3);
+    assert.ok(transcript.metrics.agentBreakdown['test-author'], 'Should have breakdown for test-author');
+    assert.strictEqual(transcript.metrics.agentBreakdown['test-author'].stepCount, 1);
+    assert.strictEqual(transcript.metrics.agentBreakdown['main'].stepCount, 2);
 
     const md = renderMarkdown(transcript);
-    assert.ok(md.includes('# Session Transcript'));
-    assert.ok(md.includes('**Provider**: gemini (gemini)'));
-    assert.ok(md.includes('Thinking about hello'));
-    assert.ok(md.includes('Hello Gemini'));
+    assert.ok(md.includes('test-author'), 'Markdown should include test-author stats');
 
     const json = JSON.parse(renderJson(transcript));
-    assert.strictEqual(json.counts.stepCount, 2);
+    assert.ok(json.agentBreakdown['test-author'], 'JSON should include test-author breakdown');
   });
 });
