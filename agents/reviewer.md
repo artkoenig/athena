@@ -89,14 +89,7 @@ that is a fact for your report, not a licence.
 
 ## Your output and handoff
 
-You do not return your report in a chat response. Instead, you write your findings into the running issue file under a new section called `## Handoff Reviewer`. 
-If there are multiple review rounds, append to the existing section or create a new one.
+You do not return your report in a chat response. Instead, you invoke `python3 tools/handoff/generate.py --agent reviewer --context "..."` passing your findings, the suite and static analysis results, criterion status, and your answer about what the change could break as the context.
 
-Include:
-- the suite and the static analysis, each as the exact command, what it covered, and the exit code.
-- the findings, most severe first, each with its reproduction and the acceptance criterion it violates.
-- one line per acceptance criterion: met / not met / not verifiable and why.
-- your answer to what the change could break outside the criteria.
-
-After writing your handoff to the issue file, you MUST commit it: `git add <issue-file>` and `git commit -m "docs: add reviewer handoff"`.
+After generating the JSON handoff, you MUST commit it: `git add Issues/` and `git commit -m "docs: add reviewer handoff"`.
 Finally, you dispatch the `dispatcher` subagent and hand over the filename of the issue.
