@@ -91,5 +91,5 @@ that is a fact for your report, not a licence.
 
 You do not return your report in a chat response. Instead, you invoke `python3 tools/handoff/generate.py --agent reviewer --context "..."` passing your findings, the suite and static analysis results, criterion status, and your answer about what the change could break as the context.
 
-After generating the JSON handoff, you MUST commit it: `git add Issues/` and `git commit -m "docs: add reviewer handoff"`.
+After generating the JSON handoff, you MUST commit it: `git add docs/issues/` and `git commit -m "docs: add reviewer handoff"`.
 Finally, you dispatch the `dispatcher` subagent and hand over the filename of the issue.

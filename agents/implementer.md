@@ -50,5 +50,5 @@ job; grinding past them wastes the run.
 
 You do not return your report in a chat response. Instead, you invoke `python3 tools/handoff/generate.py --agent implementer --context "..."` passing the files you changed, the suite and static-analysis commands, their scope, their exit codes, assumptions, surprises, or questions as the context.
 
-After writing your code and generating the JSON handoff, you MUST commit them: `git add <files> Issues/` and `git commit -m "feat: implement requested changes and implementer handoff"`.
+After writing your code and generating the JSON handoff, you MUST commit them: `git add <files> docs/issues/` and `git commit -m "feat: implement requested changes and implementer handoff"`.
 Finally, you dispatch the `reviewer` subagent and hand over the filename of the issue.

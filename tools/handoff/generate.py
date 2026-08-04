@@ -14,13 +14,10 @@ def get_next_filename(directory, agent):
     return f"{agent}-v{version}.json"
 
 def get_issue_directory():
-    # Find the most recently modified directory in Issues/ that contains issue.md
-    issues_dir = os.path.join(os.getcwd(), 'Issues')
+    # Find the most recently modified directory in docs/issues/ that contains issue.md
+    issues_dir = os.path.join(os.getcwd(), 'docs', 'issues')
     if not os.path.exists(issues_dir):
-        # Fallback to docs/issues/
-        issues_dir = os.path.join(os.getcwd(), 'docs', 'issues')
-        if not os.path.exists(issues_dir):
-            raise RuntimeError("Issues directory not found")
+        raise RuntimeError("Issues directory not found")
             
     candidates = []
     for root, dirs, files in os.walk(issues_dir):

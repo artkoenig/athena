@@ -39,5 +39,5 @@ rules, and nothing else. The reviewer does not write tests; you do.
 
 You do not return your report in a chat response. Instead, you invoke `python3 tools/handoff/generate.py --agent test-author --context "..."` passing the test plan, coverage requirements, the test files you wrote, the mapping criterion → test name(s), and per test the one-line proof it currently fails as the context.
 
-After writing your tests and generating the JSON handoff, you MUST commit them: `git add <test-files> Issues/` and `git commit -m "test: add failing tests and test-author handoff"`.
+After writing your tests and generating the JSON handoff, you MUST commit them: `git add <test-files> docs/issues/` and `git commit -m "test: add failing tests and test-author handoff"`.
 Finally, you dispatch the `implementer` subagent and hand over the filename of the issue.

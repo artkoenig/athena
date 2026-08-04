@@ -3,7 +3,7 @@
 Work for this repository is tracked as local markdown issues in two levels.
 
 ## Layout
-- Root: `Issues/`.
+- Root: `docs/issues/`.
 - A top-level `NN-<slug>/` directory is a **main-issue**: it maps 1:1 to one
   branch `issue/<slug>`, one worktree and one pull request, and its `issue.md`
   holds the specification (PRD). It carries a `Type:`
@@ -13,7 +13,7 @@ Work for this repository is tracked as local markdown issues in two levels.
   vertically-sliced units that make up that one PR. A child-issue inherits its
   main-issue's type.
 - Each issue is a directory `NN-<slug>/` with an `issue.md`, addressed by its
-  path relative to `Issues/`, e.g. `01-checkout/02-cart-api`.
+  path relative to `docs/issues/`, e.g. `01-checkout/02-cart-api`.
 
 ## States (enforced transitions)
 - `needs-triage` — awaiting evaluation by the maintainer
@@ -53,7 +53,7 @@ its neighbours forever.
 ## Planning a main-issue (module level, before slicing)
 Right after a main-issue's specification exists — and before deciding whether
 it needs child-issues at all — a module-level plan is written once,
-unconditionally, to a **temporary** `Issues/<main-id>/design.md`: a module
+unconditionally, to a **temporary** `docs/issues/<main-id>/design.md`: a module
 map, an explicit single-module-vs-multiple-modules classification, and the
 shared contracts (interfaces, types, data shapes) a slice would need to honour.
 That classification is one input — not a hard rule — into whether the

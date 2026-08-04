@@ -49,9 +49,10 @@ here becomes a leak in every run.
 
 Give each agent the narrowest tool list that does its job; a read-only role
 gets no writing tools. Only its handoff is written to the issue file;
-give it nothing about the project beyond `Issues/` or `docs/issues/`. An agent that needs
-more must find it. An agent that needs to leave a note for the
-implementer — finds it itself under `Issues/` (or `docs/issues/` for old issues), by the `status:`/
+give it nothing about the project beyond `docs/issues/`. An agent that needs
+the history runs `git log` itself.
+- **Paths are inferred, never passed:** The next agent — reviewer, or
+implementer — finds it itself under `docs/issues/`, by the `status:`/
 `branch:` scan the issue file describes, never through a handed
 path — except a reviewer, whose diff range already bounds what it may see,
 and which derives the intent from git instead.
