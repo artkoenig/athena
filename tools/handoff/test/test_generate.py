@@ -1,8 +1,17 @@
 import unittest
 import os
+import sys
 import tempfile
-import subprocess
 import json
+from unittest.mock import patch
+import io
+from contextlib import redirect_stderr
+
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+from tools.handoff.generate import main, get_next_filename
 
 class TestGenerateScript(unittest.TestCase):
     def setUp(self):
@@ -18,64 +27,70 @@ class TestGenerateScript(unittest.TestCase):
         self.assertNotIn('TEST_MOCK_API', content, "The script should not mock APIs")
         self.assertNotIn('client.models.generate_content', content, "The script should not call API")
 
-    def test_cli_execution_with_json_string(self):
-        valid_json = json.dumps({
-            "technical_specification": "spec",
-            "module_map": "map",
-            "next_steps": "steps"
-        })
-        result = subprocess.run(
-            ['python3', self.script_path, '--agent', 'dispatcher', '--json-data', valid_json],
-            capture_output=True, text=True
-        )
-        self.assertEqual(result.returncode, 0, f"generate.py failed with string: {result.stderr}")
-        # Not strictly checking output file location since it writes to latest issue dir
-
-    def test_cli_execution_with_json_file(self):
-        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json') as f:
-            json.dump({
-                "status": "st",
-                "findings": "fi"
-            }, f)
-            json_file_path = f.name
+    @patch('tools.handoff.generate.get_issue_directory')
+    def test_cli_execution_with_json_string(self, mock_get_issue_dir):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mock_get_issue_dir.return_value = tmpdir
+            valid_json = json.dumps({
+                "technical_specification": "spec",
+                "module_map": "map",
+                "next_steps": "steps"
+            })
             
-        try:
-            result = subprocess.run(
-                ['python3', self.script_path, '--agent', 'reviewer', '--json-data', json_file_path],
-                capture_output=True, text=True
-            )
-            self.assertEqual(result.returncode, 0, f"generate.py failed with file: {result.stderr}")
-        finally:
-            os.remove(json_file_path)
+            test_args = ['generate.py', '--agent', 'dispatcher', '--json-data', valid_json]
+            with patch.object(sys, 'argv', test_args):
+                main()
+                
+            self.assertTrue(os.path.exists(os.path.join(tmpdir, 'dispatcher.json')))
+
+    @patch('tools.handoff.generate.get_issue_directory')
+    def test_cli_execution_with_json_file(self, mock_get_issue_dir):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mock_get_issue_dir.return_value = tmpdir
+            
+            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json') as f:
+                json.dump({
+                    "status": "rejected",
+                    "findings": "fi"
+                }, f)
+                json_file_path = f.name
+                
+            try:
+                test_args = ['generate.py', '--agent', 'reviewer', '--json-data', json_file_path]
+                with patch.object(sys, 'argv', test_args):
+                    main()
+                    
+                self.assertTrue(os.path.exists(os.path.join(tmpdir, 'reviewer.json')))
+            finally:
+                os.remove(json_file_path)
 
     def test_cli_invalid_json_validation(self):
-        # Missing coverage_requirements for test-author
         invalid_json = json.dumps({
             "test_plan": "plan"
         })
-        result = subprocess.run(
-            ['python3', self.script_path, '--agent', 'test-author', '--json-data', invalid_json],
-            capture_output=True, text=True
-        )
-        self.assertNotEqual(result.returncode, 0, "generate.py should fail when JSON is missing required fields")
-        self.assertIn("validation", result.stderr.lower(), "Should output validation error message")
+        test_args = ['generate.py', '--agent', 'test-author', '--json-data', invalid_json]
+        
+        f = io.StringIO()
+        with patch.object(sys, 'argv', test_args), redirect_stderr(f):
+            with self.assertRaises(SystemExit) as cm:
+                main()
+            self.assertEqual(cm.exception.code, 1)
+            
+        self.assertIn("validation", f.getvalue().lower())
 
     def test_cli_malformed_json(self):
-        result = subprocess.run(
-            ['python3', self.script_path, '--agent', 'test-author', '--json-data', '{malformed'],
-            capture_output=True, text=True
-        )
-        self.assertNotEqual(result.returncode, 0, "generate.py should fail when JSON is malformed")
-        # Should mention json parsing error
-        self.assertTrue("json" in result.stderr.lower() or "decode" in result.stderr.lower(), 
-                        "Should mention JSON decoding error")
+        test_args = ['generate.py', '--agent', 'test-author', '--json-data', '{malformed']
+        
+        f = io.StringIO()
+        with patch.object(sys, 'argv', test_args), redirect_stderr(f):
+            with self.assertRaises(SystemExit) as cm:
+                main()
+            self.assertEqual(cm.exception.code, 1)
+            
+        err_out = f.getvalue().lower()
+        self.assertTrue("json" in err_out or "decode" in err_out)
 
     def test_versioning_logic(self):
-        try:
-            from tools.handoff.generate import get_next_filename
-        except ImportError:
-            self.fail("Could not import get_next_filename from tools.handoff.generate")
-            
         with tempfile.TemporaryDirectory() as tmpdir:
             name1 = get_next_filename(tmpdir, "researcher")
             self.assertEqual(name1, "researcher.json")
