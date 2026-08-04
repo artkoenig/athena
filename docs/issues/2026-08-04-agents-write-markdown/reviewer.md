@@ -1,30 +1,22 @@
-# Review Status
+# Reviewer Handoff
 
-**Status**: Rejected
+## Review Status
+This round continues the previous context.
 
-# Findings
+## Facts
+1. **Test Suite**: Ran `bash test.sh; echo "test.sh exited with $?"` covering all tests. It exited with 1 due to 7 pre-existing failures in `test-plugin.sh` that test `claude plugin validate` and plugin installation. These failures are unrelated to `tools/handoff` or agents. No tests for `tools/handoff` remain.
+2. **Static Analysis**: Attempted to run `npm run lint`. It failed with `ENOENT` because there is no `package.json` in the root directory.
 
-1. **Facts**:
-   - `bash test.sh` run covered 6 suites. It exited with code 1 due to a failure in `test-plugin.sh` (7 of 39 cases failed). The failures state `claude plugin validate accepts the marketplace manifest` and similar errors, which are preexisting and stem from the `claude` CLI not being installed on the runner's path. This is not caused by the implementer's changes.
-   - Run `npm run lint` exited with code 254 (no package.json) and `npm --prefix tools/argus run lint` exited with code 1 (no lint script), so there is no static analysis available to run for the project.
+## Findings
+- No findings. The implementer successfully removed all remaining references to reading or writing handoffs from/to `issue.md` in the agent prompts and correctly updated them to look for separate markdown files in the issue directory.
 
-2. **Diff against Intent**:
-   - The implementation correctly removed `tools/handoff/generate.py`, its models, and test suite, which satisfies Criterion 1 and 3.
-   - However, the modifications to the agent prompts (Criterion 2) are incomplete and introduce contradictions. While the "Your output and handoff" sections correctly instruct agents to write separate markdown files (e.g. `implementer.md`), the frontmatter descriptions and workflow instructions still tell the agents to read and append handoffs within the `issue.md` file itself. 
-   
-   **Reproduction of contradictions:**
-   - `agents/dispatcher.md:3`: The description says "writes the technical handoff to the issue file".
-   - `agents/dispatcher.md:26`: Still instructs "When the `reviewer` hands back to you, read `## Handoff Reviewer`." instead of pointing to `reviewer.md`.
-   - `agents/implementer.md:3`: The description says "Appends its own handoff to the issue file".
-   - `agents/implementer.md:17`: Instructs the agent to "Read `## Handoff Test-Author` in the issue to find the failing tests." instead of the separate `test-author.md` file.
-   - `agents/test-author.md:3`: The description says "Reads the existing handoffs from the issue file ... It appends its own handoff to the issue file".
-   - `agents/test-author.md:14`: Claims "Your entire brief is in the issue file (... and the previous handoffs from the researcher)."
-   - `agents/reviewer.md:16`: Claims "The issue file contains the intent and all previous handoffs."
-   
-   These remaining references to the old workflow will cause agents to either fall back to appending to `issue.md` or fail to read the other agents' independent markdown handoff files, breaking the chain.
+## Acceptance Criteria
+1. **Die Skripte und Modelle zur JSON-Generierung (z.B. in `tools/handoff/`) werden vollständig entfernt.**
+   - Met. The entire `tools/handoff/` directory has been deleted.
+2. **Die Prompts aller Agenten in `agents/` (bzw. `.agents/plugins/athena/agents/`) werden so angepasst, dass sie direkt Markdown-Handoff-Dateien (z.B. `dispatcher.md`, `dispatcher-v1.md`) in das aktuelle Issue-Verzeichnis schreiben.**
+   - Met. All 4 agent prompts in `agents/` correctly instruct to directly read and write to Markdown files in the issue directory, completely removing the intermediate JSON workflow and any references to `issue.md`.
+3. **Eventuell bestehende Unittests, die noch das alte `generate.py`-Skript testen, werden gelöscht oder durch Tests ersetzt, die den neuen Workflow unterstützen.**
+   - Met. All old tests in `tools/handoff/test` were removed.
 
-3. **Tests against Intent**:
-   - There are no tests for this change because the modified files are just Markdown prompts and the scripts that required tests were deleted. This correctly satisfies Criterion 3.
-
-4. **Beyond the Criteria**:
-   - The blast radius here covers the agent loop. If an agent tries to read a handoff inside `issue.md` but the handoff was written to `test-author.md`, it will fail to find its input, causing it to block or hallucinate. The missing read-instructions mentioned above confirm this breakage.
+## Beyond the Criteria
+Nothing found. The changes are strictly localized to the agent prompts which will change their future workflow.
