@@ -46,3 +46,14 @@ Der Agent-Handoff-Prozess wurde überarbeitet. Die `issue.md` dient nun nur noch
 - **What the change could break outside the criteria**:
   - The hardcoded path changes to `Issues/<timestamp>-<slug>/issue.md` in `skills/grill/SKILL.md` and `skills/retro/SKILL.md` break compatibility with older issues still residing in `docs/issues/`.
   - Several documents (`CLAUDE.md`, `.claude/rules/agents.md`, `docs/agents/issue-tracker.md`) still reference `docs/issues/` as the single source of truth for issues, which will misguide agents in the future.
+
+## Handoff Test-Author
+
+- **Files edited**:
+  - `tools/handoff/test/test_generate.py`
+- **Criterion -> Test Name Mapping**:
+  - *Handoffs werden als eigenständige JSON-Dateien abgelegt / Script execution*: `test_cli_execution`
+  - *Die LLM-API wird so konfiguriert, dass sie dieses strukturierte Format direkt generiert*: `test_structured_output_configuration`
+- **Failing Tests Proof**:
+  - `test_cli_execution`: `AssertionError: 1 != 0 : generate.py failed to execute: [...] ModuleNotFoundError: No module named 'tools'` (Fails as expected because of the import path issue).
+  - `test_structured_output_configuration`: This test actually **passes**, which proves the implementer *did* configure `google.genai.Client` with `response_schema`, though it was untestable before. (Note: as Test-Author, I did not modify production code to make this pass, it was already correct but missing a test).
