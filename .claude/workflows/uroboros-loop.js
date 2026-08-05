@@ -15,7 +15,16 @@ export const meta = {
 
 const MAX_CORRECTIONS = 2
 
-const dir = args && args.issueDir
+// The caller may hand us the object, a JSON string of it, or the bare path —
+// the harness stringifies args on some paths, and a run must not die on that.
+const parsed =
+  typeof args === 'string'
+    ? args.trim().startsWith('{')
+      ? JSON.parse(args)
+      : { issueDir: args.trim() }
+    : args
+
+const dir = parsed && parsed.issueDir
 if (!dir) {
   log('No args.issueDir given — nothing to run. Call with args: { issueDir: "docs/issues/<name>" }.')
   return { ran: false, reason: 'missing args.issueDir' }
