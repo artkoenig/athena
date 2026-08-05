@@ -41,9 +41,14 @@ for file in "${claims[@]}"; do
 done
 
 # The other direction: no file anywhere claims a licence LICENSE is not.
+# The record of past runs under docs/issues/ is out of scope, the way *.sh
+# already is: those documents quote this suite — the sentence above about
+# three files drifting is itself quoted in one of them — and a quotation is
+# not a claim. Nothing there sets the project's licence anyway.
 strays="$(grep -rln 'Apache' "$root" \
   --include='*.md' --include='*.json' --include='*.mjs' --include='*.yaml' \
-  --exclude='package-lock.json' --exclude-dir=node_modules 2>/dev/null || true)"
+  --exclude='package-lock.json' --exclude-dir=node_modules \
+  --exclude-dir=issues 2>/dev/null || true)"
 if [ -z "$strays" ]; then
   ok "no file claims the Apache licence"
 else
