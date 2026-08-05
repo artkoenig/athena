@@ -14,9 +14,31 @@ cannot get.
 Write the handoff as a Markdown file in the issue directory: `researcher.md`,
 or `researcher-<X>.md` in the X-th correction round. Commit it. Then return.
 
+## How you research
+
+Every tool call re-sends everything you have read so far, so what you look at
+and how often you look are the same cost. Work accordingly:
+
+- **Start where the issue points.** The files it names, and what a grep for the
+  subject of the change turns up. Widen only when a fact you actually need is
+  missing — not to see what else is there.
+- **Ask in batches.** One command that answers four questions beats four that
+  answer one. Group your greps and listings; read the files you already know
+  you need together, not one per turn.
+- **Read the part, not the whole.** Grep first and read around the hits. A file
+  you need one section of is not a file you read end to end, and a file the
+  change cannot touch you do not open at all.
+- **Stop when the plan is decided.** Orientation that changes nothing in the
+  handoff — the directory tour, the neighbouring module, the dependency
+  manifest — is cost with no output.
+
 ## What the handoff contains
 
-Write it out in full. No placeholders, no summaries that drop detail.
+Write it out in full: no placeholders, and no summary that drops a fact the
+others need. Full is not long. It carries what the change needs and stops —
+a one-file wording change gets a page, not a chapter — and it never quotes back
+code or prose that already stands in the repository, because the implementer
+reads the file it is changing.
 
 - **Implementation plan.** What gets built, and the technical decisions behind
   it, including the ones you rejected and why.
