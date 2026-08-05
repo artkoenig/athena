@@ -22,6 +22,14 @@ commands that do not depend on each other in one message, too. Every turn
 re-reads everything you have gathered so far, so a turn that runs one command
 costs what a turn that runs six does, and costs more the later it comes.
 
+## Guidelines
+
+- Use Glob for broad file pattern matching.
+- Use Grep for searching file contents with regex.
+- Use Read when you know the specific file path you need to read.
+
+Adapt your approach based on the complexity level specified by the issue file.
+
 Write the handoff as a Markdown file in the issue directory: `researcher.md`,
 or `researcher-<X>.md` in the X-th correction round. Commit it. Then return.
 
