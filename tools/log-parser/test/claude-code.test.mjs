@@ -21,6 +21,23 @@ const sessionFixture = path.join(fixturesDir, 'claude-code-session.jsonl');
 
 const binPath = path.join(__dirname, '..', 'bin', 'parse-agent-log.mjs');
 
+// The fixture's four usage fields sum to this. The JSON output carries it raw.
+const TOTAL_TOKENS_RAW = 1110;
+
+// `renderMarkdown` writes token totals through `Number#toLocaleString()`
+// (src/renderers.mjs:13), so the digit grouping depends on the runtime's
+// locale — on this Node it is `en-US` and 1110 renders as "1,110". Computing
+// the expectation the same way keeps the assertion exact and locale-independent
+// instead of hard-coding either "1110" or "1,110".
+const TOTAL_TOKENS_RENDERED = TOTAL_TOKENS_RAW.toLocaleString();
+
+// The exact markdown row `renderMarkdown` emits for the total.
+const TOTAL_TOKENS_ROW = `| Total Tokens | ${TOTAL_TOKENS_RENDERED} |`;
+
+// `--format all` prints the markdown, then this separator, then the JSON
+// metrics (bin/parse-agent-log.mjs:80-84).
+const JSON_SEPARATOR = '=== JSON Metrics ===';
+
 function writeLines(filePath, lines) {
   fs.writeFileSync(filePath, lines.map((l) => (typeof l === 'string' ? l : JSON.stringify(l))).join('\n') + '\n');
 }
@@ -295,17 +312,39 @@ test('Claude Code session transcripts', async (t) => {
   });
 
   await t.test('CLI: --format all exits 0 and renders the summary', () => {
+    // execFileSync throws on a non-zero exit status, so "exits 0" is asserted
+    // by the call itself.
     const stdout = execFileSync(process.execPath, [binPath, sessionFixture, '--format', 'all'], {
       encoding: 'utf8'
     });
-    assert.ok(stdout.includes('Total Tokens'), 'markdown summary must be rendered');
-    assert.ok(stdout.includes('1110'), 'markdown must carry the token total');
+
+    // Assert against the markdown half only — the JSON half carries the same
+    // total unformatted and would satisfy a naive substring search over the
+    // whole stdout no matter what the markdown said.
+    const cut = stdout.indexOf(JSON_SEPARATOR);
+    assert.ok(cut > 0, 'the all format must print markdown before the JSON metrics block');
+
+    const markdown = stdout.slice(0, cut);
+    const json = stdout.slice(cut + JSON_SEPARATOR.length);
+
+    assert.ok(markdown.includes('Total Tokens'), 'markdown summary must be rendered');
+    assert.ok(
+      markdown.includes(TOTAL_TOKENS_ROW),
+      `markdown must carry the token total as the renderer formats it (${TOTAL_TOKENS_ROW})`
+    );
+    assert.ok(
+      json.includes(`"totalTokens": ${TOTAL_TOKENS_RAW}`),
+      'the JSON block must carry the raw token total'
+    );
   });
 
   await t.test('renderers still take what the parser produces', async () => {
     const turns = await parseClaudeLog(sessionFixture);
     const md = renderMarkdown(normalizeSession(turns, 'claude', 'claude'));
-    assert.ok(md.includes('Total Tokens'));
-    assert.ok(md.includes('1110'));
+    assert.ok(md.includes('Total Tokens'), 'the markdown must carry the total tokens label');
+    assert.ok(
+      md.includes(TOTAL_TOKENS_ROW),
+      `markdown must carry the token total as the renderer formats it (${TOTAL_TOKENS_ROW})`
+    );
   });
 });
