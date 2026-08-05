@@ -17,14 +17,14 @@ or `researcher-<X>.md` in the X-th correction round. Commit it. Then return.
 ## How you research
 
 Every tool call re-sends everything you have read so far, so what you look at
-and how often you look are the same cost. Work accordingly:
+and how often you look are the same cost, and a dozen small questions cost more
+than the three big ones they could have been. Work accordingly:
 
-- **Start where the issue points.** The files it names, and what a grep for the
-  subject of the change turns up. Widen only when a fact you actually need is
-  missing — not to see what else is there.
-- **Ask in batches.** One command that answers four questions beats four that
-  answer one. Group your greps and listings; read the files you already know
-  you need together, not one per turn.
+- **Gather twice, then decide.** Your first call reads the issue together with
+  the files it names. Your second greps the repository for the subject of the
+  change and for whatever might contradict it, and lists what you still need to
+  see. Decide the plan from what those two returned. After that you go back only
+  for a fact you can name before you look — never to see what else is there.
 - **Read the part, not the whole.** Grep first and read around the hits. A file
   you need one section of is not a file you read end to end, and a file the
   change cannot touch you do not open at all.
@@ -57,7 +57,10 @@ trusts you instead of judging for itself, and neither goes looking for a
 convention you did not write down. Answer all of this:
 
 - **Whether.** Tests, or none. A change with nothing a tool can check — prose,
-  and nothing else — needs none. Then say so in one sentence and skip the rest.
+  and nothing else — needs none. Then say so in one sentence, name the suite the
+  repository already has as the only command that counts, and skip the rest of
+  this section. Do not go looking for a runner, a linter or a test convention
+  you have just decided not to use.
 - **What.** Per acceptance criterion, the cases that prove it: input, state,
   expected result, and the edges — empty, limit, repeat. Name what you leave
   untested and why, so an omission reads as a decision. A criterion missing
