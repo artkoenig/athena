@@ -24,7 +24,9 @@ correction round, at most twice.
      the command that runs a single test file, the linter and formatter — by
      name and command, or the plain sentence that there is none — and any
      prerequisite a test needs before it can run at all. "There is no linter"
-     is an answer; silence is not, and it costs the implementer a search.
+     is an answer; silence is not, and it costs the implementer a search. You
+     name these commands, you do not run them: the suite runs once, at the end
+     of the round, and that run is the implementer's.
    - Write your handoff directly as a Markdown file into the issue directory (e.g., `researcher.md` or `researcher-<X>.md` for the X-th correction loop).
    - The file should include an Implementation Plan. Ensure all technical details, architectural decisions, research results, and module maps are completely and extensively detailed. Do not use placeholders or artificial summaries.
    - Check in your handoff file
