@@ -7,6 +7,7 @@ export const meta = {
     { title: 'Tests', detail: 'test-author writes failing tests' },
     { title: 'Implement', detail: 'implementer makes them pass' },
     { title: 'Review', detail: 'reviewer checks the diff against main' },
+    { title: 'Push', detail: 'the branch goes to the remote' },
   ],
 }
 
@@ -61,6 +62,20 @@ const VERDICT = {
     summary: { type: 'string' },
   },
   required: ['findings', 'handoffFile', 'summary'],
+  additionalProperties: false,
+}
+
+const PUSH = {
+  type: 'object',
+  properties: {
+    pushed: {
+      type: 'boolean',
+      description: 'True only when the push command exited 0.',
+    },
+    branch: { type: 'string' },
+    summary: { type: 'string' },
+  },
+  required: ['pushed', 'branch', 'summary'],
   additionalProperties: false,
 }
 
@@ -131,4 +146,20 @@ if (!accepted) {
   log(`Stopped after ${MAX_CORRECTIONS} correction loops with findings open. Hand back to the human.`)
 }
 
-return { ran: true, accepted, verdict, issueDir: dir }
+// Every agent above commits, none of them pushes, and the main session is not
+// allowed to. Without this step the branch stays local and the work is lost
+// with the container. Runs whether or not the review accepted — the commits
+// exist either way.
+phase('Push')
+const push = await agent(
+  'Push the current branch to its remote, nothing else.\n' +
+    'Run `git push -u origin "$(git branch --show-current)"`. On a network error retry ' +
+    'up to 4 times, waiting 2s, 4s, 8s, 16s. Do NOT commit, do NOT stage, do NOT change ' +
+    'any file, do NOT force-push, and do NOT switch branches. If the working tree is ' +
+    'dirty, leave it dirty and report it.\n' +
+    'You are running inside a workflow script. Do NOT dispatch any subagent.',
+  { agentType: 'general-purpose', phase: 'Push', label: 'push', schema: PUSH },
+)
+log(`Push: ${push.pushed ? 'ok' : 'FAILED'} — ${push.summary}`)
+
+return { ran: true, accepted, verdict, issueDir: dir, push }
