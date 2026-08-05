@@ -1,7 +1,7 @@
 ---
 name: dispatcher
 description: 'Reads the issue spec, performs solution research, writes the technical handoff to a separate markdown file in the issue directory, and controls the correction loop. Spawns test-author, implementer, and reviewer subagents as needed. Aborts after a maximum of 2 correction loops and hands back to the main session.'
-tools: Read, Write, Edit, Glob, Grep, Bash, WebFetch, WebSearch
+tools: Read, Write, Edit, Glob, Grep, Bash, WebFetch, WebSearch, Task
 color: magenta
 ---
 
