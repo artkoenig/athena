@@ -57,7 +57,7 @@ test('the interface serves the page on its own port', async () => {
     const page = await fetch(`${base}/`);
     assert.equal(page.status, 200);
     assert.match(page.headers.get('content-type'), /text\/html/);
-    assert.match(await page.text(), /athena/i);
+    assert.match(await page.text(), /uroboros/i);
 
     const script = await fetch(`${base}/app.js`);
     assert.equal(script.status, 200);
@@ -77,7 +77,7 @@ test('the interface supplies the collector token itself and strips the browser c
     { collectorToken: 'collector-secret', collector: { token: 'collector-secret' } },
     async ({ base, collector }) => {
       const response = await fetch(`${base}/api/sessions?limit=5`, {
-        headers: { cookie: 'athena_obs_token=whatever-the-browser-had' },
+        headers: { cookie: 'uroboros_obs_token=whatever-the-browser-had' },
       });
       assert.equal(response.status, 200);
       assert.deepEqual(await response.json(), { ok: true, path: '/api/sessions?limit=5' });
@@ -188,11 +188,11 @@ test('with --token the interface trades the token in the query for a cookie', as
     assert.equal(handoff.status, 302);
     assert.equal(handoff.headers.get('location'), '/', 'the secret leaves the address bar');
     const cookie = handoff.headers.get('set-cookie');
-    assert.match(cookie, /^athena_obs_token=ui-secret;/);
+    assert.match(cookie, /^uroboros_obs_token=ui-secret;/);
     assert.match(cookie, /HttpOnly/);
     assert.match(cookie, /SameSite=Strict/);
 
-    const jar = { cookie: 'athena_obs_token=ui-secret' };
+    const jar = { cookie: 'uroboros_obs_token=ui-secret' };
     assert.equal((await fetch(`${base}/api/sessions`, { headers: jar })).status, 200);
 
     // The app shell is not gated: a browser puts the token on the document

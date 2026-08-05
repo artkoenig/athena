@@ -31,11 +31,11 @@ argus start --background          # returns to the shell, keeps listening
 eval "$(argus env)"
 claude -p "What does this repo do?"
 
-# 3. Look at it: the interface is its own process, from an athena checkout
+# 3. Look at it: the interface is its own process, from an uroboros checkout
 node tools/argus-ui/bin/argus-ui.mjs        # http://127.0.0.1:4319
 ```
 
-`argus` is on the `PATH` of any session with the athena plugin enabled, in any
+`argus` is on the `PATH` of any session with the uroboros plugin enabled, in any
 project — the plugin's `bin/` is what puts it there. From a checkout the same
 thing is `node tools/argus/bin/argus.mjs`.
 
@@ -79,7 +79,7 @@ export OTEL_TRACES_EXPORTER="otlp"
 export OTEL_METRIC_EXPORT_INTERVAL="1000"        # the 60s default is too sluggish for short runs
 export OTEL_LOGS_EXPORT_INTERVAL="1000"
 export OTEL_TRACES_EXPORT_INTERVAL="1000"
-export ATHENA_OBS_URL="http://127.0.0.1:4318"    # the same address under this tool's own name
+export UROBOROS_OBS_URL="http://127.0.0.1:4318"    # the same address under this tool's own name
 ```
 
 `--format json` and `--format dotenv` give the same values for `options.env`
@@ -174,7 +174,7 @@ docker compose up -d          # http://127.0.0.1:4318, data in the "telemetry" v
 ```
 
 The published port is deliberately bound to `127.0.0.1`. The persistence directory is
-preset in the container (`ATHENA_OBS_PERSIST=/data`), so every record is on the volume
+preset in the container (`UROBOROS_OBS_PERSIST=/data`), so every record is on the volume
 rather than only in the process. A restart starts a fresh measurement in the same
 directory — what is already on the volume is read back by starting a collector on it with
 `--open /data`, not by restarting.
@@ -279,7 +279,7 @@ sends a real OTLP span and reads it back:
   ✓ reachable  https://obs.example.ts.net is an argus collector
   ✓ single     one collector process answers this URL
   ✓ ingest     OTLP span accepted
-  ✓ stored     probe session athena-check-16f7537d is in the store
+  ✓ stored     probe session uroboros-check-16f7537d is in the store
 ```
 
 Every step fails on its own: `reachable` points at network policy or a wrong URL,
@@ -344,7 +344,7 @@ node bin/argus.mjs check \
   ✓ reachable  … is an argus collector
   ✓ single     one collector process answers this URL
   ✓ ingest     OTLP span accepted
-  ✓ stored     probe session athena-check-… is in the store
+  ✓ stored     probe session uroboros-check-… is in the store
 ```
 
 The second line is the one that fails on a platform for functions.
@@ -363,7 +363,7 @@ public address already filled in:
 
 That works because Render passes `PORT` and `RENDER_EXTERNAL_URL` into the process and
 both are read. `PORT` is the convention on all of these platforms, so Fly and Railway
-work the same way — there with `--public-url` or `ATHENA_OBS_PUBLIC_URL` for the address.
+work the same way — there with `--public-url` or `UROBOROS_OBS_PUBLIC_URL` for the address.
 
 #### Not on serverless — and why, measured
 
@@ -430,28 +430,28 @@ exactly these routes and nothing else.
 
 | Flag                    | Env                          | Default        | Meaning                                          |
 | ----------------------- | ---------------------------- | -------------- | ------------------------------------------------ |
-| `-p, --port`            | `ATHENA_OBS_PORT`            | `4318`         | Port for OTLP ingest **and** the JSON API        |
-| `-h, --host`            | `ATHENA_OBS_HOST`            | `127.0.0.1`    | Bind address                                     |
-| `-t, --token`           | `ATHENA_OBS_TOKEN`           | –              | Require `Authorization: Bearer …`                |
+| `-p, --port`            | `UROBOROS_OBS_PORT`            | `4318`         | Port for OTLP ingest **and** the JSON API        |
+| `-h, --host`            | `UROBOROS_OBS_HOST`            | `127.0.0.1`    | Bind address                                     |
+| `-t, --token`           | `UROBOROS_OBS_TOKEN`           | –              | Require `Authorization: Bearer …`                |
 | `--background`          | –                            | –              | Start and return to the caller                   |
 | `--exit-with <pid>`     | `CLAUDE_PID`                 | the session    | Shut down when that process is gone              |
 | `--tunnel [binary]`     | –                            | –              | Open a Cloudflare tunnel, generate a token, print the block |
 | `--tunnel-protocol <p>` | –                            | both           | Pin the transport: `quic` or `http2`             |
-| `--public-url <url>`    | `ATHENA_OBS_PUBLIC_URL`      | –              | Announced URL behind a tunnel/proxy              |
-| `--persist <dir>`       | `ATHENA_OBS_PERSIST`         | –              | Write into exactly this directory instead of the default one |
+| `--public-url <url>`    | `UROBOROS_OBS_PUBLIC_URL`      | –              | Announced URL behind a tunnel/proxy              |
+| `--persist <dir>`       | `UROBOROS_OBS_PERSIST`         | –              | Write into exactly this directory instead of the default one |
 | `--no-persist`          | –                            | –              | Keep nothing on disk                             |
 | `--open <dir>`          | –                            | –              | Replay an existing measurement, write nothing    |
-| `--retention <duration>`| `ATHENA_OBS_RETENTION`       | `24h`          | Age at which raw data is discarded               |
-| `--max-spans <n>`       | `ATHENA_OBS_MAX_SPANS`       | `50000`        | Span buffer                                      |
-| `--max-logs <n>`        | `ATHENA_OBS_MAX_LOGS`        | `50000`        | Event buffer                                     |
-| `--max-metrics <n>`     | `ATHENA_OBS_MAX_METRICS`     | `50000`        | Metric buffer                                    |
-| `--max-sessions <n>`    | `ATHENA_OBS_MAX_SESSIONS`    | `500`          | Sessions in memory                               |
+| `--retention <duration>`| `UROBOROS_OBS_RETENTION`       | `24h`          | Age at which raw data is discarded               |
+| `--max-spans <n>`       | `UROBOROS_OBS_MAX_SPANS`       | `50000`        | Span buffer                                      |
+| `--max-logs <n>`        | `UROBOROS_OBS_MAX_LOGS`        | `50000`        | Event buffer                                     |
+| `--max-metrics <n>`     | `UROBOROS_OBS_MAX_METRICS`     | `50000`        | Metric buffer                                    |
+| `--max-sessions <n>`    | `UROBOROS_OBS_MAX_SESSIONS`    | `500`          | Sessions in memory                               |
 
 Durations accept `ms`, `s`, `m`, `h`, `d` (e.g. `--retention 90m`).
 
 Two more variables that platforms set themselves are read: `PORT` (Render, Fly, Railway,
 Heroku) as the port and `RENDER_EXTERNAL_URL` as the public address. Both rank below the
-`ATHENA_OBS_*` variants, so a deliberately set value wins.
+`UROBOROS_OBS_*` variants, so a deliberately set value wins.
 
 ## How data is kept
 
@@ -463,7 +463,7 @@ Two lifetimes, deliberately separated:
   stay correct even once the raw data has long rolled out.
 
 **Persistence is on by default.** A `start` creates
-`<cwd>/.athena-telemetry/<YYYY-MM-DDTHH-MM-SS>/` in the project being measured and appends
+`<cwd>/.uroboros-telemetry/<YYYY-MM-DDTHH-MM-SS>/` in the project being measured and appends
 every normalized record there as JSONL; two starts get two directories, so runs can be
 compared instead of one overwriting the other. Creating that root also writes a
 `.gitignore` holding `*` inside it, so the measured project's `git status` stays clean and
@@ -479,7 +479,7 @@ for writing — a reopened measurement cannot be changed by what happens while y
 it. `--persist` and `--open` together are refused.
 
 ```bash
-argus start --open .athena-telemetry/2026-08-03T14-22-05
+argus start --open .uroboros-telemetry/2026-08-03T14-22-05
 ```
 
 `DELETE /api/data` empties the store at runtime.

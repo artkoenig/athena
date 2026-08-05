@@ -1,6 +1,6 @@
 {
   "extraKnownMarketplaces": {
-    "athena": {
+    "uroboros": {
       "source": {
         "source": "directory",
         "path": "."
@@ -8,7 +8,7 @@
     }
   },
   "enabledPlugins": {
-    "athena@athena": true
+    "uroboros@uroboros": true
   },
   "worktree": {
     "baseRef": "fresh"

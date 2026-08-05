@@ -62,7 +62,7 @@ run_hook() {
 # model, deterministic. FAKE_CLAUDE_CALLED_MARKER records that it ran at
 # all; FAKE_CLAUDE_UPDATE_EXIT and FAKE_CLAUDE_UPDATE_DELAY control `plugin
 # update`; FAKE_CLAUDE_LIST_VERSION controls what `plugin list` reports for
-# athena@athena, empty meaning "no Version: line".
+# uroboros@uroboros, empty meaning "no Version: line".
 fake_claude_bin() {
   local bin_dir="$1"
   mkdir -p "$bin_dir"
@@ -75,7 +75,7 @@ if [ "${1:-}" = "plugin" ] && [ "${2:-}" = "update" ]; then
 elif [ "${1:-}" = "plugin" ] && [ "${2:-}" = "list" ]; then
   echo "Installed plugins:"
   echo
-  echo "  > athena@athena"
+  echo "  > uroboros@uroboros"
   [ -n "${FAKE_CLAUDE_LIST_VERSION:-}" ] && echo "    Version: ${FAKE_CLAUDE_LIST_VERSION}"
   echo "    Scope: user"
   echo "    Status: (mock) enabled"
@@ -101,7 +101,7 @@ hook_status() {
     const fs = require("fs");
     const out = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
     const ctx = out.hookSpecificOutput.additionalContext;
-    const line = ctx.split("\n").filter(l => l.startsWith("Athena self-check:")).pop();
+    const line = ctx.split("\n").filter(l => l.startsWith("Uroboros self-check:")).pop();
     process.stdout.write(line || "");
   ' "$1"
 }
@@ -117,11 +117,11 @@ node -e '
   const problems = [];
   for (const k of Object.keys(m)) if (!allowed.has(k)) problems.push("unknown field: " + k);
   for (const k of ["name","description","author","repository","license"]) if (!m[k]) problems.push("missing field: " + k);
-  if (m.name !== "athena") problems.push("name is not athena: " + m.name);
+  if (m.name !== "uroboros") problems.push("name is not uroboros: " + m.name);
   if ("version" in m) problems.push("declares a version");
   if (problems.length) { console.error(problems.join("; ")); process.exit(1); }
 ' "$root/.claude-plugin/plugin.json"
-check $? "plugin.json has the documented fields, names athena, pins no version"
+check $? "plugin.json has the documented fields, names uroboros, pins no version"
 
 # every skill directory in the tree is declared. `skills` normally adds to
 # the default `skills/` scan, but this marketplace entry's source is the
@@ -161,20 +161,20 @@ node -e '
 check $? "plugin.json declares exactly the agent files the tree holds"
 
 # the marketplace manifest offers exactly this repository as the
-# athena plugin, and pins no version either.
+# uroboros plugin, and pins no version either.
 node -e '
   const m = require(process.argv[1]);
   const problems = [];
-  if (m.name !== "athena") problems.push("marketplace name is not athena: " + m.name);
+  if (m.name !== "uroboros") problems.push("marketplace name is not uroboros: " + m.name);
   if (!m.owner || !m.owner.name) problems.push("no owner");
   if (!Array.isArray(m.plugins) || m.plugins.length !== 1) problems.push("expected exactly one plugin entry");
   const p = (m.plugins || [])[0] || {};
-  if (p.name !== "athena") problems.push("plugin entry is not athena: " + p.name);
+  if (p.name !== "uroboros") problems.push("plugin entry is not uroboros: " + p.name);
   if (p.source !== "./") problems.push("plugin source is not the repository root: " + p.source);
   if ("version" in p) problems.push("plugin entry declares a version");
   if (problems.length) { console.error(problems.join("; ")); process.exit(1); }
 ' "$root/.claude-plugin/marketplace.json"
-check $? "marketplace.json offers this repository as the athena plugin, no version"
+check $? "marketplace.json offers this repository as the uroboros plugin, no version"
 
 # the validator accepts the repository at both of its targets. They
 # check different things: the marketplace target reads marketplace.json and
@@ -225,10 +225,10 @@ details="$tmp/details.txt"
 (
   export HOME="$install_home" CLAUDE_CONFIG_DIR="$install_cfg"
   claude plugin marketplace add "$root" >/dev/null 2>&1 \
-    && claude plugin install athena@athena >/dev/null 2>&1 \
-    && claude plugin details athena@athena >"$details" 2>&1
+    && claude plugin install uroboros@uroboros >/dev/null 2>&1 \
+    && claude plugin details uroboros@uroboros >"$details" 2>&1
 )
-check $? "the marketplace adds and athena@athena installs from it"
+check $? "the marketplace adds and uroboros@uroboros installs from it"
 
 # Agents are not compared here: `claude plugin details` counts the default
 # agents/ scan, and this plugin replaces that scan with an explicit file list
@@ -276,14 +276,14 @@ check $? "bin/argus parses as POSIX sh"
 check $? "bin/argus locates itself from \$0, not from CLAUDE_PLUGIN_ROOT"
 
 # criterion 2: the command runs out of the installed plugin cache, from a
-# working directory that is not an athena checkout. That is the whole point —
+# working directory that is not an uroboros checkout. That is the whole point —
 # the files already shipped, the reachability did not.
 installed_argus="$(find "$install_home" "$install_cfg" -type f -path '*/bin/argus' 2>/dev/null | head -1)"
-outside="$tmp/not-an-athena-checkout"
+outside="$tmp/not-an-uroboros-checkout"
 mkdir -p "$outside"
 if [ -n "$installed_argus" ]; then
   ( cd "$outside" && "$installed_argus" --help ) >"$tmp/argus-help.txt" 2>&1
-  check $? "argus --help runs from the installed plugin cache outside an athena checkout, exit 0"
+  check $? "argus --help runs from the installed plugin cache outside an uroboros checkout, exit 0"
   grep -qi 'argus' "$tmp/argus-help.txt"
   check $? "the help names the command it belongs to"
 else
@@ -462,12 +462,12 @@ real_agents=$(find "$root/agents" -mindepth 1 -maxdepth 1 -name '*.md' 2>/dev/nu
 # the happy status names the real counts, the delivered rulebook and
 # the set guard, and reports no failure.
 case "$status" in
-  "Athena self-check: ${real_skills} skills and ${real_agents} agents reachable; rulebook delivered; push guard set; no problems.")
+  "Uroboros self-check: ${real_skills} skills and ${real_agents} agents reachable; rulebook delivered; push guard set; no problems.")
     ok "the status names the real counts, the rulebook and the guard, with no problems" ;;
   *) no "unexpected happy status: $status" ;;
 esac
 
-# athena ships the rulebook before its agents and skills, so a tree
+# uroboros ships the rulebook before its agents and skills, so a tree
 # with neither is the deliberate state, not a defect. The counts still have
 # to say zero — the rulebook sends the session here to find out what a role
 # has behind it.
@@ -478,7 +478,7 @@ empty_project="$tmp/empty-project"
 project_repo "$empty_project"
 status="$(run_hook "$empty_plugin" "$empty_project" >"$tmp/empty.json" && hook_status "$tmp/empty.json")"
 case "$status" in
-  "Athena self-check: 0 skills and 0 agents reachable;"*"no problems.") ok "no skills and no agents is reported as zero, not as a failure" ;;
+  "Uroboros self-check: 0 skills and 0 agents reachable;"*"no problems.") ok "no skills and no agents is reported as zero, not as a failure" ;;
   *) no "an empty shelf was not reported cleanly: $status" ;;
 esac
 
@@ -521,7 +521,7 @@ project_repo "$own_project"
 status="$(run_hook "$own_dir" "$own_project" >"$tmp/own-dir.json" && hook_status "$tmp/own-dir.json")"
 case "$status" in
   *"not reachable"*) no "an agent's own directory was mistaken for a lost agent: $status" ;;
-  "Athena self-check: $((before_skills + 1)) skills and $((real_agents + 1)) agents reachable; rulebook delivered; push guard set; no problems.")
+  "Uroboros self-check: $((before_skills + 1)) skills and $((real_agents + 1)) agents reachable; rulebook delivered; push guard set; no problems.")
     ok "an agent's own directory carries its skill into the count and is no defect" ;;
   *) no "unexpected status for an agent with its own directory: $status" ;;
 esac

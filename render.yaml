@@ -28,20 +28,20 @@ services:
 
     disk:
       name: telemetry
-      mountPath: /data # the Dockerfile already exports ATHENA_OBS_PERSIST=/data
+      mountPath: /data # the Dockerfile already exports UROBOROS_OBS_PERSIST=/data
       sizeGB: 1
 
     envVars:
       # Render assigns the port and routes to it; the Dockerfile's own default
       # would otherwise take precedence over what Render injects.
-      - key: ATHENA_OBS_PORT
+      - key: UROBOROS_OBS_PORT
         value: 10000
-      - key: ATHENA_OBS_HOST
+      - key: UROBOROS_OBS_HOST
         value: 0.0.0.0
       # A collector on a public URL accepts telemetry from anyone who finds it,
       # so the token is not optional here. Render generates it once; read it in
       # the dashboard under Environment, or off the first lines of the log.
-      - key: ATHENA_OBS_TOKEN
+      - key: UROBOROS_OBS_TOKEN
         generateValue: true
-      - key: ATHENA_OBS_RETENTION
+      - key: UROBOROS_OBS_RETENTION
         value: 7d

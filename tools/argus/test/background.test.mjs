@@ -72,7 +72,7 @@ async function runBackground(cwd, args) {
 
 /** The one measurement directory a start left in that project, absolute. */
 function runDirOf(cwd) {
-  const root = path.join(cwd, '.athena-telemetry');
+  const root = path.join(cwd, '.uroboros-telemetry');
   const runs = fs.existsSync(root) ? fs.readdirSync(root).filter((name) => name !== '.gitignore') : [];
   assert.equal(runs.length, 1, `expected exactly one measurement directory under ${root}, got ${runs.length}`);
   return path.join(root, runs[0]);
@@ -80,7 +80,7 @@ function runDirOf(cwd) {
 
 /** What a start left behind in that project, minus the .gitignore. */
 function measurementsIn(cwd) {
-  const root = path.join(cwd, '.athena-telemetry');
+  const root = path.join(cwd, '.uroboros-telemetry');
   return fs.existsSync(root) ? fs.readdirSync(root).filter((name) => name !== '.gitignore') : [];
 }
 
@@ -277,9 +277,9 @@ test('start --background returns to its caller and prints the endpoint, the toke
     assert.match(out, new RegExp(`http://127\\.0\\.0\\.1:${port}`), 'the endpoint');
     assert.match(out, /banner-secret/, 'the token');
 
-    const runs = fs.readdirSync(path.join(cwd, '.athena-telemetry')).filter((name) => name !== '.gitignore');
+    const runs = fs.readdirSync(path.join(cwd, '.uroboros-telemetry')).filter((name) => name !== '.gitignore');
     assert.equal(runs.length, 1);
-    const runDir = path.join(cwd, '.athena-telemetry', runs[0]);
+    const runDir = path.join(cwd, '.uroboros-telemetry', runs[0]);
     assert.ok(out.includes(runDir), `the absolute measurement directory (${runDir}) is not in the banner`);
 
     const printed = out.match(/\bpid\b[^0-9]{0,12}(\d+)/i);
@@ -327,9 +327,9 @@ test('a second start on a live collector names its directory instead of starting
 
   try {
     await runBackground(first, ['--port', String(port), '--exit-with', String(session.pid)]);
-    const runs = fs.readdirSync(path.join(first, '.athena-telemetry')).filter((name) => name !== '.gitignore');
+    const runs = fs.readdirSync(path.join(first, '.uroboros-telemetry')).filter((name) => name !== '.gitignore');
     assert.equal(runs.length, 1);
-    const runDir = path.join(first, '.athena-telemetry', runs[0]);
+    const runDir = path.join(first, '.uroboros-telemetry', runs[0]);
 
     const { out } = await runBackground(second, ['--port', String(port), '--exit-with', String(session.pid)]);
     assert.ok(
@@ -362,9 +362,9 @@ test('a collector whose event loop is blocked past one probe is still a collecto
 
   try {
     const started = await runBackground(first, ['--port', String(port), '--exit-with', String(session.pid)]);
-    const runs = fs.readdirSync(path.join(first, '.athena-telemetry')).filter((name) => name !== '.gitignore');
+    const runs = fs.readdirSync(path.join(first, '.uroboros-telemetry')).filter((name) => name !== '.gitignore');
     assert.equal(runs.length, 1);
-    const runDir = path.join(first, '.athena-telemetry', runs[0]);
+    const runDir = path.join(first, '.uroboros-telemetry', runs[0]);
 
     const printed = started.out.match(/\bpid\b[^0-9]{0,12}(\d+)/i);
     assert.ok(printed, 'the banner has to name the process id');
@@ -447,9 +447,9 @@ test('a collector that frees its loop for one request and no more is still named
 
   try {
     const started = await runBackground(first, ['--port', String(port), '--exit-with', String(session.pid)]);
-    const runs = fs.readdirSync(path.join(first, '.athena-telemetry')).filter((name) => name !== '.gitignore');
+    const runs = fs.readdirSync(path.join(first, '.uroboros-telemetry')).filter((name) => name !== '.gitignore');
     assert.equal(runs.length, 1);
-    const runDir = path.join(first, '.athena-telemetry', runs[0]);
+    const runDir = path.join(first, '.uroboros-telemetry', runs[0]);
 
     const printed = started.out.match(/\bpid\b[^0-9]{0,12}(\d+)/i);
     assert.ok(printed, 'the banner has to name the process id');
@@ -498,7 +498,7 @@ test('a collector that frees its loop for one request and no more is still named
       `every step of finding out who holds the port has to be as patient as the first, or the answer is worse than silence — it names no directory while the first collector records into ${runDir}: ${result.out.trim()}`,
     );
 
-    const telemetry = path.join(second, '.athena-telemetry');
+    const telemetry = path.join(second, '.uroboros-telemetry');
     const left = fs.existsSync(telemetry)
       ? fs.readdirSync(telemetry).filter((name) => name !== '.gitignore')
       : [];
@@ -850,7 +850,7 @@ test('every JSON body that is not an object is classified the same way, over and
       `a second start has to reach one of criterion 6's two outcomes for every one of these:\n  ${problems.join('\n  ')}`,
     );
     assert.equal(
-      fs.readdirSync(path.join(first, '.athena-telemetry')).filter((name) => name !== '.gitignore').length,
+      fs.readdirSync(path.join(first, '.uroboros-telemetry')).filter((name) => name !== '.gitignore').length,
       1,
       'and eight probes of a held port leave the collector on it with the one measurement it started with',
     );
@@ -916,7 +916,7 @@ test('a port held by a listener that never answers is the same error, and leaves
     // connect and exit, which is a measurement of the machine and goes red under
     // load with nothing changed. The one deadline that stays is `runBackground`'s
     // own: the command has to come back to its caller by itself, not be killed.
-    const telemetry = path.join(cwd, '.athena-telemetry');
+    const telemetry = path.join(cwd, '.uroboros-telemetry');
     const left = fs.existsSync(telemetry)
       ? fs.readdirSync(telemetry).filter((name) => name !== '.gitignore')
       : [];

@@ -1,6 +1,6 @@
 ---
 status: waiting
-branch: claude/athena-observer-background-04t663
+branch: claude/uroboros-observer-background-04t663
 pr:
 ---
 
@@ -10,7 +10,7 @@ pr:
 
 `tools/observability` is one process doing two jobs: it receives OpenTelemetry from
 Claude Code sessions, and it serves the web page that shows the numbers. It is
-started by hand, in the foreground, from an athena checkout. Nothing in the plugin
+started by hand, in the foreground, from an uroboros checkout. Nothing in the plugin
 manifest points at it, so a session in another project cannot reach it at all, even
 though the plugin cache already carries the files.
 
@@ -24,7 +24,7 @@ apart into two projects side by side under `tools/`:
   deployed or distributed.
 - **`tools/argus-ui`** — the interface. Serves the page and reaches a running
   collector over HTTP. Local only: not shipped to other projects, not deployed, and
-  destined to leave athena later as a project of its own, so it must never grow a
+  destined to leave uroboros later as a project of its own, so it must never grow a
   dependency on anything inside this repository.
 
 Acceptance criteria:
@@ -34,14 +34,14 @@ Acceptance criteria:
    own: `npm --prefix tools/argus test` and `npm --prefix tools/argus-ui test` both
    exit 0. Neither imports a file from the other; `argus-ui` knows the collector
    only through its HTTP API, so it can be lifted out of this repository unchanged.
-2. **The collector is reachable from any project.** With the athena plugin enabled,
-   `argus --help` runs from a session whose working directory is not an athena
+2. **The collector is reachable from any project.** With the uroboros plugin enabled,
+   `argus --help` runs from a session whose working directory is not an uroboros
    checkout, exit 0, and a user-invocable `argus` skill carries the procedure —
    including that Claude Code reads its telemetry configuration at process start, so
    a session started without the environment block cannot be measured after the
    fact.
 3. **The interface is not distributed.** `argus-ui` has no entry on the `PATH`, no
-   skill and no mention in the plugin manifest; it is started from an athena
+   skill and no mention in the plugin manifest; it is started from an uroboros
    checkout. Nothing outside `tools/argus-ui` references it except the root README.
 4. **Started in the background on demand.** `argus start --background` returns to
    its caller with exit 0 while the collector keeps listening, and prints the
@@ -61,9 +61,9 @@ Acceptance criteria:
    and shows a running collector's data including the live stream. It supplies the
    collector's token itself, so on loopback the browser never handles one.
 9. **Persistence is on by default, one directory per measurement.** A `start`
-   without a persist flag creates `<cwd>/.athena-telemetry/<YYYY-MM-DDTHH-MM-SS>/`.
+   without a persist flag creates `<cwd>/.uroboros-telemetry/<YYYY-MM-DDTHH-MM-SS>/`.
    Two starts in the same second get two distinct directories.
-10. **The measured project stays clean.** Creating the `.athena-telemetry` root also
+10. **The measured project stays clean.** Creating the `.uroboros-telemetry` root also
     writes a `.gitignore` inside it that hides it. No file outside that directory is
     created or modified in the measured project.
 11. **Reopening is its own option.** `argus start --open <dir>` loads an existing
@@ -95,7 +95,7 @@ Taken at `99ce318`, the tip of the branch at the start of this run, which contai
 
 Everything under `tools/observability/` unless noted.
 
-- `bin/athena-observe.mjs` (260) — the only entry; commands `start` (default,
+- `bin/uroboros-observe.mjs` (260) — the only entry; commands `start` (default,
   blocks), `env`, `check`. `EADDRINUSE` branch at `:167-177`; `shutdown()` at `:244`
   with a 2 s unref'd timer because open SSE streams hold the process.
 - `src/server.mjs` (453) — **the single coupling point**. `createServer()` mounts
@@ -112,7 +112,7 @@ Everything under `tools/observability/` unless noted.
   `names.jsonl`, rotates at 64 MB, replays on next start. `load()` does
   `mkdirSync(recursive)`.
 - `src/config.mjs` (102) — flags/env → config; default persist dir
-  `.athena-telemetry` (`:76`).
+  `.uroboros-telemetry` (`:76`).
 - `src/claude.mjs` (288) — metric/event names, token typing, `otelEnvFor()` (pins
   the three export intervals to 1000 ms, `:280-286`), `sessionNameHook()`
   (`:247-252`, embeds an absolute path via `fileURLToPath`). Imported by **both**
@@ -132,7 +132,7 @@ Everything under `tools/observability/` unless noted.
 
 Outside the tool: `test.sh:38`, `test-repo.sh:21` (licence assertion on the
 package), `render.yaml` (`rootDir: tools/observability`), root `README.md:91,94`,
-`.gitignore` (`.athena-telemetry/`), `.worktreeinclude`,
+`.gitignore` (`.uroboros-telemetry/`), `.worktreeinclude`,
 `docs/2026-08-02-workflow-token-measurement.md`.
 
 Plugin surface: `.claude-plugin/plugin.json` declares `skills: ["./skills/",
@@ -157,7 +157,7 @@ Five commits, each green under `test.sh`.
    a working way to name a session and is now the only one. Delete
    `test/hook.test.mjs`; drop the naming cases from five other test files.
 2. **Rename to `tools/argus`** with `git mv`, entry to `bin/argus.mjs`, package to
-   `@athena/argus`. Every path reference follows: `test.sh`, `test-repo.sh`,
+   `@uroboros/argus`. Every path reference follows: `test.sh`, `test-repo.sh`,
    `render.yaml`, the root README, the project's own `CLAUDE.md` and README. A pure
    move — the case count must not change.
 3. **Split the interface into `tools/argus-ui`.** In `argus`: `server.mjs` loses
@@ -167,8 +167,8 @@ Five commits, each green under `test.sh`.
    a JSON 404 naming `argus-ui`; `/api/config` gains `persist`, the absolute run
    directory. `public/` moves out with `git mv`. New project `argus-ui`, zero
    runtime dependencies like its sibling: `bin/argus-ui.mjs`; `src/config.mjs`
-   (`--collector`, default `ATHENA_OBS_URL` then `http://127.0.0.1:4318`;
-   `--collector-token`, default `ATHENA_OBS_TOKEN`; `--port` 4319; `--host`
+   (`--collector`, default `UROBOROS_OBS_URL` then `http://127.0.0.1:4318`;
+   `--collector-token`, default `UROBOROS_OBS_TOKEN`; `--port` 4319; `--host`
    127.0.0.1; `--token`, required for a non-loopback bind); `src/server.mjs`, which
    serves `public/` with the moved `serveStatic`/`MIME` and reverse-proxies
    `/api/*` and `/v1/*` over `node:http`, adding the collector's `Authorization`
@@ -177,7 +177,7 @@ Five commits, each green under `test.sh`.
    and `test/server.test.mjs` against a fake collector, both on port 0; `README.md`;
    and a `CLAUDE.md` whose load-bearing rule is that this project never imports from
    `tools/argus` and never reads its files — it knows the collector only through the
-   HTTP API, so it can be moved out of athena unchanged. `test.sh` gains the fifth
+   HTTP API, so it can be moved out of uroboros unchanged. `test.sh` gains the fifth
    suite.
 
    Why a proxy and not CORS on the collector: `EventSource` cannot set an
@@ -186,14 +186,14 @@ Five commits, each green under `test.sh`.
    exactly what the current cookie redirect exists to avoid.
 4. **Persist by default, open explicitly.** `runDirName(date)` in `config.mjs` →
    `2026-08-03T14-22-05` from local time, suffixed `-2`, `-3` when the directory
-   exists. Default on, under `<cwd>/.athena-telemetry/<name>/`. `--persist <dir>`
+   exists. Default on, under `<cwd>/.uroboros-telemetry/<name>/`. `--persist <dir>`
    means exactly that directory, no nesting, write-only — which keeps `Dockerfile`'s
-   `ATHENA_OBS_PERSIST=/data` behaving as today. `--no-persist` turns it off.
+   `UROBOROS_OBS_PERSIST=/data` behaving as today. `--no-persist` turns it off.
    `--open <dir>` is the read direction: it replays that directory, turns retention
    off so nothing is evicted by age, and opens nothing for writing. Without the
    retention escape criterion 11 fails silently. `--persist` and `--open` together
    are refused with a message saying which does what. `load()` writes
-   `.athena-telemetry/.gitignore` containing `*` when it creates the root — a
+   `.uroboros-telemetry/.gitignore` containing `*` when it creates the root — a
    self-ignoring directory, no `git` subprocess, nothing of the measured project
    touched.
 5. **Reachable and backgroundable.** `bin/argus` at the repository root: POSIX `sh`,
@@ -251,18 +251,18 @@ Five commits, each green under `test.sh`.
   it cannot carry the trap that telemetry configuration is read at process start.
   Source: the human, on that argument.
 - The interface is local only. No `PATH` entry, no skill, no manifest mention, and
-  never deployed; it leaves athena later as its own project, which is why its
+  never deployed; it leaves uroboros later as its own project, which is why its
   `CLAUDE.md` forbids it from importing anything in this repository. Source: the
   human.
 - Reopening a measurement is `--open <dir>`, separate from `--persist <dir>`, which
   only ever writes. Source: the human.
 - The collector is started on demand, never automatically. Source: the human — "der
   observer soll auf zuruf gestartet werden".
-- The user exports the `OTEL_*` block themselves at session start; athena writes no
+- The user exports the `OTEL_*` block themselves at session start; uroboros writes no
   settings file anywhere. Source: the human — "der nutzer setzt die otel
   konfiguration über environment variablen beim start der session".
 - The collector dies with the session. Source: the human.
-- Persistence on by default, into the measured project's `.athena-telemetry/`, one
+- Persistence on by default, into the measured project's `.uroboros-telemetry/`, one
   subdirectory per measurement named by timestamp. Source: the human.
 - The interface always attaches to a running collector; an old measurement is viewed
   by starting the collector on its directory. The rejected alternative — the
@@ -276,7 +276,7 @@ Five commits, each green under `test.sh`.
   against it. Accepted knowing an public address alone then shows nothing, and that
   the token no longer has to reach a browser over the network. Source: the human.
 - The commands are named after the projects: `argus` and `argus-ui`, replacing
-  `athena-observe`. Source: default, unanswered.
+  `uroboros-observe`. Source: default, unanswered.
 - Delivery is two `bin/` shims plus a user-invocable `argus` skill. Source: default,
   unanswered.
 - The move is done with `git mv` so each file's history survives. Source: default,
@@ -321,7 +321,7 @@ Facts established by measurement, which the criteria rest on:
   (it would leave half the coupling in place).
 - The human amended the intent before step 3 was implemented: reopening gets its own
   option instead of overloading `--persist`; the interface is never distributed and
-  will leave athena later; other projects use the collector through the `PATH`
+  will leave uroboros later; other projects use the collector through the `PATH`
   command and the skill. Criteria 1, 2, 3, 11, 13 carry the amendment; steps 1 and 2
   are untouched by it. The old numbering shifted by one from criterion 3 onward.
 - Criterion 14 was corrected on the implementer's objection before it was
@@ -349,12 +349,12 @@ Facts established by measurement, which the criteria rest on:
   `docs/2026-08-02-workflow-token-measurement.md` — the live reproduce command, not
   the account of the measurement.
 - Recorded as a default in step 2: the command name follows its file, so every
-  `athena-observe` string in help text, log prefixes and `check` output became
+  `uroboros-observe` string in help text, log prefixes and `check` output became
   `argus` in the same commit. That also renamed the probe's synthetic service and
   span, and the Render **service name**, which is the one outward-facing item in
   these two commits — re-applying the blueprint would move the deployment's URL.
   Raised with the human.
-- `ATHENA_OBS_*`, the `athena_obs_token` cookie and `.athena-telemetry` keep their
+- `UROBOROS_OBS_*`, the `uroboros_obs_token` cookie and `.uroboros-telemetry` keep their
   names; nothing in these two steps falsifies them. The tool README keeps two
   mentions of a SessionStart hook, in the paragraph explaining why a hook *cannot*
   set the resource attribute — still true, and it stops the hook being reinvented.
@@ -393,7 +393,7 @@ Facts established by measurement, which the criteria rest on:
   `test-repo.sh` 6 cases exit 0, and `bash test.sh` all five suites (repository 6,
   plugin 39, worktrees 9, argus 112, argus-ui 14), exit 0.
 - Surprise, and the plan was wrong: it claimed `--persist` would keep the container's
-  `ATHENA_OBS_PERSIST=/data` behaving as before. It does not. Today that replays on
+  `UROBOROS_OBS_PERSIST=/data` behaving as before. It does not. Today that replays on
   restart; criterion 11 makes `--persist` write-only, so a restarted container now
   begins a fresh measurement in the same directory and reads the old one back with
   `--open`. The Docker paragraph of the collector's README was corrected rather than
@@ -463,7 +463,7 @@ Facts established by measurement, which the criteria rest on:
     criterion 14 enumerates the READMEs and the `CLAUDE.md`s — but the rulebook's
     exception covers exactly a documentation statement this diff falsified.
   - **The interface's page title, fix now, bounded.** `public/index.html` and
-    `public/styles.css` still name "athena · observe". Pre-existing text, but this
+    `public/styles.css` still name "uroboros · observe". Pre-existing text, but this
     diff is what renamed the product, so the page now titles itself after something
     that no longer exists. Same exception; bounded to the title, the header and the
     file comment.
@@ -488,10 +488,10 @@ Facts established by measurement, which the criteria rest on:
   argus 113, argus-ui 14 — exit 0.
 - Regression during that commit, caused and corrected inside it: renaming the page
   to `argus · ui` turned a green case red. `tools/argus-ui/test/server.test.mjs`
-  asserts the served HTML matches `/athena/i` as its proof that the page came back
-  at all. Tests are not the implementer's to edit, so the page became `athena ·
+  asserts the served HTML matches `/uroboros/i` as its proof that the page came back
+  at all. Tests are not the implementer's to edit, so the page became `uroboros ·
   argus` instead; only "observe" is gone. Worth naming because that assertion pins
-  the word "athena" into a project whose own `CLAUDE.md` says it must be liftable
+  the word "uroboros" into a project whose own `CLAUDE.md` says it must be liftable
   out of this repository unchanged — a future rename has to go through the
   test-author. Out of scope here.
 - Two more of the same falsehood were left standing, both outside the triage:
@@ -517,7 +517,7 @@ Facts established by measurement, which the criteria rest on:
   anywhere. `render.yaml`'s inline plan comment and `compose.yaml`'s service key
   were examined and are **not** falsified — the first speaks only about the free
   tier, the second is a key rather than a statement — so both correctly stayed. The
-  `/athena/i` assertion does not violate criterion 1: it is neither an import nor
+  `/uroboros/i` assertion does not violate criterion 1: it is neither an import nor
   knowledge of the collector, and it lives inside the interface project, so the
   project lifts out with page and test together.
 
@@ -946,7 +946,7 @@ Facts established by measurement, which the criteria rest on:
 ### Before implementation
 
 - **Does this match what was asked?** The human asked for three things: the observer
-  becomes a background part of athena, the interface is separated and stays a tool
+  becomes a background part of uroboros, the interface is separated and stays a tool
   of its own, and the whole thing serves measuring token usage in other projects.
   Every one of the fourteen criteria serves one of those. Two things they did *not*
   ask for are deliberately absent: an automatic start (Claude Code's plugin monitors

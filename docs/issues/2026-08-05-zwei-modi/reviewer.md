@@ -267,12 +267,12 @@ wrong instruction inside grill's own procedure. That is why I rate it below F1.
 
 ---
 
-### F3 — `README.md` still says athena keeps process for precisely what Direct Mode now drops (low-medium; violates no acceptance criterion)
+### F3 — `README.md` still says uroboros keeps process for precisely what Direct Mode now drops (low-medium; violates no acceptance criterion)
 
 **Where.** `README.md:15-20` against `CLAUDE.md:46-49`.
 
-**Reproduction.** A reader (or an agent) evaluating what athena guarantees
-reads `README.md:16-20`: athena "gives the agent the run and asks it to decide
+**Reproduction.** A reader (or an agent) evaluating what uroboros guarantees
+reads `README.md:16-20`: uroboros "gives the agent the run and asks it to decide
 how much planning a change needs, how to slice it, which tools to reach for —
 and keeps process only for the handful of things a model can't reliably judge
 about its own work, **like grading its own tests or reviewing a diff it just

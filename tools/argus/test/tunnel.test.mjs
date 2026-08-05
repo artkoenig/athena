@@ -6,7 +6,7 @@ import path from 'node:path';
 
 import { startTunnel } from '../src/tunnel.mjs';
 
-const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'athena-tunnel-'));
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'uroboros-tunnel-'));
 
 /**
  * Stand in for cloudflared so the tests never touch the network. The scripts

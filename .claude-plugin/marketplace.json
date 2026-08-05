@@ -1,6 +1,6 @@
 {
-  "name": "athena",
-  "description": "The home marketplace of the athena plugin: the athena rulebook, released from the repository that grows it.",
+  "name": "uroboros",
+  "description": "The home marketplace of the uroboros plugin: the uroboros rulebook, released from the repository that grows it.",
   "owner": {
     "name": "Artjom König",
     "email": "artkoenig@gmail.com",
@@ -8,9 +8,9 @@
   },
   "plugins": [
     {
-      "name": "athena",
+      "name": "uroboros",
       "source": "./",
-      "description": "An AI agent workflow built on judgment, not rules: the athena rulebook, delivered to every session."
+      "description": "An AI agent workflow built on judgment, not rules: the uroboros rulebook, delivered to every session."
     }
   ]
 }

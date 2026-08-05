@@ -13,7 +13,7 @@ This round continues the previous context.
 ## Acceptance Criteria
 1. **Die Skripte und Modelle zur JSON-Generierung (z.B. in `tools/handoff/`) werden vollständig entfernt.**
    - Met. The entire `tools/handoff/` directory has been deleted.
-2. **Die Prompts aller Agenten in `agents/` (bzw. `.agents/plugins/athena/agents/`) werden so angepasst, dass sie direkt Markdown-Handoff-Dateien (z.B. `dispatcher.md`, `dispatcher-v1.md`) in das aktuelle Issue-Verzeichnis schreiben.**
+2. **Die Prompts aller Agenten in `agents/` (bzw. `.agents/plugins/uroboros/agents/`) werden so angepasst, dass sie direkt Markdown-Handoff-Dateien (z.B. `dispatcher.md`, `dispatcher-v1.md`) in das aktuelle Issue-Verzeichnis schreiben.**
    - Met. All 4 agent prompts in `agents/` correctly instruct to directly read and write to Markdown files in the issue directory, completely removing the intermediate JSON workflow and any references to `issue.md`.
 3. **Eventuell bestehende Unittests, die noch das alte `generate.py`-Skript testen, werden gelöscht oder durch Tests ersetzt, die den neuen Workflow unterstützen.**
    - Met. All old tests in `tools/handoff/test` were removed.

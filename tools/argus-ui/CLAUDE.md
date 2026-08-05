@@ -8,7 +8,7 @@ here is the user-facing page; this file is for changing the code.
 
 - **This project never imports from `tools/argus` and never reads its files.**
   It knows the collector only through the HTTP API, so it can be moved out of
-  athena unchanged. That rule is what `test/independence.test.mjs` guards, and
+  uroboros unchanged. That rule is what `test/independence.test.mjs` guards, and
   it is the reason this is a project of its own rather than a second directory
   sharing a library.
 - **Zero runtime dependencies**, like its sibling: it has to start from a

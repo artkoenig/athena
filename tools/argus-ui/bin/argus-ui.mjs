@@ -28,8 +28,8 @@ Options
       --help                    Show this message
 
 Environment
-  ATHENA_OBS_URL, ATHENA_OBS_TOKEN            the collector and its token
-  ATHENA_OBS_UI_PORT, ATHENA_OBS_UI_HOST, ATHENA_OBS_UI_TOKEN   this process
+  UROBOROS_OBS_URL, UROBOROS_OBS_TOKEN            the collector and its token
+  UROBOROS_OBS_UI_PORT, UROBOROS_OBS_UI_HOST, UROBOROS_OBS_UI_TOKEN   this process
 `.trim();
 
 function main(argv) {

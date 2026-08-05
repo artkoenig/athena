@@ -136,7 +136,7 @@ export async function probeCollector(endpoint, { token = null, timeoutMs = DEFAU
   }
 
   // 3. Push a real OTLP span the same way the exporter would.
-  const sessionId = `athena-check-${crypto.randomBytes(4).toString('hex')}`;
+  const sessionId = `uroboros-check-${crypto.randomBytes(4).toString('hex')}`;
   const traceId = crypto.randomBytes(16).toString('hex');
   const headers = { 'content-type': 'application/x-protobuf' };
   if (token) headers.authorization = `Bearer ${token}`;

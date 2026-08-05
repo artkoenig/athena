@@ -21,8 +21,8 @@ import {
 import { parseArgs } from '../src/config.mjs';
 
 const { flags } = parseArgs(process.argv.slice(2));
-const ENDPOINT = (flags.endpoint ?? process.env.ATHENA_OBS_ENDPOINT ?? 'http://localhost:4318').replace(/\/$/, '');
-const TOKEN = flags.token ?? process.env.ATHENA_OBS_TOKEN ?? null;
+const ENDPOINT = (flags.endpoint ?? process.env.UROBOROS_OBS_ENDPOINT ?? 'http://localhost:4318').replace(/\/$/, '');
+const TOKEN = flags.token ?? process.env.UROBOROS_OBS_TOKEN ?? null;
 const SESSIONS = Number(flags.sessions ?? 2);
 const LIVE = Boolean(flags.live);
 
@@ -66,7 +66,7 @@ async function post(path, schema, payload) {
 function resource(sessionId) {
   return {
     attributes: attrs({
-      'service.name': 'athena-demo-agent',
+      'service.name': 'uroboros-demo-agent',
       'service.version': '0.1.0',
       'deployment.environment': 'demo',
       'session.id': sessionId,

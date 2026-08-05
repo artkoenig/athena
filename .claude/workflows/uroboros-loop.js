@@ -1,5 +1,5 @@
 export const meta = {
-  name: 'athena-loop',
+  name: 'uroboros-loop',
   description: 'Runs the issue loop as a script: research, tests, implementation, review, correction.',
   whenToUse: 'When an issue file with confirmed acceptance criteria exists and the whole chain should run without the main session steering it. Pass the issue directory as args.issueDir.',
   phases: [
@@ -70,7 +70,7 @@ function research(round) {
         `Set needsTests true only if a finding needs a new failing test first.\n`
   return agent(
     `Issue directory: ${dir}\n${correction}Write your handoff to ${dir}/${file}.\n${noDispatch}`,
-    { agentType: 'athena:dispatcher', phase: 'Research', label: `research:${round}`, schema: PLAN },
+    { agentType: 'uroboros:dispatcher', phase: 'Research', label: `research:${round}`, schema: PLAN },
   )
 }
 
@@ -81,7 +81,7 @@ log(`Plan written to ${plan.handoffFile}; tests needed: ${plan.needsTests}`)
 if (plan.needsTests) {
   await agent(
     `Issue directory: ${dir}\nWrite your handoff to ${dir}/test-author.md.\n${noDispatch}`,
-    { agentType: 'athena:test-author', phase: 'Tests', label: 'tests' },
+    { agentType: 'uroboros:test-author', phase: 'Tests', label: 'tests' },
   )
 }
 
@@ -94,7 +94,7 @@ for (let round = 0; round <= MAX_CORRECTIONS; round++) {
       await agent(
         `Issue directory: ${dir}\nThe reviewer's reproduction spec is your criterion. ` +
           `Write your handoff to ${dir}/test-author-${round}.md.\n${noDispatch}`,
-        { agentType: 'athena:test-author', phase: 'Tests', label: `tests:${round}` },
+        { agentType: 'uroboros:test-author', phase: 'Tests', label: `tests:${round}` },
       )
     }
   }
@@ -103,14 +103,14 @@ for (let round = 0; round <= MAX_CORRECTIONS; round++) {
   await agent(
     `Issue directory: ${dir}\nYour brief is ${plan.handoffFile}.\n` +
       `Write your handoff to ${dir}/${implFile}.\n${noDispatch}`,
-    { agentType: 'athena:implementer', phase: 'Implement', label: `implement:${round}` },
+    { agentType: 'uroboros:implementer', phase: 'Implement', label: `implement:${round}` },
   )
 
   const revFile = round === 0 ? 'reviewer.md' : `reviewer-${round}.md`
   verdict = await agent(
     `Issue directory: ${dir}\nReview round ${round}. Check the whole diff against main.\n` +
       `Write your findings to ${dir}/${revFile}.\n${noDispatch}`,
-    { agentType: 'athena:reviewer', phase: 'Review', label: `review:${round}`, schema: VERDICT },
+    { agentType: 'uroboros:reviewer', phase: 'Review', label: `review:${round}`, schema: VERDICT },
   )
 
   log(`Round ${round}: ${verdict.findings} findings — ${verdict.summary}`)

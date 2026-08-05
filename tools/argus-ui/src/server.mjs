@@ -34,7 +34,7 @@ const MIME = {
  * can set no header at all. HttpOnly keeps it away from scripts, SameSite=Strict
  * stops another site from making an authenticated request with it.
  */
-const TOKEN_COOKIE = 'athena_obs_token';
+const TOKEN_COOKIE = 'uroboros_obs_token';
 const TOKEN_COOKIE_MAX_AGE = 30 * 24 * 60 * 60;
 
 /** Headers that describe one hop and must not be copied onto the next. */
@@ -139,7 +139,7 @@ export function createServer({
             error: 'collector rejected this interface',
             hint:
               `the collector at ${upstream.origin} rejected the token this UI was started with — ` +
-              'start argus-ui with --collector-token <secret>, or set ATHENA_OBS_TOKEN',
+              'start argus-ui with --collector-token <secret>, or set UROBOROS_OBS_TOKEN',
           });
           return;
         }

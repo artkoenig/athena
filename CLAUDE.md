@@ -1,4 +1,4 @@
-# Athena
+# Uroboros
 
 You run the work. Your judgment picks the process; this page lists the rules
 that always hold. When the two conflict, this page wins — say so in the retro.
@@ -31,7 +31,7 @@ The requirements are yours, the work is the subagents'.
 1. **Collect Requirements:** Conduct the initial interview ("grill") to clarify the user's intent.
 2. **Create the Issue File:** Establish the acceptance criteria and write them to a new issue file under `docs/issues/` (e.g. `docs/issues/<timestamp>-<slug>/issue.md`).
 3. **Confirm the acceptance criteria** with the human.
-4. **Run the loop:** Once the issue is created and confirmed, run the `athena-loop` workflow (`.claude/workflows/athena-loop.js`) and hand it the issue directory as `args.issueDir`. The script calls dispatcher, test-author, implementer and reviewer in turn and stops after two correction rounds. The orchestration lives there and not in an agent because a subagent cannot start another one.
+4. **Run the loop:** Once the issue is created and confirmed, run the `uroboros-loop` workflow (`.claude/workflows/uroboros-loop.js`) and hand it the issue directory as `args.issueDir`. The script calls dispatcher, test-author, implementer and reviewer in turn and stops after two correction rounds. The orchestration lives there and not in an agent because a subagent cannot start another one.
 
 And what you do not do here:
 

@@ -253,12 +253,12 @@ export function otelEnvFor(endpoint, { traces = true, token = null, fastFlush = 
   if (token) env.OTEL_EXPORTER_OTLP_HEADERS = `Authorization=Bearer ${token}`;
   // The same address and secret once more, under the stable names this tool's
   // own commands read. The OTEL_* variables belong to the exporter and say where
-  // an agent *sends* telemetry; ATHENA_OBS_* say where the collector is, which is
+  // an agent *sends* telemetry; UROBOROS_OBS_* say where the collector is, which is
   // the question anything talking to it has to answer. resolveConfig already
-  // reads ATHENA_OBS_TOKEN, so exporting this block also configures a collector
+  // reads UROBOROS_OBS_TOKEN, so exporting this block also configures a collector
   // started in the same shell.
-  env.ATHENA_OBS_URL = endpoint;
-  if (token) env.ATHENA_OBS_TOKEN = token;
+  env.UROBOROS_OBS_URL = endpoint;
+  if (token) env.UROBOROS_OBS_TOKEN = token;
   if (fastFlush) {
     // Defaults are 60s for metrics and 5s for logs/traces, which loses data on
     // short-lived SDK calls. Flushing every second keeps the UI close to live.

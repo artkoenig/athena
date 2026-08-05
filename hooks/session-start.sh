@@ -38,8 +38,8 @@ project_dir="${CLAUDE_PROJECT_DIR:-.}"
 # the rulebook this session gets is then the same one it would have gotten
 # without this block.
 if [ "${CLAUDE_CODE_REMOTE:-}" = "true" ] && command -v claude >/dev/null 2>&1; then
-  timeout 15 claude plugin update athena@athena >/dev/null 2>&1
-  new_version="$(claude plugin list 2>/dev/null | grep -A1 'athena@athena' | sed -n 's/^ *Version: *//p')"
+  timeout 15 claude plugin update uroboros@uroboros >/dev/null 2>&1
+  new_version="$(claude plugin list 2>/dev/null | grep -A1 'uroboros@uroboros' | sed -n 's/^ *Version: *//p')"
   if [ -n "$new_version" ]; then
     candidate="$(dirname "$plugin_root")/${new_version}"
     [ -d "$candidate" ] && plugin_root="$candidate"
@@ -68,7 +68,7 @@ problems=""
 #    directory without its SKILL.md and an agent that is not a flat .md file
 #    are invisible to plugin discovery, so neither may be counted, and each
 #    is a defect — something is in the tree that the session cannot reach.
-#    A count of zero is not: athena ships the rulebook first and its agents
+#    A count of zero is not: uroboros ships the rulebook first and its agents
 #    and skills after, and the rulebook tells the session to read these
 #    counts rather than assume a role has a page behind it.
 #    Two places hold skills: the plugin's own skills/, and the directory of
@@ -145,7 +145,7 @@ else
   fi
 fi
 
-status="Athena self-check: ${skills} skills and ${agents} agents reachable; ${rulebook_state}; ${guard_state};"
+status="Uroboros self-check: ${skills} skills and ${agents} agents reachable; ${rulebook_state}; ${guard_state};"
 if [ -z "$problems" ]; then
   status="${status} no problems."
 else

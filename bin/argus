@@ -3,7 +3,7 @@
 #
 # A plugin's bin/ is appended to the PATH of the shell a session runs commands
 # in, which is what makes the collector usable in a project that is not an
-# athena checkout. Those commands are handed no variable naming the plugin's
+# uroboros checkout. Those commands are handed no variable naming the plugin's
 # own root — that exists for hooks and MCP servers only — so this locates its
 # tree from $0 and nothing else.
 set -eu

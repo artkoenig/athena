@@ -288,7 +288,7 @@ test('the collector keeps no browser session: it issues no cookie and accepts no
     assert.equal(visit.status, 404, 'an authorized request for a page is still a request for nothing');
 
     assert.equal(
-      (await fetch(`${base}/api/stats`, { headers: { cookie: 'athena_obs_token=secret' } })).status,
+      (await fetch(`${base}/api/stats`, { headers: { cookie: 'uroboros_obs_token=secret' } })).status,
       401,
       'a cookie is not a credential here',
     );

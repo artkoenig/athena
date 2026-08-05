@@ -1,4 +1,4 @@
-# Measuring one athena run end to end
+# Measuring one uroboros run end to end
 
 A full run — idea to pushed branch — was played through on a throwaway project
 and measured with `tools/observability`. A second run of the same task without
@@ -10,10 +10,10 @@ assumption, it says so.
 
 ## The setup
 
-| | with athena (A) | control (B) |
+| | with uroboros (A) | control (B) |
 | --- | --- | --- |
 | project | `tally`, a 30-line ESM word-frequency module, `node --test`, 5 cases green | identical copy |
-| plugin | `athena@athenatest`, built from this checkout at `2776466` | none |
+| plugin | `uroboros@uroborostest`, built from this checkout at `2776466` | none |
 | idea handed over | *"countWords soll mir auch nur die häufigsten Wörter geben können, also Top 5 statt aller. Sonst bleibt alles wie es ist."* | identical |
 | session | `claude -p`, opus-5, own `--session-id`, own bare `origin` | identical |
 
@@ -21,14 +21,14 @@ Both sessions exported OTLP to the same collector. The plugin was rebuilt from
 the checkout on purpose: the installed one is older (see finding 8).
 
 The control matters because the plain CLI's own context is nine tenths of the
-starting size — without it, "athena costs 32k tokens to start" would be a
+starting size — without it, "uroboros costs 32k tokens to start" would be a
 meaningless number.
 
 ## What it cost
 
 Collector aggregates (`GET /api/sessions/:id`, source `metrics`):
 
-| | A (athena) | B (control) | ratio |
+| | A (uroboros) | B (control) | ratio |
 | --- | --- | --- | --- |
 | tokens total | 2,874,332 | 322,132 | 8.9× |
 | cost | $3.30 | $0.37 | 9.0× |
@@ -45,7 +45,7 @@ touched. The control produced 23 lines of tests and one commit.
 
 It did not buy a better function. Both runs implemented the same slice of a
 sorted array. The control chose an options object, `countWords(text, {top})`;
-athena chose a positional `countWords(text, limit)` — and then its own reviewer
+uroboros chose a positional `countWords(text, limit)` — and then its own reviewer
 reported that the positional form silently misreads `['a b','c'].map(countWords)`,
 which the options object would not have. The record caught the hazard the
 decision created.
@@ -68,7 +68,7 @@ read nor write code — 13 edit the issue file, 17 maintain a task list
 (findings 4 and 6). Tool calls per stage, counted as distinct `tool_use` ids:
 main 48, test-author 12, implementer 17, reviewer 16.
 
-## What athena adds to every session, before any work
+## What uroboros adds to every session, before any work
 
 First-turn context, A minus B: **3,454 tokens**, on top of the CLI's own
 28,853. Split by character share of the injected texts:
@@ -99,7 +99,7 @@ is what it withholds."*
 Measured. The test-author's first three calls:
 
 ```
-Skill  athena:issue  args="read the intent"
+Skill  uroboros:issue  args="read the intent"
 Bash   ls -la .../docs/issues/
 Read   .../docs/issues/2026-08-02-countwords-top-n.md
 ```
@@ -212,10 +212,10 @@ stage instead of per thought — would change the number without changing what
 the record says.
 
 *Since measured:* the writing moved out of the orchestrator entirely. The
-`tracker` holds it in its own context and runs on the smallest model athena
+`tracker` holds it in its own context and runs on the smallest model uroboros
 uses, so "as they happen" stays and the price of each one drops twice over.
 
-### 7. The rulebook is in context twice in athena's own repository
+### 7. The rulebook is in context twice in uroboros's own repository
 
 Not in the test project — in this one. The SessionStart hook injects the
 plugin's `CLAUDE.md` verbatim, and Claude Code loads the checkout's `CLAUDE.md`
@@ -265,7 +265,7 @@ from the stream.
 ### 10. One tool-discovery detour
 
 `ToolSearch` ×2, one of them `select:Monitor`. That is the harness's deferred
-tools, not athena's doing. Recorded because the question asked for tool calls
+tools, not uroboros's doing. Recorded because the question asked for tool calls
 caused by missing information, and this is the only one that was not.
 
 ## What worked

@@ -60,18 +60,18 @@ const text = (value) => (value === true || value === undefined || value === '' ?
 
 export function resolveConfig(flags = {}, env = process.env) {
   const config = {
-    // The collector this interface reads. ATHENA_OBS_URL is the same variable
+    // The collector this interface reads. UROBOROS_OBS_URL is the same variable
     // the collector prints for agents, so a shell already pointed at one needs
     // no flag here.
-    collector: (text(flags.collector) ?? text(env.ATHENA_OBS_URL) ?? 'http://127.0.0.1:4318')
+    collector: (text(flags.collector) ?? text(env.UROBOROS_OBS_URL) ?? 'http://127.0.0.1:4318')
       .trim()
       .replace(/\/+$/, ''),
-    collectorToken: text(flags['collector-token']) ?? text(env.ATHENA_OBS_TOKEN),
+    collectorToken: text(flags['collector-token']) ?? text(env.UROBOROS_OBS_TOKEN),
     // Not 4318: the collector is usually on this machine already, and two
     // processes fighting for one port is a failure with no useful message.
-    port: parsePort(flags.port ?? env.ATHENA_OBS_UI_PORT, 4319),
-    host: text(flags.host) ?? text(env.ATHENA_OBS_UI_HOST) ?? '127.0.0.1',
-    token: text(flags.token) ?? text(env.ATHENA_OBS_UI_TOKEN),
+    port: parsePort(flags.port ?? env.UROBOROS_OBS_UI_PORT, 4319),
+    host: text(flags.host) ?? text(env.UROBOROS_OBS_UI_HOST) ?? '127.0.0.1',
+    token: text(flags.token) ?? text(env.UROBOROS_OBS_UI_TOKEN),
   };
 
   // Reachable from another machine, this process hands the collector's token to

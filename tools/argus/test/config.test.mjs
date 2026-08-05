@@ -24,12 +24,12 @@ test('publicUrl overrides the bind address and is normalized', () => {
 });
 
 test('resolveConfig layers defaults, environment and flags', () => {
-  const fromEnv = resolveConfig({}, { ATHENA_OBS_PUBLIC_URL: 'https://env.example', ATHENA_OBS_PORT: '9999' });
+  const fromEnv = resolveConfig({}, { UROBOROS_OBS_PUBLIC_URL: 'https://env.example', UROBOROS_OBS_PORT: '9999' });
   assert.equal(fromEnv.publicUrl, 'https://env.example');
   assert.equal(fromEnv.port, 9999);
 
   const { flags } = parseArgs(['--public-url', 'https://flag.example', '--port=4444']);
-  const fromFlags = resolveConfig(flags, { ATHENA_OBS_PUBLIC_URL: 'https://env.example' });
+  const fromFlags = resolveConfig(flags, { UROBOROS_OBS_PUBLIC_URL: 'https://env.example' });
   assert.equal(fromFlags.publicUrl, 'https://flag.example', 'flags win over the environment');
   assert.equal(fromFlags.port, 4444);
 
@@ -52,9 +52,9 @@ test('a PaaS can hand over the port and the public URL without extra config', ()
     {},
     {
       PORT: '10000',
-      ATHENA_OBS_PORT: '4318',
+      UROBOROS_OBS_PORT: '4318',
       RENDER_EXTERNAL_URL: 'https://obs.onrender.com',
-      ATHENA_OBS_PUBLIC_URL: 'https://obs.example.com',
+      UROBOROS_OBS_PUBLIC_URL: 'https://obs.example.com',
     },
   );
   assert.equal(pinned.port, 4318);
