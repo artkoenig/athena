@@ -1,0 +1,5 @@
+{"type":"message","usage":{"input_tokens":100,"output_tokens":50,"cache_read_input_tokens":10},"role":"user","content":[{"type":"text","text":"Hello Claude"}]}
+{"role":"assistant","content":[{"type":"thinking","thinking":"I should say hello."},{"type":"text","text":"Hello there!"},{"type":"tool_use","id":"tool_1","name":"get_weather","input":{"location":"Seattle"}},{"type":"tool_use","id":"tool_sub_1","name":"invoke_subagent","input":{"Subagents":[{"TypeName":"test-author"}]}}]}
+{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool_1","content":"Sunny"},{"type":"tool_result","tool_use_id":"tool_sub_1","content":"file://{{CLAUDE_SUBAGENT_PATH}}"},{"type":"text","text":"What about tomorrow?"}]}
+{"role":"assistant","content":[{"type":"text","text":"I don't know."}]}
+{"error":{"type":"api_error","message":"Some error"}}

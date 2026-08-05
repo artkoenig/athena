@@ -1,0 +1,7 @@
+{
+  "changes_made": "Fixed test pollution in test_generate.py by using @patch on get_issue_directory so it writes to tempdir. Integrated test_generate.py into test.sh by running unittest discover. Fixed missing 'rejected' status in test_generate.py mock to match updated ReviewerHandoff pydantic schema.",
+  "files_modified": [
+    "tools/handoff/test/test_generate.py",
+    "test.sh"
+  ]
+}

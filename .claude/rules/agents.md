@@ -48,10 +48,11 @@ implementation, a reviewer that sees only the diff and the intent. An omission
 here becomes a leak in every run.
 
 Give each agent the narrowest tool list that does its job; a read-only role
-gets no writing tools. Only the `tracker` reads and writes the whole record;
+gets no writing tools. Only its handoff is written to the issue file;
 give it nothing about the project beyond `docs/issues/`. An agent that needs
-its own narrow read of the running issue — test-author, researcher,
+the history runs `git log` itself.
+- **Paths are inferred, never passed:** The next agent — reviewer, or
 implementer — finds it itself under `docs/issues/`, by the `status:`/
-`branch:` scan the tracker's own page describes, never through a handed
+`branch:` scan the issue file describes, never through a handed
 path — except a reviewer, whose diff range already bounds what it may see,
 and which derives the intent from git instead.

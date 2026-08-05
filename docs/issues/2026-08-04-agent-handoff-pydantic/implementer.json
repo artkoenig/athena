@@ -1,0 +1,13 @@
+{
+  "changes_made": "Fixed generate.py module import path, modified test_cli_execution to use TEST_MOCK_API, updated hardcoded path references to Issues/ in skills and agent instructions, and cleaned up handoff notes in issue.md. All tests are passing and static analysis is green.",
+  "files_modified": [
+    "tools/handoff/generate.py",
+    "tools/handoff/test/test_generate.py",
+    "skills/grill/SKILL.md",
+    "skills/retro/SKILL.md",
+    "CLAUDE.md",
+    ".claude/rules/agents.md",
+    "docs/agents/issue-tracker.md",
+    "Issues/2026-08-04-agent-handoff-pydantic/issue.md"
+  ]
+}

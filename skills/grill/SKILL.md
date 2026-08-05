@@ -17,36 +17,7 @@ survives untouched.
 
 ## Ground yourself first
 
-Find out what is already true about the topic. Dispatch the `researcher` —
-one dispatch per question you actually have, never one "tell me about X",
-which comes back a tour instead of an answer; the ones that do not depend on
-each other go out together.
-
-Hand over the idea in the human's own words, never your summary of it. There
-is no issue yet, so that wording is the whole intent — retold, the sweep is
-grounded on what you already assume.
-
-Four places, each as far as the topic reaches into it:
-
-- **The code** the idea touches: what it does today, who calls it, what the
-  change would collide with.
-- **The project's documentation**: the README, the `CLAUDE.md` of every
-  directory involved, whatever is under `docs/`. A convention written there
-  binds the criteria — it is a constraint, not background reading.
-- **The record**, through the `tracker`'s *read the record on a subject*:
-  what past issues settled on it, what was filed and never built, what was
-  tried and abandoned. Re-deciding what the record already settled is the
-  cheapest mistake available here.
-- **The documentation of what this is built on**, where the topic is not the
-  project's own invention — the library, the tool, the protocol. What it
-  actually supports bounds what can be asked for at all, and no answer from
-  the human moves that bound.
-
-You are grounded when every open point left is a question of what the human
-*wants* rather than of what *is*. Those are the questions worth a turn of
-theirs; the rest you now answer yourself. A gap the sweep could not close is
-not a question for them either — it is a fact labelled "not verified", and it
-stays labelled.
+Ask the user to clarify the problem statement. The main session does NO research of its own in the codebase. You do not read the code or the documentation yourself to prepare for the interview. You rely entirely on the user's input to establish the acceptance criteria.
 
 ## Then ask
 
@@ -67,14 +38,10 @@ stays labelled.
 
 ## The output
 
-Two operations of the `tracker`: **file an issue** with the problem and the
-criteria, and **record a decision** — for every answer the human gave, and
-for every fact from the sweep a criterion now rests on, each with the source
-it came from. The human's answers are not the only thing that shaped them, and
-a criterion whose source is gone is one nobody can revisit. Dispatch the
-`tracker` for both — continuing it if this run already has one running — it
-knows where they go and what form a criterion takes; do not write into
-`docs/issues/` yourself.
+Write the issue directly to a file under `docs/issues/<timestamp>-<slug>/issue.md`. Create a markdown file with the problem and the criteria, and **record a decision** — for every answer the human gave. The human's answers are not the only thing that shaped them, and a criterion whose source is gone is one nobody can revisit. 
+
+Do NOT use git to commit this issue file. The main session does no git operations.
+Once the file is created and the human has approved the criteria, hand over the issue filename to the `researcher` subagent to begin the linear workflow.
 
 Then show the criteria to the human for approval: this is the first of their
 three steering points, and the one place a run genuinely waits.

@@ -5,6 +5,9 @@ node_modules/
 # so it never forces other contributors to export into a collector they don't run.
 .claude/settings.local.json
 
+# Sandbox worktrees
+.worktrees/
+
 # Where `claude --worktree` puts a parallel run's checkout. Without this line
 # every worktree shows up as untracked in the main checkout.
 .claude/worktrees/
@@ -13,3 +16,4 @@ node_modules/
 .athena-telemetry/
 telemetry/
 
+.scratch/

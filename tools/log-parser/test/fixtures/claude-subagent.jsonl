@@ -1,0 +1,2 @@
+{"type":"message","usage":{"input_tokens":10,"output_tokens":5},"role":"user","content":[{"type":"text","text":"Subagent Hello"}]}
+{"role":"assistant","content":[{"type":"text","text":"Subagent Hi"}]}

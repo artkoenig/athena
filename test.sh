@@ -35,9 +35,14 @@ run "tools/argus" \
 run "tools/argus-ui" \
   npm --prefix "$root/tools/argus-ui" test --silent
 
+run "tools/log-parser" \
+  npm --prefix "$root/tools/log-parser" test --silent
+
+
 if [ "$failed" -eq 0 ]; then
   echo "PASS: all $total suites"
 else
   echo "FAIL: $failed of $total suite(s)"
   exit 1
 fi
+

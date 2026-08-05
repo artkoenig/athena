@@ -1,0 +1,4 @@
+{
+  "test_plan": "1. test_generate_script_exists: ensure script exists. 2. test_no_api_calls_in_source: ensure no 'genai', 'TEST_MOCK_API' or API calls exist in generate.py source. 3. test_cli_execution_with_json_string: ensure parsing valid JSON via --json-data string works (returns 0). 4. test_cli_execution_with_json_file: ensure parsing valid JSON via --json-data file works (returns 0). 5. test_cli_invalid_json_validation: ensure missing required fields via --json-data fails and prints 'validation' error. 6. test_cli_malformed_json: ensure malformed JSON via --json-data fails and mentions JSON parsing error. 7. test_versioning_logic: ensure filename versioning helper works.",
+  "coverage_requirements": "tools/handoff/generate.py should be fully covered for standard JSON parsing and failure paths, without any API calls being executed."
+}
