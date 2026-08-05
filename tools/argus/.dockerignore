@@ -1,6 +1,6 @@
 .git
 node_modules
 telemetry
-.athena-telemetry
+.uroboros-telemetry
 *.log
 *.png

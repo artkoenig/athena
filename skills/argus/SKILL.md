@@ -34,7 +34,7 @@ collector's configuration; that needs the collector's token, so without it the
 call says the directory could not be read rather than naming one. Either way it
 answers "is anything measuring right now?" — that is what it is for.
 
-Measurements land in `<project>/.athena-telemetry/<timestamp>/`, one directory
+Measurements land in `<project>/.uroboros-telemetry/<timestamp>/`, one directory
 per run, and that directory ignores itself in git — nothing else in the
 measured project is touched.
 
@@ -83,7 +83,7 @@ The collector serves JSON on its own port:
 A finished measurement is read back by starting a collector on its directory:
 
 ```bash
-argus start --open .athena-telemetry/2026-08-03T14-22-05
+argus start --open .uroboros-telemetry/2026-08-03T14-22-05
 ```
 
 That replays it and writes nothing into it, however old it is.

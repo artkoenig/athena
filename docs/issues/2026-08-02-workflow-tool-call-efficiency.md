@@ -9,12 +9,12 @@ pr: 22
 ## Intent
 
 A measured comparison of one real bug fix — the same idea, the same commit, the
-same model (`claude-sonnet-5`), once with the athena workflow and once without —
+same model (`claude-sonnet-5`), once with the uroboros workflow and once without —
 showed where the workflow's cost actually comes from. The control run was a
-single context; the athena run dispatched researcher, tracker, test-author,
+single context; the uroboros run dispatched researcher, tracker, test-author,
 implementer (3x), reviewer.
 
-| | with athena | control |
+| | with uroboros | control |
 | --- | ---: | ---: |
 | LLM turns | 327 | 146 |
 | tool calls | 345 | 145 |
@@ -24,7 +24,7 @@ implementer (3x), reviewer.
 **96% of billed input is cache read**, at a tenth the price of a cache write.
 So a long agent context is nearly free per token, and the unit of cost is the
 turn: every tool call re-reads the whole context. Measured, a turn cost $0.045
-in the athena run and $0.065 in the control run.
+in the uroboros run and $0.065 in the control run.
 
 That changes what is worth optimising. Restarting an agent is cheap and
 shortening a context is expensive — the three implementer dispatches each reset
@@ -213,7 +213,7 @@ Taken at `4bed60a`, the tip of `main` at the start of this run.
   changes what a dispatch does — the whole change is prose, so `bash test.sh`
   proves only that nothing else in the repository broke, never that a run is a
   quarter cheaper. And that no review round ran on this diff: this environment
-  registers none of athena's own subagents, so the reading here is the
+  registers none of uroboros's own subagents, so the reading here is the
   implementer's own, which is exactly the check the rulebook says an
   implementer cannot do for itself.
 

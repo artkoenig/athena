@@ -107,7 +107,7 @@ CLAUDE_PLUGIN_ROOT="$root" CLAUDE_PROJECT_DIR="$worktree" \
 status="$(node -e '
   const fs = require("fs");
   const ctx = JSON.parse(fs.readFileSync(process.argv[1], "utf8")).hookSpecificOutput.additionalContext;
-  process.stdout.write(ctx.split("\n").filter(l => l.startsWith("Athena self-check:")).pop() || "");
+  process.stdout.write(ctx.split("\n").filter(l => l.startsWith("Uroboros self-check:")).pop() || "");
 ' "$out")"
 
 node -e '

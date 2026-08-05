@@ -13,7 +13,7 @@ node_modules/
 .claude/worktrees/
 
 # argus persistence (--persist)
-.athena-telemetry/
+.uroboros-telemetry/
 telemetry/
 
 .scratch/

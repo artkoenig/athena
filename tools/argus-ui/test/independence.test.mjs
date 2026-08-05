@@ -42,7 +42,7 @@ test('the interface is a project of its own, with everything a project needs', (
 
 test('nothing in the interface reaches outside the interface', () => {
   // The load-bearing rule: this project knows the collector only through its
-  // HTTP API, so it can be lifted out of athena unchanged. A single import of a
+  // HTTP API, so it can be lifted out of uroboros unchanged. A single import of a
   // file next door is what would make that impossible.
   const files = walk(PROJECT);
   const modules = files.filter((file) => file.endsWith('.mjs') || file.endsWith('.js'));

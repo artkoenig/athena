@@ -93,3 +93,5 @@ correction, the path of the file you wrote, and one sentence. The count is the
 whole triage: zero means the change is accepted, and anything else sends your
 caller into another correction round. Findings you decided to leave out, or
 that need no correction, are not in it.
+
+Write the findings file in English, whatever language the issue is in.

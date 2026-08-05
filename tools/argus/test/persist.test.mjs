@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { TelemetryStore } from '../src/store.mjs';
 import { JsonlPersistence } from '../src/persist.mjs';
 
-const tmpdir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'athena-obs-'));
+const tmpdir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'uroboros-obs-'));
 
 const logRecord = (sessionId, tokens) => ({
   eventName: 'claude_code.api_request',
@@ -181,7 +181,7 @@ test('persistence is on by default, one timestamped directory per measurement', 
   try {
     const runDir = await runDirOf(collector.base);
     assert.ok(path.isAbsolute(runDir), 'the run directory is reported absolute');
-    assert.equal(path.dirname(runDir), path.join(cwd, '.athena-telemetry'));
+    assert.equal(path.dirname(runDir), path.join(cwd, '.uroboros-telemetry'));
     assert.match(path.basename(runDir), /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}$/);
     assert.ok(fs.existsSync(runDir), 'and it exists by the time the collector is listening');
   } finally {
@@ -209,7 +209,7 @@ test('two starts in the same project get two distinct directories', async () => 
 
 test('a name already taken is suffixed -2, then -3', async () => {
   const cwd = projectDir();
-  const root = path.join(cwd, '.athena-telemetry');
+  const root = path.join(cwd, '.uroboros-telemetry');
   fs.mkdirSync(root, { recursive: true });
   // Take every name the next few seconds could produce, so the collision is
   // certain however the clock falls while the process starts.
@@ -247,7 +247,7 @@ test('the measured project gets a self-ignoring directory and nothing else', asy
   try {
     assert.deepEqual(
       fs.readdirSync(cwd).sort(),
-      ['.athena-telemetry', 'keep.txt'],
+      ['.uroboros-telemetry', 'keep.txt'],
       'nothing outside the measurement directory may appear',
     );
     assert.equal(fs.readFileSync(path.join(cwd, 'keep.txt'), 'utf8'), 'untouched');
@@ -255,8 +255,8 @@ test('the measured project gets a self-ignoring directory and nothing else', asy
 
     // Self-ignoring, so measuring a project never shows up in its git status —
     // and no `git` subprocess had to run to arrange that.
-    const ignore = path.join(cwd, '.athena-telemetry', '.gitignore');
-    assert.ok(fs.existsSync(ignore), '.athena-telemetry/.gitignore is written with the root');
+    const ignore = path.join(cwd, '.uroboros-telemetry', '.gitignore');
+    assert.ok(fs.existsSync(ignore), '.uroboros-telemetry/.gitignore is written with the root');
     assert.equal(fs.readFileSync(ignore, 'utf8').trim(), '*');
   } finally {
     fs.rmSync(cwd, { recursive: true, force: true });
@@ -292,7 +292,7 @@ test('--persist <dir> means exactly that directory, and never replays it', async
 
   const nested = fs.readdirSync(dir, { withFileTypes: true }).filter((entry) => entry.isDirectory());
   assert.deepEqual(nested.map((entry) => entry.name), [], 'nothing is nested inside it');
-  assert.equal(fs.existsSync(path.join(cwd, '.athena-telemetry')), false);
+  assert.equal(fs.existsSync(path.join(cwd, '.uroboros-telemetry')), false);
   fs.rmSync(cwd, { recursive: true, force: true });
 });
 
@@ -318,7 +318,7 @@ test('--open <dir> replays it however old it is, and writes nothing into it', as
   }
 
   assert.deepEqual(snapshot(dir), before, '--open must not write into what it opens');
-  assert.equal(fs.existsSync(path.join(cwd, '.athena-telemetry')), false, '--open opens nothing for writing');
+  assert.equal(fs.existsSync(path.join(cwd, '.uroboros-telemetry')), false, '--open opens nothing for writing');
   fs.rmSync(cwd, { recursive: true, force: true });
 });
 

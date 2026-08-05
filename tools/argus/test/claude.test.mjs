@@ -4,10 +4,10 @@ import assert from 'node:assert/strict';
 import { otelEnvFor, sessionNameOf } from '../src/claude.mjs';
 
 test('a session name is read from the resource, and from metric attributes', () => {
-  assert.equal(sessionNameOf({ resource: { 'session.name': 'athena-refactor' } }), 'athena-refactor');
+  assert.equal(sessionNameOf({ resource: { 'session.name': 'uroboros-refactor' } }), 'uroboros-refactor');
   // Custom resource attributes ride along on metric attributes too, and metrics
   // are the one signal that may arrive without a resource block worth the name.
-  assert.equal(sessionNameOf({ attrs: { 'session.name': 'athena-refactor' } }), 'athena-refactor');
+  assert.equal(sessionNameOf({ attrs: { 'session.name': 'uroboros-refactor' } }), 'uroboros-refactor');
   assert.equal(sessionNameOf({ resource: { 'session_name': 'snake-case' } }), 'snake-case');
 });
 
@@ -36,14 +36,14 @@ test('the env block stays free of naming configuration', () => {
 });
 
 test('the env block carries the collector address under its own stable name', () => {
-  // The OTEL_* variables say where an agent sends telemetry; ATHENA_OBS_* say
+  // The OTEL_* variables say where an agent sends telemetry; UROBOROS_OBS_* say
   // where the collector is, which is what this tool's own commands read.
   const open = otelEnvFor('http://localhost:4318');
-  assert.equal(open.ATHENA_OBS_URL, 'http://localhost:4318');
-  assert.ok(!('ATHENA_OBS_TOKEN' in open), 'no token, nothing to pass on');
+  assert.equal(open.UROBOROS_OBS_URL, 'http://localhost:4318');
+  assert.ok(!('UROBOROS_OBS_TOKEN' in open), 'no token, nothing to pass on');
 
   const gated = otelEnvFor('https://collector.example', { token: 'secret' });
-  assert.equal(gated.ATHENA_OBS_URL, 'https://collector.example');
-  assert.equal(gated.ATHENA_OBS_TOKEN, 'secret');
+  assert.equal(gated.UROBOROS_OBS_URL, 'https://collector.example');
+  assert.equal(gated.UROBOROS_OBS_TOKEN, 'secret');
   assert.equal(gated.OTEL_EXPORTER_OTLP_HEADERS, 'Authorization=Bearer secret');
 });

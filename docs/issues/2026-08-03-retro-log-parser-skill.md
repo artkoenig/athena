@@ -11,7 +11,7 @@ pr:
 Acceptance criteria:
 
 1. Build a log parser tool (`tools/log-parser` and `bin/parse-agent-log`) supporting both Claude Code `.jsonl` logs (using `claude-JSONL-browser` logic) and Gemini/Antigravity `.jsonl` transcript logs into Markdown transcripts and quantitative metrics JSON.
-2. Build a skill (`skills/retro/SKILL.md`) for Athena that executes the log parser on an explicit path or auto-detects the latest session log (Claude in `~/.claude/` or Gemini in `~/.gemini/antigravity/brain/`).
+2. Build a skill (`skills/retro/SKILL.md`) for Uroboros that executes the log parser on an explicit path or auto-detects the latest session log (Claude in `~/.claude/` or Gemini in `~/.gemini/antigravity/brain/`).
 3. The retro skill analyzes the log metadata/transcript and appends a structured English `## Retro` section to the active issue file (`docs/issues/<issue>/issue.md`).
 4. The generated retro answers the 3 core questions in English:
    - What went well
@@ -22,19 +22,19 @@ Acceptance criteria:
 
 ## Map
 
-- [tools/log-parser/package.json](file:///Users/artkoenig/Workspace/athena/tools/log-parser/package.json)
-- [tools/log-parser/bin/parse-agent-log.mjs](file:///Users/artkoenig/Workspace/athena/tools/log-parser/bin/parse-agent-log.mjs)
-- [tools/log-parser/src/detector.mjs](file:///Users/artkoenig/Workspace/athena/tools/log-parser/src/detector.mjs)
-- [tools/log-parser/src/claude-parser.mjs](file:///Users/artkoenig/Workspace/athena/tools/log-parser/src/claude-parser.mjs)
-- [tools/log-parser/src/gemini-parser.mjs](file:///Users/artkoenig/Workspace/athena/tools/log-parser/src/gemini-parser.mjs)
-- [tools/log-parser/src/metrics.mjs](file:///Users/artkoenig/Workspace/athena/tools/log-parser/src/metrics.mjs)
-- [tools/log-parser/src/renderers.mjs](file:///Users/artkoenig/Workspace/athena/tools/log-parser/src/renderers.mjs)
-- [bin/parse-agent-log](file:///Users/artkoenig/Workspace/athena/bin/parse-agent-log)
-- [skills/retro/SKILL.md](file:///Users/artkoenig/Workspace/athena/skills/retro/SKILL.md)
+- [tools/log-parser/package.json](file:///Users/artkoenig/Workspace/uroboros/tools/log-parser/package.json)
+- [tools/log-parser/bin/parse-agent-log.mjs](file:///Users/artkoenig/Workspace/uroboros/tools/log-parser/bin/parse-agent-log.mjs)
+- [tools/log-parser/src/detector.mjs](file:///Users/artkoenig/Workspace/uroboros/tools/log-parser/src/detector.mjs)
+- [tools/log-parser/src/claude-parser.mjs](file:///Users/artkoenig/Workspace/uroboros/tools/log-parser/src/claude-parser.mjs)
+- [tools/log-parser/src/gemini-parser.mjs](file:///Users/artkoenig/Workspace/uroboros/tools/log-parser/src/gemini-parser.mjs)
+- [tools/log-parser/src/metrics.mjs](file:///Users/artkoenig/Workspace/uroboros/tools/log-parser/src/metrics.mjs)
+- [tools/log-parser/src/renderers.mjs](file:///Users/artkoenig/Workspace/uroboros/tools/log-parser/src/renderers.mjs)
+- [bin/parse-agent-log](file:///Users/artkoenig/Workspace/uroboros/bin/parse-agent-log)
+- [skills/retro/SKILL.md](file:///Users/artkoenig/Workspace/uroboros/skills/retro/SKILL.md)
 
 ## Plan
 
-See [design.md](file:///Users/artkoenig/Workspace/athena/design.md).
+See [design.md](file:///Users/artkoenig/Workspace/uroboros/design.md).
 
 ## Tasks
 

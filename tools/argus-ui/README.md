@@ -32,7 +32,7 @@ token, pass it here — the interface supplies it upstream on every request, so
 on loopback the browser never handles a token at all:
 
 ```bash
-node bin/argus-ui.mjs --collector-token "$ATHENA_OBS_TOKEN"
+node bin/argus-ui.mjs --collector-token "$UROBOROS_OBS_TOKEN"
 ```
 
 A collector somewhere else is the same command with an address:
@@ -45,11 +45,11 @@ node bin/argus-ui.mjs --collector https://obs.example.com --collector-token <sec
 
 | Flag                     | Env                  | Default                 | Meaning                                    |
 | ------------------------ | -------------------- | ----------------------- | ------------------------------------------ |
-| `-c, --collector <url>`  | `ATHENA_OBS_URL`     | `http://127.0.0.1:4318` | The collector to read                      |
-| `--collector-token <s>`  | `ATHENA_OBS_TOKEN`   | –                       | Token that collector was started with      |
-| `-p, --port <n>`         | `ATHENA_OBS_UI_PORT` | `4319`                  | Port to serve the page on                  |
-| `-h, --host <addr>`      | `ATHENA_OBS_UI_HOST` | `127.0.0.1`             | Bind address                               |
-| `-t, --token <secret>`   | `ATHENA_OBS_UI_TOKEN`| –                       | Require this token for the data            |
+| `-c, --collector <url>`  | `UROBOROS_OBS_URL`     | `http://127.0.0.1:4318` | The collector to read                      |
+| `--collector-token <s>`  | `UROBOROS_OBS_TOKEN`   | –                       | Token that collector was started with      |
+| `-p, --port <n>`         | `UROBOROS_OBS_UI_PORT` | `4319`                  | Port to serve the page on                  |
+| `-h, --host <addr>`      | `UROBOROS_OBS_UI_HOST` | `127.0.0.1`             | Bind address                               |
+| `-t, --token <secret>`   | `UROBOROS_OBS_UI_TOKEN`| –                       | Require this token for the data            |
 
 A bind address other than loopback is refused without `--token`: reachable from
 another machine, this process would hand the collector's token to anyone who

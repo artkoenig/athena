@@ -2,7 +2,7 @@
 #
 # The published port is bound to 127.0.0.1 on purpose: an OTLP collector without
 # a token accepts telemetry from anyone who can reach it. To let other machines
-# (or a cloud session) push here, set ATHENA_OBS_TOKEN and widen the binding to
+# (or a cloud session) push here, set UROBOROS_OBS_TOKEN and widen the binding to
 # "4318:4318".
 services:
   observe:
@@ -10,8 +10,8 @@ services:
     ports:
       - "127.0.0.1:4318:4318"
     environment:
-      ATHENA_OBS_TOKEN: "${ATHENA_OBS_TOKEN:-}"
-      ATHENA_OBS_RETENTION: "${ATHENA_OBS_RETENTION:-24h}"
+      UROBOROS_OBS_TOKEN: "${UROBOROS_OBS_TOKEN:-}"
+      UROBOROS_OBS_RETENTION: "${UROBOROS_OBS_RETENTION:-24h}"
     volumes:
       - telemetry:/data
     restart: unless-stopped

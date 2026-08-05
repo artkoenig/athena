@@ -53,7 +53,7 @@ Options
       --exit-with <pid>         Shut down when that process is gone
                                 (default $CLAUDE_PID, the session itself)
       --persist <dir>           Write the measurement into exactly this directory
-                                instead of <cwd>/.athena-telemetry/<timestamp>.
+                                instead of <cwd>/.uroboros-telemetry/<timestamp>.
                                 Write-only: it never replays what is there
       --no-persist              Keep nothing on disk
       --open <dir>              Replay an existing measurement and show it,
@@ -69,9 +69,9 @@ Options
       --help                    Show this message
 
 Environment
-  ATHENA_OBS_PORT, ATHENA_OBS_HOST, ATHENA_OBS_TOKEN, ATHENA_OBS_PUBLIC_URL,
-  ATHENA_OBS_PERSIST, ATHENA_OBS_RETENTION, ATHENA_OBS_MAX_SPANS,
-  ATHENA_OBS_MAX_LOGS, ATHENA_OBS_MAX_METRICS, ATHENA_OBS_MAX_SESSIONS
+  UROBOROS_OBS_PORT, UROBOROS_OBS_HOST, UROBOROS_OBS_TOKEN, UROBOROS_OBS_PUBLIC_URL,
+  UROBOROS_OBS_PERSIST, UROBOROS_OBS_RETENTION, UROBOROS_OBS_MAX_SPANS,
+  UROBOROS_OBS_MAX_LOGS, UROBOROS_OBS_MAX_METRICS, UROBOROS_OBS_MAX_SESSIONS
 `.trim();
 
 function renderEnv(env, format) {

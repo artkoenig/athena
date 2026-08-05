@@ -47,3 +47,5 @@ The file should include Test Plan and Coverage Requirements. **Important**: The 
 After writing your tests and generating the Markdown handoff, you MUST commit them.
 Then you return. Your return value is one sentence and the path of the file
 you wrote; the file carries everything else.
+
+Write the handoff file in English, whatever language the issue is in.

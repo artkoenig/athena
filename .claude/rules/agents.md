@@ -15,7 +15,7 @@ One agent is one flat `<name>.md` in that directory, and every one of them is
 listed in `plugin.json`'s `agents` field. That list is not decoration: for a
 plugin, agent discovery scans `agents/` *recursively*, and a subdirectory
 becomes part of the name — `agents/review/security.md` registers as
-`athena:review:security`. Without the list, every `.md` anywhere below loads
+`uroboros:review:security`. Without the list, every `.md` anywhere below loads
 as an agent of its own — a skill an agent preloads, above all. Declaring the
 files replaces that scan. Add an agent, add its line; the plugin suite fails
 when the two disagree.

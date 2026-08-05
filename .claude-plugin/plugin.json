@@ -1,13 +1,13 @@
 {
-  "name": "athena",
-  "description": "An AI agent workflow built on judgment, not rules: the athena rulebook, delivered to every session.",
+  "name": "uroboros",
+  "description": "An AI agent workflow built on judgment, not rules: the uroboros rulebook, delivered to every session.",
   "author": {
     "name": "Artjom König",
     "email": "artkoenig@gmail.com",
     "url": "https://github.com/artkoenig"
   },
-  "homepage": "https://github.com/artkoenig/athena",
-  "repository": "https://github.com/artkoenig/athena",
+  "homepage": "https://github.com/artkoenig/uroboros",
+  "repository": "https://github.com/artkoenig/uroboros",
   "license": "GPL-3.0-or-later",
   "keywords": [
     "workflow",

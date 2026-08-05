@@ -48,13 +48,13 @@ Defaults already recorded in the issue (do not re-open them):
 
 | Path | What it holds | Role in this change |
 | --- | --- | --- |
-| `/home/user/athena/CLAUDE.md` | The rulebook, 42 lines. Sections: intro (3 principles), `## The Main Session` (`### Your Responsibilities`, `### Your Restrictions`), `## The Human`. | **The change.** Rewrite the `## The Main Session` section. |
-| `/home/user/athena/GEMINI.md` | **Correction to the first draft of this plan:** it is not a copy but a symlink to `CLAUDE.md` — `git ls-files -s` reports mode `120000`, blob content `CLAUDE.md`. It is the same rulebook for the Gemini CLI. | **No change and no copy step.** It follows `CLAUDE.md` by itself; writing a file over it would replace the symlink with a duplicate that then drifts. |
-| `/home/user/athena/.claude/rules/agents.md` | Path-scoped (`paths: agents/**`) page about how subagent pages are written. Says nothing about the Main Session's modes. | **No change.** Nothing here contradicts the two modes. |
-| `/home/user/athena/hooks/session-start.sh` | SessionStart hook. Reads `${plugin_root}/CLAUDE.md` and puts its whole text into the session context verbatim (JSON-escaped), plus a self-check line. | **No change.** It ships whatever `CLAUDE.md` says; the new text reaches sessions automatically. |
-| `/home/user/athena/skills/grill/SKILL.md` | The grill skill: vague idea → filed issue with approved criteria. Contains "The main session does NO research of its own in the codebase" and "The main session does no git operations". | **No change — deliberate.** Grill exists only to produce a filed issue, i.e. it is an Issue-Mode tool, and there its statements stay true. Restating the mode split here would be a second description of one rule (`skills/CLAUDE.md`: "Describe each thing once"). |
-| `/home/user/athena/agents/*.md` | The four subagent pages. | **No change.** The subagent flow is untouched; Direct Mode simply does not enter it. |
-| `/home/user/athena/README.md` | Project page. Describes the bet on judgment and the unattended run; does not enumerate the Main Session's steps. | **No change.** It never claims the issue route is the only one. |
+| `/home/user/uroboros/CLAUDE.md` | The rulebook, 42 lines. Sections: intro (3 principles), `## The Main Session` (`### Your Responsibilities`, `### Your Restrictions`), `## The Human`. | **The change.** Rewrite the `## The Main Session` section. |
+| `/home/user/uroboros/GEMINI.md` | **Correction to the first draft of this plan:** it is not a copy but a symlink to `CLAUDE.md` — `git ls-files -s` reports mode `120000`, blob content `CLAUDE.md`. It is the same rulebook for the Gemini CLI. | **No change and no copy step.** It follows `CLAUDE.md` by itself; writing a file over it would replace the symlink with a duplicate that then drifts. |
+| `/home/user/uroboros/.claude/rules/agents.md` | Path-scoped (`paths: agents/**`) page about how subagent pages are written. Says nothing about the Main Session's modes. | **No change.** Nothing here contradicts the two modes. |
+| `/home/user/uroboros/hooks/session-start.sh` | SessionStart hook. Reads `${plugin_root}/CLAUDE.md` and puts its whole text into the session context verbatim (JSON-escaped), plus a self-check line. | **No change.** It ships whatever `CLAUDE.md` says; the new text reaches sessions automatically. |
+| `/home/user/uroboros/skills/grill/SKILL.md` | The grill skill: vague idea → filed issue with approved criteria. Contains "The main session does NO research of its own in the codebase" and "The main session does no git operations". | **No change — deliberate.** Grill exists only to produce a filed issue, i.e. it is an Issue-Mode tool, and there its statements stay true. Restating the mode split here would be a second description of one rule (`skills/CLAUDE.md`: "Describe each thing once"). |
+| `/home/user/uroboros/agents/*.md` | The four subagent pages. | **No change.** The subagent flow is untouched; Direct Mode simply does not enter it. |
+| `/home/user/uroboros/README.md` | Project page. Describes the bet on judgment and the unattended run; does not enumerate the Main Session's steps. | **No change.** It never claims the issue route is the only one. |
 
 Out of scope, noticed while researching — report as notes, do not fix:
 - `skills/grill/SKILL.md` line 44 hands over to a `researcher` subagent; no
@@ -66,7 +66,7 @@ Out of scope, noticed while researching — report as notes, do not fix:
 
 ### 4.1 The exact target text
 
-Replace lines 13–30 of `/home/user/athena/CLAUDE.md` — the whole block from
+Replace lines 13–30 of `/home/user/uroboros/CLAUDE.md` — the whole block from
 `## The Main Session` up to and including the line
 `- All research and code work is delegated to the subagents, starting with the `dispatcher`.` —
 with the text below. The intro (lines 1–11) and `## The Human` (lines 32–42)
@@ -155,10 +155,10 @@ these gets this section as the answer)
 
 ### 4.4 Steps
 
-1. Edit `/home/user/athena/CLAUDE.md` as in 4.1.
+1. Edit `/home/user/uroboros/CLAUDE.md` as in 4.1.
 2. Leave `GEMINI.md` alone — it is a symlink to `CLAUDE.md`.
 3. Run the suite (section 5) and record the exit codes.
-4. Write `/home/user/athena/docs/issues/2026-08-05-zwei-modi/implementer.md`.
+4. Write `/home/user/uroboros/docs/issues/2026-08-05-zwei-modi/implementer.md`.
 5. Commit `CLAUDE.md`, `GEMINI.md` and the handoff on
    `claude/zwei-modi-issue-workflow-2fnxb4`. Do not push to `main`.
 6. Dispatch the `reviewer` with this issue directory.
@@ -180,7 +180,7 @@ dispatched directly.
 Still run and report, with the command and the exit code:
 
 ```bash
-bash /home/user/athena/test.sh
+bash /home/user/uroboros/test.sh
 ```
 
 It runs `test-repo.sh`, `test-plugin.sh`, `test-worktree.sh` and the three
@@ -198,7 +198,7 @@ applied section 4.1 itself. What was done:
 - `CLAUDE.md` lines 13–30 replaced by the text in 4.1. Nothing else in the
   file changed; the intro and `## The Human` are byte-identical to before.
 - `GEMINI.md` untouched (symlink, see the module map).
-- `bash /home/user/athena/test.sh` → `PASS: all 6 suites`, exit code 0. That
+- `bash /home/user/uroboros/test.sh` → `PASS: all 6 suites`, exit code 0. That
   includes `test-plugin.sh`, whose case "the whole text of CLAUDE.md arrives
   verbatim in additionalContext" now carries the new text.
 - No review by a fresh context has happened. The change has not been reviewed

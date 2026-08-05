@@ -11,9 +11,9 @@ RUN mkdir -p /data && chown -R node:node /data
 
 USER node
 
-ENV ATHENA_OBS_HOST=0.0.0.0 \
-    ATHENA_OBS_PORT=4318 \
-    ATHENA_OBS_PERSIST=/data
+ENV UROBOROS_OBS_HOST=0.0.0.0 \
+    UROBOROS_OBS_PORT=4318 \
+    UROBOROS_OBS_PERSIST=/data
 
 EXPOSE 4318
 VOLUME /data

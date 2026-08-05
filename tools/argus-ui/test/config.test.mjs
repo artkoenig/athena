@@ -15,14 +15,14 @@ test('the defaults point at a collector on this machine and a port of their own'
 test('the collector and its token come from the environment, and flags win over it', () => {
   const fromEnv = resolveConfig(
     {},
-    { ATHENA_OBS_URL: 'https://obs.example.com', ATHENA_OBS_TOKEN: 'env-secret' },
+    { UROBOROS_OBS_URL: 'https://obs.example.com', UROBOROS_OBS_TOKEN: 'env-secret' },
   );
   assert.equal(fromEnv.collector, 'https://obs.example.com');
   assert.equal(fromEnv.collectorToken, 'env-secret');
 
   const fromFlags = resolveConfig(
     { collector: 'https://flag.example.com', 'collector-token': 'flag-secret' },
-    { ATHENA_OBS_URL: 'https://obs.example.com', ATHENA_OBS_TOKEN: 'env-secret' },
+    { UROBOROS_OBS_URL: 'https://obs.example.com', UROBOROS_OBS_TOKEN: 'env-secret' },
   );
   assert.equal(fromFlags.collector, 'https://flag.example.com');
   assert.equal(fromFlags.collectorToken, 'flag-secret');
