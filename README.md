@@ -55,7 +55,7 @@ which runs the chain:
 
 | Step      | Agent                                  | What it does                                                                    |
 | --------- | -------------------------------------- | ------------------------------------------------------------------------------- |
-| Research  | [`dispatcher`](agents/dispatcher.md)   | Researches the codebase, decides the solution, writes the implementation plan    |
+| Research  | [`researcher`](agents/researcher.md)   | Researches the codebase, decides the solution, writes the implementation plan    |
 | Tests     | [`test-author`](agents/test-author.md) | Turns the criteria into failing tests, having never seen an implementation       |
 | Implement | [`implementer`](agents/implementer.md) | Builds from the plan until the tests pass and the suite is green                 |
 | Review    | [`reviewer`](agents/reviewer.md)       | Checks the whole diff against `main` — it sees the diff and the issue, no handoffs |

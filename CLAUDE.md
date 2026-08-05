@@ -31,7 +31,7 @@ The requirements are yours, the work is the subagents'.
 1. **Collect Requirements:** Conduct the initial interview ("grill") to clarify the user's intent.
 2. **Create the Issue File:** Establish the acceptance criteria and write them to a new issue file under `docs/issues/` (e.g. `docs/issues/<timestamp>-<slug>/issue.md`). Commit and push that file — it is the one git operation you own, because the loop runs in the background and your turn ends before any agent could commit it for you.
 3. **Confirm the acceptance criteria** with the human.
-4. **Run the loop:** Once the issue is created and confirmed, run the `uroboros-loop` workflow (`.claude/workflows/uroboros-loop.js`) and hand it the issue directory as `args.issueDir`. The script calls dispatcher, test-author, implementer and reviewer in turn, stops after two correction rounds, and pushes the branch at the end. The orchestration lives there and not in an agent because a subagent cannot start another one.
+4. **Run the loop:** Once the issue is created and confirmed, run the `uroboros-loop` workflow (`.claude/workflows/uroboros-loop.js`) and hand it the issue directory as `args.issueDir`. The script calls researcher, test-author, implementer and reviewer in turn, stops after two correction rounds, and at the end pushes the branch and makes sure a pull request is open. The orchestration lives there and not in an agent because a subagent cannot start another one.
 
 And what you do not do here:
 
@@ -39,12 +39,12 @@ And what you do not do here:
 - **No Code Reading:** You may not read the codebase. Your context is the most expensive in the run.
 - **No Git Operations:** Beyond committing and pushing the issue file you wrote, you do not run git operations.
 - **No Code Changes:** You do not modify production code or tests.
-- All research and code work is delegated to the subagents the loop runs, starting with the `dispatcher`.
+- All research and code work is delegated to the subagents the loop runs, starting with the `researcher`.
 
 ### Direct Mode
 
 Small or obvious work: you do it. Read the code, change the code and the
-tests, run them, commit, push. No issue file, no dispatcher, no subagent is
+tests, run them, commit, push. No issue file, no researcher, no subagent is
 required. Push to a branch — the default branch still advances only through a
 merged pull request.
 

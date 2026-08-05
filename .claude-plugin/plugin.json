@@ -19,7 +19,7 @@
     "./skills/"
   ],
   "agents": [
-    "./agents/dispatcher.md",
+    "./agents/researcher.md",
     "./agents/implementer.md",
     "./agents/reviewer.md",
     "./agents/test-author.md"
