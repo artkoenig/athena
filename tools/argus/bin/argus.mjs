@@ -67,6 +67,7 @@ Options
       --format <fmt>            Output format for "env": shell (default), json,
                                 dotenv, settings (.claude/settings.local.json)
       --help                    Show this message
+  -V, --version                 Print the version and exit
 
 Environment
   UROBOROS_OBS_PORT, UROBOROS_OBS_HOST, UROBOROS_OBS_TOKEN, UROBOROS_OBS_PUBLIC_URL,
@@ -339,8 +340,26 @@ async function startInBackground(argv, config, endpoint) {
   console.error('');
 }
 
+/**
+ * The version, from the manifest rather than from a literal here: two places
+ * saying which argus this is means one of them is eventually wrong. Read on
+ * demand, so an ordinary start pays neither the file read nor the risk that a
+ * damaged manifest keeps the collector from running at all.
+ */
+function readVersion() {
+  const manifest = JSON.parse(
+    fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+  );
+  return manifest.version;
+}
+
 async function main(argv) {
   const { flags, positional } = parseArgs(argv);
+  // Before anything is resolved, started or dialled: which argus is this?
+  if (flags.version) {
+    console.log(readVersion());
+    return;
+  }
   if (flags.help) {
     console.log(HELP);
     return;

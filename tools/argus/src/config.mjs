@@ -48,6 +48,7 @@ const FLAG_ALIASES = {
   '-p': '--port',
   '-h': '--host',
   '-t': '--token',
+  '-V': '--version',
   '-?': '--help',
 };
 
