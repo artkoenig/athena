@@ -10,9 +10,7 @@ context that agent pays for.
 
 - Put one instruction in one sentence.
 - Write that sentence in the imperative.
-- State each rule once, and never in a second wording.
+- State each rule once.
 
-A rule that stands twice is a rule that drifts: the two wordings disagree after
-the first edit, and the agent follows whichever one it read last. When a
-sentence would repeat one that already stands in the file, delete it — or
-delete the other one, if this wording is the better of the two.
+A rule that stands twice drifts: the two wordings disagree after the first
+edit, and the agent follows whichever one it read last.
