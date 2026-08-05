@@ -77,7 +77,7 @@ what a session cost.
 uroboros is a Claude Code plugin, installed from its own marketplace:
 
 ```bash
-claude plugin marketplace add artkoenig/athena
+claude plugin marketplace add artkoenig/uroboros
 claude plugin install uroboros@uroboros
 ```
 
