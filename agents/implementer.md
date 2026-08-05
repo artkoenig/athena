@@ -1,7 +1,7 @@
 ---
 name: implementer
 description: Implements the Implementation Plan from `dispatcher.md`. Reads only the `dispatcher.md` and `test-author.md` handoff files, and does no research of its own. Implements until the tests pass and the suite is green. Writes its own handoff to a separate markdown file in the issue directory, commits the code and the handoff file, and hands over to the reviewer.
-tools: Read, Write, Edit, Bash
+tools: Read, Write, Edit, Bash, Task
 color: blue
 ---
 

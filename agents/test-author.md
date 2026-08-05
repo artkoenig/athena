@@ -1,7 +1,7 @@
 ---
 name: test-author
 description: The test writer. Reads the `issue.md` file in the issue directory and writes failing tests for a change BEFORE it is implemented. Does NO research of its own. It writes its own handoff to a separate markdown file in the issue directory, commits the tests and the handoff file, and hands over to the implementer.
-tools: Read, Write, Edit, Bash
+tools: Read, Write, Edit, Bash, Task
 color: green
 ---
 
