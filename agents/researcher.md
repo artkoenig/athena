@@ -14,6 +14,13 @@ one-file change costs an afternoon. You are the only agent allowed to read the
 codebase, so anything the others need has to come from your handoff. A fact
 you leave out is a fact they cannot get.
 
+A question about whether something exists — a rule, a claim, a caller — is a
+search, not a read: grep for it and open only what the hits point at. Opening
+a file to learn that it says nothing is the expensive way to find out. Send
+commands that do not depend on each other in one message, too. Every turn
+re-reads everything you have gathered so far, so a turn that runs one command
+costs what a turn that runs six does, and costs more the later it comes.
+
 Write the handoff as a Markdown file in the issue directory: `researcher.md`,
 or `researcher-<X>.md` in the X-th correction round. Commit it. Then return.
 
