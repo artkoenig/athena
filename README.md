@@ -4,55 +4,24 @@
 > a scripted loop builds it — research, failing tests, implementation, review,
 > correction — and a human steps in only where it matters.
 
-**Uroboros** is the snake that eats its own tail: the loop that closes on
-itself and starts again. That is the principle, not just the name — a run
-reviews and corrects its own work, and what a run learns about the workflow
-is written back into the workflow.
+**Uroboros** is the snake that eats its own tail. That is the principle, not
+just the name: a run reviews and corrects its own work, and what a run learns
+about the workflow is written back into the workflow. It ships as a Claude Code
+plugin and assumes a modern Anthropic agent — at least Opus 5. The rules are one
+page, [`CLAUDE.md`](CLAUDE.md); this one won't repeat it.
 
-## What it's for
+## Context is the scarce resource
 
-uroboros assumes a modern Anthropic agent — at least Opus 5 — and spends that
-capability inside the loop rather than in the conversation. The session you
-talk to decides almost nothing about the work: it settles what is wanted,
-writes the acceptance criteria to an issue, and hands that issue to a script.
-The script runs the chain, and every step gets its own agent with its own
-brief, so no single context carries the whole run.
+A long-running agent gets worse as its context fills with everything it has ever
+read. So each step gets its own agent and the smallest brief that does its job:
+what a step needs is handed over in writing, what it does not need never
+arrives. The chain is cut where a model cannot reliably judge its own work —
+grading its own tests, reviewing a diff it just wrote. The session you talk to
+is the most expensive context of all, so it never reads the codebase: it settles
+the acceptance criteria, writes them to an issue, and hands that issue to a
+script.
 
-The separation is the point. Process is kept for the things a model cannot
-reliably judge about its own work — grading its own tests, reviewing a diff it
-just wrote — and the chain is cut along those seams. Inside a step, how to go
-about it stays the agent's call.
-
-**Effective context engineering is the goal**, not a side effect of the
-layout. A long-running agent gets worse as its context fills with everything
-it has ever read, so uroboros treats context as the scarce resource it is:
-each step gets the smallest brief that does its job, the run's record lives in
-the issue rather than in anyone's window, and the session the human talks to —
-the most expensive context of all — is kept out of the codebase entirely. What
-a step needs is written down and handed over; what it does not need never
-arrives.
-
-That split is what makes unattended work possible: a run is meant to go
-from idea to pull request with no human at the keyboard, stepping in only
-where a human actually has to — intent that's genuinely unclear, anything
-irreversible, the merge itself. Everything a run decides or discovers along
-the way is written to an issue as it happens, so a session that picks the
-work back up — hours later, or a different session entirely — resumes from
-that record instead of from a conversation that's gone.
-
-**It also improves itself.** After every run, the agent records what got in
-its way; a rule that keeps misfiring becomes a proposed change to the
-rulebook itself, reviewed like any other pull request. Because every wired
-project loads uroboros fresh at session start, an accepted fix reaches all of
-them with their next session — the workflow gets better at being followed
-without a human rewriting it by hand.
-
-The rules themselves are one page, [`CLAUDE.md`](CLAUDE.md) — short enough
-to read end to end if you want the specifics; this page won't repeat it.
-
-## How a run goes
-
-Every task runs in one of two modes, and the human names which.
+## The loop corrects itself, and the issue is the record
 
 ```mermaid
 flowchart LR
@@ -77,90 +46,65 @@ flowchart LR
     DIRECT --> MERGE
 ```
 
-**Direct Mode** — the session does the work itself: read the code, change it,
-run the tests, commit, push. No issue file, no subagent, no ceremony.
+The steps are [`researcher`](agents/researcher.md),
+[`test-author`](agents/test-author.md), [`implementer`](agents/implementer.md)
+and [`reviewer`](agents/reviewer.md), run by a script
+([`.claude/workflows/uroboros-loop.js`](.claude/workflows/uroboros-loop.js)) and
+not by an agent, because a subagent cannot start another one. Findings from the
+review open a correction round; after two the loop stops and hands back.
 
-**Issue Mode** — the session owns the requirements, the subagents own the
-work. It writes the acceptance criteria to
-`docs/issues/<timestamp>-<slug>/issue.md`, has them confirmed, and hands the
-directory to the `uroboros-loop` workflow
-([`.claude/workflows/uroboros-loop.js`](.claude/workflows/uroboros-loop.js)),
-which runs the chain:
+Every agent commits its handoff into `docs/issues/<timestamp>-<slug>/`, so the
+record of a run is the issue and not anyone's context window. That is what makes
+unattended work possible: idea to pull request with nobody at the keyboard, and
+a session picking the work back up hours later resumes from the record rather
+than from a conversation that is gone.
 
-| Step      | Agent                                  | What it does                                                                    |
-| --------- | -------------------------------------- | ------------------------------------------------------------------------------- |
-| Research  | [`researcher`](agents/researcher.md)   | Researches the codebase and writes the implementation plan                      |
-| Tests     | [`test-author`](agents/test-author.md) | Turns the acceptance criteria into failing tests                                |
-| Implement | [`implementer`](agents/implementer.md) | Builds from the plan until the tests pass                                       |
-| Review    | [`reviewer`](agents/reviewer.md)       | Checks the finished change against the criteria and the tests                   |
-| Publish   | —                                      | Pushes the branch and makes sure a pull request is open for the human to merge   |
+Which mode a task runs in, the human names. **Direct Mode**: the session does it
+itself, no issue file and no subagent. **Issue Mode**: the loop above — and for
+an idea too vague to write criteria for, the [`grill`](skills/grill/) skill gets
+there one question at a time.
 
-Every agent writes its handoff into the issue directory and commits it, so the
-record is the issue rather than anyone's context. Findings from the review
-open a correction round; after two the loop stops and hands back to the human.
-The orchestration is a script and not an agent because a subagent cannot start
-another one.
+## It improves itself
 
-Three skills sit on the shelf for when they are needed:
-[`grill`](skills/grill/) turns an idea too vague to build into approved
-criteria, one question at a time; [`retro`](skills/retro/) writes the session
-retrospective from the log into the issue; [`argus`](skills/argus/) measures
-what a session cost.
+After a run, the [`retro`](skills/retro/) skill reads the session log and
+records what got in the way. A rule that keeps misfiring becomes a proposed
+change to the rulebook itself, reviewed like any other pull request. Every wired
+project loads uroboros fresh at session start, so an accepted fix reaches all of
+them with their next session — the workflow gets better at being followed
+without a human rewriting it by hand. To have the retros land in *your*
+rulebook, fork this repository and point `marketplace add` at the fork.
 
 ## Installing it
-
-uroboros is a Claude Code plugin, installed from its own marketplace:
 
 ```bash
 claude plugin marketplace add artkoenig/uroboros
 claude plugin install uroboros@uroboros
 ```
 
-A session with the plugin active gets the rulebook of the current `main` in
-its context, the subagents in [`agents/`](agents/) and the skills in
-[`skills/`](skills/) — plus, for a subagent that owns one, a skill preloaded
-from beside its page — a self-check saying what of that is actually reachable,
-and a `pre-push` guard that refuses a direct push to the default branch. A
-project that manages its own git hooks — husky, lefthook, pre-commit — keeps
-them: uroboros then leaves `core.hooksPath` alone and reports the missing guard
-instead of overwriting it silently.
-
-Updates come with the next session, not with a re-installation. The rulebook
-reads its roles off the self-check rather than assuming a page exists, so a
-subagent or a skill that is added or dropped changes what a session does
-without anything else having to be told.
-
-To have the retros land in *your* rulebook, fork this repository and point
-`marketplace add` at the fork.
+A session then gets the rulebook of the current `main`, the subagents, the
+skills, a self-check saying what of that is actually reachable, and a `pre-push`
+guard that refuses a direct push to the default branch — unless the project
+manages its own git hooks, which uroboros leaves alone and reports. Updates come
+with the next session, not with a re-installation.
 
 ## Working in parallel
 
-Runs that overlap in time each get their own worktree — the rulebook says
-why, and this is what makes it work:
-
 ```bash
 claude --worktree feature-auth   # its own checkout under .claude/worktrees/
-git worktree list                # what is already in flight
 ```
 
-`worktree.baseRef` is pinned to `"fresh"` project-wide, so a new worktree
-branches from the default branch rather than from unpushed work. The push
-guard holds inside a worktree too, because `core.hooksPath` lives in the
-shared `.git` config. Gitignored files a run needs are listed in
+`worktree.baseRef` is pinned to `"fresh"`, so a new worktree branches from the
+default branch rather than from unpushed work, and the push guard holds inside
+it. Gitignored files a run needs are listed in
 [`.worktreeinclude`](.worktreeinclude) and copied into every new worktree.
-
-Clearing a worktree away is Claude Code's job, not uroboros': leaving an
-interactive session it removes a clean one and asks before dropping anything
-that still holds work. A `-p` run has no exit prompt, so its worktree stays
-until `git worktree remove`.
 
 ## tools/
 
 | Tool                              | Purpose                                                                                                                |
-| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
 | [`argus`](tools/argus/)           | OpenTelemetry collector for agent sessions: traces, tokens, cost, tool calls, errors. Ingests, aggregates, serves JSON. |
 | [`argus-ui`](tools/argus-ui/)     | The page that shows what a collector holds. Local only — started from a checkout, never deployed.                      |
-| [`log-parser`](tools/log-parser/) | Reads a Claude Code or Gemini/Antigravity session log into markdown and metrics. What the `retro` skill runs.          |
+| [`log-parser`](tools/log-parser/) | Reads a Claude Code or Gemini/Antigravity session log into markdown and metrics. What the `retro` skill runs.           |
 
 ```bash
 argus start --background                     # collector, http://127.0.0.1:4318
@@ -168,22 +112,15 @@ node tools/argus-ui/bin/argus-ui.mjs         # interface, http://127.0.0.1:4319
 bin/parse-agent-log --latest auto            # the last session as markdown
 ```
 
-`argus` is on the `PATH` of every session with the plugin enabled, so a project
-that is not this one can measure itself; the `argus` skill carries the
-procedure. The interface is not distributed — it is started from a checkout.
-What a measured run persists lands in `<project>/.uroboros-telemetry/`.
-
-Runs on your own machine — no account, no third-party service, no running
-costs. Alternatively `docker compose up -d` in `tools/argus` for the collector.
+`argus` is on the `PATH` of every session with the plugin enabled, so any
+project can measure itself; the [`argus`](skills/argus/) skill carries the
+procedure. It all runs on your own machine — no account, no third-party service.
 
 ## Tests
 
-```bash
-bash test.sh
-```
-
-Six suites, one command: the repository's own rules, the plugin manifests and
-the session-start hook, parallel runs in worktrees, and the three tools.
+`bash test.sh` — six suites, one command: the repository's own rules, the plugin
+manifests and the session-start hook, parallel runs in worktrees, and the three
+tools.
 
 ## Licence
 
