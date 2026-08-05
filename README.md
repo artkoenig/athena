@@ -54,6 +54,29 @@ to read end to end if you want the specifics; this page won't repeat it.
 
 Every task runs in one of two modes, and the human names which.
 
+```mermaid
+flowchart LR
+    MODE{"An idea —<br/>which mode?"}
+    MODE -->|"Direct Mode"| DIRECT["The session does it itself:<br/>read, change, test,<br/>commit, push"]
+    MODE -->|"Issue Mode"| CRIT["The session settles<br/>the acceptance criteria"]
+    CRIT --> ISSUE[("issue.md<br/>the record of the run")]
+    ISSUE ==> RES
+
+    subgraph LOOP["uroboros-loop.js — one agent per step, each commits its handoff into the issue directory"]
+        direction TB
+        RES["researcher<br/>writes the implementation plan"]
+        TEST["test-author<br/>turns the criteria<br/>into failing tests"]
+        IMPL["implementer<br/>builds until they pass"]
+        REV["reviewer<br/>checks the diff against main"]
+        RES --> TEST --> IMPL --> REV
+        REV -.->|"findings: correction<br/>round, at most two"| RES
+    end
+
+    REV ==>|"accepted, or<br/>two rounds spent"| PUB["Publish:<br/>push the branch,<br/>open the pull request"]
+    PUB --> MERGE(["A human merges<br/>the pull request"])
+    DIRECT --> MERGE
+```
+
 **Direct Mode** — the session does the work itself: read the code, change it,
 run the tests, commit, push. No issue file, no subagent, no ceremony.
 
