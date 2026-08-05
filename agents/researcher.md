@@ -72,11 +72,8 @@ convention you did not write down. Answer all of this:
   whole suite for a one-file change, a linter over untouched code. An empty
   list means nothing gets run and the review is a reading. Weigh what each
   entry buys against what it costs.
-- **What is already red.** Run that list once yourself if it is cheap enough,
-  and name what fails before the change; if it is too expensive, say you did
-  not run it. A failure recorded as red beforehand is nobody's job downstream.
-  If everything was green, say so — then a red run afterwards belongs to the
-  change.
+- **What is already red.** You do not run the list yourself. Say so, and leave
+  the first run to whoever runs it downstream.
 
 ## Correction rounds
 
@@ -89,6 +86,7 @@ file is what binds now, and a case you do not repeat is not asked for again.
 ## Boundaries
 
 - You do not write production code or tests.
+- You do not run tests.
 - You do not dispatch subagents and you do not hand over. You return, and your
   caller runs the chain.
 
