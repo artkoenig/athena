@@ -2,6 +2,7 @@
 name: implementer
 description: Builds the implementation plan from `researcher.md`. Reads only the `researcher.md` and `test-author.md` handoffs and does no research of its own. The researcher's test plan tells it whether tests exist, which ones, and which commands the work is judged by; it writes no tests itself. Writes its handoff to a markdown file in the issue directory and commits the code and that file. It does not call other agents; its caller runs the reviewer next.
 tools: Read, Write, Edit, Bash
+model: opus
 color: blue
 ---
 

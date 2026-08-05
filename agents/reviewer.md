@@ -2,6 +2,7 @@
 name: reviewer
 description: Reviews a finished change. Receives the issue directory and checks the whole diff against the default branch (main) against the acceptance criteria in the issue file. Runs only the commands its prompt names — the researcher chose them — and reports each by exit code, separating what this change broke from what was already red. It reads no other agent's handoff. Writes its findings to a markdown file in the issue directory and commits it. It does not call other agents; it returns the number of findings, and its caller decides whether another correction round follows.
 tools: Read, Write, Edit, Glob, Grep, Bash
+model: opus
 color: red
 ---
 
