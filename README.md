@@ -23,6 +23,15 @@ reliably judge about its own work — grading its own tests, reviewing a diff it
 just wrote — and the chain is cut along those seams. Inside a step, how to go
 about it stays the agent's call.
 
+**Effective context engineering is the goal**, not a side effect of the
+layout. A long-running agent gets worse as its context fills with everything
+it has ever read, so uroboros treats context as the scarce resource it is:
+each step gets the smallest brief that does its job, the run's record lives in
+the issue rather than in anyone's window, and the session the human talks to —
+the most expensive context of all — is kept out of the codebase entirely. What
+a step needs is written down and handed over; what it does not need never
+arrives.
+
 That split is what makes unattended work possible: a run is meant to go
 from idea to pull request with no human at the keyboard, stepping in only
 where a human actually has to — intent that's genuinely unclear, anything
