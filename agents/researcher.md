@@ -27,6 +27,8 @@ costs what a turn that runs six does, and costs more the later it comes.
 - Use Glob for broad file pattern matching.
 - Use Grep for searching file contents with regex.
 - Use Read when you know the specific file path you need to read.
+- Prefer dedicated tools over Bash when one fits (Read, Edit, Write, Glob,
+  Grep) — reserve Bash for shell-only operations.
 
 Adapt your approach based on the complexity level specified by the issue file.
 
@@ -70,11 +72,8 @@ convention you did not write down. Answer all of this:
   whole suite for a one-file change, a linter over untouched code. An empty
   list means nothing gets run and the review is a reading. Weigh what each
   entry buys against what it costs.
-- **What is already red.** Run that list once yourself if it is cheap enough,
-  and name what fails before the change; if it is too expensive, say you did
-  not run it. A failure recorded as red beforehand is nobody's job downstream.
-  If everything was green, say so — then a red run afterwards belongs to the
-  change.
+- **What is already red.** You do not run the list yourself. Say so, and leave
+  the first run to whoever runs it downstream.
 
 ## Correction rounds
 
@@ -87,6 +86,7 @@ file is what binds now, and a case you do not repeat is not asked for again.
 ## Boundaries
 
 - You do not write production code or tests.
+- You do not run tests.
 - You do not dispatch subagents and you do not hand over. You return, and your
   caller runs the chain.
 
