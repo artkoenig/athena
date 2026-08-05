@@ -15,16 +15,13 @@ uroboros assumes a modern Anthropic agent — at least Opus 5 — and spends tha
 capability inside the loop rather than in the conversation. The session you
 talk to decides almost nothing about the work: it settles what is wanted,
 writes the acceptance criteria to an issue, and hands that issue to a script.
-The script runs the chain, and each agent in it gets one job, one brief, and
-none of the others' context — the researcher reads the codebase, the
-test-author has never seen an implementation, the implementer never opens the
-issue file, the reviewer sees only the diff and the intent.
+The script runs the chain, and every step gets its own agent with its own
+brief, so no single context carries the whole run.
 
-The separation is the point. Process is kept for the handful of things a model
-cannot reliably judge about its own work — grading its own tests, reviewing a
-diff it just wrote — and the chain is cut along exactly those seams. Inside
-each step, how much to plan and which tools to reach for stays the agent's
-call.
+The separation is the point. Process is kept for the things a model cannot
+reliably judge about its own work — grading its own tests, reviewing a diff it
+just wrote — and the chain is cut along those seams. Inside a step, how to go
+about it stays the agent's call.
 
 That split is what makes unattended work possible: a run is meant to go
 from idea to pull request with no human at the keyboard, stepping in only
@@ -60,10 +57,10 @@ which runs the chain:
 
 | Step      | Agent                                  | What it does                                                                    |
 | --------- | -------------------------------------- | ------------------------------------------------------------------------------- |
-| Research  | [`researcher`](agents/researcher.md)   | Researches the codebase, decides the solution, writes the implementation plan    |
-| Tests     | [`test-author`](agents/test-author.md) | Turns the criteria into failing tests, having never seen an implementation       |
-| Implement | [`implementer`](agents/implementer.md) | Builds from the plan until the tests pass and the suite is green                 |
-| Review    | [`reviewer`](agents/reviewer.md)       | Checks the whole diff against `main` — it sees the diff and the issue, no handoffs |
+| Research  | [`researcher`](agents/researcher.md)   | Researches the codebase and writes the implementation plan                      |
+| Tests     | [`test-author`](agents/test-author.md) | Turns the acceptance criteria into failing tests                                |
+| Implement | [`implementer`](agents/implementer.md) | Builds from the plan until the tests pass                                       |
+| Review    | [`reviewer`](agents/reviewer.md)       | Checks the finished change against the criteria and the tests                   |
 | Publish   | —                                      | Pushes the branch and makes sure a pull request is open for the human to merge   |
 
 Every agent writes its handoff into the issue directory and commits it, so the
