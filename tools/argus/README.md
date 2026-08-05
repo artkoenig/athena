@@ -446,6 +446,7 @@ exactly these routes and nothing else.
 | `--max-logs <n>`        | `UROBOROS_OBS_MAX_LOGS`        | `50000`        | Event buffer                                     |
 | `--max-metrics <n>`     | `UROBOROS_OBS_MAX_METRICS`     | `50000`        | Metric buffer                                    |
 | `--max-sessions <n>`    | `UROBOROS_OBS_MAX_SESSIONS`    | `500`          | Sessions in memory                               |
+| `-V, --version`         | –                            | –              | Print the version and exit                       |
 
 Durations accept `ms`, `s`, `m`, `h`, `d` (e.g. `--retention 90m`).
 
