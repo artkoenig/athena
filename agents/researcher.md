@@ -20,11 +20,12 @@ correction round, at most twice.
    - Establish a module map (name the files the change touches, their paths, what they hold, and the entry points).
    - Establish the **environment**, as its own section in the handoff. Nobody
      after you is allowed to research the codebase, so anything they need to
-     run the work has to come from you: the command that runs the whole suite,
-     the command that runs a single test file, the linter and formatter — by
-     name and command, or the plain sentence that there is none — and any
-     prerequisite a test needs before it can run at all. "There is no linter"
-     is an answer; silence is not, and it costs the implementer a search.
+     run the work has to come from you: every command your Test Plan asks
+     anyone to run, spelled out, and any prerequisite it needs before it can
+     run at all. "There is no linter" is an answer; silence is not, and it
+     costs the implementer a search. Only what the plan asks for belongs here —
+     a suite command listed for completeness reads downstream as a suite
+     command to run, and that run is then on you, not on them.
    - Write your handoff directly as a Markdown file into the issue directory (e.g., `researcher.md` or `researcher-<X>.md` for the X-th correction loop).
    - The file should include an Implementation Plan. Ensure all technical details, architectural decisions, research results, and module maps are completely and extensively detailed. Do not use placeholders or artificial summaries.
    - Check in your handoff file
@@ -48,15 +49,21 @@ correction round, at most twice.
      just that file. You are the only one who may read the codebase, so these
      conventions are yours to extract; a "follow the existing style" is not an
      answer.
-   - **What counts as done.** Name the commands whose exit code the work is
-     judged by — usually the planned cases plus the whole suite and the static
-     analysis, and less than that when running everything is not possible here;
-     say which and why. Run them once yourself before you hand over and write
-     down what is *already* red, by name. A failure you recorded as red before
-     the change is nobody's job to fix downstream: the implementer reports it
-     and moves on, and the reviewer weighs it as a fact, not as a defect of this
-     change. Where you found everything green, say that — then a red run after
-     the change belongs to the change.
+   - **What counts as done.** A closed list of commands, verbatim and runnable
+     from the repository root, whose exit codes the work is judged by. Closed
+     means closed: nobody downstream runs anything that is not on it, so a run
+     you do not want — the whole suite for a one-file change, a linter over a
+     tree the change never touches — you leave off, and an empty list means
+     nothing gets run at all and the review is a reading. Weigh what each entry
+     buys against what it costs to run; the list is a decision, not a
+     formality.
+   - **What is already red.** Where the list is cheap enough to run, run it once
+     yourself and write down by name what fails before the change; where it is
+     not, say plainly that you did not and downstream inherits no baseline. A
+     failure recorded as red beforehand is nobody's job downstream: the
+     implementer reports it and moves on, the reviewer weighs it as a fact and
+     not as a defect of this change. Where you found everything green, say that
+     — then a red run afterwards belongs to the change.
    - The decision is also a field in what you return, and your caller acts on
      it: tests, or none. It says the same thing as the section.
 3. **A correction round**: your prompt names the round when you are in one.

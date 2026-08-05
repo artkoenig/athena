@@ -35,9 +35,12 @@ encode what was *asked for* and cannot inherit an implementer's misreading.
    the tests you can and state the conflict in your handoff file with the
    question — a guessed expectation is worse than none, and rewriting the plan
    yourself is worse than both.
-4. Run every test you wrote and confirm each fails for the right reason: the
-   behaviour is missing — not an import error, not a typo. Prove it in your
-   report with the failure summary.
+4. Run the tests you wrote — those alone, with the single-file command the plan
+   names — and confirm each fails for the right reason: the behaviour is
+   missing, not an import error, not a typo. Prove it in your report with the
+   failure summary. The whole suite and the linter are not yours to run; the
+   implementer runs what the plan asks for after the code exists, and a suite
+   run now only tells you what you already know.
 
 In a correction round the criterion is a reviewer's reproduction spec instead
 of the whole intent — this input, this state, this expected result against this

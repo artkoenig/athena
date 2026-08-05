@@ -59,6 +59,12 @@ test-author writes those cases and no others, the implementer trusts the
 decision instead of judging it, and the reviewer, which reads no handoff at all,
 checks the result against the intent and so remains the check on that plan.
 
+The plan also closes the list of commands the change is judged by, and the loop
+hands that list to the implementer and the reviewer. Nobody runs a suite or a
+linter it leaves out, and an empty list means the review is a reading — so the
+cost of checking is a decision made once, with the codebase in view, instead of
+four agents each reaching for `test.sh` to be safe.
+
 Every agent commits its handoff into `docs/issues/<timestamp>-<slug>/`, so the
 record of a run is the issue and not anyone's context window. That is what makes
 unattended work possible: idea to pull request with nobody at the keyboard, and

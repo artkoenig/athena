@@ -23,9 +23,11 @@ no more, no less.
    missing, are notes in your handoff file for the reviewer, not editing
    targets. When the Test Plan says there are no tests, cite it and go on
    without them; that is the same path to `done`.
-4. **Implement** until those tests pass, then run what the Test Plan named as
-   what counts as done — usually the whole suite and the project's static
-   analysis. Take the commands from `researcher.md`, from that section and the
+4. **Implement** until the planned tests pass, then run the commands the Test
+   Plan lists as what counts as done — those, and nothing else. That list is
+   closed: a suite, a linter or a formatter it does not name is not yours to
+   run, however obvious it looks, and an empty list means you run nothing and
+   say so. Take the commands from `researcher.md`, from that section and the
    environment one; they live there, so you never go searching for a test
    runner or a linter yourself. Report each as the command, what it covered,
    and the exit code — not as "green".
@@ -34,9 +36,9 @@ no more, no less.
    code this change never touched, is reported with its exit code and left
    alone — you are `done` with it open, and chasing it is scope you were not
    given. Anything red that your change caused is yours, and you are not `done`
-   while it stands. When the plan says there is no suite or no linter, cite it
-   and move on. When it says nothing at all, the gap is a note in your handoff,
-   not a search.
+   while it stands. When the plan is silent about what counts as done, that gap
+   is a note in your handoff for the reviewer — not a licence to pick commands
+   yourself, and not a search.
 
 ## Boundaries
 
