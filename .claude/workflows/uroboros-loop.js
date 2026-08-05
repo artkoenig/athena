@@ -36,7 +36,9 @@ const PLAN = {
   properties: {
     needsTests: {
       type: 'boolean',
-      description: 'False only when the change has nothing a test could check.',
+      description:
+        'What the Test Plan section of your handoff decided: false only when the ' +
+        'change has nothing a test could check.',
     },
     handoffFile: {
       type: 'string',
@@ -102,7 +104,9 @@ function research(round) {
       ? ''
       : `This is correction loop ${round} of ${MAX_CORRECTIONS}. Read the reviewer's ` +
         `findings file in the issue directory and plan the corrections. ` +
-        `Set needsTests true only if a finding needs a new failing test first.\n`
+        `Set needsTests true only if a finding needs a new failing test first, and ` +
+        `then give that test its own Test Plan section in this file — the earlier ` +
+        `rounds' plans do not carry over.\n`
   return agent(
     `Issue directory: ${dir}\n${correction}Write your handoff to ${dir}/${file}.\n${noDispatch}`,
     { agentType: 'uroboros:researcher', phase: 'Research', label: `research:${round}`, schema: PLAN },
@@ -115,7 +119,9 @@ log(`Plan written to ${plan.handoffFile}; tests needed: ${plan.needsTests}`)
 
 if (plan.needsTests) {
   await agent(
-    `Issue directory: ${dir}\nWrite your handoff to ${dir}/test-author.md.\n${noDispatch}`,
+    `Issue directory: ${dir}\nYour work order is the Test Plan section of ` +
+      `${plan.handoffFile}: write those cases, in the files and style it names, and ` +
+      `no others.\nWrite your handoff to ${dir}/test-author.md.\n${noDispatch}`,
     { agentType: 'uroboros:test-author', phase: 'Tests', label: 'tests' },
   )
 }
@@ -127,7 +133,8 @@ for (let round = 0; round <= MAX_CORRECTIONS; round++) {
     log(`Correction plan ${round} written to ${plan.handoffFile}`)
     if (plan.needsTests) {
       await agent(
-        `Issue directory: ${dir}\nThe reviewer's reproduction spec is your criterion. ` +
+        `Issue directory: ${dir}\nThe reviewer's reproduction spec is your criterion, ` +
+          `and the Test Plan section of ${plan.handoffFile} is your work order for it. ` +
           `Write your handoff to ${dir}/test-author-${round}.md.\n${noDispatch}`,
         { agentType: 'uroboros:test-author', phase: 'Tests', label: `tests:${round}` },
       )
