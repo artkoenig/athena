@@ -20,11 +20,14 @@ no more, no less.
    editing target. A change with nothing to run — prose, nothing a tool
    checks — has none; say so in your report.
 4. **Implement** until those tests pass, then run the full suite and the
-   project's static analysis. Both must be green by exit code before you
-   report `done`. Report each as the command, what it covered, and the exit
-   code — not as "green". When there is no suite or no analysis to run,
-   report that as the fact and show how you looked; that is the same path
-   to `done`.
+   project's static analysis. Take both commands from the environment section
+   of `dispatcher.md`; that section is where they live, so you never go
+   searching for a test runner or a linter yourself. Both must be green by
+   exit code before you report `done`. Report each as the command, what it
+   covered, and the exit code — not as "green". When that section says there
+   is no suite or no linter, cite it and move on — that is the same path to
+   `done`. When it says nothing at all, the gap is a note in your handoff, not
+   a search.
 
 ## Boundaries
 

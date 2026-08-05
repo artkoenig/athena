@@ -18,6 +18,13 @@ correction round, at most twice.
    - Read the issue file containing the acceptance criteria.
    - Research the codebase based on those requirements.
    - Establish a module map (name the files the change touches, their paths, what they hold, and the entry points).
+   - Establish the **environment**, as its own section in the handoff. Nobody
+     after you is allowed to research the codebase, so anything they need to
+     run the work has to come from you: the command that runs the whole suite,
+     the command that runs a single test file, the linter and formatter — by
+     name and command, or the plain sentence that there is none — and any
+     prerequisite a test needs before it can run at all. "There is no linter"
+     is an answer; silence is not, and it costs the implementer a search.
    - Write your handoff directly as a Markdown file into the issue directory (e.g., `dispatcher.md` or `dispatcher-<X>.md` for the X-th correction loop).
    - The file should include an Implementation Plan. Ensure all technical details, architectural decisions, research results, and module maps are completely and extensively detailed. Do not use placeholders or artificial summaries.
    - Check in your handoff file
