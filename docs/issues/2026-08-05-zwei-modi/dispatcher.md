@@ -49,7 +49,7 @@ Defaults already recorded in the issue (do not re-open them):
 | Path | What it holds | Role in this change |
 | --- | --- | --- |
 | `/home/user/athena/CLAUDE.md` | The rulebook, 42 lines. Sections: intro (3 principles), `## The Main Session` (`### Your Responsibilities`, `### Your Restrictions`), `## The Human`. | **The change.** Rewrite the `## The Main Session` section. |
-| `/home/user/athena/GEMINI.md` | A byte-identical copy of `CLAUDE.md` (verified: `diff CLAUDE.md GEMINI.md` is empty). Nothing in the repo references it; it is the same rulebook for the Gemini CLI and has been changed in the same commit as `CLAUDE.md` in the past (`2221334`). | **Must be updated to stay byte-identical.** Copy `CLAUDE.md` over it. |
+| `/home/user/athena/GEMINI.md` | **Correction to the first draft of this plan:** it is not a copy but a symlink to `CLAUDE.md` — `git ls-files -s` reports mode `120000`, blob content `CLAUDE.md`. It is the same rulebook for the Gemini CLI. | **No change and no copy step.** It follows `CLAUDE.md` by itself; writing a file over it would replace the symlink with a duplicate that then drifts. |
 | `/home/user/athena/.claude/rules/agents.md` | Path-scoped (`paths: agents/**`) page about how subagent pages are written. Says nothing about the Main Session's modes. | **No change.** Nothing here contradicts the two modes. |
 | `/home/user/athena/hooks/session-start.sh` | SessionStart hook. Reads `${plugin_root}/CLAUDE.md` and puts its whole text into the session context verbatim (JSON-escaped), plus a self-check line. | **No change.** It ships whatever `CLAUDE.md` says; the new text reaches sessions automatically. |
 | `/home/user/athena/skills/grill/SKILL.md` | The grill skill: vague idea → filed issue with approved criteria. Contains "The main session does NO research of its own in the codebase" and "The main session does no git operations". | **No change — deliberate.** Grill exists only to produce a filed issue, i.e. it is an Issue-Mode tool, and there its statements stay true. Restating the mode split here would be a second description of one rule (`skills/CLAUDE.md`: "Describe each thing once"). |
@@ -156,9 +156,7 @@ these gets this section as the answer)
 ### 4.4 Steps
 
 1. Edit `/home/user/athena/CLAUDE.md` as in 4.1.
-2. `cp /home/user/athena/CLAUDE.md /home/user/athena/GEMINI.md` — then verify
-   with `diff /home/user/athena/CLAUDE.md /home/user/athena/GEMINI.md`
-   (must print nothing, exit 0).
+2. Leave `GEMINI.md` alone — it is a symlink to `CLAUDE.md`.
 3. Run the suite (section 5) and record the exit codes.
 4. Write `/home/user/athena/docs/issues/2026-08-05-zwei-modi/implementer.md`.
 5. Commit `CLAUDE.md`, `GEMINI.md` and the handoff on
@@ -191,12 +189,27 @@ verbatim-delivery case, which now carries the new text. If a suite was already
 red before this edit, say so with the evidence (`git stash` + re-run) instead
 of chasing it; scope is the brief.
 
+## 5a. Execution record — who actually did this
+
+The `Task` tool was disabled for this run ("No such tool available: Task"), so
+neither `implementer` nor `reviewer` could be dispatched. The dispatcher
+applied section 4.1 itself. What was done:
+
+- `CLAUDE.md` lines 13–30 replaced by the text in 4.1. Nothing else in the
+  file changed; the intro and `## The Human` are byte-identical to before.
+- `GEMINI.md` untouched (symlink, see the module map).
+- `bash /home/user/athena/test.sh` → `PASS: all 6 suites`, exit code 0. That
+  includes `test-plugin.sh`, whose case "the whole text of CLAUDE.md arrives
+  verbatim in additionalContext" now carries the new text.
+- No review by a fresh context has happened. The change has not been reviewed
+  by anyone other than its author.
+
 ## 6. Definition of done
 
 - `CLAUDE.md` has `## The Main Session` with `### Issue Mode` and
   `### Direct Mode`, the mode-choice paragraph, and the Issue-Mode lists
   unchanged in substance.
-- `GEMINI.md` is byte-identical to `CLAUDE.md`.
+- `GEMINI.md` is untouched and still a symlink to `CLAUDE.md`.
 - Nothing else in the repository is modified except the handoff file.
 - `bash test.sh` reported with its exit code.
 - Handoff written, everything committed on the issue branch.
