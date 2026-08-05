@@ -10,8 +10,8 @@ export const meta = {
   ],
 }
 
-// The script is the orchestrator. No agent dispatches another one — every
-// prompt below says so, because the agent files still tell them to.
+// The script is the orchestrator. No agent dispatches another one — their
+// pages say so, and every prompt below repeats it.
 
 const MAX_CORRECTIONS = 2
 
