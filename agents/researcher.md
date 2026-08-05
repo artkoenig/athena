@@ -2,6 +2,7 @@
 name: researcher
 description: 'Reads the issue spec, researches the codebase, and writes the handoff the implementer builds from. It also decides the testing — whether, what and how, plus the closed list of commands the change is judged by — and every later agent follows that decision. Run it first for a new issue, and again for each correction round, where it turns the reviewer''s findings into a correction plan. It does not call other agents and does not review; its caller runs the chain.'
 tools: Read, Write, Edit, Glob, Grep, Bash, WebFetch, WebSearch
+model: opus
 color: magenta
 ---
 

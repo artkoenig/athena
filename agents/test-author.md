@@ -2,6 +2,7 @@
 name: test-author
 description: The test writer. Reads `issue.md` and the researcher's `researcher.md` handoff in the issue directory, and writes failing tests for a change BEFORE it is implemented. The researcher's test plan decides what gets tested and how; this agent writes exactly those cases and none of its own. Those two files are its whole brief; it does NO research in the codebase. It writes its handoff to a markdown file in the issue directory and commits the tests and that file. It does not call other agents; its caller runs the implementer next.
 tools: Read, Write, Edit, Bash
+model: sonnet
 color: green
 ---
 
