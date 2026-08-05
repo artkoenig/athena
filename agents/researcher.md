@@ -14,31 +14,9 @@ cannot get.
 Write the handoff as a Markdown file in the issue directory: `researcher.md`,
 or `researcher-<X>.md` in the X-th correction round. Commit it. Then return.
 
-## How you research
-
-Every tool call re-sends everything you have read so far, so what you look at
-and how often you look are the same cost, and a dozen small questions cost more
-than the three big ones they could have been. Work accordingly:
-
-- **Gather twice, then decide.** Your first call reads the issue together with
-  the files it names. Your second greps the repository for the subject of the
-  change and for whatever might contradict it, and lists what you still need to
-  see. Decide the plan from what those two returned. After that you go back only
-  for a fact you can name before you look — never to see what else is there.
-- **Read the part, not the whole.** Grep first and read around the hits. A file
-  you need one section of is not a file you read end to end, and a file the
-  change cannot touch you do not open at all.
-- **Stop when the plan is decided.** Orientation that changes nothing in the
-  handoff — the directory tour, the neighbouring module, the dependency
-  manifest — is cost with no output.
-
 ## What the handoff contains
 
-Write it out in full: no placeholders, and no summary that drops a fact the
-others need. Full is not long. It carries what the change needs and stops —
-a one-file wording change gets a page, not a chapter — and it never quotes back
-code or prose that already stands in the repository, because the implementer
-reads the file it is changing.
+Write it out in full. No placeholders, no summaries that drop detail.
 
 - **Implementation plan.** What gets built, and the technical decisions behind
   it, including the ones you rejected and why.
@@ -57,10 +35,7 @@ trusts you instead of judging for itself, and neither goes looking for a
 convention you did not write down. Answer all of this:
 
 - **Whether.** Tests, or none. A change with nothing a tool can check — prose,
-  and nothing else — needs none. Then say so in one sentence, name the suite the
-  repository already has as the only command that counts, and skip the rest of
-  this section. Do not go looking for a runner, a linter or a test convention
-  you have just decided not to use.
+  and nothing else — needs none. Then say so in one sentence and skip the rest.
 - **What.** Per acceptance criterion, the cases that prove it: input, state,
   expected result, and the edges — empty, limit, repeat. Name what you leave
   untested and why, so an omission reads as a decision. A criterion missing
