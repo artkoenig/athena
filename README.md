@@ -33,8 +33,8 @@ flowchart LR
 
     subgraph LOOP["uroboros-loop.js — one agent per step, each commits its handoff into the issue directory"]
         direction TB
-        RES["researcher<br/>writes the implementation plan"]
-        TEST["test-author<br/>turns the criteria<br/>into failing tests"]
+        RES["researcher<br/>writes the implementation plan<br/>and the test plan"]
+        TEST["test-author<br/>turns the planned cases<br/>into failing tests"]
         IMPL["implementer<br/>builds until they pass"]
         REV["reviewer<br/>checks the diff against main"]
         RES --> TEST --> IMPL --> REV
@@ -52,6 +52,18 @@ and [`reviewer`](agents/reviewer.md), run by a script
 ([`.claude/workflows/uroboros-loop.js`](.claude/workflows/uroboros-loop.js)) and
 not by an agent, because a subagent cannot start another one. Findings from the
 review open a correction round; after two the loop stops and hands back.
+
+Whether, what and how to test is decided once, by the researcher — the only
+agent that reads the codebase — in a Test Plan section of its handoff. The
+test-author writes those cases and no others, the implementer trusts the
+decision instead of judging it, and the reviewer, which reads no handoff at all,
+checks the result against the intent and so remains the check on that plan.
+
+The plan also closes the list of commands the change is judged by, and the loop
+hands that list to the implementer and the reviewer. Nobody runs a suite or a
+linter it leaves out, and an empty list means the review is a reading — so the
+cost of checking is a decision made once, with the codebase in view, instead of
+four agents each reaching for `test.sh` to be safe.
 
 Every agent commits its handoff into `docs/issues/<timestamp>-<slug>/`, so the
 record of a run is the issue and not anyone's context window. That is what makes

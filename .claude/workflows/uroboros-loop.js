@@ -36,7 +36,17 @@ const PLAN = {
   properties: {
     needsTests: {
       type: 'boolean',
-      description: 'False only when the change has nothing a test could check.',
+      description:
+        'What the Test Plan section of your handoff decided: false only when the ' +
+        'change has nothing a test could check.',
+    },
+    checks: {
+      type: 'array',
+      items: { type: 'string' },
+      description:
+        'The closed list from your Test Plan: the commands, verbatim and runnable from ' +
+        'the repository root, whose exit codes this change is judged by. Nobody ' +
+        'downstream runs anything else. Empty when nothing should be run at all.',
     },
     handoffFile: {
       type: 'string',
@@ -44,7 +54,7 @@ const PLAN = {
     },
     summary: { type: 'string' },
   },
-  required: ['needsTests', 'handoffFile', 'summary'],
+  required: ['needsTests', 'checks', 'handoffFile', 'summary'],
   additionalProperties: false,
 }
 
@@ -90,6 +100,17 @@ const PUSH = {
   additionalProperties: false,
 }
 
+// The reviewer reads no handoff — that is what keeps it an independent pair of
+// eyes. So the one thing it needs from the plan, the list of commands that count
+// for this change, is handed to it here instead: what to run, never why.
+function checkList(checks) {
+  return checks && checks.length
+    ? 'The commands that count for this change, and the only ones anyone runs:\n' +
+        checks.map((c) => `  - \`${c}\``).join('\n') +
+        '\n'
+    : 'The plan lists no command to run for this change. Run none, and say so.\n'
+}
+
 const noDispatch =
   'You are running inside a workflow script. Do NOT dispatch any subagent and ' +
   'do NOT hand over to anyone — the script calls the next agent itself. Write ' +
@@ -102,7 +123,9 @@ function research(round) {
       ? ''
       : `This is correction loop ${round} of ${MAX_CORRECTIONS}. Read the reviewer's ` +
         `findings file in the issue directory and plan the corrections. ` +
-        `Set needsTests true only if a finding needs a new failing test first.\n`
+        `Set needsTests true only if a finding needs a new failing test first, and ` +
+        `then give that test its own Test Plan section in this file — the earlier ` +
+        `rounds' plans do not carry over, the list of commands that count included.\n`
   return agent(
     `Issue directory: ${dir}\n${correction}Write your handoff to ${dir}/${file}.\n${noDispatch}`,
     { agentType: 'uroboros:researcher', phase: 'Research', label: `research:${round}`, schema: PLAN },
@@ -111,11 +134,16 @@ function research(round) {
 
 phase('Research')
 let plan = await research(0)
-log(`Plan written to ${plan.handoffFile}; tests needed: ${plan.needsTests}`)
+log(
+  `Plan written to ${plan.handoffFile}; tests needed: ${plan.needsTests}; ` +
+    `checks: ${plan.checks.length ? plan.checks.join(', ') : 'none'}`,
+)
 
 if (plan.needsTests) {
   await agent(
-    `Issue directory: ${dir}\nWrite your handoff to ${dir}/test-author.md.\n${noDispatch}`,
+    `Issue directory: ${dir}\nYour work order is the Test Plan section of ` +
+      `${plan.handoffFile}: write those cases, in the files and style it names, and ` +
+      `no others.\nWrite your handoff to ${dir}/test-author.md.\n${noDispatch}`,
     { agentType: 'uroboros:test-author', phase: 'Tests', label: 'tests' },
   )
 }
@@ -127,7 +155,8 @@ for (let round = 0; round <= MAX_CORRECTIONS; round++) {
     log(`Correction plan ${round} written to ${plan.handoffFile}`)
     if (plan.needsTests) {
       await agent(
-        `Issue directory: ${dir}\nThe reviewer's reproduction spec is your criterion. ` +
+        `Issue directory: ${dir}\nThe reviewer's reproduction spec is your criterion, ` +
+          `and the Test Plan section of ${plan.handoffFile} is your work order for it. ` +
           `Write your handoff to ${dir}/test-author-${round}.md.\n${noDispatch}`,
         { agentType: 'uroboros:test-author', phase: 'Tests', label: `tests:${round}` },
       )
@@ -137,6 +166,7 @@ for (let round = 0; round <= MAX_CORRECTIONS; round++) {
   const implFile = round === 0 ? 'implementer.md' : `implementer-${round}.md`
   await agent(
     `Issue directory: ${dir}\nYour brief is ${plan.handoffFile}.\n` +
+      checkList(plan.checks) +
       `Write your handoff to ${dir}/${implFile}.\n${noDispatch}`,
     { agentType: 'uroboros:implementer', phase: 'Implement', label: `implement:${round}` },
   )
@@ -144,6 +174,7 @@ for (let round = 0; round <= MAX_CORRECTIONS; round++) {
   const revFile = round === 0 ? 'reviewer.md' : `reviewer-${round}.md`
   verdict = await agent(
     `Issue directory: ${dir}\nReview round ${round}. Check the whole diff against main.\n` +
+      checkList(plan.checks) +
       `Write your findings to ${dir}/${revFile}.\n${noDispatch}`,
     { agentType: 'uroboros:reviewer', phase: 'Review', label: `review:${round}`, schema: VERDICT },
   )
