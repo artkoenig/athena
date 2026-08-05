@@ -43,3 +43,5 @@ The substance goes into the handoff file, in full — that is what the
 implementer reads. What you return is only what your caller needs to pick the
 next step: whether tests are needed, the path of the file you wrote, and one
 sentence on the plan.
+
+Write the handoff file in English, whatever language the issue is in.
