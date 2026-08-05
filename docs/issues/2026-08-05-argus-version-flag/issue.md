@@ -58,7 +58,7 @@ is not explained here.
 | dispatcher | 2.6 min | 2,026 | 635,355 | 15 | 0 | 7 |
 | test-author | 8.2 min | 10,070 | 1,002,352 | 17 | 0 | 11 |
 | implementer | 7.0 min | 8,657 | 884,989 | 24 | 1 | 8 |
-| reviewer | 6.1 min | 6,846 | 765,909 | 18 | 1 | 14 |
+| reviewer | 6.1 min | 7,846 | 765,909 | 18 | 1 | 14 |
 
 The main session spent more output tokens than all four subagents together
 (30,580 vs 28,599) and read 58 % of all cached prompt tokens — in a mode whose
@@ -139,7 +139,7 @@ prefix and pay mostly for their own additions. No compaction was triggered.
 
 **Which recurring manual steps should be encapsulated into dedicated CLI tools
 or scripts?**
-The retro itself. `bin/parse-agent-log` cannot read this session at all, in two
+The retro itself. `bin/parse-agent-log` cannot read this session at all, in three
 independent ways:
 
 1. `--latest` searches `~/.claude` and reported "Log file not found" although the
