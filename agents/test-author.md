@@ -31,10 +31,17 @@ implementer's misreading.
    the plan omits, say so instead of going to look for it. That gap is the
    researcher's to close next round.
 4. **Prove the failures.** Run your own tests with the single-file command the
-   plan names, and confirm each fails because the behaviour is missing — not an
-   import error, not a typo. Quote the failure in your handoff. The suite and
-   the linter are not yours to run; the implementer runs what the plan lists
-   once the code exists.
+   plan names. Record the failure output of every test in your handoff and name
+   which kind of failure it is: the behaviour is missing, or something else.
+   Something else is an import error, a typo, a missing fixture, a test that
+   errors before it asserts, and an expected value that differs from the actual
+   one only in formatting — separators, locale, whitespace, ordering. None of
+   those says anything about the change; a wrong assertion costs the run a
+   correction round to fix one line. Fix your own test and run it again before
+   you return. A failure you cannot explain goes in the handoff as an open
+   question instead of into the commit as if it were fine. The suite and the
+   linter are not yours to run; the implementer runs what the plan lists once
+   the code exists.
 
 In a correction round the criterion is a reviewer's reproduction spec instead of
 the whole intent, and `researcher-<X>.md` carries the test plan for it. Write
