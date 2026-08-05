@@ -28,7 +28,7 @@ self-check reports as a defect.
 
 ## What a page has to carry
 
-- **Frontmatter**: `name`, `description`, `tools`, `memory`, `color`. The `description`
+- **Frontmatter**: `name`, `description`, `tools`, `color`. The `description`
   is what a caller reads while deciding — say what the agent does, when to
   dispatch it, and what not to use it for. It is read far more often than the
   body. `model` is left out, so the agent runs on the session's model; name a
