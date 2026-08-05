@@ -10,7 +10,7 @@
     {
       "name": "uroboros",
       "source": "./",
-      "description": "An AI agent workflow built on judgment, not rules: the uroboros rulebook, delivered to every session."
+      "description": "An AI agent workflow that delegates the work to a scripted loop: the uroboros rulebook, delivered to every session."
     }
   ]
 }

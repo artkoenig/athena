@@ -1,8 +1,8 @@
 # uroboros
 
-> An AI agent workflow built on judgment, not rules — a few invariants,
-> self-correction in the loop, and a human only where it matters. Successor to
-> [metis](https://github.com/artkoenig/metis).
+> An AI agent workflow that delegates: the conversation settles what is wanted,
+> a scripted loop builds it — research, failing tests, implementation, review,
+> correction — and a human steps in only where it matters.
 
 **Uroboros** is the snake that eats its own tail: the loop that closes on
 itself and starts again. That is the principle, not just the name — a run
@@ -11,17 +11,28 @@ is written back into the workflow.
 
 ## What it's for
 
-uroboros bets on the judgment of a modern Anthropic agent — it assumes at
-least Opus 5 — and builds on that trust rather than around its absence.
-Most agent workflows compensate for a model they don't quite trust with
-process: approval gates, checklists, a human re-checking work the agent
-could have checked itself. uroboros instead gives the agent the run and asks
-it to decide how much planning a change needs, how to slice it, which
-tools to reach for — and keeps process only for the handful of things a
-model can't reliably judge about its own work, like grading its own tests
-or reviewing a diff it just wrote.
+uroboros assumes a modern Anthropic agent — at least Opus 5 — and spends that
+capability inside the loop rather than in the conversation. The session you
+talk to decides almost nothing about the work: it settles what is wanted,
+writes the acceptance criteria to an issue, and hands that issue to a script.
+The script runs the chain, and every step gets its own agent with its own
+brief, so no single context carries the whole run.
 
-That trust is what makes unattended work possible: a run is meant to go
+The separation is the point. Process is kept for the things a model cannot
+reliably judge about its own work — grading its own tests, reviewing a diff it
+just wrote — and the chain is cut along those seams. Inside a step, how to go
+about it stays the agent's call.
+
+**Effective context engineering is the goal**, not a side effect of the
+layout. A long-running agent gets worse as its context fills with everything
+it has ever read, so uroboros treats context as the scarce resource it is:
+each step gets the smallest brief that does its job, the run's record lives in
+the issue rather than in anyone's window, and the session the human talks to —
+the most expensive context of all — is kept out of the codebase entirely. What
+a step needs is written down and handed over; what it does not need never
+arrives.
+
+That split is what makes unattended work possible: a run is meant to go
 from idea to pull request with no human at the keyboard, stepping in only
 where a human actually has to — intent that's genuinely unclear, anything
 irreversible, the merge itself. Everything a run decides or discovers along
@@ -55,10 +66,11 @@ which runs the chain:
 
 | Step      | Agent                                  | What it does                                                                    |
 | --------- | -------------------------------------- | ------------------------------------------------------------------------------- |
-| Research  | [`dispatcher`](agents/dispatcher.md)   | Researches the codebase, decides the solution, writes the implementation plan    |
-| Tests     | [`test-author`](agents/test-author.md) | Turns the criteria into failing tests, having never seen an implementation       |
-| Implement | [`implementer`](agents/implementer.md) | Builds from the plan until the tests pass and the suite is green                 |
-| Review    | [`reviewer`](agents/reviewer.md)       | Checks the whole diff against `main` — it sees the diff and the issue, no handoffs |
+| Research  | [`researcher`](agents/researcher.md)   | Researches the codebase and writes the implementation plan                      |
+| Tests     | [`test-author`](agents/test-author.md) | Turns the acceptance criteria into failing tests                                |
+| Implement | [`implementer`](agents/implementer.md) | Builds from the plan until the tests pass                                       |
+| Review    | [`reviewer`](agents/reviewer.md)       | Checks the finished change against the criteria and the tests                   |
+| Publish   | —                                      | Pushes the branch and makes sure a pull request is open for the human to merge   |
 
 Every agent writes its handoff into the issue directory and commits it, so the
 record is the issue rather than anyone's context. Findings from the review

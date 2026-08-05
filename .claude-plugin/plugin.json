@@ -1,6 +1,6 @@
 {
   "name": "uroboros",
-  "description": "An AI agent workflow built on judgment, not rules: the uroboros rulebook, delivered to every session.",
+  "description": "An AI agent workflow that delegates the work to a scripted loop: the uroboros rulebook, delivered to every session.",
   "author": {
     "name": "Artjom König",
     "email": "artkoenig@gmail.com",
@@ -19,7 +19,7 @@
     "./skills/"
   ],
   "agents": [
-    "./agents/dispatcher.md",
+    "./agents/researcher.md",
     "./agents/implementer.md",
     "./agents/reviewer.md",
     "./agents/test-author.md"
