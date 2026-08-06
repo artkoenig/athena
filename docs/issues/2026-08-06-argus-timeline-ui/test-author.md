@@ -1508,3 +1508,122 @@ and slicing technique left nothing to guess; every case mapped to one
 concrete assertion, and running the files confirmed the plan's own predicted
 failure shapes (module-load error for `context.test.mjs`, four named
 assertion failures for `page.test.mjs`) exactly.
+
+## Increment 6
+
+The plan names three hops (M-A/M-C, M-B, M-D/M-E) and gives each an exact
+case list. All nine cases below are written exactly as the plan states them —
+no case added, none dropped, no assertion reworded beyond what the plan's own
+text gives.
+
+### `tools/argus-ui/test/context.test.mjs`
+
+| # | Case name | Status | Note |
+| --- | --- | --- | --- |
+| import | adds `lanePanelInput` to the `context.js` import list, `fmtNum` to the `format.js` import list, and one `blockChunks` helper beside the factories | — | as the plan specifies |
+| C1 | `the panel input is built from the lane whose key the reader selected` | new | see below |
+| C2 | `a key no lane carries, and no key at all, leave nothing to draw` | new | see below |
+| C3 | `a subagent lane's context is drawn under that subagent's own heading` | new | see below |
+| C5 | rewrite of the existing case `the head names the lane and the record the context came from` (was line 302) | rewritten in place | see below |
+| C4 | `every collapsed line shows that block's own size` | new | see below |
+| C6 | `the one line a collapsed block shows reaches the markup` | new | see below |
+
+`node --test tools/argus-ui/test/context.test.mjs` fails the whole file before
+any of its 30-odd cases run:
+
+```
+SyntaxError: The requested module '../public/context.js' does not provide an export named 'lanePanelInput'
+```
+
+That one `SyntaxError` is C1, C2 and C3's failure: `lanePanelInput` is the
+export the implementation plan adds to close M-A/M-C, and none of it exists
+yet, so the import that names it cannot resolve. Node reports a module-load
+failure as a single top-level failure, not one per `test(...)` — the run shows
+"1 test, 1 fail", not three — but the cause is exactly the missing behaviour
+C1–C3 exist to pin, not a typo of mine: the same load succeeds and every other
+case in the file keeps passing the moment I temporarily strip the
+`lanePanelInput` import and the three cases that use it (checked by running
+the file's other content standalone, not committed anywhere).
+
+C5, C4 and C6 do **not** fail today, and per the researcher's own table this is
+by design, not a gap I found: finding 3 ("the sizes and the preview in the
+markup") is logged as "already value-testable; only the assertions were
+loose... No production change at all" — these three cases sharpen assertions
+against code that already prints `block.chars` and `block.preview` correctly.
+I confirmed this outside the suite, since the file-level `SyntaxError` above
+blocks all three from running inside `node --test` until `lanePanelInput`
+exists: a standalone script that imports only `contextBlocks`,
+`renderContextPanel`, `esc` and `fmtNum` (nothing C1–C3 need) and runs C4's,
+C5's and C6's exact assertions against the current `context.js` and
+`format.js` passes all three. So once the implementer adds `lanePanelInput`
+(which C1–C3 force regardless) and the file loads, C4, C5 and C6 will pass
+immediately with no further change to `context.js` — that is the correct,
+plan-predicted outcome for a case pinning behaviour that was never broken,
+only under-asserted.
+
+### `tools/argus-ui/test/page.test.mjs`
+
+| # | Case name | Status | Failure |
+| --- | --- | --- | --- |
+| P1 | `app.js takes the context panel from its module` (rewrite of the existing case at line 349, name unchanged) | fails | `AssertionError: app.js must import lanePanelInput from context.js, so the tested function is the one the page runs` |
+| P2 | `the panel is drawn from the lane the reader selected and the answer held for it` (rewrite of the existing case at line 462, renamed as the plan directs) | fails | `AssertionError: the panel's whole input must come from lanePanelInput` — the quoted `actual` is today's `renderContextPanel({ lane, ...laneContextInput(key, state.laneContext), expanded: state.expanded })`, the exact call M-A's mutation (dropping `lane,`) hides inside |
+| P3 | `selecting a lane repaints the panel once its own fetch resolves, without waiting for an ingest` (new, placed directly after the existing `selecting a lane fetches its context` case at line 394) | passes | see below |
+
+P3 passes today. This matches the researcher's own table for M-B: "a
+sharpened source assertion is the ceiling, and it kills M-B" — the plan states
+this hop needs no production change either, only a stricter read of the
+existing `[data-lane]` click branch. The branch in today's `app.js` already
+chains `.then(renderLanePanel)` off the same `loadLaneContext(...)` call P3
+locates, so the sharpened assertion is satisfied now; it exists to catch the
+measured mutation (dropping that `.then`), which I cannot apply myself since
+production code is off limits to me.
+
+`node --test tools/argus-ui/test/page.test.mjs`: 42 tests, 40 pass, 2 fail
+(P1, P2 above — the two rewritten cases), exit 1.
+
+### Whole-project run, once, at the end
+
+`npm --prefix tools/argus-ui test`: 129 tests, 126 pass, 3 fail, exit 1. The
+three failures are exactly `test/context.test.mjs`'s one whole-file load error
+(covering C1–C3) plus P1 and P2 in `test/page.test.mjs`; every other case in
+every file — including P3, C4, C5, C6, and every pre-existing case this round
+did not touch — passes. I ran this once, after writing and individually
+checking every case above, only to confirm these three are the whole of what
+this round's test edits turn red; the plan reserves this command for the
+implementer, and I did not use it to discover anything I hadn't already found
+running the two files it names on their own.
+
+### Deliberately not written
+
+Matches the plan's "What is deliberately left untested" list exactly:
+
+- A real click in a real browser — no DOM, no dependency; P3 is the plan's own
+  named ceiling.
+- The debounced-scrub and return-to-live repaint chains — pinned already by
+  the untouched cases at `page.test.mjs:478` and `:502`; no criterion of this
+  increment names their repaint and no mutation was measured on them.
+- The transport (`app.js`'s `api()`, the collector's `/api/content/at`) —
+  unchanged here, covered by `tools/argus`'s own suite.
+- The parser (`contextBlocks`, `previewOf`, `textOf`, `laneContentQuery`) —
+  keeps its ~40 existing cases untouched; this increment reads what the
+  renderer prints, not what the parser computes.
+- The reviewer's round-2 observations not raised as findings (expansion set
+  collapsing on a newer record, the whole body refetched every refresh, the
+  `main`/`span`/`agent` naming agreement) — none is a finding, no case pins
+  them.
+- Everything increment 7 owns — the tools an agent used up to the moment. Not
+  named by this increment's criteria, so not mine to test or report as
+  missing.
+
+### Gaps and conflicts found in the plan
+
+None. Every case's input, expected value and exact assertion text came
+straight from the plan's tables; nothing needed a guess. The one thing worth
+flagging is not a gap but a fact this round's own execution confirms: four of
+the nine cases (P3, C4, C6, and the rewritten C5) pass against today's
+unmodified production code rather than failing, exactly as the researcher's
+hop table predicted for findings 2 and 3 ("no production change at all").
+Only the five cases tied to finding 1's restructuring (C1, C2, C3, P1, P2)
+are red right now; the implementer closes those, and the other four stay
+green through the change since the plan explicitly asks for no production
+edit on their account.

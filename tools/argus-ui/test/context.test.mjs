@@ -8,8 +8,9 @@ import {
   laneContentQuery,
   fetchLaneContext,
   laneContextInput,
+  lanePanelInput,
 } from '../public/context.js';
-import { esc } from '../public/format.js';
+import { esc, fmtNum } from '../public/format.js';
 
 // The three factories every case builds its input from — modelled on the
 // captured request body (increment 5's finding 3) and nothing else.
@@ -70,6 +71,9 @@ const recorder = (answer = { item: item() }) => {
     },
   };
 };
+
+/** The markup of each rendered block, in the order the panel prints them. */
+const blockChunks = (html) => [...html.matchAll(/<details class="ctx-block"[\s\S]*?<\/details>/g)].map((m) => m[0]);
 
 // Criterion — selecting a lane at the chosen time shows that agent's context as a
 // message list, built from contextBlocks(body).
@@ -300,9 +304,18 @@ test('a selected lane at a moment renders one expandable block per block, each w
 });
 
 test('the head names the lane and the record the context came from', () => {
-  const html = renderContextPanel({ lane: lane(), item: item() });
+  const body = requestBody();
+  const html = renderContextPanel({ lane: lane(), item: item({ body }) });
   assert.ok(html.includes(lane().label), 'the head must carry the lane\'s own label');
-  assert.match(html, /data-chars="\d+"/);
+  assert.match(
+    html,
+    new RegExp('<span class="context-meta" data-chars="' + body.length + '"'),
+    'the head\'s total must be the body\'s own length, not any number',
+  );
+  assert.ok(
+    html.includes(fmtNum(body.length) + ' chars'),
+    'the readable line must carry the same total the data attribute does',
+  );
   assert.match(html, /data-time="4000"/);
   assert.match(html, /data-model="claude-sonnet-5"/);
   assert.match(html, /data-truncated="false"/);
@@ -644,4 +657,123 @@ test('what the page holds spreads straight into the panel, and the record\'s own
     expanded: [],
   });
   assert.match(pendingHtml, /data-state="pending"/);
+});
+
+// Increment 6 — lanePanelInput(view, key, held, expanded): the panel's whole
+// input becomes one pure value, so the lane lookup that decides whose context
+// is drawn is itself value-testable (reviewer's increment 5 round 2, findings
+// 1 and 3).
+
+test('the panel input is built from the lane whose key the reader selected', () => {
+  const v = view();
+  const rec = item();
+  const out = lanePanelInput({
+    view: v,
+    key: 'agent:sp-b:probe',
+    held: { key: 'agent:sp-b:probe', item: rec },
+    expanded: ['12:0'],
+  });
+  assert.deepEqual(out, { lane: v.lanes[1], item: rec, pending: false, expanded: ['12:0'] });
+  assert.equal(
+    out.lane,
+    v.lanes[1],
+    'the agent lane itself — a lookup that lands on the main lane puts a subagent under the main session\'s heading',
+  );
+
+  const mainOut = lanePanelInput({
+    view: v,
+    key: 'main',
+    held: { key: 'main', item: rec },
+    expanded: ['12:0'],
+  });
+  assert.equal(mainOut.lane, v.lanes[0]);
+});
+
+test('a key no lane carries, and no key at all, leave nothing to draw', () => {
+  const noneOut = lanePanelInput({ view: view(), key: 'agent:gone:x', held: null });
+  assert.equal(noneOut.lane, null);
+
+  const nullKeyOut = lanePanelInput({ view: view(), key: null, held: { key: null, item: null } });
+  assert.equal(nullKeyOut.lane, null);
+
+  const noArgOut = lanePanelInput();
+  assert.equal(noArgOut.lane, null);
+  assert.deepEqual(noArgOut, { lane: null, item: null, pending: true, expanded: [] });
+
+  assert.equal(
+    renderContextPanel(lanePanelInput({ view: view(), key: null, held: null })),
+    '',
+    'no lane selected, no panel under the timeline',
+  );
+});
+
+test('a subagent lane\'s context is drawn under that subagent\'s own heading', () => {
+  const rec = item();
+  const html = renderContextPanel(
+    lanePanelInput({
+      view: view(),
+      key: 'agent:sp-b:probe',
+      held: { key: 'agent:sp-b:probe', item: rec },
+      expanded: [],
+    }),
+  );
+  assert.match(
+    html,
+    /data-state="ready"/,
+    'an input with no lane renders the empty string — this is the case a dropped lane fails',
+  );
+  assert.ok(html.includes('data-context-lane="agent:sp-b:probe"'));
+  assert.ok(html.includes('probe'));
+  assert.ok(
+    !html.includes('main session'),
+    'the main session\'s heading over a subagent\'s context is the mutation this case exists to catch',
+  );
+  assert.ok(html.includes('the answer'), 'the record\'s own content must be what the panel shows');
+
+  const mainHtml = renderContextPanel(
+    lanePanelInput({ view: view(), key: 'main', held: { key: 'main', item: rec }, expanded: [] }),
+  );
+  assert.ok(mainHtml.includes('data-context-lane="main"'));
+  assert.ok(mainHtml.includes('main session'));
+});
+
+// Increment 6 — the sizes and the one-line preview must reach the markup
+// (reviewer's increment 5 round 2, finding 3, mutations M-D and M-E).
+
+test('every collapsed line shows that block\'s own size', () => {
+  const { blocks } = contextBlocks(requestBody());
+  const chunks = blockChunks(renderContextPanel({ lane: lane(), item: item() }));
+  assert.ok(
+    new Set(blocks.map((b) => b.chars)).size > 1,
+    'the fixture must carry blocks of differing sizes, or one size printed for all of them would pass',
+  );
+  assert.equal(chunks.length, blocks.length);
+  blocks.forEach((block, i) => {
+    const m = chunks[i].match(/<span class="ctx-size" data-chars="(\d+)">([\s\S]*?)<\/span>/);
+    assert.ok(m, `block ${i} must carry a ctx-size span`);
+    assert.equal(Number(m[1]), block.chars, `block ${i} must advertise its own measured size`);
+    assert.equal(
+      m[2],
+      esc(fmtNum(block.chars)),
+      'and the reader must see that same size, not another block\'s and not zero',
+    );
+  });
+});
+
+test('the one line a collapsed block shows reaches the markup', () => {
+  const { blocks } = contextBlocks(requestBody());
+  const chunks = blockChunks(renderContextPanel({ lane: lane(), item: item() }));
+  assert.ok(
+    blocks.every((b) => b.preview.length > 0),
+    'no block of the fixture may preview as nothing, or an emptied preview span would pass',
+  );
+  assert.ok(
+    blocks.some((b) => b.preview.endsWith('…')),
+    'at least one preview must be a real cut, so this case cannot pass on previews that are just the whole text',
+  );
+  blocks.forEach((block, i) => {
+    const m = chunks[i].match(/<span class="ctx-preview">([\s\S]*?)<\/span>/);
+    assert.ok(m, `block ${i} must carry a ctx-preview span`);
+    assert.equal(m[1], esc(block.preview), `block ${i}'s collapsed line must be its own preview`);
+  });
 });
