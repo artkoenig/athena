@@ -2023,3 +2023,466 @@ result is unknown. Unlike the earlier rounds, they are expected to pass on the
 first run — `activityMarks` already computes what they assert, and the numbers
 they pin are the ones I verified above. A red new case means the case's
 arithmetic is wrong, not the module.
+
+## Increment 4 — the timeline scrubs, and a live mode follows the head
+
+This increment changes `tools/argus-ui` only, and inside it four files. The
+collector is not touched: a time cursor is page state over data the page already
+holds, and nothing about it belongs in a headless collector. No new file, no new
+dependency, no change to any route.
+
+I read the code and ran nothing — no test, no capture, no baseline. The
+increment turns on no question about the telemetry: increments 1–3 already
+settled what arrives and how it is attributed, and the window the cursor moves
+in is `buildLanes`' own `startMs`…`endMs`, which is already in the page.
+
+### What the criterion asks for, restated as the change
+
+The timeline gains a **time cursor**: a `<input type="range">` whose value *is*
+a timestamp in the session window, a vertical line drawn over the lanes at that
+moment, a clock readout of it, and a **Live** control. The cursor has two modes,
+held in one page-state object `state.cursor`:
+
+- `{ live: true, timeMs: null }` — every render resolves the cursor to the
+  window's `endMs`, so as new data extends the window the cursor moves with it.
+  That is "follows the newest data as it arrives", and it rides the SSE refresh
+  the page already does; no new polling, no timer.
+- `{ live: false, timeMs: <ms> }` — the cursor is pinned to an absolute moment
+  and stays on it while the session grows around it. Dragging the range produces
+  exactly this, which is "scrubbing away from the head leaves live mode".
+
+The **Live** button writes `{ live: true, timeMs: null }` back, which is the
+control that returns to live mode.
+
+Nothing is selected at the cursor yet — the two detail panels are increments 5
+and 6. No code here may anticipate them and no case may pin them.
+
+### Implementation plan
+
+**A. `tools/argus-ui/public/timeline.js` — three pure functions and a second
+argument to `renderTimeline`.**
+
+New exported functions, next to the existing pure ones:
+
+- `liveCursor()` → `{ live: true, timeMs: null }`, a **fresh object per call**.
+  A shared frozen constant would be mutable-by-reference from the page; a
+  factory keeps the shape in one place with no shared instance.
+- `scrubCursor(timeMs, window)` → `{ live: false, timeMs: <clamped> }`. The
+  clamp is into `window.startMs`…`window.endMs`; a non-finite `timeMs` falls back
+  to `window.endMs`. It **always** returns `live: false`, including for a scrub
+  that lands exactly on the head — see the decisions.
+- `resolveCursor(cursor, window)` → `{ live, timeMs, leftPct }`, leaving its
+  argument untouched:
+  1. `startMs = window?.startMs ?? 0`, `endMs = Math.max(startMs, window?.endMs ?? startMs)`;
+  2. `cursor?.live === false` is the only thing that is not live — so `null`,
+     `undefined` and `{ live: true }` all resolve live, which is what keeps
+     `renderTimeline(view)` (increments 2 and 3's call shape) working;
+  3. live → `timeMs = endMs`;
+  4. not live → `timeMs = clamp(Number.isFinite(cursor.timeMs) ? cursor.timeMs : endMs, startMs, endMs)`;
+  5. `span = endMs - startMs`;
+     `leftPct = span > 0 ? clamp(((timeMs - startMs) / span) * 100, 0, 100) : 100`.
+     The `span > 0` branch is what stops a one-instant session dividing by zero,
+     and it puts the cursor of such a session on the head rather than at 0, so
+     both modes agree there.
+
+`renderTimeline(view, cursor = null)` gains a second parameter and two blocks of
+markup. It resolves once — `const active = resolveCursor(cursor, window)` — and
+both blocks read that one result, so the thumb, the line and the readout can
+never disagree. The markup, exactly:
+
+```html
+<div class="panel timeline-panel">
+  <div class="timeline">
+    <div class="timeline-legend">…unchanged…</div>
+    <div class="timeline-scrub">
+      <span class="scrub-time" id="timeline-cursor-time" data-time="<active.timeMs>"><fmtClock(active.timeMs)></span>
+      <input type="range" id="timeline-scrub" class="scrub-range" min="<window.startMs>"
+             max="<window.endMs>" step="1" value="<active.timeMs>" aria-label="Time cursor">
+      <button type="button" class="ghost-button scrub-live" data-cursor-live
+              aria-pressed="<active.live>">Live</button>
+    </div>
+    <div class="timeline-axis">…unchanged…</div>
+    <div class="timeline-lanes">
+      <div class="timeline-cursor" aria-hidden="true">
+        <span class="timeline-ahead" data-cursor-pos style="left:<active.leftPct.toFixed(3)>%"></span>
+        <span class="timeline-cursor-line" data-cursor-pos style="left:<active.leftPct.toFixed(3)>%"></span>
+      </div>
+      …the lane rows, each exactly as today…
+    </div>
+  </div>
+</div>
+```
+
+Points that are load-bearing, not taste:
+
+- The range's `min`/`max` **are** the window in milliseconds and its `value` is
+  the cursor's own timestamp, so no fraction arithmetic sits between the control
+  and the model — and the page can recover the window from the element itself.
+- The lane rows move inside a new `<div class="timeline-lanes">`; that element is
+  the positioning context the cursor overlay is absolutely placed in. The rows'
+  own markup does not change.
+- `data-cursor-pos` marks every element whose `left` is the cursor position, and
+  `data-cursor-live` marks the control that returns to live. Both are the hooks
+  the page wires and the tests read; neither collides with anything in the
+  project (`#live-indicator` uses `data-state` and sits outside `#detail`).
+- The interpolated values follow this file's convention: numbers through
+  `.toFixed(3)` inside `style`, everything else through `esc(...)`.
+- Class names avoid the substrings `lane-curve` and `lane-mark`, because
+  increment 3's "a lane with nothing on it renders as a bare lane" case asserts
+  those two strings are absent from the whole markup.
+
+**B. `tools/argus-ui/public/app.js` — state, two small functions, three wirings.**
+
+- State: `cursor: { live: true, timeMs: null }` next to `content`. A session
+  opens live; that is the landing state the criterion's "follows the newest data"
+  half describes.
+- `selectSession` sets `state.cursor = liveCursor()` beside the existing
+  `state.content = []` reset, so a new session never inherits a moment pinned in
+  another one.
+- `renderDetail` passes the cursor:
+  `renderTimeline(buildDensity(buildLanes({ session, content: state.content }), { content: state.content, tools: state.toolMarks }), state.cursor)`.
+- Two new top-level functions, so the wiring has a name a test can read:
+  ```js
+  /** The cursor's position, written straight into the DOM: a full re-render would
+   *  replace the slider under the pointer and end the drag. */
+  function paintCursor() {
+    const input = document.getElementById('timeline-scrub');
+    if (!input) return;
+    const active = resolveCursor(state.cursor, { startMs: Number(input.min), endMs: Number(input.max) });
+    for (const node of document.querySelectorAll('[data-cursor-pos]')) {
+      node.style.left = `${active.leftPct.toFixed(3)}%`;
+    }
+    input.value = String(active.timeMs);
+    const readout = document.getElementById('timeline-cursor-time');
+    if (readout) {
+      readout.textContent = fmtClock(active.timeMs);
+      readout.dataset.time = String(active.timeMs);
+    }
+    const control = document.querySelector('[data-cursor-live]');
+    if (control) control.setAttribute('aria-pressed', String(active.live));
+  }
+
+  /** A drag reads its window off the control it came from. */
+  function scrubTo(input) {
+    state.cursor = scrubCursor(Number(input.value), { startMs: Number(input.min), endMs: Number(input.max) });
+    paintCursor();
+  }
+  ```
+- Wiring in `wireEvents`, all three on the `#detail` element that already carries
+  the delegated listeners:
+  1. the existing `input` listener gains, **before** its
+     `if (event.target.id !== 'event-search') return;` line:
+     `if (event.target.id === 'timeline-scrub') { scrubTo(event.target); return; }`
+     — this is what keyboard scrubbing (arrow keys on a range) goes through too;
+  2. the existing `click` listener gains, after the `[data-copy]` branch:
+     `const live = event.target.closest('[data-cursor-live]'); if (live) { state.cursor = liveCursor(); renderDetail(); return; }`
+     — returning to live is a full re-render, which is safe: no drag is in flight;
+  3. a `pointerdown` listener on `#detail` sets a module-level `let scrubbing = false;`
+     to `true` when `event.target.id === 'timeline-scrub'`, and `pointerup` plus
+     `pointercancel` on `window` set it back to `false` (the pointer is often
+     released outside the slider).
+- `scheduleRefresh` defers while a drag is in flight, or the SSE refresh that
+  fires on every ingest replaces the slider mid-drag and the scrub dies under the
+  pointer:
+  ```js
+  refreshTimer = setTimeout(() => {
+    refreshTimer = null;
+    if (scrubbing) { scheduleRefresh(delay); return; }
+    refresh().catch(() => setLive('offline', 'error'));
+  }, delay);
+  ```
+- Imports: `resolveCursor`, `scrubCursor`, `liveCursor` join the existing
+  `./timeline.js` import list. `fmtClock` is already imported from `./format.js`.
+
+**C. `tools/argus-ui/public/styles.css` — appended to the timeline block
+(lines 786–933), plus nothing in the responsive block.**
+
+```css
+.timeline-scrub {
+  display: grid;
+  grid-template-columns: var(--label-w) 1fr var(--meta-w);
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.scrub-time { font-family: var(--mono); font-size: 10px; color: var(--text-faint); }
+
+.timeline-scrub input[type="range"] { width: 100%; margin: 0; accent-color: var(--accent); cursor: ew-resize; }
+
+.scrub-live { justify-self: end; padding: 2px 8px; font-size: 10px; }
+.scrub-live[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+
+.timeline-lanes { position: relative; }
+
+/* Exactly the track column: the lane grid is label | 1fr | meta with an 8px gap. */
+.timeline-cursor {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--label-w) + 8px);
+  right: calc(var(--meta-w) + 8px);
+  pointer-events: none;
+}
+
+.timeline-cursor-line { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--accent); }
+
+/* Everything after the cursor is dimmed, so "as of this moment" reads at a glance. */
+.timeline-ahead { position: absolute; top: 0; bottom: 0; right: 0; background: color-mix(in srgb, var(--bg) 55%, transparent); }
+```
+
+The responsive block at line ~1148 already overrides `--label-w` and `--meta-w`
+on `.timeline`, and the `calc()`s above read them, so the overlay follows the
+narrow layout with no second rule. `color-mix` is already used in this file, and
+every colour named here exists in both `:root` and the light-mode block.
+
+**D. `tools/argus-ui/README.md` — one edit.** The **Timeline** bullet (around
+line 61) gains that the timeline carries a time cursor that can be dragged to any
+moment of the session and a live mode, left by scrubbing and returned to with the
+Live control. `CLAUDE.md` needs no change: no convention changes.
+
+### Decisions, and what I rejected
+
+- **A native `<input type="range">` as the scrub control**, rather than
+  pointer-drag handling on the lane track. It gives dragging, keyboard scrubbing
+  and focus behaviour for free in a project with zero dependencies and no DOM
+  test harness, and its `min`/`max`/`value` carry the model so nothing has to be
+  recomputed from pixel offsets. Rejected: `pointerdown`/`pointermove`/
+  `pointercapture` on the track (more untestable DOM code, no keyboard, and
+  `getBoundingClientRect` arithmetic that this project cannot test at all).
+- **The range's value is a timestamp**, not a per-mille fraction. One less
+  conversion, and the page can read the window back off the element instead of
+  stashing it in state.
+- **Any scrub leaves live mode, including a scrub that lands exactly on the
+  head.** Live is a *following* mode; a cursor a human parked on the current head
+  must not silently start moving when the next record arrives. The criterion asks
+  for a control that returns to live, and that control is the only way back.
+  Rejected: auto-resuming live when the thumb reaches the right edge (a
+  video-player idiom that makes the mode change without the human asking).
+- **A pinned cursor keeps its absolute moment while the window grows**, so its
+  `leftPct` shrinks as the session lengthens. The alternative — holding the
+  position and letting the moment drift — would silently rewrite what the human
+  selected.
+- **A one-instant window puts the cursor at the head (`leftPct` 100), not at 0.**
+  The two modes then agree in the degenerate case, and no division by zero can
+  reach a style attribute.
+- **The overlay is drawn from one resolution.** `renderTimeline` calls
+  `resolveCursor` once; `paintCursor` calls it once. Two call sites computing a
+  position independently is how a thumb and a line drift apart.
+- **A drag is answered by writing `style.left` directly, never by re-rendering.**
+  `renderDetail` replaces `#detail.innerHTML` wholesale, which would destroy the
+  slider the pointer is holding. Same reason `scheduleRefresh` defers while a
+  drag is in flight rather than re-rendering behind it.
+- **Rejected: zooming or windowing the timeline to the cursor.** The window is
+  the whole recorded session; the criterion asks for a cursor in it, not a
+  viewport over it.
+- **Rejected: a playback speed, a play/pause pair, or stepping controls.** The
+  issue's own assumptions say no playback machinery is asked for.
+- **Rejected: putting the cursor in the collector or in a URL parameter.** The
+  cursor is view state of one open page; the hash already carries the session.
+- **Rejected: filtering the lanes, curves or marks to the left of the cursor.**
+  What the cursor selects is increments 5 and 6; drawing less of the timeline
+  than it draws today would be a regression against increment 3's criterion.
+- **Rejected: a second cursor for a range selection.** Not asked for.
+
+### Consequences to accept, not paper over
+
+- A range input's thumb travels the track minus the thumb's own width, so at the
+  extreme ends the thumb centre and the cursor line can differ by a few pixels.
+  The line is the truth; the thumb is the grip.
+- While a drag is in flight, the page stops refreshing (up to the drag's
+  duration). The next scheduled refresh runs as soon as the pointer is released.
+- A cursor pinned before the oldest record the 2000-record content window still
+  holds points at a moment whose lanes are already absent — increment 2's
+  recorded consequence, unchanged here.
+- The `.timeline-ahead` shade dims the marks and curve to the right of the
+  cursor. That is the intent (the future of the chosen moment), not a loss: the
+  Live control restores the full-brightness head in one click.
+
+### Module map
+
+| Path | What it holds | Entry points |
+| --- | --- | --- |
+| `tools/argus-ui/public/timeline.js` | Lane derivation, density, cursor resolution and the timeline markup; pure, no DOM | **new** `liveCursor`, `scrubCursor`, `resolveCursor`; **changed** `renderTimeline(view, cursor = null)` |
+| `tools/argus-ui/public/app.js` | The page: state, fetching, rendering, wiring | `state.cursor`, **new** `paintCursor`, `scrubTo`, module-level `scrubbing`; **changed** `selectSession`, `renderDetail`, `scheduleRefresh`, `wireEvents`, the `./timeline.js` import line |
+| `tools/argus-ui/public/styles.css` | Every style; dark-first with a light-mode `:root` | the timeline block, lines 786–933 |
+| `tools/argus-ui/README.md` | User-facing page | the **Timeline** bullet, around line 61 |
+| `tools/argus-ui/public/format.js` | `esc`, `fmtNum`, `fmtDur`, `fmtClock`, … | unchanged; `fmtClock(ms)` prints `HH:MM:SS.mmm` and returns `–` for a falsy `ms` |
+| `tools/argus-ui/test/timeline.test.mjs` | Unit cases over `public/timeline.js` | fixtures `session()`, `record()`, `threeRecordContent()`, `toolMark()` |
+| `tools/argus-ui/test/page.test.mjs` | Source-level cases over `public/` | helpers `walk()`, `functionSource(source, name)` |
+| `tools/argus-ui/test/independence.test.mjs` | The no-outside-imports rule and the project's file list | **unchanged** — no new file under `public/`, so nothing to add |
+
+Facts about the code this plan rests on, so nobody has to go and read for them:
+
+- `buildLanes(...)` returns `{ startMs, endMs, durationMs, lanes }`; `startMs`
+  and `endMs` are the whole recorded session (the main lane is the session's own
+  `firstSeenMs`…`lastSeenMs`, widened by any subagent record outside it).
+  `buildDensity` passes both through untouched. That pair **is** the scrub
+  window; nothing new has to be derived for it.
+- `renderDetail` (`app.js:142`) replaces `#detail.innerHTML` wholesale and then
+  calls `renderTabBody`; `refresh` (`app.js:906`) calls it after every load and
+  restores scroll position and the focused element by `id`.
+- `scheduleRefresh` (`app.js:975`) is the 400 ms debounce every SSE `ingest`
+  event goes through; `connectStream` is its only caller besides itself.
+- `#detail` already carries delegated `click`, `change` and `input` listeners;
+  the `input` one currently returns early for anything that is not
+  `#event-search`.
+- The lane grid is `grid-template-columns: var(--label-w) 1fr var(--meta-w)` with
+  `gap: 8px` (`styles.css:852`), which is why the overlay's inset is
+  `calc(var(--label-w) + 8px)` / `calc(var(--meta-w) + 8px)`.
+
+### Environment
+
+- Node v22.22.2 at `/opt/node22/bin/node`, on the `PATH`; the package requires
+  ≥ 20.11.
+- `tools/argus-ui` has **zero runtime and zero dev dependencies**; `npm install`
+  is not needed and must not become needed. Adding a dependency is not a coding
+  decision — it goes to the human.
+- Whole package, from the repository root: `npm --prefix tools/argus-ui test`
+  (`node --test "test/*.test.mjs"`).
+- A single file, from the repository root:
+  `node --test tools/argus-ui/test/timeline.test.mjs`, same shape for
+  `page.test.mjs`, `server.test.mjs`, `config.test.mjs`, `independence.test.mjs`.
+- `public/*.js` is importable by `node --test` because the package is
+  `"type": "module"`: `import { resolveCursor } from '../public/timeline.js';`
+  works with no loader flag.
+- **There is no linter and no formatter in this repository** — nothing to run,
+  nothing to configure.
+- `./test.sh` runs every suite in the repository. It is **not** on this
+  increment's list: the closing increment (`tool-usage`) owns it, and nothing
+  outside `tools/argus-ui` changes here.
+
+### Test plan
+
+Tests are needed. Framework: `node:test` with `node:assert/strict`, the only
+thing this project uses. Conventions, taken from the two files the cases land in:
+every test name is a full lowercase sentence stating the fact ('scrubbing to the
+head still leaves live mode'); fixtures are the local factories already at the
+top of the file (`session()`, `record()`, `threeRecordContent()`, `toolMark()` in
+`timeline.test.mjs`; `walk()`, `functionSource()` in `page.test.mjs`); nothing is
+mocked beyond those; every assertion that could be read two ways carries a
+message saying what the fact is; banner comments separate the criteria; and a
+fact is asserted as a number or an attribute, never as a wording — which is why
+the cursor's moment goes into `data-time` and no case asserts the readout's text.
+
+Two files are edited; **no test file is created** and no new fixture is needed.
+Both new blocks go under a new banner appended after the existing cases:
+
+```js
+// Criterion 6 — the timeline scrubs, and a live mode follows the head.
+```
+
+`window` below means `{ startMs: 1000, endMs: 5000 }` unless a case says
+otherwise — the same window `session()` produces.
+
+#### One existing case is edited, deliberately
+
+`timeline.test.mjs`, the increment-2 case **'the rendered timeline carries one
+bar for the main session and one for the subagent, each with valid geometry'**,
+scans *every* `style="…"` in the markup and requires each to carry both `left:`
+and `width:`. The cursor overlay adds two elements whose style is a `left:` only,
+so that loop turns red on correct code. Narrow the scan to the elements whose
+fact it is:
+
+```js
+const styles = [...html.matchAll(/<span class="lane-bar"[^>]*style="([^"]*)"/g)].map((m) => m[1]);
+assert.equal(styles.length, 2, 'both lane bars must carry their geometry as a style');
+```
+
+keeping the existing per-style `left:` / `width:` / no-`NaN` assertions inside
+the loop, and adding `assert.doesNotMatch(html, /NaN/)` after it so the whole
+markup stays covered against `NaN`. The fact the case pins is unchanged and
+sharper: two bars, each with valid geometry, and nothing anywhere prints `NaN`.
+No other existing case changes — the new class names contain neither `lane-curve`
+nor `lane-mark`, and the mark-position regex binds each `lane-mark` to its own
+`style`.
+
+#### The criterion — the timeline scrubs to any point, and a live mode follows the head
+
+| # | Case | Input / state | Expected | File | Level |
+| --- | --- | --- | --- | --- | --- |
+| 1 | a session opens live, with the cursor on the newest data | `resolveCursor(liveCursor(), window)` | `deepEqual` `{ live: true, timeMs: 5000, leftPct: 100 }` | `timeline.test.mjs` | unit |
+| 2 | live mode follows the head as new data arrives | one `liveCursor()` resolved against `{1000,5000}` then `{1000,9000}` | `timeMs` 5000 then 9000, `leftPct` 100 both times — the mode follows, it does not merely start at the end | `timeline.test.mjs` | unit |
+| 3 | a scrubbed cursor stays on its moment while the session grows | `{ live: false, timeMs: 3000 }` against `{1000,5000}` then `{1000,9000}` | `timeMs` 3000 both times; `leftPct` 50 then 25 | `timeline.test.mjs` | unit |
+| 4 | the cursor never leaves the recorded session | `{ live: false, timeMs: 0 }` and `{ live: false, timeMs: 99999 }` | `timeMs` 1000 / `leftPct` 0, and `timeMs` 5000 / `leftPct` 100 | `timeline.test.mjs` | unit |
+| 5 | a pinned cursor with no usable time falls back to the head and stays out of live | `{ live: false, timeMs: null }` and `{ live: false }` | both `{ live: false, timeMs: 5000, leftPct: 100 }` | `timeline.test.mjs` | unit |
+| 6 | no cursor at all is live | `resolveCursor(undefined, window)`, `resolveCursor(null, window)`, `resolveCursor({}, window)` | all three `live === true`, `timeMs === 5000` — this is what keeps `renderTimeline(view)` working | `timeline.test.mjs` | unit |
+| 7 | a one-instant session resolves to a finite position at the head | window `{ startMs: 1000, endMs: 1000 }`, live cursor and `{ live: false, timeMs: 1000 }` | both `timeMs === 1000` and `leftPct === 100`, `Number.isFinite` on both numbers | `timeline.test.mjs` | unit |
+| 8 | resolving does not mutate the cursor it was given | `const cursor = { live: false, timeMs: 99999 }`, resolve it | `deepEqual(cursor, { live: false, timeMs: 99999 })` afterwards | `timeline.test.mjs` | unit |
+| 9 | scrubbing leaves live mode | `scrubCursor(3000, window)` | `deepEqual` `{ live: false, timeMs: 3000 }` | `timeline.test.mjs` | unit |
+| 10 | scrubbing to the head still leaves live mode | `scrubCursor(5000, window)` | `{ live: false, timeMs: 5000 }` — landing on the head is not the same as following it | `timeline.test.mjs` | unit |
+| 11 | a scrub past either end is pinned to the end it passed | `scrubCursor(-10, window)`, `scrubCursor(10_000_000, window)` | `timeMs` 1000 and 5000, `live === false` in both | `timeline.test.mjs` | unit |
+| 12 | a scrub with no usable number lands on the head, never on NaN | `scrubCursor(Number.NaN, window)`, `scrubCursor(undefined, window)` | both `{ live: false, timeMs: 5000 }` | `timeline.test.mjs` | unit |
+| 13 | the live cursor is a fresh object every call | `liveCursor()` twice | each `deepEqual` `{ live: true, timeMs: null }`; `assert.notEqual(a, b)` — no shared default a caller could pin | `timeline.test.mjs` | unit |
+| 14 | the scrub control spans the whole recorded session | `renderTimeline(buildDensity(buildLanes({ session: session(), content: threeRecordContent() }), { content: threeRecordContent(), tools: [] }))` | the markup carries one `<input` with `type="range"`, `id="timeline-scrub"`, `min="1000"`, `max="5000"`, a `step=`, and `value="5000"` | `timeline.test.mjs` | unit |
+| 15 | a scrubbed cursor puts the thumb, the line and the readout on one moment | same view, cursor `{ live: false, timeMs: 2500 }` | `value="2500"`; every `data-cursor-pos` element's style is `left:37.500%` (assert two of them, matched by regex); `data-time="2500"`; the `data-cursor-live` control carries `aria-pressed="false"` | `timeline.test.mjs` | unit |
+| 16 | live puts all three on the head | same view, `liveCursor()` | `value="5000"`, every `data-cursor-pos` style is `left:100.000%`, `data-time="5000"`, `aria-pressed="true"` on the `data-cursor-live` control | `timeline.test.mjs` | unit |
+| 17 | the timeline still renders from a bare view with no cursor given | `renderTimeline(buildLanes({ session: session(), content: threeRecordContent() }))` | two `data-lane="` occurrences, one `data-cursor-live` control with `aria-pressed="true"`, `left:100.000%` on the cursor, no `NaN` | `timeline.test.mjs` | unit |
+| 18 | a one-instant session still renders a cursor inside the track | `renderTimeline(buildDensity(buildLanes({ session: session({ firstSeenMs: 1000, lastSeenMs: 1000 }), content: [] }), {}))` | `min="1000"`, `max="1000"`, `left:100.000%`, no `NaN` anywhere in the markup | `timeline.test.mjs` | unit |
+| 19 | the page opens live | the `const state = {` … `\n};` slice of `app.js`, taken the way the existing landing case takes it | matches `/\bcursor:\s*\{\s*live:\s*true\b/` and does not match `/\bcursor:\s*\{\s*live:\s*false\b/` | `page.test.mjs` | source |
+| 20 | the timeline is rendered with the page's cursor | `functionSource(appJs, 'renderDetail')` | contains `renderTimeline(` and `state.cursor`, with the `renderTimeline(` index the smaller of the two — the cursor reaches the renderer, not some other call | `page.test.mjs` | source |
+| 21 | selecting a session returns to live | `functionSource(appJs, 'selectSession')` | matches `/state\.cursor\s*=\s*liveCursor\(\)/` — a new session never inherits a moment pinned in another one | `page.test.mjs` | source |
+| 22 | a drag moves the cursor without re-rendering the page under the pointer | `functionSource(appJs, 'scrubTo')` | matches `/scrubCursor\(/` and `/paintCursor\(/`, and does **not** match `/renderDetail\(/` | `page.test.mjs` | source |
+| 23 | the cursor is painted from one resolution, so the line and the readout cannot disagree | `functionSource(appJs, 'paintCursor')` | matches `/resolveCursor\(/` and `/data-cursor-pos/` | `page.test.mjs` | source |
+| 24 | a control returns the page to live | `functionSource(appJs, 'wireEvents')` | matches `/data-cursor-live/` and `/state\.cursor\s*=\s*liveCursor\(\)/` — the control exists in the markup (cases 15–17) and the page acts on it | `page.test.mjs` | source |
+| 25 | a refresh never yanks the slider out from under a drag | `functionSource(appJs, 'scheduleRefresh')` | matches `/scrubbing/` | `page.test.mjs` | source |
+| 26 | app.js takes the cursor functions from the timeline module | the whole `app.js` source | matches `/import\s*\{[^}]*\bresolveCursor\b[^}]*\}\s*from\s*['"]\.\/timeline\.js['"]/`, and the same for `scrubCursor` and `liveCursor` — the tested functions are the ones the page runs | `page.test.mjs` | source |
+
+Case 15's `left:37.500%` is exact: `(2500 - 1000) / (5000 - 1000) = 0.375`.
+Case 3's `leftPct` values are exact for the same reason.
+
+Commands that run just one of these files, from the repository root:
+
+```
+node --test tools/argus-ui/test/timeline.test.mjs
+node --test tools/argus-ui/test/page.test.mjs
+```
+
+#### Deliberately untested, and why
+
+- **The drag itself** — `pointerdown`, `pointerup`, thumb pixels, and whether the
+  line lands under the thumb. This project has no DOM harness and will not grow
+  one (jsdom is a dependency, and zero dependencies is the project's first rule).
+  Case 22 pins that a drag does not re-render; the rest is what the review looks
+  at.
+- **That `scheduleRefresh` actually defers and then resumes.** Timing behaviour
+  behind a `setTimeout` in a module with no seam; case 25 pins that the guard is
+  in the code, and the cost of the alternative is a fake clock and an exported
+  timer.
+- **Colours, the dimming of the region after the cursor, and whether the overlay
+  aligns with the lane tracks.** `node --test` sees strings; the geometry is CSS
+  and the review is where it is judged.
+- **Selecting a lane at the cursor, the context message list, tool names and
+  parameters.** Increments 5 and 6 own them; no case here may pin behaviour for
+  them.
+- **Lane derivation, density, marks, the merge, labels, escaping and the landing
+  view.** Increments 2 and 3's cases own them, they stay as they are apart from
+  the one narrowing named above, and the command below re-runs them all.
+- **`tools/argus`** — not touched by this increment.
+- **Recordings made without the content flags** — out of contract by the issue's
+  own decision.
+
+#### What counts as done
+
+```
+npm --prefix tools/argus-ui test
+```
+
+That one command, from the repository root, is the whole list. It runs the new
+cases together with every existing case in the package, costs seconds, and needs
+no install. `tools/argus`' own suite and `./test.sh` are off the list on purpose:
+nothing outside `tools/argus-ui` changes here, and the closing increment owns the
+full-suite run.
+
+#### What is already red
+
+I did not run the list, not once and not as a baseline; the first run belongs to
+whoever runs it downstream. From reading: nothing is red before the change, and
+exactly one existing case would turn red if the markup were added without the
+edit named above — the increment-2 geometry case, whose style scan is
+deliberately narrowed as part of this increment's work. Every other existing case
+is unaffected: `renderTimeline(view)` stays valid (case 6 makes a missing cursor
+live), the lane rows' markup is unchanged inside its new wrapper, the new class
+names contain neither `lane-curve` nor `lane-mark`, `independence.test.mjs` gets
+no new file to guard, and `page.test.mjs`'s flag-absence case is untouched by
+anything written here.
