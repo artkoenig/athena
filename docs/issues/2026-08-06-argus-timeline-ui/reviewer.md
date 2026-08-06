@@ -874,3 +874,141 @@ outside `tools/argus-ui` was touched by this increment.
   the cutoff. The tool marks accumulate instead, so activity and context history
   can disagree at that scale. The content fetch and its limit came with
   increment 2 and are unchanged here; increment 3 did not break it.
+
+## Increment 3 — Round 2
+
+**Status: accepted, no finding requires a correction.** Both halves of the
+criterion are drawn on the lanes and both are now pinned in time: the four new
+cases tie an activity mark's position to the moment its tool call or API request
+happened, including its direction, which was the one gap round 1 named.
+
+### Commands run
+
+- `npm --prefix tools/argus-ui test` — 77 cases, 77 pass, 0 fail, 0 skipped,
+  0 todo, exit 0. Nothing excluded. This is the only command my prompt lists and
+  the only one I ran; `tools/argus`' own suite and `./test.sh` were not run, by
+  that list.
+
+### Criterion — each lane shows its activity over time (tool calls, API requests) and, as a curve or area behind it, the context size over time
+
+Met. Read against the criterion word by word, from the diff against `main`.
+
+- **Activity, both kinds, per lane.** `buildDensity`
+  (`tools/argus-ui/public/timeline.js:239`) feeds `activityMarks` (`:203`) one
+  `{kind:'request'}` per `claude_code.api_request_body` content record and one
+  `{kind:'tool'}` per fetched `claude_code.tool_result` event, bucketed into at
+  most `ACTIVITY_BUCKETS` (120) marks per lane, each keeping its `count`.
+  `renderTimeline` (`:321`) paints one `<span class="lane-mark"
+  data-kind="request|tool">` per bucket inside the same `.lane-track` as the
+  bar, coloured `--teal` / `--warn`, with a legend above the lanes.
+- **Over time, and now verified as such.** `activityMarks` maps `timeMs` to a
+  bucket and the bucket to `leftPct`; `renderTimeline` writes that number into
+  `style="left:…%"`. `styles.css:910` positions `.lane-mark` absolutely in the
+  relative `.lane-track` (`:869`), so the number is the position on screen.
+- **Context size as an area behind the bar.** `contextPoints` (`:162`) maps each
+  request's `bodyLength` into a 0…100 box scaled by the session peak, not the
+  lane's; `areaPolygon` (`:181`) closes it on the baseline; the `<svg
+  class="lane-curve">` is emitted before the `<span class="lane-bar">`, and the
+  CSS puts the curve at `inset: 0` and the bar at `bottom: 0; height: 5px`, so
+  the area sits behind the bar and the marks paint on top of both.
+- **Without opening any detail.** `renderDetail` (`app.js:177`) composes
+  `renderTimeline(buildDensity(buildLanes(...)))` above the technical-views nav,
+  and the landing state (`tab: null`) opens no view.
+- **The field names the drawing reads are the ones the API sends.**
+  `contentMetaOf` (`tools/argus/src/claude.mjs:210`) returns `eventName`,
+  `timeMs`, `bodyLength`, `spanId`, `agent`, `isSubagent` — exactly what
+  `buildDensity` filters and measures on — and `EVENT.toolResult` is literally
+  `claude_code.tool_result`, the value of `TOOL_EVENT`. The fixtures are not
+  inventing a shape.
+- **The stale-answer guard from round 1 still stands.** `loadTimeline`
+  (`app.js:857`) re-reads `state.selectedSessionId !== id` after both fetches
+  resolve and before writing state, and accumulates through `mergeToolMarks`,
+  which drops a `seq` already held and returns the highest seq *held*.
+
+### Round 1's finding is closed, checked against the code rather than the claim
+
+Round 1 said the whole `timeMs` → track-position mapping for the marks could be
+replaced by a constant with the suite staying green. Four cases in
+`test/timeline.test.mjs:669–748` now pin it, and I checked each degradation by
+hand rather than trusting the titles:
+
+- Constant `bucket = 0`: the four items of `a mark sits at the fraction of the
+  track its moment sits at in the window` collapse into one mark, so its
+  `deepEqual([0, 25, 50, 75])` fails.
+- Any offset or scale error: the same `deepEqual` fails.
+- A *mirrored* mapping (`100 - …`) survives that case and survives `the rendered
+  marks carry the positions their moments earned`, because both compare sorted
+  positions that happen to be symmetric — but `a later moment always sits
+  strictly right of an earlier one` (`:687`) compares each mark against the ideal
+  position of *its own* time and asserts `diff >= 0`, which a mirror breaks. The
+  direction is pinned, not just the spacing.
+- An epoch-relative rather than window-relative position: `a mark keeps
+  following its moment when the window does not start at zero` (`:736`) fails.
+
+### The tests against the intent — the rest
+
+No gap I can name.
+
+- Context size: scaled session-wide and not per lane, exact at round numbers
+  (`x` is `[0, 50, 100]`), zero-length window, all-zero `bodyLength`, a single
+  request still a four-vertex plateau, no requests means no polygon, and the area
+  closes on the baseline.
+- Which lane a record belongs to: requests land on the lane that made them
+  (`:284`), a tool call on the lane whose span it carries (`:295`), a tool call
+  on an unowned span on `main` (`:307`), two concurrent same-type agents never
+  merge (`:323`), and a response body contributes neither context point nor mark
+  (`:341`).
+- Bounds and composition: 500 records stay under 120 marks and lose none, a mark
+  never sits at or past the right edge, a request and a tool call at one moment
+  stay two marks, the curve precedes the bar inside one lane row, a lane with
+  nothing on it renders neither, and increment 2's `renderTimeline(buildLanes(…))`
+  call shape still works.
+- Accumulation: `mergeToolMarks` is pinned for the empty index, a duplicate
+  `seq`, the same response merged twice, a watermark that may not run ahead of
+  what is held, an unusable `seq`, non-mutation, out-of-order items, a missing
+  `spanId`, and that the merged index is what the density reads.
+- Wiring is pinned at source level in `test/page.test.mjs` (the `/api/events`
+  fetch scoped to `TOOL_EVENT` with `sinceSeq`, the guard between the awaits and
+  `state.content =`, `mergeToolMarks` as the only path into page state, the reset
+  on session change, and `renderTimeline(buildDensity(…))`). String assertions
+  over `app.js` are what this project can do without a DOM or a dependency.
+
+### Nothing in the diff that no criterion asked for
+
+Round 2 added no production line: `git diff 76bd706..HEAD -- tools/` is 84 added
+lines in `test/timeline.test.mjs` and nothing else. Increment 3's production
+footprint is unchanged from round 1 — `timeline.js`, `app.js`, `styles.css` and
+one README clause describing what the lanes draw. The legend and the `lane-meta`
+data attributes are not literally named by the criterion but serve it directly;
+I raise neither, as in round 1. Handoff files are outside what I judge.
+
+### Beyond the criteria (blast radius)
+
+- **Callers of what changed.** Nothing outside `app.js` and the two test files
+  imports `timeline.js`; `renderTimeline` still accepts a bare `buildLanes` view.
+  Round 2 changed no callable at all, so nothing new can have broken.
+- **Increment 1 and 2 behaviour.** The lane bar moved to `bottom: 0; height: 5px`
+  inside a 26px track, which changes how a lane looks, not the horizontal span
+  that increment 2's criterion is about; `laneGeometry` is untouched.
+- **Project rules hold.** `timeline.js` imports only `./format.js` and touches no
+  `document`/`fetch`/`location`; `independence.test.mjs` covers both new public
+  modules; no runtime dependency was added.
+- **No document made stale.** Only `tools/argus/README.md` and
+  `tools/argus-ui/README.md` mention a timeline or lanes; the former's hit is
+  about the event tail, the latter was updated in this diff. Neither `CLAUDE.md`
+  describes what a lane draws.
+- **Observation, not a finding — subagent tool attribution.** A tool call reaches
+  its subagent lane only if its `tool_result` event carries the same `spanId` as
+  that agent's `api_request_body` record. Nothing in this checkout records real
+  telemetry, so I can neither confirm nor refute it; if they differ, every tool
+  mark lands on the main lane and the suite stays green, because that fallback is
+  deliberate. On the record without a reproduction.
+- **Observation, not a finding — the 2000-record ceilings.** `/api/content` is
+  fetched with `limit: 2000` (the server maximum) and holds request *and*
+  response bodies, and the first `/api/events` fetch for a session takes the
+  newest 2000 `tool_result` events before the watermark advances past the rest
+  (`tools/argus/src/store.mjs:908`, newest-first walk). A session past roughly a
+  thousand API turns, or past 2000 tool calls, therefore starts its curve and its
+  tool marks at that cutoff. Degradation at scale within a fixed retention
+  window, not a wrong drawing of what is retained; the content limit predates
+  increment 3 and the event limit is the server's own maximum.
