@@ -756,3 +756,424 @@ Round 0 run, one case is red — the case this round replaces — and the other 
 `tools/argus` cases plus all four other suites were green with nothing skipped.
 I know of no other red case. The first run belongs to whoever runs it
 downstream.
+
+## Round 2
+
+Correction round for the reviewer's four Round 1 findings (`reviewer.md`,
+Round 1). Two are defects in the timeline's live/scrub control
+(`tools/argus-ui/public/app.js`), one is the absence of any check for criteria 3
+and 6, and two are false claims in `tools/argus/README.md`. Nothing in
+`tools/argus/src/` changes.
+
+Nothing from Round 0's or Round 1's test plan is asked for again. The cases in
+this round's Test plan are the whole of what is asked for now; every other case
+in the tree stays exactly as it is.
+
+### Finding 1 — the fix, and the module the fix is testable from
+
+Two defects with one root: the scrub path and the refresh path disagree about
+who owns the scrub row.
+
+**1a. The `Live` control keeps saying "live" after a scrub.** The `input`
+handler (`app.js:1319-1337`) sets `state.live = false` and repaints the
+playhead and the clock, but never touches
+`<button class="scrub-live" … aria-pressed>` (rendered at `app.js:363`, styled
+engaged by `.scrub-live[aria-pressed="true"]`, `styles.css:652`). On a finished
+session no SSE `ingest` ever arrives, so nothing repaints the row and the lie
+stands forever. Fix: the scrub handler repaints the whole row — playhead, clock
+and the mode control — through one function.
+
+**1b. A refresh arriving mid-drag destroys the range input.** `scheduleRefresh`
+→ `refresh()` → `renderDetail()` assigns `detail.innerHTML` wholesale
+(`app.js:218`), which replaces `#timeline-scrub` under the pointer and kills the
+drag. With `OTEL_LOGS_EXPORT_INTERVAL=1000` that happens about once a second on
+a running session. Fix: a gate. While the pointer holds the scrubber, a refresh
+is held back instead of run, and the release runs the one that was held back.
+Pointer-down also cancels an already-scheduled refresh and counts it as held
+back, because a timer armed 300 ms before the grab would otherwise fire into the
+drag.
+
+**Both fixes go through a new DOM-free module** so they can be tested at all —
+which is also the answer to Finding 2. New file
+`tools/argus-ui/public/timeline.js`, imported by `public/app.js` as
+`./timeline.js` and by `test/timeline.test.mjs` as `../public/timeline.js`. It
+is a browser module and a Node module at once: `tools/argus-ui/package.json`
+has `"type": "module"`, so Node treats a `.js` file here as ESM, and the static
+server's MIME map has `.js` but not `.mjs` (`src/server.mjs:20-27`) — hence the
+`.js` extension, do not name it `.mjs`. The module imports nothing, touches no
+global at import time, and its one DOM-aware function takes the root to paint
+into as a parameter.
+
+#### The exact API `public/timeline.js` exports
+
+The test-author writes against these signatures and the implementer implements
+exactly them; a mismatch is a broken build, so neither side may improvise a
+name.
+
+```js
+/** The wall clock a time view shows: HH:MM:SS.mmm, local time. Moved from app.js. */
+export function fmtClock(ms)            // 0/undefined/null → '–'
+
+/** The view state a freshly opened session starts in. */
+export function freshSessionView()
+// → { timeline: null, slice: null, selectedLaneId: 'main', atMs: 0, live: true, technicalTab: null }
+
+/** Fit lane and moment to a timeline that has just arrived. Mutates and returns `view`. */
+export function pinToTimeline(view, timeline)
+// keeps view.selectedLaneId when timeline.lanes holds it, else the first lane's id, else 'main';
+// sets view.atMs = timeline.lastMs when view.live or view.atMs is 0;
+// then clamps view.atMs into [timeline.firstMs, timeline.lastMs].
+
+/** A scrub is an explicit "show me back then", so it leaves live mode. */
+export function scrubTo(view, value)    // view.live = false; view.atMs = Number(value); returns view
+
+/** The Live control: follow the newest record again. */
+export function resumeLive(view)        // view.live = true; view.atMs = view.timeline?.lastMs ?? view.atMs
+
+/** Clicking the open technical view closes it again. */
+export function toggleTechnicalTab(view, tab)  // view.technicalTab = view.technicalTab === tab ? null : tab
+
+/** Where the playhead sits, in percent of the track; null when there is no axis to scale by. */
+export function playheadPercent(timeline, atMs)
+// null for a falsy timeline or lastMs <= firstMs; otherwise atMs clamped into the range, as 0..100
+
+/** Repaint the scrub row in place. `root` is anything with querySelector — document, in the page. */
+export function paintScrubRow(root, view)
+// '.lane-playhead'  → style.left = `${percent.toFixed(3)}%`, only when percent !== null
+// '.scrub-clock'    → textContent = fmtClock(view.atMs)
+// '.scrub-live'     → setAttribute('aria-pressed', String(view.live))
+// a missing node is skipped, never an error
+
+/** Refreshes are held back while the pointer holds the scrubber. */
+export function createRefreshGate()                                  // → { dragging: false, missed: false }
+export function scrubGrabbed(gate, { refreshPending = false } = {})   // dragging = true; missed ||= refreshPending
+export function refreshHeldBack(gate)                                 // dragging ? (missed = true, true) : false
+export function scrubReleased(gate)                                   // returns whether one was missed, then resets both
+```
+
+#### The edits in `public/app.js`
+
+- Add `import { … } from './timeline.js';` below the `TOKEN` line.
+- `state` literal (lines 12-36): replace the six timeline fields (`timeline`,
+  `slice`, `selectedLaneId`, `atMs`, `live`, `technicalTab`) with
+  `...freshSessionView(),`, keeping the comment that explains them.
+- Delete the local `fmtClock` (lines 74-80); its nine call sites now use the
+  import. A leftover copy is a duplicate declaration and kills the page, so
+  delete it in the same edit that adds the import.
+- `loadTimeline` (lines 1102-1107): replace the lane fallback, the head-follow
+  and the clamp with `pinToTimeline(state, timeline);`.
+- `selectSession` (lines 1198-1203): replace the six assignments with
+  `Object.assign(state, freshSessionView());`, keeping the comment.
+- Live click (lines 1260-1265): `resumeLive(state);` then the existing
+  `loadSlice().then(renderDetail);`.
+- Tab click (line 1282): `toggleTechnicalTab(state, tab.dataset.tab);`.
+- Scrub `input` handler (lines 1320-1336): `scrubTo(state, event.target.value);`
+  then `paintScrubRow(document, state);` then the existing debounced
+  `loadSlice().then(paintSlice)`. The hand-written playhead and clock lookups go
+  away with it.
+- `scheduleRefresh` (lines 1225-1231): first line becomes
+  `if (refreshHeldBack(refreshGate)) return;`, with
+  `const refreshGate = createRefreshGate();` beside `let refreshTimer = null;`.
+- `wireEvents`: on `#detail`, a `pointerdown` listener that, for
+  `event.target.id === 'timeline-scrub'`, calls
+  `scrubGrabbed(refreshGate, { refreshPending: refreshTimer !== null })` and then
+  clears `refreshTimer` to `null`. On `window`, `pointerup` **and**
+  `pointercancel` listeners that call `scrubReleased(refreshGate)` and, when it
+  returns true, `scheduleRefresh(0)` — `pointercancel` too, so a cancelled drag
+  cannot freeze refreshes for good.
+
+`renderTimeline`, `renderSlicePanel` and `renderDetail` stay in `app.js`
+untouched apart from the `fmtClock` import: moving the whole render pipeline
+would be a large edit to code no test can exercise, which is the wrong trade in
+a correction round.
+
+### Finding 2 — what gets checked, and what stays unchecked
+
+The new module carries every transition the reviewer named, and
+`tools/argus-ui/test/timeline.test.mjs` pins them: criterion 3's landing state
+(`technicalTab === null`, live, main lane) and the closability of the technical
+views, and criterion 6's open → live at head, scrub → live off at the scrubbed
+value, `Live` → live on at `lastMs`, plus the mode control the scrub repaints
+and the refresh gate. Deleting `state.live = false` from the scrub path, or
+starting a session on `'overview'`, now turns a case red.
+
+What still has no check, stated so an omission reads as a decision: the markup
+`renderDetail`/`renderTimeline` produce, and which DOM event is wired to which
+transition. Both need a DOM harness; `tools/argus-ui/CLAUDE.md` sends a
+dependency to the human first, and a hand-rolled fake browser large enough to
+boot `app.js` would pin the implementation rather than the behaviour.
+
+**Question for the human, to be recorded and left open:** should `argus-ui` take
+a DOM test dependency (jsdom or `node:test` plus a headless browser) so the
+rendering and the event wiring can be checked? Until it does, criteria 3, 5 and
+7's rendering halves and the listener registration are verified by reading only.
+
+The implementer records the same thing in the repository, as a paragraph at the
+end of the `## Tests` section of `tools/argus-ui/CLAUDE.md`: the page's decision
+logic lives in `public/timeline.js` and is tested there without a DOM; what
+`public/app.js` renders and which event calls which transition is not tested;
+new decision logic goes into a DOM-free module for that reason, and a DOM
+harness would be a dependency, which goes to the human first.
+
+### Finding 3 — delete the flagless-recording promise
+
+Delete the whole bullet at `tools/argus/README.md:529-531` ("**To record
+structure without content**, … nothing else changes."), and nothing else in that
+list. It promises behaviour for the one case decision 5 puts out of contract,
+and it is wrong twice over: without `OTEL_LOG_TOOL_DETAILS=1` the tools panel
+loses its parameters (`toolParametersOf` returns null, `claude.mjs:83-99`) and
+subagent lane labels fall back to the CLI's redacted `custom`
+(`claude.mjs:289-291`). No replacement sentence: the correct number of sentences
+about recordings without the flags is zero.
+
+Leave the neighbouring bullets and the "Sensitive data" heading as they are. The
+`Limits` bullet about `CLAUDE_CODE_ENHANCED_TELEMETRY_BETA` and tool lanes
+(`README.md:616-620`) is about the traces flag, which `argus env` sets, and is
+not in scope.
+
+### Finding 4 — the `--open` recovery promise, corrected
+
+Replace the last sentence of the timeline bullet at `tools/argus/README.md:615`
+("A measurement written with `--persist` and reopened with `--open` has it
+back.") with a claim that matches `src/persist.mjs`. The facts to state, all
+verified by reading:
+
+- Each signal file rotates at `--persist-max-bytes` /
+  `UROBOROS_OBS_PERSIST_MAX_BYTES`, default 64 MB
+  (`src/config.mjs:160`, `src/persist.mjs:23`, `#append` at `persist.mjs:116-127`).
+- Only two generations survive: `#rotate` deletes `<signal>.1.jsonl` before
+  renaming the live file onto it (`persist.mjs:82-92`), and `#read` replays
+  generations 1 and 0 only (`persist.mjs:98-101`).
+- So `--open` gives back at most ~128 MB of `logs.jsonl`, while the in-memory
+  content budget is 256 MB (`--max-content-bytes`): the disk copy is not a
+  superset of what memory held, and with 1 MB request bodies a long run's
+  earliest turns are gone from disk for good.
+
+Say that in one or two sentences — reopening returns what is still on disk, the
+file rotates at `--persist-max-bytes` and keeps the live generation plus one, so
+a long recording loses its beginning unless that flag is raised. Add one row for
+`--persist-max-bytes` to the Options table (`README.md:436-455`, beside
+`--max-content-bytes`): env `UROBOROS_OBS_PERSIST_MAX_BYTES`, default
+`67108864`, meaning "Size at which a persisted signal file rotates; one previous
+generation is kept". Leave `bin/argus.mjs --help` alone — the flag was already
+missing there before this change, and that gap is not this finding's.
+
+### Rejected alternatives
+
+- **Fix Finding 1a by re-rendering the detail pane on every scrub.** That is
+  exactly what `app.js:407-410` forbids: it would replace the input being
+  dragged, i.e. trade 1a for a worse 1b.
+- **Fix 1b by suppressing refreshes whenever `state.live` is false.** Simpler,
+  but it freezes the whole pane — chips, counts, event tail — for as long as a
+  session is parked off the head, and a parked session is the normal reading
+  state. The gate is tied to the pointer, so it lasts as long as the drag does.
+- **Move `renderTimeline` and the formatters into the new module too**, to test
+  the markup as a string. It buys a real check for criteria 3/5/7's rendering,
+  but it means moving `esc`, `fmtNum`, `fmtDur` and ~150 lines of rendering used
+  from forty call sites in a file no test executes; a single missed import kills
+  the page silently. Not worth it in a correction round — recorded as the open
+  question above instead.
+- **A hand-rolled fake browser that boots `app.js`.** No dependency, but it
+  would have to grow a stub for every DOM call the page makes, and it pins the
+  implementation. Same reason.
+- **Answer Finding 2 with the question to the human alone**, changing no code.
+  Permitted by the finding, but the transitions are pure state and testable
+  today; leaving them unchecked after a defect shipped in exactly one of them
+  would be a choice to repeat it.
+
+### Module map
+
+- `tools/argus-ui/public/timeline.js` — **new.** The timeline's state
+  transitions, the playhead math, the scrub-row repaint and the refresh gate.
+  No imports, no DOM at import time. Entry points: the exports listed above.
+- `tools/argus-ui/public/app.js` — 1402 lines, the whole page. Relevant
+  entry points: `state` (12-36), `fmtClock` (74-80, to be deleted),
+  `renderDetail` (201-251), `renderTabBody` (253-281), `renderTimeline`
+  (312-379), `paintSlice` (411-414), `loadTimeline` (1088-1109), `refresh`
+  (1154-1186), `selectSession` (1188-1206), `scheduleRefresh` (1224-1231),
+  `wireEvents` (1247-1378), the scrub `input` handler (1319-1342).
+- `tools/argus-ui/test/timeline.test.mjs` — **new.** The only test file this
+  round adds.
+- `tools/argus-ui/CLAUDE.md` — one paragraph appended to `## Tests`.
+- `tools/argus-ui/src/server.mjs` — not changed. Read for its MIME map
+  (lines 20-27): `.js` is served as `text/javascript`, `.mjs` is not in the map
+  at all, which is why the new module is a `.js` file.
+- `tools/argus-ui/test/independence.test.mjs` — not changed. Its scan already
+  covers every `.js`/`.mjs` under the project, so `public/timeline.js` and the
+  new test file are checked for outside imports automatically; the explicit
+  file list in it is a floor, not an inventory, and adding to it would pin a
+  layout.
+- `tools/argus/README.md` — two prose edits (delete lines 529-531, rewrite the
+  sentence at 615) and one added Options row.
+- `tools/argus/src/persist.mjs`, `tools/argus/src/config.mjs`,
+  `tools/argus/src/claude.mjs` — read for the two README corrections, not
+  changed.
+
+### Environment
+
+- Node ≥ 20.11, already installed. `tools/argus-ui` has zero runtime
+  dependencies and no install step: `npm --prefix tools/argus-ui test` runs
+  without `npm install` ever having run. Same for `tools/argus`.
+- Whole suite: `bash test.sh` from the repository root — five suites: the
+  repository itself, worktrees, `tools/argus`, `tools/argus-ui`,
+  `tools/log-parser`.
+- Single file, from the repository root:
+  `node --test tools/argus-ui/test/timeline.test.mjs`.
+- The package's own script is `node --test "test/*.test.mjs"`, so the new file
+  joins the `tools/argus-ui` suite by being in `test/` — no registration
+  anywhere.
+- There is no linter and no formatter in this repository. Nothing else is to be
+  installed or run.
+
+### Test plan
+
+Tests are needed. Finding 2 asks for them by name, and Finding 1 is a defect
+whose fix is only checkable through them: written first, the cases below fail
+because `public/timeline.js` does not exist yet, and they go green when the
+module lands. Findings 3 and 4 are prose and get no test — nothing a tool can
+check, and pinning a README sentence would break on a better one.
+
+#### What
+
+**Criterion 3 — opening a session lands on the timeline, technical views
+subordinate.**
+
+1. *The landing state.* `freshSessionView()` deep-equals
+   `{ timeline: null, slice: null, selectedLaneId: 'main', atMs: 0, live: true, technicalTab: null }`.
+   That is the whole contract `selectSession` and the initial `state` both take:
+   no technical view open, live, main lane.
+2. *A technical view opens, closes on a second click, and gives way to another.*
+   From `technicalTab: null`: `toggleTechnicalTab(view, 'events')` → `'events'`;
+   again with `'events'` → `null`; from `'events'` with `'traces'` → `'traces'`.
+
+**Criterion 6 — scrub, live, leaving and returning.**
+
+3. *A live view follows the head, and picks a lane that exists.* With
+   `view = { ...freshSessionView() }` and
+   `timeline = { firstMs: 1000, lastMs: 3000, lanes: [{ id: 'main' }, { id: 'sub' }] }`:
+   `pinToTimeline(view, timeline)` leaves `selectedLaneId === 'main'` and sets
+   `atMs === 3000`. With `selectedLaneId: 'sub'` it stays `'sub'`. With
+   `selectedLaneId: 'gone'` it falls to `'main'` (the first lane). Edge — no
+   lanes at all (`lanes: []`): `'main'`, and `lanes` absent entirely
+   (`{ firstMs, lastMs }`): `'main'`, no throw.
+4. *A scrubbed moment survives the next timeline, clamped into the recorded
+   range.* With `live: false`: `atMs: 2000` stays 2000; `atMs: 10` (before
+   `firstMs`, the window aged out from under it) becomes 1000; `atMs: 9999`
+   becomes 3000. Edge — `live: false, atMs: 0` (never scrubbed) jumps to
+   `lastMs`, because 0 means "no moment chosen", not "the epoch".
+5. *Scrubbing leaves live mode.* `scrubTo(view, '2500')` on a live view →
+   `live === false` and `atMs === 2500` as a number, not the string an
+   `<input type="range">` hands over.
+6. *The `Live` control returns to live mode at the newest record.* On a view
+   with `live: false, atMs: 2000, timeline`: `resumeLive(view)` → `live === true`
+   and `atMs === 3000`. Edge — `timeline: null`: `live === true` and `atMs`
+   unchanged, so the control cannot throw the moment away when there is no
+   timeline to jump to.
+7. *After a scrub the row says live mode was left* (Finding 1a). Build
+   `view = { ...freshSessionView(), timeline: { firstMs: 1000, lastMs: 3000, lanes: [] }, atMs: 3000 }`,
+   `scrubTo(view, 2000)`, `paintScrubRow(root, view)` against the stub root
+   below, then assert: `.scrub-live` got `aria-pressed === 'false'`,
+   `.scrub-clock` textContent `=== fmtClock(2000)`, `.lane-playhead`
+   `style.left === '50.000%'`. Then `resumeLive(view)`, paint again:
+   `aria-pressed === 'true'`, `style.left === '100.000%'`,
+   textContent `=== fmtClock(3000)`.
+8. *A session with no axis has no playhead to move* (the edges of the math).
+   `playheadPercent(null, 5) === null`;
+   `playheadPercent({ firstMs: 7, lastMs: 7 }, 7) === null`;
+   `playheadPercent({ firstMs: 1000, lastMs: 3000 }, 0) === 0` and
+   `(…, 9999) === 100` (clamped, never off the track). And `paintScrubRow` with
+   a single-instant timeline leaves `.lane-playhead` `style.left` untouched
+   (`''`) while still writing the clock and `aria-pressed` — a row that cannot
+   be positioned must still tell the truth about its mode.
+9. *A refresh landing mid-drag is held back until the scrubber is let go*
+   (Finding 1b). `const gate = createRefreshGate();`
+   `refreshHeldBack(gate) === false` before any drag;
+   `scrubGrabbed(gate)` then `refreshHeldBack(gate) === true` twice in a row;
+   `scrubReleased(gate) === true` (one was missed, so the caller runs it);
+   `refreshHeldBack(gate) === false` afterwards, and a second
+   `scrubReleased(gate) === false`. Edge — a drag with nothing held back:
+   `scrubGrabbed(gate); scrubReleased(gate) === false`. Edge — a refresh already
+   scheduled when the pointer lands:
+   `scrubGrabbed(gate, { refreshPending: true }); scrubReleased(gate) === true`.
+
+Left untested, deliberately, each for a stated reason:
+
+- **What `renderDetail`, `renderTimeline` and `renderSlicePanel` produce**, and
+  **which DOM event calls which transition** — Finding 2's residue, needs a DOM
+  harness, which is a dependency and therefore the human's call.
+- **The README wording** of Findings 3 and 4 — prose.
+- **Everything the `tools/argus` suite already covers.** No case there is
+  touched, added or removed this round.
+- **Recordings without the content flags** — decision 5 forbids pinning them.
+
+#### How
+
+All nine cases are unit cases in one new file,
+`tools/argus-ui/test/timeline.test.mjs`, importing
+`../public/timeline.js`. Framework: `node:test` with `node:assert/strict`,
+exactly as `tools/argus-ui/test/config.test.mjs` does — that file is the model
+for this one, because it is the project's other pure-module test.
+
+Conventions of that file, to follow:
+
+- `import test from 'node:test';` and `import assert from 'node:assert/strict';`
+  at the top, then the import under test.
+- One `test('<lowercase sentence naming the behaviour>', () => { … })` per case;
+  the name says what must hold, e.g.
+  `a freshly opened session lands on its timeline, live, with no technical view open`,
+  not `freshSessionView returns defaults`.
+- No `describe`, no hooks, no shared mutable module-level state: each case builds
+  the view object it needs.
+- Third-argument assertion messages on anything non-obvious, in the voice the
+  project uses ("the interface must not fight the collector for 4318"): e.g.
+  "a scrub is the user saying 'back then' — the control has to stop claiming
+  live".
+- A short comment above a case that exists because of a defect, saying which
+  one, the way `config.test.mjs` explains its refusal case.
+
+The one fake in the file, hand-written and local — no dependency, no DOM
+library:
+
+```js
+/** Just enough of the scrub row for paintScrubRow: three nodes behind querySelector. */
+function scrubRow() {
+  const nodes = {
+    '.lane-playhead': { style: { left: '' } },
+    '.scrub-clock': { textContent: '' },
+    '.scrub-live': { attrs: {}, setAttribute(name, value) { this.attrs[name] = value; } },
+  };
+  return { nodes, querySelector: (selector) => nodes[selector] ?? null };
+}
+```
+
+Cases 7 and 8 use it; the other seven need nothing. Nothing else is faked and
+nothing is stubbed globally — the module under test touches no global.
+
+Command that runs just this file, from the repository root:
+
+```
+node --test tools/argus-ui/test/timeline.test.mjs
+```
+
+#### What counts as done
+
+One command, from the repository root:
+
+```
+bash test.sh
+```
+
+That is the whole list. Criterion 10 names it, it covers the new file through
+the `tools/argus-ui` package script, and nothing else is to be run: no
+single-file run belongs in the verdict, there is no linter, and no separate
+lint or format step exists to invoke.
+
+#### What is already red
+
+I ran nothing, here or in the earlier rounds, and took no baseline: a run buys
+no fact I could not state from reading. From the reviewer's Round 1 run the
+whole suite was green — 164 `tools/argus` cases, 14 `tools/argus-ui`, 23
+`tools/log-parser`, both shell suites, nothing skipped. So the only red this
+round should produce is the new `test/timeline.test.mjs` before
+`public/timeline.js` exists, and it goes green with the module. The first run
+belongs to whoever runs it downstream.
