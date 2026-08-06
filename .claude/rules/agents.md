@@ -54,6 +54,12 @@ rather than a `CLAUDE.md` — a `CLAUDE.md` here would load as project memory an
 be inherited, which no installing project can reproduce — and why every page in
 `.claude/rules/` carries `paths:`. The suite checks both.
 
+So a page here may only carry what someone developing uroboros needs, and this
+one — about writing the agents — is that. It may never be the only home of a
+rule that binds a run: `docs/` had such a page, and its writing rules moved into
+the shared brief, where every project gets them. Scoping keeps a rule from the
+wrong reader; it cannot make one exist where this directory does not.
+
 Three rules bind the session and the agents alike: English, the default branch
 moving only through a merged pull request, and the cache deletion after a change
 to uroboros' own agents or skills. They stand in the rulebook and in the shared
