@@ -1138,3 +1138,110 @@ neither acted on:
   reviewer's four "beyond the criteria" observations (the lane `<button>`,
   `renderTimeline`'s third argument, the fourth module under `public/`, the
   extra request per refresh) were closed by him and I pinned nothing for them.
+
+## Increment 6
+
+The panel already met the criterion; this increment makes the last stretch of
+the chain — the selected lane reaching the markup — executable, so the
+reviewer's measured mutations M-A and M-C fail a case instead of surviving.
+Two production files changed, exactly the two the plan names, and the rendered
+markup is byte-identical before and after: no markup, no CSS, no README, no
+file under `tools/argus`.
+
+### Tests first, before any edit
+
+Ran the plan's one command as a baseline, then the failing file on its own to
+read the cause. Both match the test-author's handoff exactly:
+
+- `npm --prefix tools/argus-ui test` (baseline) — 129 tests, 126 pass, 3 fail,
+  exit 1.
+- `node --test tools/argus-ui/test/context.test.mjs` (baseline, to read the
+  cause of the file-level failure) — 1 reported test, 0 pass, 1 fail, exit 1:
+  `SyntaxError: The requested module '../public/context.js' does not provide an
+  export named 'lanePanelInput'`.
+
+The three baseline failures, each red for the reason the plan predicts:
+
+| # | Case | Why red before the change |
+| --- | --- | --- |
+| C1–C3 | the whole of `test/context.test.mjs` | the `SyntaxError` above — `lanePanelInput` is the export this increment adds, so the import naming it cannot resolve and Node reports one top-level failure for the file |
+| P1 | `app.js takes the context panel from its module` (`page.test.mjs:349`) | `AssertionError: app.js must import lanePanelInput from context.js, so the tested function is the one the page runs` — the quoted `actual` is the old import line naming `laneContextInput` |
+| P2 | `the panel is drawn from the lane the reader selected and the answer held for it` (`page.test.mjs:479`) | `AssertionError: the panel's whole input must come from lanePanelInput`, `operator: 'match'` — the quoted `actual` is the old call, `renderContextPanel({ lane, ...laneContextInput(key, state.laneContext), expanded: state.expanded })` |
+
+P3, C4, C5 and C6 pass without any production change of mine, as both the plan's
+hop table (findings 2 and 3: "no production change at all") and the
+test-author's handoff predict. C4, C5 and C6 could not run at all before the
+change, because the file they live in failed to load; they went green the moment
+the import resolved, with nothing in `context.js`'s renderer touched.
+
+### What changed
+
+**`tools/argus-ui/public/context.js`** — one new export, nothing else in the
+file touched:
+
+- `lanePanelInput({ view, key, held, expanded })` added directly after
+  `laneContextInput` (which keeps its body and its export) and before
+  `renderContextPanel`, verbatim as the plan's snippet gives it, doc comment
+  included. It looks the lane up by the selected key alone, spreads
+  `laneContextInput(key, held)` for `item`/`pending`, and returns
+  `renderContextPanel`'s whole argument so the page cannot drop a key on the
+  way. The module header (lines 1-16) is unchanged, as the plan directs.
+
+**`tools/argus-ui/public/app.js`** — the page hands its state over:
+
+- Line 11 is now
+  `import { fetchLaneContext, lanePanelInput, renderContextPanel } from './context.js';`;
+  `laneContextInput` left the import because the page no longer calls it.
+- `renderLanePanel` keeps its name, doc comment, container lookup and
+  `if (!container) return;`. Its `const key` and `const lane` lines are gone and
+  the body is now the single flat
+  `container.innerHTML = renderContextPanel(lanePanelInput({ view: laneView(), key: state.selectedLane, held: state.laneContext, expanded: state.expanded }));`.
+- Nothing else in `app.js` moved: `loadLaneContext`, `clearLaneContext`,
+  `scheduleLaneContext`, `laneView`, `refresh`, `selectSession` and every
+  listener — the `[data-lane]` branch included — keep every line they had.
+  Finding 2 (M-B) is closed by P3's sharpened assertion, not by an edit, exactly
+  as decision 3 requires.
+
+No test file was opened for editing and none changed; `git status` shows only
+the two `public/` files and this handoff.
+
+### Commands run
+
+- `npm --prefix tools/argus-ui test` (baseline, before any edit) — 129 tests,
+  126 pass, 3 fail, exit 1. The three are the table above.
+- `node --test tools/argus-ui/test/context.test.mjs` (baseline only, to read the
+  file-level failure) — 1 test, 0 pass, 1 fail, exit 1. Not on the plan's list;
+  run to confirm the red was the predicted missing export and not a defect in
+  the test.
+- `npm --prefix tools/argus-ui test` (after the change) — 181 tests, 181 pass,
+  0 fail, exit 0. Nothing skipped, nothing excluded.
+
+That one command is the whole of what this increment's "What counts as done"
+lists. `tools/argus`' suite and `./test.sh` are off the list by the plan's own
+wording and were not run. There is no linter and no formatter in this
+repository, so none was run.
+
+The jump from 129 reported cases to 181 is `context.test.mjs`'s ~52 cases
+registering individually now that the module imports — before, the whole file
+counted as one failing entry. No case was added or removed by me.
+
+### Problems hit
+
+None. Nothing is blocked and no question is open. Three things recorded, none
+acted on:
+
+- **Line numbers in the plan's module map moved by the edit, which is not a
+  conflict.** `lanePanelInput` went in after `laneContextInput`'s closing brace
+  at line 225, as specified; `renderContextPanel` and everything below it in
+  `context.js` shifted down by 21 lines, and `app.js` lost one line net in
+  `renderLanePanel`. Same call sites, same expressions.
+- **P2's cited line differs from the plan's.** The plan calls the rewritten case
+  `page.test.mjs:462`; the test-author landed it at `:479`. Same case, same
+  name, no ambiguity — noted only so a reader chasing the line number is not
+  confused.
+- **Beyond the criteria, noticed and left alone.** `laneView()` is now called on
+  every panel repaint including when no lane is selected, which decision 4
+  chooses deliberately and judges free; the panel with no lane still renders the
+  empty string, so nothing on screen changes. `laneContextInput` stays exported
+  with no caller in `app.js`, per decision 2, because its three cases pin the
+  fresh/foreign/absent mapping at the finest grain there is.

@@ -8,7 +8,7 @@
  */
 
 import { esc, fmtNum, fmtCost, fmtDur, fmtClock, fmtAgo, isLive, shortId } from './format.js';
-import { fetchLaneContext, laneContextInput, renderContextPanel } from './context.js';
+import { fetchLaneContext, lanePanelInput, renderContextPanel } from './context.js';
 import {
   buildLanes,
   buildDensity,
@@ -934,13 +934,14 @@ async function loadLaneContext() {
 function renderLanePanel() {
   const container = document.getElementById('lane-panel');
   if (!container) return;
-  const key = state.selectedLane;
-  const lane = key ? (laneView().lanes.find((entry) => entry.key === key) ?? null) : null;
-  container.innerHTML = renderContextPanel({
-    lane,
-    ...laneContextInput(key, state.laneContext),
-    expanded: state.expanded,
-  });
+  container.innerHTML = renderContextPanel(
+    lanePanelInput({
+      view: laneView(),
+      key: state.selectedLane,
+      held: state.laneContext,
+      expanded: state.expanded,
+    }),
+  );
 }
 
 let laneContextTimer = null;

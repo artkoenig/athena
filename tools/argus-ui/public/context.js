@@ -225,6 +225,26 @@ export function laneContextInput(key, held) {
 }
 
 /**
+ * Everything `renderContextPanel` is drawn from, out of what the page holds.
+ *
+ * The lane is looked up by the key the reader selected and by nothing else: a
+ * lookup that lands on another lane paints one agent's context under another
+ * agent's heading, and the reader cannot tell. A key no lane in the view
+ * carries — and no key at all — resolves to no lane, which is how the panel
+ * disappears when the selection is let go.
+ *
+ * The four keys are the four `renderContextPanel` reads, so the result is its
+ * argument whole: the page cannot drop one of them on the way.
+ *
+ * @param {{ view: object|null, key: string|null, held: object|null, expanded: string[]|Set<string> }} input
+ * @returns {{ lane: object|null, item: object|null, pending: boolean, expanded: string[]|Set<string> }}
+ */
+export function lanePanelInput({ view = null, key = null, held = null, expanded = [] } = {}) {
+  const lane = key ? ((view?.lanes ?? []).find((entry) => entry.key === key) ?? null) : null;
+  return { lane, ...laneContextInput(key, held), expanded };
+}
+
+/**
  * The panel for the selected lane, as of the cursor's moment.
  *
  * No attribute named `data-lane` may appear anywhere in here: the page binds
