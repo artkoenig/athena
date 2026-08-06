@@ -273,3 +273,68 @@ increment's list, and nothing outside `tools/argus-ui` changed.
    harness, so they are a reading, and this is the round where they get read.
 4. **No blocking question.** Every fact the increment needed was in
    `researcher.md`.
+
+## Increment 2 — Round 1
+
+**No file changed. The round's plan asks for no production edit, and I made
+none.** `researcher.md`'s Increment 2 — Round 1 section states it twice
+("**This round changes no production file.**"; "the implementer's work this
+round is to confirm the command below is green and change nothing"), because
+the reviewer's finding was a missing guard rather than broken behaviour: the
+landing behaviour of criterion 1 was already correct in `public/app.js` and the
+correction was three new source-level cases in
+`tools/argus-ui/test/page.test.mjs`, which the test-author has already landed.
+
+So my whole work this round was to run the list and confirm it is green.
+
+### The tests are not mine, and I ran them first
+
+Per the test plan, the three cases of this round are regression pins expected to
+pass on their first run against the code as it stands. I ran the command before
+touching anything, it was green, and there was therefore nothing to implement:
+no case failed, so no case demanded a change. I edited no test and wrote none.
+
+### Commands run
+
+- `npm --prefix tools/argus-ui test` (from the repository root; runs
+  `node --test "test/*.test.mjs"` over all five files: `config`,
+  `independence`, `page`, `server`, `timeline`) — **37 tests, 37 pass, 0 fail,
+  0 skipped, 0 todo, exit 0.**
+
+That is the whole list for this round. `tools/argus` and `./test.sh` are off it
+by the plan's own decision, and I ran neither. There is no linter and no
+formatter in this repository, so nothing else was run.
+
+The count matches the plan's arithmetic exactly: the suite stood at 34 cases at
+the reviewer's run, and the test-author's three new `page.test.mjs` cases bring
+it to 37. The three are visible in the TAP output as `ok 8 - the page loads with
+no technical view open`, `ok 9 - selecting a session returns to the timeline`
+and `ok 10 - the timeline is rendered above the technical views`.
+
+`git status --short` is empty apart from this handoff: no production file, no
+test file and no configuration file was modified in this round.
+
+### Problems hit
+
+None. Nothing was red before the run, nothing is red after it, and no command
+reported a failure or a skip.
+
+### Notes for the reviewer, acted on nowhere
+
+1. **The three notes I filed in Increment 2's handoff still stand**, and this
+   round touched none of them: the 15s repaint interval only fires for
+   `state.tab === 'overview'` and so no longer repaints the landing view;
+   `loadTimeline()` runs on every refresh for every session; and — note 3 —
+   nothing pinned the arrangement inside `renderDetail`. Note 3 is precisely
+   what this round closes: cases 8–10 now pin the state literal, `selectSession`
+   and the call order in `renderDetail` at source level. Notes 1 and 2 remain
+   open observations, outside this round's scope.
+2. **The test-author's open question about case 2** (`selecting a session
+   returns to the timeline`) is a question about the plan's prose, not about the
+   code: neither half of the reviewer's named reproduction touches
+   `selectSession`, so that case pins a fact no named mutation breaks. It still
+   pins fact 2 of the three the plan's "What the finding asks for" section lists,
+   and it passes. I changed nothing over it and note it only so the reviewer
+   knows it is a known, reported looseness rather than a fresh gap.
+3. **No blocking question.** The round's brief was unambiguous: change nothing,
+   run one command, report it.
