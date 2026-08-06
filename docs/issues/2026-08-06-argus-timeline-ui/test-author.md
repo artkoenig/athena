@@ -556,3 +556,118 @@ phrasing (`TOOL_EVENT`, `sinceSeq`, `state.toolMarks = []`, `state.toolSeq =
 0`, the `renderTimeline(` / `buildDensity(` ordering). No case needed a
 guessed expectation and no criterion text conflicted with what the plan asked
 me to pin.
+
+## Increment 3 — Round 1
+
+The reviewer's reproduction spec for this round is the finding at
+`tools/argus-ui/public/app.js:839–857`: `loadTimeline` writes its fetch
+answers into shared page state with no check that the selected session is
+still the one that was asked for, so an answer for a session the user has
+since left contaminates the new session's lanes and pins its `toolSeq`
+watermark to a foreign counter. Wrote exactly the twelve cases the Round 1
+test plan of `researcher.md` names for that spec, and nothing else: nine unit
+cases appended to `tools/argus-ui/test/timeline.test.mjs` under a new
+`// Criterion 5, round 1 — the tool-mark index survives an overlapping
+refresh.` banner, and three source-level cases appended to
+`tools/argus-ui/test/page.test.mjs` under a new `// Criterion 5, round 1 — a
+refresh answer for another session never reaches these lanes.` banner. No
+production file was opened — every expected shape (the `mergeToolMarks`
+signature and its doc comment, the guard's regex, the import-line regex) came
+from the plan's own code snippets and prose.
+
+Two changes beyond the twelve cases, both named by the plan itself and both
+inside test files:
+
+- Added `mergeToolMarks` to the `import { … } from '../public/timeline.js'`
+  list at the top of `timeline.test.mjs`. No new local fixture was needed —
+  the plan's nine cases build every input inline or from the file's existing
+  `session()`, `record()`, `threeRecordContent()` and `toolMark()` factories.
+- Tightened `functionSource`'s terminator regex in `page.test.mjs` from
+  `/\nfunction \w+\(/` to `/\n(?:async )?function \w+\(/`, exactly as the
+  plan's "A helper change first" section specifies, because `loadTimeline` is
+  an `async function` and the untightened regex ran its slice through
+  `loadTabData` and `refresh` as well. Checked against the plan's own claim
+  that no existing case is affected: reran the file's nine pre-existing cases
+  after the change (three under Criterion 1 use `functionSource` on
+  `selectSession`/`renderDetail`, neither preceded by an `async` sibling) —
+  all nine still pass.
+
+### Proving the twelve new cases
+
+Ran both files after writing all twelve cases. Every one fails for the
+absence the finding names — `mergeToolMarks` does not exist yet in
+`public/timeline.js`, and `loadTimeline` in `public/app.js` carries neither
+the session guard nor a call to it — never on a typo of mine.
+
+`timeline.test.mjs` fails to load as a whole, because importing
+`mergeToolMarks` from a module that does not export it is a `SyntaxError` at
+the top of the file, before `node:test` can register any of its 40+ cases:
+
+```
+node --test tools/argus-ui/test/timeline.test.mjs
+# file:///home/user/uroboros/tools/argus-ui/test/timeline.test.mjs:16
+#   mergeToolMarks,
+#   ^^^^^^^^^^^^^^
+# SyntaxError: The requested module '../public/timeline.js' does not provide an export named 'mergeToolMarks'
+# tests 1
+# pass 0
+# fail 1
+```
+
+| # | Case | Test name | File | Result |
+| --- | --- | --- | --- | --- |
+| 1 | merging into an empty index keeps every item, and only the three fields a mark needs | `'merging into an empty index keeps every item, and only the three fields a mark needs'` | `timeline.test.mjs` | fails: module load error above (all nine of this round's `timeline.test.mjs` cases share this one failure, alongside every pre-existing case in the file) |
+| 2 | an event already held is not counted twice | `'an event already held is not counted twice'` | `timeline.test.mjs` | fails: module load error |
+| 3 | merging the same response twice changes nothing the second time | `'merging the same response twice changes nothing the second time'` | `timeline.test.mjs` | fails: module load error |
+| 4 | the watermark is what is held, never what was seen | `'the watermark is what is held, never what was seen'` | `timeline.test.mjs` | fails: module load error |
+| 5 | an item with no usable seq is dropped rather than held un-deduplicable | `'an item with no usable seq is dropped rather than held un-deduplicable'` | `timeline.test.mjs` | fails: module load error |
+| 6 | merging does not mutate the index it was given | `'merging does not mutate the index it was given'` | `timeline.test.mjs` | fails: module load error |
+| 7 | out-of-order items still leave the highest seq as the watermark | `'out-of-order items still leave the highest seq as the watermark'` | `timeline.test.mjs` | fails: module load error |
+| 8 | a missing spanId becomes null rather than undefined | `'a missing spanId becomes null rather than undefined'` | `timeline.test.mjs` | fails: module load error |
+| 9 | the merged index is what the density reads | `'the merged index is what the density reads'` | `timeline.test.mjs` | fails: module load error |
+| 10 | the timeline loader drops an answer that arrived after the selection moved on | `'the timeline loader drops an answer that arrived after the selection moved on'` | `page.test.mjs` | fails on its own assertion: `assert.ok(guardIdx >= 0, 'loadTimeline must guard against a stale session before writing state')` throws — `AssertionError [ERR_ASSERTION]: loadTimeline must guard against a stale session before writing state`, `expected: true`, `actual: false`; the current `loadTimeline` has no `state.selectedSessionId !== id` check anywhere |
+| 11 | the timeline loader merges tool events instead of appending them blind | `'the timeline loader merges tool events instead of appending them blind'` | `page.test.mjs` | fails on its own assertion: `assert.match(loadTimeline, /mergeToolMarks\(/)` throws `'loadTimeline must delegate the accumulation to mergeToolMarks'`; the function body quoted in the failure still ends with the blind `for (const item of tools?.items ?? []) { state.toolMarks.push(...) ... }` loop the finding names |
+| 12 | app.js takes the merge from the timeline module | `'app.js takes the merge from the timeline module'` | `page.test.mjs` | fails: `assert.match(appJs, /import\s*\{[^}]*\bmergeToolMarks\b[^}]*\}\s*from\s*['"]\.\/timeline\.js['"]/)` throws `'app.js must import mergeToolMarks from timeline.js, so the tested function is the one the page runs'`; the current import line names only `esc, fmtNum, fmtCost, fmtDur, fmtClock, fmtAgo, isLive, shortId` |
+
+### Commands run
+
+- `node --test tools/argus-ui/test/timeline.test.mjs` — 1 top-level failure
+  (module load error), 0 pass, 1 fail, exit 1. All 9 new cases (and every
+  pre-existing case in the file) share this one failure; none registered
+  individually because the import throws before `node:test` can enumerate
+  the file's tests.
+- `node --test tools/argus-ui/test/page.test.mjs` — 12 tests, 9 pass (the
+  file's pre-existing cases, including the three whose `functionSource` calls
+  now run through the tightened regex), 3 fail (cases 10–12 above), exit 1.
+
+Not run this round: `npm --prefix tools/argus-ui test` and `./test.sh` — the
+plan reserves both for the implementer, and this round touches only
+`test/timeline.test.mjs` and `test/page.test.mjs`.
+
+### Deliberately not written
+
+Matches the round's own list exactly, nothing added or dropped:
+
+- The race itself, end to end, against two overlapping `refresh()` calls and
+  a fake collector — it needs a DOM and a `fetch` harness; jsdom is a
+  dependency, and zero dependencies is this project's first rule. Cases 1–9
+  pin the state transition that made the race destructive, and cases 10–12
+  pin that `loadTimeline` is wired to it.
+- The collector's `sinceSeq` semantics — owned by `tools/argus`'s own suite;
+  re-asserting them here would pin someone else's behaviour.
+- `state.content`'s stale write as a case of its own — fixed by the same
+  guard as the tool-mark race, and case 10 pins that the guard precedes the
+  `state.content` write, so no case of its own is needed.
+- Everything increment 3's earlier round already pins (buckets, curve
+  scaling, geometry, escaping, the composition) — untouched by this change
+  and re-run by the command list above.
+- `tools/argus`, `styles.css`, `README.md`, the landing view, scrubbing, live
+  mode and per-lane selection — not touched, or not this increment's.
+
+### Gaps and conflicts found in the plan
+
+None. The plan's `mergeToolMarks` doc comment, algorithm and the two guard
+snippets for `loadTimeline` were concrete enough that every case in the test
+plan mapped to one exact assertion with no guessed expectation, and the
+"helper change first" instruction named its own regex verbatim, so no
+reading choice was needed there either.

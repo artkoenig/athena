@@ -13,6 +13,7 @@ import {
   activityMarks,
   MIN_CURVE_WIDTH_PCT,
   ACTIVITY_BUCKETS,
+  mergeToolMarks,
 } from '../public/timeline.js';
 
 // The two shapes every case builds its input from — nothing else.
@@ -563,4 +564,102 @@ test('the timeline still renders from a bare buildLanes view, with no density at
   const laneCount = (html.match(/data-lane="/g) ?? []).length;
   assert.equal(laneCount, 2, 'increment 2\'s call shape, renderTimeline(buildLanes(...)), must keep working');
   assert.doesNotMatch(html, /NaN/);
+});
+
+// Criterion 5, round 1 — the tool-mark index survives an overlapping refresh.
+
+test('merging into an empty index keeps every item, and only the three fields a mark needs', () => {
+  const result = mergeToolMarks(
+    [],
+    [
+      { seq: 4, timeMs: 2000, spanId: 'sp-a', attrs: { tool_input: 'x'.repeat(100) } },
+      { seq: 7, timeMs: 3000, spanId: 'sp-b' },
+    ],
+  );
+  assert.deepEqual(result.marks, [
+    { seq: 4, timeMs: 2000, spanId: 'sp-a' },
+    { seq: 7, timeMs: 3000, spanId: 'sp-b' },
+  ]);
+  assert.equal(result.seq, 7);
+});
+
+test('an event already held is not counted twice', () => {
+  const held = [{ seq: 4, timeMs: 2000, spanId: 'sp-a' }];
+  const items = [
+    { seq: 4, timeMs: 2000, spanId: 'sp-a' },
+    { seq: 5, timeMs: 2100, spanId: 'sp-a' },
+  ];
+  const result = mergeToolMarks(held, items);
+  assert.equal(result.marks.length, 2, 'the overlapping-refresh double count must not happen');
+  assert.equal(result.marks.filter((mark) => mark.seq === 4).length, 1);
+  assert.equal(result.marks.filter((mark) => mark.seq === 5).length, 1);
+});
+
+test('merging the same response twice changes nothing the second time', () => {
+  const items = [
+    { seq: 4, timeMs: 2000, spanId: 'sp-a', attrs: { tool_input: 'x'.repeat(100) } },
+    { seq: 7, timeMs: 3000, spanId: 'sp-b' },
+  ];
+  const first = mergeToolMarks([], items);
+  const second = mergeToolMarks(first.marks, items);
+  assert.deepEqual(second.marks, first.marks);
+  assert.equal(second.seq, first.seq);
+});
+
+test('the watermark is what is held, never what was seen', () => {
+  const empty = mergeToolMarks([], []);
+  assert.deepEqual(empty, { marks: [], seq: 0 });
+  const held = mergeToolMarks([{ seq: 9, timeMs: 4000, spanId: 'sp-a' }], []);
+  assert.equal(held.seq, 9, 'a watermark can never run ahead of the records behind it');
+  assert.equal(held.marks.length, 1);
+});
+
+test('an item with no usable seq is dropped rather than held un-deduplicable', () => {
+  const items = [
+    { timeMs: 2000, spanId: 'sp-a' },
+    { seq: null, timeMs: 2100, spanId: 'sp-a' },
+    { seq: 'x', timeMs: 2200, spanId: 'sp-a' },
+  ];
+  const result = mergeToolMarks([], items);
+  assert.deepEqual(result.marks, []);
+  assert.equal(result.seq, 0);
+});
+
+test('merging does not mutate the index it was given', () => {
+  const held = [{ seq: 1, timeMs: 1000, spanId: 'sp-a' }];
+  const items = [
+    { seq: 2, timeMs: 1100, spanId: 'sp-a' },
+    { seq: 3, timeMs: 1200, spanId: 'sp-a' },
+  ];
+  const result = mergeToolMarks(held, items);
+  assert.equal(held.length, 1, 'the array passed in must not be mutated');
+  assert.notEqual(result.marks, held);
+});
+
+test('out-of-order items still leave the highest seq as the watermark', () => {
+  const items = [
+    { seq: 9, timeMs: 4000, spanId: 'sp-a' },
+    { seq: 4, timeMs: 2000, spanId: 'sp-a' },
+  ];
+  const result = mergeToolMarks([], items);
+  assert.equal(result.marks.length, 2);
+  assert.equal(result.seq, 9, 'the watermark is the maximum seq held, not the last item merged');
+});
+
+test('a missing spanId becomes null rather than undefined', () => {
+  const result = mergeToolMarks([], [{ seq: 3, timeMs: 2000 }]);
+  assert.deepEqual(result.marks, [{ seq: 3, timeMs: 2000, spanId: null }]);
+});
+
+test('the merged index is what the density reads', () => {
+  const content = threeRecordContent();
+  const merged = mergeToolMarks([], [toolMark({ seq: 5, timeMs: 2200, spanId: 'sp-a' })]);
+  const view = buildDensity(buildLanes({ session: session(), content }), {
+    content,
+    tools: merged.marks,
+  });
+  const agent = view.lanes.find((lane) => lane.kind === 'agent');
+  assert.equal(agent.toolCalls, 1);
+  const toolMarksOnLane = agent.activity.filter((mark) => mark.kind === 'tool');
+  assert.equal(toolMarksOnLane.length, 1);
 });

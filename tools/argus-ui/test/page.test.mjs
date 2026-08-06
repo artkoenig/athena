@@ -21,7 +21,7 @@ function functionSource(source, name) {
   const start = source.indexOf(`function ${name}(`);
   assert.ok(start >= 0, `app.js must still declare ${name}()`);
   const body = source.slice(start + 1);
-  const next = body.search(/\nfunction \w+\(/);
+  const next = body.search(/\n(?:async )?function \w+\(/);
   return next === -1 ? body : body.slice(0, next);
 }
 
@@ -176,5 +176,42 @@ test('the timeline is composed with its density, not around it', () => {
   assert.ok(
     timelineIdx < densityIdx,
     'renderTimeline(buildDensity(...)) means the renderTimeline( call opens before the buildDensity( call',
+  );
+});
+
+// Criterion 5, round 1 — a refresh answer for another session never reaches these lanes.
+
+test('the timeline loader drops an answer that arrived after the selection moved on', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const loadTimeline = functionSource(appJs, 'loadTimeline');
+
+  const awaitIdx = loadTimeline.indexOf('await');
+  assert.ok(awaitIdx >= 0, 'loadTimeline must await its fetches');
+  const guardIdx = loadTimeline.search(/state\.selectedSessionId\s*!==\s*id/);
+  assert.ok(guardIdx >= 0, 'loadTimeline must guard against a stale session before writing state');
+  const contentWriteIdx = loadTimeline.indexOf('state.content =');
+  assert.ok(contentWriteIdx >= 0, 'loadTimeline must still write state.content');
+
+  assert.ok(guardIdx > awaitIdx, 'the guard must come after the fetches are awaited');
+  assert.ok(guardIdx < contentWriteIdx, 'the guard must come before state is written');
+});
+
+test('the timeline loader merges tool events instead of appending them blind', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const loadTimeline = functionSource(appJs, 'loadTimeline');
+  assert.match(loadTimeline, /mergeToolMarks\(/, 'loadTimeline must delegate the accumulation to mergeToolMarks');
+  assert.doesNotMatch(
+    loadTimeline,
+    /state\.toolMarks\.push\(/,
+    'the de-duplicating merge must be the only way tool marks reach page state',
+  );
+});
+
+test('app.js takes the merge from the timeline module', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  assert.match(
+    appJs,
+    /import\s*\{[^}]*\bmergeToolMarks\b[^}]*\}\s*from\s*['"]\.\/timeline\.js['"]/,
+    'app.js must import mergeToolMarks from timeline.js, so the tested function is the one the page runs',
   );
 });
