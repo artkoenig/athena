@@ -764,3 +764,75 @@ Outside this increment's scope, noticed and left alone: the drag, the thumb
 alignment and the dimming are untestable in this project (no DOM harness, zero
 dependencies) and are the review's to judge on screen; nothing here anticipates
 increments 5 and 6, and no case pins them.
+
+## Increment 4 — Round 1
+
+No production file changed this round, and none needed to. The Round 1 plan
+states it outright ("**No production file changes in this round.**"): the
+reviewer's finding was a coverage hole, not a behaviour defect, so the correction
+is the three new cases the test-author already wrote, and the implementer's work
+is to run the list and fix only what it reports. It reported nothing.
+
+### What I changed
+
+Nothing but this handoff. `tools/argus-ui/public/app.js`,
+`public/timeline.js`, `public/styles.css`, `public/index.html` and
+`tools/argus-ui/README.md` are byte-identical to the state the test-author's
+commit left them in — the plan names all five as staying exactly as they are, and
+the wiring the finding is about (the `#detail` `input` listener routing
+`#timeline-scrub` to `scrubTo`, the `#detail` `pointerdown` listener setting
+`scrubbing`, and the `window` `pointerup`/`pointercancel` loop clearing it) is
+already correct.
+
+### Running the tests first, as the brief requires
+
+The plan's "What is already red" section predicts nothing red before the change
+and nothing red after it, and predicts the suite growing from 103 to 106 cases.
+Measured, that is exactly what the suite does. The three cases this round is
+about are green on the code as it stands, which is the intended outcome and not a
+skipped correction:
+
+| # | Case | Result |
+| --- | --- | --- |
+| 1 | `the scrub control's input reaches the scrub` | `ok 27`, passes |
+| 2 | `a drag is registered before the next refresh can fire` | `ok 28`, passes |
+| 3 | `releasing the pointer lets refreshes resume` | `ok 29`, passes |
+
+I did not apply the plan's named deletions to check the cases are sensitive to
+them. The plan says of those deletions "do not perform those deletions, and do not
+touch `app.js`", and the test-author already measured each one (deleting the
+`input` listener's `timeline-scrub` branch turns case 1 red; deleting the
+`pointerdown` listener with the `pointerup`/`pointercancel` loop turns cases 2 and
+3 red).
+
+### Commands run
+
+The plan's "What counts as done" list is one command, and it is the only command
+I ran.
+
+- `npm --prefix tools/argus-ui test` (`node --test "test/*.test.mjs"`, from the
+  repository root) — **106 tests, 106 pass, 0 fail, 0 skipped, 0 todo, exit 0**.
+  It covers every file in `tools/argus-ui/test/`: `page.test.mjs` (including the
+  three new cases above), `timeline.test.mjs`, `server.test.mjs`,
+  `config.test.mjs` and `independence.test.mjs`. Nothing was excluded and nothing
+  was skipped.
+
+Deliberately not run, because the plan puts them off the list: `./test.sh` (the
+closing increment owns the full-suite run) and `tools/argus`' own suite (nothing
+outside `tools/argus-ui` is touched by this round). No linter and no formatter
+exist in this repository, so there is none to run.
+
+### Problems hit
+
+None, and no question is blocking. Two notes for the reviewer, neither acted on:
+
+- **This round's commit carries no code.** The only tracked file it changes is
+  this handoff, because the test-author's commit `3953c3e` already landed the
+  three cases and the helper, and the plan forbids any production edit. If the
+  reviewer expected a code diff to review, the thing to review is that commit
+  plus the fact that the suite is green at 106 without one.
+- **Outside this round's scope, noticed and left alone:** the reviewer's second
+  item — an in-flight `refresh()` that can still replace the slider mid-drag —
+  is recorded in the plan as an observation and explicitly not a finding ("**No
+  action, no test, no code change for it.** Do not widen the guard"). I widened
+  nothing and wrote nothing for it.
