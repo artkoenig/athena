@@ -1433,3 +1433,176 @@ block, carrying that text.
   and the unfiltered query would answer with main-session traffic. I could not
   construct that record from the collector's own parsing rules (`agentOf` falls
   back to the source segment), so it stays an observation.
+
+## Increment 5 — Round 1
+
+**Status: 2 findings require a correction.** Round 0's three findings are
+closed, and the production code still meets the criterion when I read it line by
+line. What is still unverifiable is the wiring in the middle: the suite stays
+green when the panel stops asking for the cursor's moment, and when the fetched
+record never reaches the renderer at all. Both are proven by a mutation run
+below, not suspected — with either one in place the panel shows the wrong
+context, or none, and `npm --prefix tools/argus-ui test` reports 161 pass, exit
+0.
+
+### Commands run
+
+- `npm --prefix tools/argus-ui test` — 161 cases, 161 pass, 0 fail, 0 cancelled,
+  0 skipped, 0 todo, exit 0. Nothing excluded. This is the only command my prompt
+  lists; `tools/argus`' suite and `./test.sh` were not run, by that list.
+- The same command twice more in a throwaway `git worktree` outside the
+  checkout, one single mutation each, to find out what the suite would catch.
+  The worktree was removed afterwards; `git worktree list` names only the
+  checkout and `git status --porcelain` is empty. The checkout under review was
+  never modified, and no test was written to produce these findings.
+
+| Sandbox run | Result |
+| --- | --- |
+| M1 — the line `at: resolveCursor(state.cursor, view).timeMs,` (`app.js:927`) deleted, the `resolveCursor(state.cursor, view)` call kept above it | 161 pass, exit 0 |
+| M2 — `app.js:935` becomes `state.laneContext = { key, item: null };` | 161 pass, exit 0 |
+
+### Criterion — selecting a lane at the chosen time shows that agent's (or the main session's) context as of that moment, as a structured message list
+
+Met in the code, judged from the diff against `main`.
+
+- **Selecting a lane.** Each lane row is
+  `<button type="button" class="lane" data-lane="…" aria-current="…">`
+  (`tools/argus-ui/public/timeline.js:417-425`), reachable by pointer and
+  keyboard; the delegated `click` handler on `#detail` (`app.js:1159-1167`)
+  toggles `state.selectedLane`, clears the expansions and refetches. The
+  dimmed-ahead overlay drawn across the track carries `pointer-events: none`
+  (`styles.css:1004`) and its children inherit it, so it cannot swallow a click
+  on the part of a lane right of the cursor.
+- **That agent's, or the main session's.** `laneContentQuery` (`context.js:158-164`)
+  is now a pure function and produces exactly one filter: `{ main: '1' }` for the
+  main lane, else the lane's `{ span }`, else its `{ agent }`, else `null` —
+  and `loadLaneContext` sends no request at all for `null`, so no lane can be
+  answered with the main session's traffic by accident.
+- **As of that moment, nearest at or before.** `loadLaneContext`
+  (`app.js:915-936`) resolves the page's own cursor with
+  `resolveCursor(state.cursor, view)` and puts that moment on the wire as `at`;
+  the collector's `contentAt` defaults `eventName` to
+  `claude_code.api_request_body` and returns the newest matching record with
+  `timeMs <= atMs`. Live mode refetches (`refresh`, `app.js:1013`), a scrub
+  refetches debounced (`scrubTo` → `scheduleLaneContext`, `app.js:1106` and
+  `app.js:960-966`), returning to live refetches (`app.js:1156`), and the session
+  and lane guards after the await (`app.js:934`) drop an answer that arrived
+  after the reader moved on.
+- **A structured message list — system prompt, user, assistant, tool call, tool
+  result.** `contextBlocks` (`context.js:65-143`) emits the system prompt (string
+  or array of text entries) first, then every message in order — `text` under the
+  message's role, `thinking`, `tool_use` labelled with the tool name,
+  `tool_result` labelled with its `tool_use_id` and marked `error` — then every
+  remaining top-level field, `tools` included. Nothing is dropped; an unknown
+  content block is kept under its own type.
+- **One line with its size, expandable to the exact full text.** Each block is
+  `<details><summary>` label + preview + `ctx-size` `</summary><pre>` full text
+  `</pre></details>` (`context.js:216-222`), collapsed unless its
+  `"<seq>:<index>"` key is in the expanded set, and `chars` is the length of the
+  very string the `<pre>` carries (`makeBlock`, `context.js:50-53`). Everything
+  printed goes through `esc`.
+- **Edges.** No body, an empty body, a non-object body and a body cut mid-JSON
+  all render (raw block or nothing, never a crash); a moment before the lane's
+  first request says so; a fetch in flight says something different from "there
+  is nothing here".
+
+### Round 0's three findings are closed
+
+Checked against the code and the new cases, not against the claim.
+
+- **Exact full text.** `context.test.mjs:386-428` reads the content of every
+  `<pre class="ctx-text">` and compares it to `esc(block.text)` block by block,
+  with an explicit guard that the fixture is longer than `PREVIEW_CHARS`. A
+  preview substituted for the text now fails.
+- **The lane-to-query mapping.** `laneContentQuery` is exported and pinned by
+  value for all four cases (`context.test.mjs:432-458`), and `loadLaneContext`
+  delegates to it in one line.
+- **The `assistant` kind.** `context.test.mjs:366-384` requires exactly one
+  `assistant` block carrying the assistant's own text, in the parser and in the
+  rendered markup.
+
+### Finding 1 — "as of that moment" is unpinned: nothing checks what moment goes on the wire
+
+`tools/argus-ui/public/app.js:924-929`. The one case over this call
+(`page.test.mjs:409-419`) greps `loadLaneContext`'s source for `/api/content/at`,
+`resolveCursor(` and `laneContentQuery(`. A grep for an identifier cannot see
+which value that identifier's result becomes, and no case anywhere asserts that
+the request carries an `at` parameter at all.
+
+Reproduction (measured, M1 above): delete the line
+`at: resolveCursor(state.cursor, view).timeMs,` from the parameter object and
+keep a bare `resolveCursor(state.cursor, view);` call in the function. The page
+then asks `GET /api/content/at?session=…&main=1` with no moment; the collector
+defaults it to `Date.now()` (`tools/argus/src/server.mjs:279`,
+`atMs: intParam(searchParams, 'at', Date.now())`), so scrubbing to any earlier
+point of the session still returns the newest request body — the panel shows the
+head's context at every cursor position, which is the whole of "as of that
+moment" gone. `npm --prefix tools/argus-ui test` reports 161 pass, exit 0.
+
+The criterion this misses: "shows that agent's … context **as of that moment**:
+the body of the nearest API request **at or before that time**".
+
+### Finding 2 — "shows that agent's context" is unpinned: nothing checks that the fetched record reaches the panel
+
+`tools/argus-ui/public/app.js:935` and `app.js:942-956`. The cases over this path
+require that `state.laneContext =` is written after the guards
+(`page.test.mjs:421-434`) and that `renderLanePanel` mentions `lane-panel`,
+`renderContextPanel(` and `state.expanded` (`page.test.mjs:436-446`,
+`481-496`). None of them looks at what is written or what is handed over, so the
+panel's only input — the record the fetch returned — is unpinned.
+
+Reproduction (measured, M2 above): change `app.js:935` to
+`state.laneContext = { key, item: null };`. Every lane, at every moment, then
+renders the empty panel — "No API request on this lane at or before this
+moment." — and no context is ever shown, while
+`npm --prefix tools/argus-ui test` reports 161 pass, exit 0.
+
+The criterion this misses: "Selecting a lane at the chosen time **shows** that
+agent's (or the main session's) context".
+
+### The tests against the intent — the rest
+
+The 42 cases in `context.test.mjs` cover the criterion's rendering half well:
+every named kind, sizes equal to the expanded text, previews cut to one line,
+order, escaping, the empty and pending states, a truncated body, and the
+`data-lane` attribute that must not appear in the panel. The gap is the layer
+between the cursor and that renderer, which lives in `app.js` and is checked
+only by reading its source for identifiers — the two findings above are the two
+places where that method loses the criterion. Everything else in `page.test.mjs`
+for this increment (container position, toggle-to-deselect, the debounce, the
+live refetch, forgetting the lane on session change) pins a decision that has no
+value to compare against, so a source assertion is as far as it can go there.
+
+### Nothing in the diff that no criterion asked for
+
+`context.js`, the lane button and `selectedKey` in `timeline.js`, the panel state
+and loader in `app.js`, the `.lane`/`.ctx-*` rules in `styles.css` and the one
+README paragraph all serve this criterion. The blocks beyond the five named
+kinds — `thinking`, `field` (`tools`, `model`, `max_tokens`, `stream`) and
+`other` — are more than the criterion enumerates, but dropping them would make
+the panel's sizes lie about what fills the context, so I do not raise them. No
+prose, flag or view was added that no criterion asked for.
+
+### Beyond the criteria (blast radius)
+
+- **`<div class="lane">` became `<button class="lane">`.** `renderTimeline` is
+  called from `app.js` only, `.lane` gained `appearance: none; width: 100%;
+  background: none; border: 0; font: inherit; text-align: left`, so the grid
+  layout of increments 3 and 4 survives. The button's descendants are spans and
+  one `<svg>` — no interactive content nested in a button. Every CSS variable the
+  new rules use (`--panel-hover`, `--accent-soft`, `--violet`, `--teal`,
+  `--warn`, `--bg-sunken`) is defined in `styles.css`.
+- **The third argument of `renderTimeline`** defaults to `null`, so the
+  two-argument calls the earlier increments' cases make still render, with every
+  lane `aria-current="false"`.
+- **A fourth module under `public/`.** `context.js` is served by the generic
+  static handler (`.js` is in `MIME`) and reaches the collector through
+  `PROXIED = pathname.startsWith('/api/')`, so `/api/content/at` needs no route
+  of its own in `tools/argus-ui/src/server.mjs`. `independence.test.mjs` was
+  extended to cover it.
+- **One extra request per refresh** when a lane is open (`refresh` awaits
+  `loadLaneContext`), guarded by `if (!id || !key)` so a closed panel costs
+  nothing; the fetch swallows its own rejection, so a failing panel cannot take
+  the page's refresh down with it.
+- Nothing else found: no caller of the changed functions outside `app.js`, and
+  no document made stale by this increment.
