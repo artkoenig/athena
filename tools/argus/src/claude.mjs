@@ -166,6 +166,70 @@ export function sessionNameOf(record) {
   );
 }
 
+/**
+ * Events that carry a full API body. "Content-bearing" means exactly that:
+ * user prompts, assistant responses and tool results already flow through the
+ * ordinary event tail and now carry their text because the flags are on, so
+ * they need no plumbing of their own.
+ */
+export const CONTENT_EVENTS = new Set([EVENT.apiRequestBody, EVENT.apiResponseBody]);
+
+/**
+ * Which subagent a record belongs to, read off `query_source`.
+ *
+ * The grammar is `agent:<source>:<name>` (`agent:custom:probe-bot`,
+ * `agent:builtin:general-purpose`); main-session traffic uses plain values like
+ * `sdk`, `repl_main_thread` or `compact` and gets `null`. `OTEL_LOG_TOOL_DETAILS=1`
+ * is what un-redacts the name segment, and current CLI builds redact it
+ * inconsistently — `agent:custom` arrives with no name at all. Falling back to the
+ * source segment keeps such a record from being mistaken for main traffic. A name
+ * containing a colon keeps everything after the second one.
+ */
+export function agentOf(attrs = {}) {
+  const source = attrs?.query_source;
+  if (typeof source !== 'string' || !source.startsWith('agent:')) return null;
+  const rest = source.slice('agent:'.length);
+  const colon = rest.indexOf(':');
+  if (colon === -1) return rest || null;
+  return rest.slice(colon + 1) || rest.slice(0, colon) || null;
+}
+
+/** True when the record came from a subagent rather than the main session. */
+export function isSubagentSource(attrs = {}) {
+  return typeof attrs?.query_source === 'string' && attrs.query_source.startsWith('agent:');
+}
+
+/**
+ * The metadata projection of a content record — everything but the body, which
+ * is what makes it cheap enough to list. `body_length` and `body_truncated`
+ * arrive as strings on the wire, hence num()/bool() rather than Number()/truthiness.
+ * `bodyLength` is the untruncated size the CLI reported; `bodyChars` is what
+ * actually arrived. `body_ref` only appears in `file:<dir>` mode, which
+ * `otelEnvFor` never sets: it is carried through opaquely and no file is read.
+ */
+export function contentMetaOf(log) {
+  const attrs = log?.attrs ?? {};
+  return {
+    seq: log?.seq ?? 0,
+    timeMs: log?.timeMs ?? 0,
+    sessionId: log?.sessionId ?? null,
+    traceId: log?.traceId ?? '',
+    spanId: log?.spanId ?? '',
+    eventName: log?.eventName ?? '',
+    querySource: attrs.query_source ?? null,
+    agent: agentOf(attrs),
+    isSubagent: isSubagentSource(attrs),
+    model: attrs.model ?? null,
+    requestId: attrs.request_id ?? null,
+    promptId: attrs['prompt.id'] ?? null,
+    eventSequence: num(attrs['event.sequence'], 0),
+    bodyLength: num(attrs.body_length, 0),
+    bodyChars: typeof attrs.body === 'string' ? attrs.body.length : 0,
+    truncated: bool(attrs.body_truncated),
+    bodyRef: attrs.body_ref ?? null,
+  };
+}
+
 /** Attribution attributes that answer "which agent/skill/tool spent this". */
 export function attributionOf(attrs = {}) {
   const out = {};
@@ -215,6 +279,12 @@ export function describeEvent(log) {
       return `${a.decision ?? '?'} ${a.tool_name ?? 'tool'} (${a.source ?? 'unknown source'})`;
     case EVENT.apiRequest:
       return `${a.model ?? 'model'} · ${num(a.input_tokens)} in / ${num(a.output_tokens)} out · ${num(a.duration_ms)}ms`;
+    // The body events carry a whole conversation. The tail says how big it was
+    // and where it came from; the text itself is served by /api/content/at only.
+    case EVENT.apiRequestBody:
+      return `${a.model ?? 'model'} request body · ${num(a.body_length)} chars${bool(a.body_truncated) ? ' (truncated)' : ''} · ${a.query_source ?? 'unknown source'}`;
+    case EVENT.apiResponseBody:
+      return `${a.model ?? 'model'} response body · ${num(a.body_length)} chars${bool(a.body_truncated) ? ' (truncated)' : ''} · ${a.query_source ?? 'unknown source'}`;
     case EVENT.apiError:
       return `${a.model ?? 'model'} ${a.status_code ?? ''} ${a.error ?? 'error'}`.trim();
     case EVENT.apiRefusal:
@@ -244,6 +314,17 @@ export function otelEnvFor(endpoint, { traces = true, token = null, fastFlush = 
     OTEL_LOGS_EXPORTER: 'otlp',
     OTEL_EXPORTER_OTLP_PROTOCOL: 'http/protobuf',
     OTEL_EXPORTER_OTLP_ENDPOINT: endpoint,
+    // Content, on by default: argus is a local measurement tool and the text
+    // *is* the measurement — prompts, tool arguments and whole API bodies.
+    // OTEL_LOG_TOOL_CONTENT rides on span events, so it only takes effect while
+    // tracing is on; it is set unconditionally and is simply inert otherwise.
+    // The CLI truncates content at 61,440 chars by default, which cuts the first
+    // request of even a trivial session in half — hence the raised ceiling.
+    OTEL_LOG_USER_PROMPTS: '1',
+    OTEL_LOG_TOOL_DETAILS: '1',
+    OTEL_LOG_TOOL_CONTENT: '1',
+    OTEL_LOG_RAW_API_BODIES: '1',
+    CLAUDE_CODE_OTEL_CONTENT_MAX_LENGTH: '2000000',
   };
   if (traces) {
     // Spans are the beta signal and need their own opt-in flag.
