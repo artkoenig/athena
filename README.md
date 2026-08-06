@@ -75,10 +75,55 @@ unattended work possible: idea to pull request with nobody at the keyboard, and
 a session picking the work back up hours later resumes from the record rather
 than from a conversation that is gone.
 
+## An issue too big for one pass: `agile-loop`
+
+The loop above plans the whole issue once, up front — before anyone has touched
+the code. For a single change that is exactly right. For an issue whose later
+parts depend on what building the earlier ones turns up, it is a guess that
+nothing ever revises, and the run spends its correction rounds on a plan that
+was wrong from the start.
+
+The second workflow, [`workflows/agile-loop.js`](workflows/agile-loop.js), does
+not plan it once. A [`planner`](agents/planner.md) cuts the issue into
+increments, each with its own acceptance criteria; the chain above then runs
+once per increment; and after every increment the planner re-cuts the ones still
+open against what that increment actually showed — splitting, merging,
+reordering, sharpening a criterion the researcher found ambiguous, dropping work
+that turned out already done. Steering the rest of the run is the point of the
+arrangement, not an escape hatch in it.
+
+```mermaid
+flowchart LR
+    ISSUE[("issue.md")] --> PLAN["planner<br/>cuts the issue<br/>into increments"]
+    PLAN --> BACK[("backlog.md<br/>the current cut")]
+    BACK -->|"the first increment<br/>still open"| CHAIN["researcher → test-author<br/>→ implementer → reviewer<br/>correction rounds as before"]
+    CHAIN --> REPLAN["planner<br/>closes that increment and<br/>re-cuts the rest"]
+    REPLAN --> BACK
+    BACK ==>|"nothing left,<br/>or the run gives up"| PUB["Publish: push the branch,<br/>open the pull request"]
+```
+
+Each increment is reviewed on its own: the workflow hands the reviewer that
+increment's criteria and names the increments still to come, so unfinished work
+reads as scheduled rather than as a finding. The planner never reads the
+codebase — the researcher stays the only agent that does — so it re-cuts from
+the handoffs the run wrote, and the code facts reach it the same way they reach
+everyone else. `backlog.md` is the one file that is rewritten rather than
+appended to, because a backlog a reader has to reconstruct from its own history
+is not a backlog.
+
+The run stops on its own when the backlog empties, and hands back when it will
+not: eight increments spent, one increment worked twice and handed back again
+unchanged, or two increments ending with findings open. Either way the branch is pushed and the
+pull request says what was delivered and what is still open.
+
+Both workflows ship, and the session picks one from the issue it just wrote —
+`uroboros:loop` when the issue is one change, `uroboros:agile-loop` when it is
+several that could land separately. The human may name one instead.
+
 Which mode a task runs in, the human names. **Direct Mode**: the session does it
-itself, no issue file and no subagent. **Issue Mode**: the loop above — and for
-an idea too vague to write criteria for, the [`grill`](skills/grill/) skill gets
-there one question at a time.
+itself, no issue file and no subagent. **Issue Mode**: one of the two loops
+above — and for an idea too vague to write criteria for, the
+[`grill`](skills/grill/) skill gets there one question at a time.
 
 ## It improves itself
 

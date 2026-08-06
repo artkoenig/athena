@@ -40,9 +40,16 @@ The requirements are yours, the work is the subagents'.
 1. **Collect Requirements:** Conduct the initial interview ("grill") to clarify the user's intent.
 2. **Create the Issue File:** Establish the acceptance criteria and write them to a new issue file under `docs/issues/` (e.g. `docs/issues/<timestamp>-<slug>/issue.md`). It is an agent's whole brief, so put one instruction in one sentence, write that sentence in the imperative, and state each rule once. Commit and push that file — it is the one git operation you own, because the loop runs in the background and your turn ends before any agent could commit it for you.
 3. **Confirm the acceptance criteria** with the human.
-4. **Run the loop:** Once the issue is created and confirmed, run the `uroboros:loop` workflow and hand it the issue directory as `args.issueDir`. The workflow ships with the plugin, so that name resolves in every project it is installed in; do not write a script of your own. The script calls researcher, test-author, implementer and reviewer in turn, stops after two correction rounds, and at the end pushes the branch and makes sure a pull request is open. The orchestration lives there and not in an agent because a subagent cannot start another one.
+4. **Run the loop:** Once the issue is created and confirmed, run a workflow and hand it the issue directory as `args.issueDir`. Both ship with the plugin, so their names resolve in every project it is installed in; do not write a script of your own. Either one calls researcher, test-author, implementer and reviewer in turn, stops after two correction rounds, and at the end pushes the branch and makes sure a pull request is open. The orchestration lives there and not in an agent because a subagent cannot start another one.
 
-5. **Say why the loop turned back:** The result carries a `rounds` entry per review round. For every round the reviewer did not accept, give the human one line in the chat with its reason, before you say anything about the pull request. That line is the reason itself, not a pointer to the findings file.
+   Which of the two is yours to pick, from the issue you just wrote, and you name it in one clause as you start it:
+
+   - `uroboros:loop` — the chain, once, over the whole issue. The default, and right whenever the issue is one change.
+   - `uroboros:agile-loop` — a `planner` first cuts the issue into increments, then the chain runs once per increment, and after each one the planner re-cuts the increments still open against what that one turned up. Take it when the issue holds several criteria that could land separately, or when what to build later plainly depends on what building the earlier part reveals. It costs a planner per increment and buys nothing where there is nothing to re-cut.
+
+   The human may name one instead; then it stands, and you do not second-guess it.
+
+5. **Say why the loop turned back:** The result carries an entry per review — `rounds` from `uroboros:loop`, `increments` from `uroboros:agile-loop`. For every one the reviewer did not accept, give the human one line in the chat with its reason, before you say anything about the pull request. That line is the reason itself, not a pointer to the findings file. After an incremental run, say in one more line what the backlog still holds, if anything.
 
 And what you do not do here:
 

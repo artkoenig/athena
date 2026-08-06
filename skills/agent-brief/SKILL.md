@@ -31,6 +31,15 @@ not guess.
 Paths are inferred, never handed to you beyond that directory. An agent that
 needs the history runs `git log` itself.
 
+**A prompt may narrow the issue to one increment.** Some runs deliver an issue
+in steps, and then your prompt names the increment that is yours and the
+criteria it has to satisfy. Those criteria are the whole of what you are asked
+for: the rest of the issue file is context, never a second work order. Work
+outside them is scope you were not given, and a criterion of the issue that
+your increment does not repeat is not yours to satisfy, to test, or to report
+as missing — a later increment takes it. Where your prompt names no increment,
+the issue is the scope, whole.
+
 ## Your tools
 
 Your page lists the narrowest set your role needs. A tool it withholds is
@@ -62,16 +71,18 @@ Write it as a Markdown file in the issue directory, under the name your page
 gives it, and commit it with whatever else you produced. Write it out in full:
 no placeholders, no summaries that drop detail.
 
-One role writes one file, whatever round it is. In a correction round you do
-not start a second one and you do not rewrite the first: open the file your
-page names, append a `## Round <X>` section for the round your prompt names,
-and leave every earlier section exactly as it stands. The file grows with the
-run, so a reader pointed at it gets the whole history of that role and never
-has to work out which copy is current.
+One role writes one file, however many times it is dispatched. On a second
+dispatch you do not start a second file and you do not rewrite the first: open
+the file your page names, append the section your prompt names — `## Round 1`,
+`## Increment 2 — Round 1`, whatever heading it gives you — and leave every
+earlier section exactly as it stands. The file grows with the run, so a reader
+pointed at it gets the whole history of that role and never has to work out
+which copy is current.
 
-Reading someone else's file follows from that: its last `## Round` section is
-what binds now, and everything above it is how the change got here — context
-you may consult, never a work order you carry out again.
+Reading someone else's file follows from that: the section your prompt points
+you at is what binds now, and where it points at none, the last section does.
+Everything above it is how the change got here — context you may consult, never
+a work order you carry out again.
 
 It is the next agent's whole brief, and every word in it is context that agent
 pays for. So put one instruction in one sentence, write that sentence in the
