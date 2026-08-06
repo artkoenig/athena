@@ -35,6 +35,21 @@ function detailListener(source, type) {
   return next === -1 ? rest : rest.slice(0, next);
 }
 
+/** The argument text of one call, from its `(` to the parenthesis that closes it. */
+function callArguments(source, name) {
+  const open = source.indexOf(`${name}(`);
+  assert.ok(open >= 0, `the source must still call ${name}()`);
+  let depth = 0;
+  for (let i = open + name.length; i < source.length; i += 1) {
+    if (source[i] === '(') depth += 1;
+    else if (source[i] === ')') {
+      depth -= 1;
+      if (depth === 0) return source.slice(open + name.length + 1, i);
+    }
+  }
+  return assert.fail(`the ${name}( call must be closed by a matching )`);
+}
+
 // Criterion 1 — opening a session lands on the timeline, the technical views stay
 // reachable and subordinate.
 
@@ -479,11 +494,7 @@ test('the panel repaints in its own container, never by re-rendering the page', 
 test('the panel is drawn from the lane the reader selected and the answer held for it', () => {
   const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
   const renderLanePanel = functionSource(appJs, 'renderLanePanel');
-  const callIdx = renderLanePanel.indexOf('renderContextPanel(');
-  assert.ok(callIdx >= 0, 'renderLanePanel must call renderContextPanel');
-  const endIdx = renderLanePanel.indexOf(';', callIdx);
-  assert.ok(endIdx >= 0, 'the renderContextPanel( call must end with a statement-terminating ;');
-  const slice = renderLanePanel.slice(callIdx, endIdx);
+  const slice = callArguments(renderLanePanel, 'renderContextPanel');
   assert.match(slice, /lanePanelInput\(/, 'the panel\'s whole input must come from lanePanelInput');
   assert.match(
     renderLanePanel,
@@ -498,6 +509,11 @@ test('the panel is drawn from the lane the reader selected and the answer held f
   );
   assert.match(slice, /held:\s*state\.laneContext\b/, 'the answer held for the selection must reach the panel');
   assert.match(slice, /expanded:\s*state\.expanded\b/, 'the remembered expansion state must still reach the panel');
+  assert.doesNotMatch(
+    slice,
+    /laneToolInput\(/,
+    'the context panel\'s arguments must be read on their own, or a sibling panel\'s key: silently satisfies this case',
+  );
 });
 
 test('scrubbing moves the context with the cursor', () => {
@@ -601,15 +617,16 @@ test('the markup the panels render is what reaches the container', () => {
 test('the tool list is drawn for the selected lane, at the cursor\'s moment, from the calls the page holds', () => {
   const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
   const renderLanePanel = functionSource(appJs, 'renderLanePanel');
-  const callIdx = renderLanePanel.indexOf('renderToolPanel(');
-  assert.ok(callIdx >= 0, 'renderLanePanel must call renderToolPanel');
-  const endIdx = renderLanePanel.indexOf(';', callIdx);
-  assert.ok(endIdx >= 0, 'the renderToolPanel( call must end with a statement-terminating ;');
-  const slice = renderLanePanel.slice(callIdx, endIdx);
+  const slice = callArguments(renderLanePanel, 'renderToolPanel');
   assert.match(slice, /laneToolInput\(/, 'the tool list must be built from laneToolInput');
   assert.match(slice, /\bview,/, 'without the page\'s own lane view the list is empty for every lane');
   assert.match(slice, /key:\s*state\.selectedLane\b/, 'without it the list is empty for every lane');
   assert.match(slice, /calls:\s*state\.toolMarks\b/, 'the merged index is the only source there is');
   assert.match(slice, /cursor:\s*state\.cursor\b/, 'without it the list ignores the scrub');
   assert.match(slice, /expanded:\s*state\.expanded\b/);
+  assert.doesNotMatch(
+    slice,
+    /lanePanelInput\(/,
+    'the tool panel\'s arguments must be read on their own, or the context panel\'s key: silently satisfies this case',
+  );
 });

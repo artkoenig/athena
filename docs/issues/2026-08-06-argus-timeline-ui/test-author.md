@@ -1819,3 +1819,130 @@ prose, not literal test bodies, for that file), but every fact each row
 names is asserted, and no case, kind, or piece of the "what is deliberately
 left untested" list was added or dropped.
 
+
+## Increment 7 — Round 1
+
+The reviewer's reproduction spec for this round is a test defect, not a
+behaviour defect: `page.test.mjs`'s two `renderLanePanel` pins each sliced
+from a call's opening `(` to the *next* `;` in the source, which — once
+`renderLanePanel`'s body became one concatenated assignment
+(`container.innerHTML = renderContextPanel(...) + renderToolPanel(...);`) —
+swallowed the neighbouring call's arguments too, so a mutation to the
+*other* panel's `key:`/`expanded:` silently satisfied the pin. Wrote exactly
+what the Round 1 test plan of `researcher.md` names: the `callArguments`
+helper and the two rewritten cases, both in `tools/argus-ui/test/page.test.mjs`,
+and nothing else. No production file was opened or edited — the exact
+`renderLanePanel` body the plan quotes in its module map (`container.innerHTML
+= renderContextPanel(lanePanelInput({...})) + renderToolPanel(laneToolInput({...}));`)
+was already given verbatim, so nothing needed reading from `public/app.js` to
+write the fix.
+
+### What changed in `page.test.mjs`
+
+- Added `callArguments(source, name)` next to `functionSource`/`detailListener`
+  (after line 36), exactly as the plan's snippet has it: it scans from
+  `${name}(` and returns the text between that call's own matching
+  parentheses, counting depth so a nested call inside the arguments (there is
+  exactly one in each of the two pins) does not close the scan early.
+- Rewrote `'the panel is drawn from the lane the reader selected and the
+  answer held for it'`: the slice is now
+  `callArguments(renderLanePanel, 'renderContextPanel')`, dropping the two
+  `indexOf('renderContextPanel(')` / `indexOf(';', callIdx)` lines and their
+  `assert.ok`s. All five pre-existing assertions and their messages are kept
+  verbatim, plus the `const view = laneView();` assertion against the whole
+  function. Added one assertion: `assert.doesNotMatch(slice, /laneToolInput\(/,
+  ...)`, so a future third panel sharing the statement cannot re-blunt this
+  case the way `renderToolPanel` did.
+- Rewrote `'the tool list is drawn for the selected lane, at the cursor's
+  moment, from the calls the page holds'` the mirror way: the slice is now
+  `callArguments(renderLanePanel, 'renderToolPanel')`, all six pre-existing
+  assertions kept verbatim, and the mirror-image
+  `assert.doesNotMatch(slice, /lanePanelInput\(/, ...)` added.
+
+No other line of the file changed. `callArguments` gets no test file of its
+own, per the plan's own "left untested, deliberately" — its two call sites are
+the only two calls in the repository it is pointed at.
+
+### Proving the correction, without touching production code permanently
+
+The plan's own bar for this round: with the **context** panel's input wired to
+anything other than `state.selectedLane` (or `state.expanded`), the suite must
+go red, while the tool panel's own arguments sit untouched — and vice versa.
+I reproduced the reviewer's mutation M-A2 in the real `public/app.js`, ran the
+suite, and reverted the file immediately afterward; `git status`/`git diff` on
+`public/app.js` afterward show it byte-identical to the tracked copy
+(confirmed with `git checkout -- tools/argus-ui/public/app.js` followed by
+`git status --short`, which lists only `test/page.test.mjs` as modified). This
+is the only time production code was touched during this round, done solely to
+verify the fix discriminates, never to author or pass a test.
+
+**Mutation M-A2** — delete `key: state.selectedLane, ` from the
+`lanePanelInput({...})` call at `app.js:942`:
+
+```
+node --test tools/argus-ui/test/page.test.mjs
+not ok 35 - the panel is drawn from the lane the reader selected and the answer held for it
+# tests 45
+# pass 44
+# fail 1
+```
+
+Rerun with the file as it stood at `HEAD` (the pre-round test, before this
+round's rewrite) against the same mutated `app.js`: 45 pass, 0 fail — exactly
+the reviewer's own reproduction of the defect this round removes.
+
+**The mirror mutation** — delete `key: state.selectedLane,` from the
+`laneToolInput({...})` call at `app.js:947`:
+
+```
+node --test tools/argus-ui/test/page.test.mjs
+not ok 45 - the tool list is drawn for the selected lane, at the cursor's moment, from the calls the page holds
+# tests 45
+# pass 44
+# fail 1
+```
+
+Both mutations were applied one at a time, each followed immediately by
+`git checkout -- tools/argus-ui/public/app.js` before the next was tried; the
+file was never left mutated between runs.
+
+### Commands run
+
+- `node --test tools/argus-ui/test/page.test.mjs` (unmutated repo) — 45 tests,
+  45 pass, exit 0.
+- `node --test tools/argus-ui/test/page.test.mjs` against `app.js` with
+  mutation M-A2 (context panel's `key:` deleted) — 45 tests, 44 pass, 1 fail
+  (`not ok 35`), exit 1. Quoted above.
+- `node --test tools/argus-ui/test/page.test.mjs` against `app.js` with the
+  mirror mutation (tool panel's `key:` deleted) — 45 tests, 44 pass, 1 fail
+  (`not ok 45`), exit 1. Quoted above.
+- `npm --prefix tools/argus-ui test` (unmutated repo, after `app.js` restored)
+  — 205 tests, 205 pass, exit 0.
+- `bash test.sh` (unmutated repo) — five suites (`test-repo.sh`,
+  `test-worktree.sh`, `tools/argus`, `tools/argus-ui`, `tools/log-parser`),
+  `PASS: all 5 suites`, exit 0. Run as `bash test.sh`, not `./test.sh`: the
+  plan's own environment note records `test.sh` as mode `100644` in the tree
+  and in `main`, so the `./` spelling exits 126 on permissions alone and
+  `bash test.sh` is the runnable spelling the plan's closed list names.
+
+### Deliberately not written
+
+Matches the round's own list exactly, nothing added or dropped:
+
+- A test file for `callArguments` itself — a test helper exercised by its two
+  call sites, which are the only two calls in the repository it is pointed at.
+- The loose `state.expanded` assertion at `page.test.mjs:545-550` (whole-function
+  match, satisfied by either panel's `expanded:`) — left exactly as it is, per
+  the plan's own decision: the mutation it exists for is caught by the repaired
+  context-panel case, and editing it buys no discrimination the suite does not
+  already have once that case is fixed.
+- Any new production behaviour or new production-facing test — no production
+  code changed this round; the two capped-parameter and poll-window
+  observations the reviewer recorded are explicitly observations, not
+  findings, and out of scope for this round.
+
+### Gaps and conflicts found in the plan
+
+None. The plan named the exact helper, the exact two edit sites, the exact
+mutation to reproduce, and the exact bar the corrected cases must clear; every
+part of it mapped to a concrete, checkable edit with nothing left to guess.
