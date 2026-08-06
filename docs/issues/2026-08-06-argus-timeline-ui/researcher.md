@@ -2743,3 +2743,554 @@ whoever runs it downstream. From reading: nothing is red before this change. The
 suite stands at 103 passing cases and grows to 106; no existing case is edited,
 no existing case reads the helper being added, and no production file changes,
 so no existing case can change its result.
+
+## Increment 5 — selecting a lane at a time shows that agent's context as a message list
+
+### Findings first: what a live capture proved about a request body
+
+The parser at the heart of this increment has to match a real
+`claude_code.api_request_body` body, so I captured one rather than assuming its
+shape. Claude Code 2.1.223, a throwaway collector on a free port
+(`node tools/argus/bin/argus.mjs start --port <free> --persist <scratchpad>`),
+the env block `argus env` now prints, and a one-prompt session that wrote and
+read a file. Nothing was written inside the repository; the collector was shut
+down afterwards. This is the exception to "the researcher runs nothing", and it
+is why every shape below is a fact.
+
+**1. The top-level keys of a request body, in the order they arrive:**
+
+```
+model, messages, system, tools, betas, metadata, max_tokens, thinking,
+context_management, output_config, diagnostics, stream
+```
+
+**2. `system` is an array of blocks, not a string.** Four entries, each
+`{ type: 'text', text }`, the larger two also carrying `cache_control`. Sizes in
+the capture: 134, 62, 10 676, 5 211 chars. A plain-string `system` is legal in
+the API and must still parse, but it is not what this CLI sends.
+
+**3. `messages` carries these shapes, all four seen in one capture:**
+
+| Shape | Measured example |
+| --- | --- |
+| `{ role: 'user', content: [ {type:'text',text}, … ] }` | two text blocks, 367 and 94 chars |
+| `{ role: 'system', content: '<string>' }` | **a string content on a `system`-role message**, 17 292 chars |
+| `{ role: 'assistant', content: [ {type:'thinking',thinking,signature}, {type:'tool_use',id,name,input,caller} ] }` | thinking + a `Write` call |
+| `{ role: 'user', content: [ {tool_use_id,type:'tool_result',content:'<string>',cache_control} ] }` | tool result, string content |
+
+So `content` is a string on some messages and an array on others, a message role
+can be `system`, and a `tool_result`'s `content` was a **string** here (the API
+also allows an array of blocks). All four have to be handled; none may be
+dropped.
+
+**4. Two-thirds of the context is the `tools` array, which is not a message.**
+Measured on the second request of a trivial session (`bodyLength` 107 461):
+
+```
+tools 70 901 · messages 19 222 · system 16 427 · betas 352 · metadata 212
+· diagnostics 54 · context_management 59 · thinking 39 · model 17
+· output_config 17 · max_tokens 5 · stream 4
+```
+
+A message list that renders only `system` + `messages` accounts for 36 KB of a
+107 KB context and silently hides its single biggest consumer. That is why the
+plan below gives every remaining top-level field a block of its own (decision 3).
+
+**5. The API this increment needs already exists and needs no change.**
+`GET /api/content/at?session=<id>&at=<epoch ms>` returns
+`{ item: { …contentMetaOf, body } | null }`, 200 in both cases, filtered by
+`main=1`, `span=<spanId>` or `agent=<name>`, defaulting to
+`claude_code.api_request_body`, and "nearest at or before" is `log.timeMs <= atMs`
+walked newest-first (`store.mjs`, `contentAt`). I confirmed it end to end against
+the capture: `/api/content?session=…` listed four content records (two request,
+two response bodies) and `/api/content/at?session=…&at=…` returned the request
+body whole, `bodyLength === body.length === 107 461`, `truncated: false`. **No
+file in `tools/argus` changes in this increment.**
+
+**6. A body can still arrive unparseable.** `CLAUDE_CODE_OTEL_CONTENT_MAX_LENGTH`
+is 2 000 000 in the env block, so a body past that arrives cut mid-JSON with
+`body_truncated="true"` (`truncated: true`, and `bodyChars < bodyLength`).
+`JSON.parse` then throws, and the parser must fall back rather than render
+nothing.
+
+### Implementation plan
+
+Five files change, all in `tools/argus-ui`: one new module `public/context.js`,
+plus `public/app.js`, `public/timeline.js`, `public/styles.css` and `README.md`.
+
+**A. New module `tools/argus-ui/public/context.js` — two pure functions.**
+
+Its header comment says what it is: pure functions over the payload of
+`GET /api/content/at`, no `document`, no `fetch`, so `node --test` imports it
+directly — the same contract as `timeline.js`. It imports `esc`, `fmtNum` and
+`fmtClock` from `./format.js` and nothing else.
+
+*A1. `export function contextBlocks(body)`* → `{ ok, chars, blocks }`.
+
+- `chars` is `body.length` (0 when `body` is not a non-empty string).
+- `ok` is `true` only when `JSON.parse(body)` yielded a non-null, non-array
+  object.
+- `body` missing, not a string, or empty → `{ ok: false, chars: 0, blocks: [] }`.
+- `JSON.parse` throws, or yields anything but a plain object → one block:
+  `{ index: 0, kind: 'raw', label: 'raw body', chars: body.length, text: body, preview }`.
+  This is what a truncated body renders as: the exact text is still there.
+- Otherwise the blocks are built in this order, and each block is
+  `{ index, kind, label, chars, preview, text }` with `index` its 0-based
+  position in the returned array:
+
+  1. **`system`** — a string becomes one block; an array becomes one block per
+     entry. `kind: 'system'`, `label: 'system prompt'`.
+  2. **`messages`**, in order. For a message whose `content` is a string: one
+     block, `kind` = the role when it is `user`/`assistant`/`system` and
+     `'other'` otherwise, `label` = the role as written. For a message whose
+     `content` is an array: one block per content block, by its `type`:
+
+     | `type` | `kind` | `label` | `text` |
+     | --- | --- | --- | --- |
+     | `text` | the message's role (`user`/`assistant`/`system`, else `other`) | the role as written | `c.text` |
+     | `thinking` | `thinking` | `thinking` | `c.thinking` |
+     | `tool_use` | `tool_use` | `tool call · <c.name>`, or `tool call` with no name | the whole block as pretty JSON |
+     | `tool_result` | `tool_result` | `tool result`, plus ` · error` when `c.is_error` is truthy, plus ` · <shortId(c.tool_use_id, 12)>` when present | `c.content` |
+     | anything else, including a missing `type` | `other` | the `type` as written, or `block` when absent | the whole block as pretty JSON |
+
+     A message with no usable `content` (absent, `null`, an empty array)
+     contributes no block.
+  3. **Every remaining top-level key** of the parsed object — everything except
+     `system` and `messages` — in `Object.keys` order, one block each:
+     `kind: 'field'`, `label` = the key.
+
+- **The one text rule, stated once:** a block's `text` is its payload when that
+  payload is a string, and `JSON.stringify(payload, null, 2)` otherwise; `chars`
+  is `text.length`, so the size shown and the text shown are the same thing. A
+  payload that is `undefined` yields `''`.
+- `preview` is `text` with every run of whitespace collapsed to one space,
+  trimmed, cut to 120 characters, with `…` appended when it was cut.
+
+*A2. `export function renderContextPanel({ lane = null, item = null, pending = false, expanded = [] } = {})`* → an HTML string.
+
+- `lane` falsy → return `''`. Nothing selected renders nothing at all.
+- The root is
+  `<div class="panel context-panel" data-state="…" data-context-lane="<lane.key>">`
+  with `data-state` one of `pending` (a fetch is in flight for a lane whose
+  context is not held yet), `empty` (`item` is null: no API request for this lane
+  at or before this moment) or `ready`. `pending` and `empty` render a
+  `<div class="placeholder">` and no `<details>`.
+- **No attribute named `data-lane` may appear anywhere in this panel.** The
+  page's click delegation binds `[data-lane]` to lane rows, so a `data-lane`
+  here would make a click inside the panel toggle the lane selection. Hence
+  `data-context-lane`.
+- The `ready` head carries the lane label and the record it was built from:
+  `<span class="context-meta" data-chars="<chars>" data-blocks="<n>" data-time="<item.timeMs>" data-model="<item.model>" data-truncated="<item.truncated === true>">`,
+  with a human line inside it (`fmtClock(item.timeMs)`, the model,
+  `fmtNum(chars)` chars, the block count). Numbers as data attributes, wording
+  free — the convention the lane meta already follows.
+- One block renders as:
+  ```html
+  <details class="ctx-block" data-kind="<kind>"[ open]>
+    <summary data-block="<item.seq>:<index>">
+      <span class="ctx-label">…</span><span class="ctx-preview">…</span>
+      <span class="ctx-size" data-chars="<chars>">fmtNum(chars)</span>
+    </summary>
+    <pre class="ctx-text">…exact text…</pre>
+  </details>
+  ```
+  `open` is written when `data-block`'s key is in `expanded`; build
+  `new Set(expanded ?? [])` once so a caller may pass an array or a Set. `esc()`
+  every interpolated value, the block text included.
+
+**B. `public/timeline.js` — the lane row becomes selectable.**
+
+- `renderTimeline(view, cursor = null, selectedKey = null)`: a third optional
+  parameter, so the existing one- and two-argument call shapes keep working.
+- The lane row changes from `<div class="lane" …>` to
+  `<button type="button" class="lane" data-lane="…" data-kind="…" aria-current="${lane.key === selectedKey}">`,
+  keeping its three children (`lane-label`, `lane-track`, `lane-meta`) and every
+  attribute it already carries, byte for byte. `aria-current` as a boolean
+  string is the convention `.span-row` and `.session-card` already use.
+- Nothing else in the module changes.
+
+**C. `public/app.js` — the selection mechanism.**
+
+New state, added to the `state` literal:
+
+```js
+selectedLane: null,
+// The record the panel is drawn from, tagged with the lane it was fetched for:
+// an answer that arrives after the selection moved on must not be painted.
+laneContext: { key: null, item: null },
+// Block keys currently expanded, so a live refresh does not collapse what is open.
+expanded: new Set(),
+```
+
+`selectSession()` resets all three (`selectedLane = null`,
+`laneContext = { key: null, item: null }`, `expanded = new Set()`), next to the
+resets already there.
+
+New functions:
+
+- `function laneView()` — `buildLanes({ session: state.session, content: state.content })`.
+  The loader needs the session window and the selected lane's `spanId`; a second
+  pure build over at most 2000 records costs nothing. **It must not be used
+  inside `renderDetail`** — see the constraint at the end of this section.
+- `async function loadLaneContext()` — captures `const id = state.selectedSessionId`
+  and `const key = state.selectedLane` first; with either missing, writes
+  `state.laneContext = { key: null, item: null }` and returns. Otherwise finds
+  the lane in `laneView().lanes`, takes the moment from
+  `resolveCursor(state.cursor, view).timeMs`, and calls
+  `api('/api/content/at', params)` with `session: id`, `at: <that moment>`, and
+  exactly one lane filter: `main: '1'` for `lane.kind === 'main'`, else
+  `span: lane.spanId`, else `agent: lane.agent`. `.catch(() => null)` — a failed
+  fetch costs the panel, not the page. After the await, **before writing state**,
+  return early when `state.selectedSessionId !== id || state.selectedLane !== key`.
+  Then `state.laneContext = { key, item: answer?.item ?? null }`.
+- `function renderLanePanel()` — reads `document.getElementById('lane-panel')`,
+  returns if absent, and writes `renderContextPanel({ lane, item, pending, expanded })`
+  into it: `lane` from `laneView().lanes.find(…)` for `state.selectedLane`,
+  `pending` = `state.laneContext.key !== state.selectedLane`, `item` =
+  `state.laneContext.item` only when the keys match. It never calls
+  `renderDetail()`: the panel repaints inside its own container, which is what
+  keeps a repaint from replacing the scrub slider under a pointer.
+- `function scheduleLaneContext(delay = 250)` — a trailing debounce
+  (`clearTimeout` then `setTimeout`) around
+  `loadLaneContext().then(renderLanePanel)`, so a drag across the slider fires
+  one fetch and not one per pixel.
+
+Wiring, all inside the existing delegated listeners:
+
+- `renderDetail()` renders `<div id="lane-panel"></div>` between the timeline and
+  `renderDetailViews(…)`, passes `state.selectedLane` as the third argument of
+  `renderTimeline(…)`, and calls `renderLanePanel()` next to the existing
+  `renderTabBody()` call.
+- The `click` listener on `#detail` gains two branches. Immediately after the
+  `[data-cursor-live]` branch:
+  ```js
+  const laneRow = event.target.closest('[data-lane]');
+  if (laneRow) {
+    state.selectedLane = state.selectedLane === laneRow.dataset.lane ? null : laneRow.dataset.lane;
+    state.expanded = new Set();
+    renderLanePanel();
+    loadLaneContext().then(renderLanePanel);
+    return;
+  }
+  ```
+  and, anywhere after it, a branch on `event.target.closest('summary[data-block]')`
+  that adds or removes `dataset.block` in `state.expanded` and returns without
+  re-rendering — the browser opens and closes the `<details>` itself. Bind on
+  `summary[data-block]`, never on `[data-block]`: a click inside an expanded
+  `<pre>` (selecting text) would otherwise flip the remembered state without
+  flipping the element.
+- The `[data-cursor-live]` branch keeps its `renderDetail()` and gains
+  `loadLaneContext().then(renderLanePanel)` after it: returning to live moves the
+  moment, so the panel has to be refetched.
+- `scrubTo(input)` gains a `scheduleLaneContext()` call after `paintCursor()`. It
+  still must not call `renderDetail()`.
+- `refresh()` calls `await loadLaneContext()` after `await loadTimeline()` inside
+  the existing `try`, so live mode follows new requests into the panel; the
+  `renderDetail()` that follows paints it.
+
+**Constraint the existing suite already imposes on `renderDetail`.**
+`page.test.mjs` asserts, on the source of `renderDetail` alone, that
+`renderTimeline(` appears before `buildDensity(`, before `state.cursor`, before
+`renderDetailViews(`, before `id="tab-body"`. So the
+`renderTimeline(buildDensity(buildLanes({ session, content: state.content }), {…}), state.cursor, state.selectedLane)`
+expression stays written out inline in `renderDetail`; extracting it into a
+helper turns three existing cases red for no gain.
+
+**D. `public/styles.css` — the panel, and the lane as a button.**
+
+- `.lane` gains the button reset it now needs: `appearance: none`,
+  `background: none`, `border: 0`, `color: inherit`, `font: inherit`,
+  `width: 100%`, `text-align: left`, `cursor: pointer`, plus a
+  `:hover` background, a `:focus-visible` outline and a
+  `.lane[aria-current="true"]` highlight (a left accent border or a tinted
+  background). The grid rules it already has stay as they are.
+- A `context` section after the timeline section: `.context-panel`,
+  `.context-head`, `.context-meta`, `.ctx-block` (a bottom hairline between
+  blocks), `.ctx-block > summary` (a grid of label · preview · size, `cursor:
+  pointer`, `list-style: none` plus a `::-webkit-details-marker` reset if the
+  native triangle is dropped), `.ctx-label`, `.ctx-preview` (single line,
+  `overflow: hidden`, `text-overflow: ellipsis`, faint), `.ctx-size`
+  (`var(--mono)`, right-aligned), `.ctx-text` (`pre`, `white-space: pre-wrap`,
+  `overflow: auto`, a `max-height` around `50vh` so one 70 KB block cannot bury
+  the rest), and one colour per `.ctx-block[data-kind="…"]` label so the five
+  named kinds are told apart at a glance. Reuse the existing custom properties
+  (`--accent`, `--violet`, `--teal`, `--warn`, `--text-faint`); introduce no new
+  palette.
+
+**E. `tools/argus-ui/README.md` — one sentence.** The **Timeline** bullet
+(lines 62–67) gains: clicking a lane opens that agent's context as of the
+cursor's moment, as a list of blocks showing each one's size and expanding to
+its full text. No other file's documentation changes.
+
+### Decisions, including the ones rejected
+
+1. **The panel is fed by `GET /api/content/at`, not by the content index the
+   lanes already hold.** The index carries metadata only — deliberately, so the
+   tail and the lanes never ship megabytes. `contentAt` is the route increment 1
+   built for exactly this question and it answers "nearest at or before" in the
+   store, where the records are. Rejected: fetching all bodies with the index
+   (megabytes per poll), and adding a new route (nothing is missing).
+2. **A new module `public/context.js` rather than growth in `timeline.js`.**
+   `timeline.js` draws lanes over a whole session; this draws one record's
+   content. Separate concerns, separate test file, and increment 6's panel can
+   sit next to it. Rejected: appending ~180 lines to a 461-line module whose
+   header promises it is about lanes.
+3. **Every non-message top-level field gets a block too.** Finding 4 measured
+   `tools` at 66% of a real context; a list that hides it answers "what fills the
+   context" with the wrong two-thirds. The criterion names the kinds that must be
+   in the list, not the ones that may not be. Rejected: only `system` +
+   `messages` (dishonest sizes), and a size-threshold rule (an arbitrary constant
+   nobody can defend).
+4. **One text rule: string payload verbatim, anything else pretty JSON, and
+   `chars = text.length`.** The number on the collapsed line is then the size of
+   the text the expansion shows, with no second measure to explain. The cost is
+   that a `text` block's `cache_control` marker is not shown; it is a caching
+   hint, not context, and the panel head carries the whole body's wire size so
+   the blocks are never mistaken for the total. Rejected: JSON-escaping every
+   block (a 70 KB tool result becomes unreadable) and mixing wire size with
+   payload text (two numbers that disagree).
+5. **Expansion state lives in the page, keyed `"<seq>:<index>"`.** `renderDetail`
+   replaces `#detail` wholesale on every ingest-triggered refresh, so a
+   `<details>` the reader opened would snap shut every few hundred milliseconds.
+   Keying by the record's `seq` means the set stops matching when the cursor
+   lands on a different request, and everything collapses — which is right: it is
+   a different context. Rejected: skipping the re-render when the record is
+   unchanged (fragile the moment anything volatile enters the panel) and a DOM
+   diff (no framework, by project rule).
+6. **`<details>`/`<summary>` rather than a button plus a hidden `<pre>`.** Native
+   expansion, native keyboard handling, no JS needed to open a block; the click
+   listener only records what the browser already did.
+7. **The lane row becomes a `<button>`.** Real keyboard and screen-reader
+   behaviour for free, and `.span-row` in the waterfall is already exactly this
+   pattern. Rejected: `role="button"` plus `tabindex` on the `<div>` (hand-rolled
+   key handling for the same result).
+8. **A trailing 250 ms debounce on scrub-driven fetches**, the interval the event
+   search already uses. Rejected: fetching on every `input` event (one request
+   per pixel of drag) and fetching only on `change` (a drag then shows nothing
+   until release, and the criterion is about scrubbing *to* a moment).
+9. **No change in `tools/argus`.** Verified end to end against the capture
+   (finding 5).
+
+### Module map
+
+| Path | What it holds | Entry points |
+| --- | --- | --- |
+| `tools/argus-ui/public/context.js` | **new** — the context panel: parse a request body into blocks, render them | `contextBlocks(body)`, `renderContextPanel({lane,item,pending,expanded})` |
+| `tools/argus-ui/public/timeline.js` | lanes, density, cursor; all pure | `renderTimeline(view, cursor, selectedKey)` gains the third parameter; `buildLanes`, `resolveCursor` are read by the new page code |
+| `tools/argus-ui/public/app.js` | the page: state, fetches, delegated listeners | `state`, `renderDetail`, `renderTabBody`, `refresh`, `selectSession`, `scrubTo`, `paintCursor`, `wireEvents`; gains `laneView`, `loadLaneContext`, `renderLanePanel`, `scheduleLaneContext` |
+| `tools/argus-ui/public/format.js` | `esc`, `fmtNum`, `fmtClock`, `fmtDur`, `shortId` — every string goes through one of these | imported by `context.js` |
+| `tools/argus-ui/public/styles.css` | all styling; timeline section at lines 786–997 | `.lane` (852), `.timeline-cursor` (972) |
+| `tools/argus-ui/README.md` | user-facing page; the **Timeline** bullet at lines 62–67 | — |
+| `tools/argus/src/server.mjs` | the collector's routes — **read only** | `/api/content/at` at line 263: `session` (required), `at`, `main`, `span`, `agent`, `event` |
+| `tools/argus/src/store.mjs` | the collector's store — **read only** | `contentAt` at line 953, `matchesContent` at line 197 |
+| `tools/argus/src/claude.mjs` | content vocabulary — **read only** | `contentMetaOf` at line 210: the item shape `/api/content/at` returns |
+
+The item `/api/content/at` returns, in full:
+`{ seq, timeMs, sessionId, traceId, spanId, eventName, querySource, agent,
+isSubagent, model, requestId, promptId, eventSequence, bodyLength, bodyChars,
+truncated, bodyRef, body }`.
+
+### Environment
+
+Node ≥ 20.11, already installed. Zero runtime dependencies in both projects, so
+**no install step is needed** — `npm --prefix tools/argus-ui test` runs from a
+bare checkout. **There is no linter and no formatter in this repository**, and no
+build step: `public/` is served exactly as written.
+
+Commands, all from the repository root:
+
+```
+npm --prefix tools/argus-ui test           # the whole argus-ui suite
+node --test tools/argus-ui/test/context.test.mjs
+node --test tools/argus-ui/test/page.test.mjs
+node --test tools/argus-ui/test/independence.test.mjs
+```
+
+To look at the result by hand (not part of any list below): start a collector
+with `node tools/argus/bin/argus.mjs start`, the interface with
+`node tools/argus-ui/bin/argus-ui.mjs` on http://127.0.0.1:4319, and feed it with
+`node tools/argus/scripts/demo-emit.mjs` — note the demo emitter sends no
+`api_request_body` events, so a real session with the `argus env` block is what
+puts content on the lanes.
+
+### Test plan
+
+Tests are needed. Every case is a `node --test` case in `tools/argus-ui/test/`,
+`node:test` + `node:assert/strict`, the style already in that directory: one
+`test('sentence describing the fact', () => {…})` per fact, factory helpers at
+the top of the file, a `// Criterion 7 — …` comment above each group, and an
+assertion message on every non-obvious assert. Nothing is faked and nothing is
+mocked: the module functions are pure and the page cases read source text.
+
+#### The new file: `tools/argus-ui/test/context.test.mjs`
+
+It imports `{ contextBlocks, renderContextPanel } from '../public/context.js'`
+and builds every input from three factories, modelled on the captured body
+(finding 3) and nothing else:
+
+```js
+const requestBody = (over = {}) =>
+  JSON.stringify({
+    model: 'claude-sonnet-5',
+    messages: [
+      { role: 'user', content: [{ type: 'text', text: 'ping' }] },
+      { role: 'system', content: '<system-reminder>context</system-reminder>' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: 'thought', signature: 'sig' },
+          { type: 'tool_use', id: 'toolu_01', name: 'Write', input: { file_path: '/tmp/notes.txt', content: 'hello' } },
+        ],
+      },
+      { role: 'user', content: [{ tool_use_id: 'toolu_01', type: 'tool_result', content: 'File created' }] },
+    ],
+    system: [
+      { type: 'text', text: 'You are a Claude agent.' },
+      { type: 'text', text: 'Long instructions.', cache_control: { type: 'ephemeral' } },
+    ],
+    tools: [{ name: 'Read', description: 'Reads a file', input_schema: { type: 'object' } }],
+    max_tokens: 64000,
+    stream: true,
+    ...over,
+  });
+
+const item = (over = {}) => ({
+  seq: 12, timeMs: 4000, sessionId: 's1', spanId: 'sp-a',
+  eventName: 'claude_code.api_request_body', model: 'claude-sonnet-5',
+  truncated: false, body: requestBody(), ...over,
+});
+
+const lane = (over = {}) => ({ key: 'main', kind: 'main', label: 'main session', spanId: null, agent: null, ...over });
+```
+
+| # | Case | Input / state | Expected |
+| --- | --- | --- | --- |
+| 1 | the five kinds the criterion names all reach the list, system prompt first | `contextBlocks(requestBody())` | `blocks.map((b) => b.kind)` deep-equals `['system','system','user','system','thinking','tool_use','tool_result','field','field','field','field']` — two system-prompt entries, then the messages in order, then `model`, `tools`, `max_tokens`, `stream` as fields |
+| 2 | a block's size is the size of the text it expands to | same | for the `'ping'` block, `text === 'ping'` and `chars === 4`; for every block, `chars === text.length` |
+| 3 | the exact full text survives the parse, unescaped and uncut | body whose first system text is `` `<script>"x"</script>\nline two` `` | that block's `text` is that string character for character; escaping is the renderer's job, not the parser's |
+| 4 | a tool call names its tool and keeps the whole call | same as case 1 | the `tool_use` block's `label` contains `Write`; its `text` parses back with `JSON.parse` to the whole block, `id`, `name` and `input` included |
+| 5 | a tool result expands to the result text and is tied to its call | same | the `tool_result` block's `text === 'File created'`; its `label` contains `toolu_01` |
+| 6 | a failed tool result says so on its one line | `is_error: true` on the tool_result block | that block's `label` contains `error` |
+| 7 | a message whose content is a plain string is one block of that role | same as case 1 | the `role: 'system'` string message yields one block, `kind === 'system'`, `text === '<system-reminder>context</system-reminder>'` |
+| 8 | thinking is its own block | same | `kind === 'thinking'`, `text === 'thought'` |
+| 9 | an unknown content block is kept, labelled by its type | a message with `content: [{ type: 'image', source: { data: 'AAA' } }]` | one block, `kind === 'other'`, `label === 'image'`, `text` parses back to the whole block — no block is silently dropped |
+| 10 | a `system` given as a plain string still parses | `requestBody({ system: 'be brief' })` | exactly one `kind === 'system'` block, `text === 'be brief'` |
+| 11 | the fields that are not messages are accounted for, so the sizes tell the truth | same as case 1 | there is a `kind === 'field'` block with `label === 'tools'` whose `chars` equals `JSON.stringify(<the tools array>, null, 2).length`; no field block is labelled `system` or `messages` |
+| 12 | the whole body's size is reported alongside the blocks | same | `chars === requestBody().length` and `ok === true` |
+| 13 | a truncated body becomes one raw block carrying every character it has | `contextBlocks('{"messages":[{"role":"user","cont')` | `ok === false`, one block, `kind === 'raw'`, `text` is that exact string, `chars === text.length` |
+| 14 | no body at all is no blocks, never a crash | `contextBlocks(null)`, `contextBlocks(undefined)`, `contextBlocks('')`, `contextBlocks(42)` | each `{ ok: false, chars: 0, blocks: [] }` |
+| 15 | a body that parses to something other than an object is raw, not empty | `contextBlocks('[1,2]')`, `contextBlocks('"x"')` | one `kind === 'raw'` block each, `ok === false` |
+| 16 | a message with no content contributes nothing | `requestBody({ messages: [{ role: 'user' }, { role: 'user', content: [] }, { role: 'user', content: 'x' }] })` | exactly one block comes from `messages`, the `'x'` one |
+| 17 | the one line is a one-line preview | a text block whose text is `'a\n\n   b'` repeated past 120 chars | its `preview` has no `\n`, no double space, is at most 121 characters and ends with `…` |
+| 18 | block indexes are their positions, in order | same as case 1 | `blocks.map((b) => b.index)` deep-equals `[0,1,2,…]` |
+| 19 | nothing selected renders nothing | `renderContextPanel()`, `renderContextPanel({ lane: null, item: item() })` | both `''` — no empty panel sits under the timeline before a lane is picked |
+| 20 | a selected lane at a moment renders one expandable block per block, each with its size | `renderContextPanel({ lane: lane(), item: item() })` | one `<details class="ctx-block"` per block from case 1, in that order; each carries a `data-kind`; each `<summary>` carries `data-block="12:<index>"` and a `<span class="ctx-size" data-chars="…">`; each `<details>` carries one `<pre class="ctx-text">` holding the escaped exact text |
+| 21 | the head names the lane and the record the context came from | same | the markup contains the lane label, and a `data-chars="<body length>"`, `data-time="4000"`, `data-model="claude-sonnet-5"`, `data-truncated="false"`, `data-state="ready"` |
+| 22 | every block is collapsed until it is asked for | same, `expanded` omitted | the markup contains no ` open` attribute at all |
+| 23 | an expanded block stays expanded, and only that one | `expanded: ['12:2']` | exactly one `<details … open>`, and it is the one whose summary carries `data-block="12:2"`; passing a `Set(['12:2'])` gives byte-identical markup |
+| 24 | a moment before this lane's first request says so, with no blocks | `renderContextPanel({ lane: lane(), item: null })` | `data-state="empty"`, one `.placeholder`, no `<details` |
+| 25 | a fetch in flight does not claim there is nothing | `renderContextPanel({ lane: lane(), item: null, pending: true })` | `data-state="pending"`, no `<details` — asserted as a state, not as a wording |
+| 26 | a truncated record is marked as one | `item({ truncated: true, body: '{"messages":[' })` | `data-truncated="true"` in the head, and the one `kind="raw"` block still renders its text |
+| 27 | the panel escapes everything it prints | body whose user text is `<script>alert("x")</script>` and whose tool name is `<img>` | `&lt;script&gt;` appears; `<script>` and `<img>` do not appear anywhere in the markup |
+| 28 | the panel carries no attribute the lane click handler would catch | `renderContextPanel({ lane: lane(), item: item() })` | `assert.doesNotMatch(html, /data-lane=/)` — a `data-lane` here would make every click inside the panel toggle the lane selection |
+| 29 | the panel prints no NaN and no undefined | `renderContextPanel({ lane: lane({ label: 'agent #1', key: 'agent:sp-a:probe' }), item: item({ model: null, timeMs: 0 }) })` | no `NaN` and no `undefined` in the markup |
+
+#### `tools/argus-ui/test/timeline.test.mjs` — the lane row is selectable
+
+| # | Case | Input / state | Expected |
+| --- | --- | --- | --- |
+| 30 | a lane row is a control a human can click and a keyboard can reach | `renderTimeline(buildDensity(buildLanes({ session: session(), content: threeRecordContent() }), { content: threeRecordContent(), tools: [] }))` | every element carrying `data-lane="…"` is a `<button type="button"`, and there are two of them |
+| 31 | the selected lane is marked as the current one | the same view, third argument `'main'` | the row whose `data-lane="main"` carries `aria-current="true"`, the agent row carries `aria-current="false"` |
+| 32 | with nothing selected no lane claims to be current | the same view, no third argument | no `aria-current="true"` anywhere, and the markup is otherwise unchanged — the two-argument call shape of increment 4 keeps working |
+
+#### `tools/argus-ui/test/page.test.mjs` — the wiring
+
+Source-level, using the file's own `functionSource()` and `detailListener()`
+helpers. Each case names the wire it pins, because deleting any one of them
+leaves a page that looks right and does nothing.
+
+| # | Case | Input / state | Expected |
+| --- | --- | --- | --- |
+| 33 | app.js takes the context panel from its module | the whole `app.js` source | matches `/import\s*\{[^}]*\brenderContextPanel\b[^}]*\}\s*from\s*['"]\.\/context\.js['"]/` |
+| 34 | the context panel has a container of its own, between the timeline and the technical views | `functionSource(appJs, 'renderDetail')` | contains `id="lane-panel"`, with `renderTimeline(` before it and `renderDetailViews(` after it |
+| 35 | a full render repaints the panel | same slice | contains `renderLanePanel(` |
+| 36 | the timeline is told which lane is selected | same slice | contains `state.selectedLane`, at an index after `renderTimeline(` |
+| 37 | clicking a lane selects it, and clicking it again lets go | `detailListener(appJs, 'click')` | contains `data-lane`, and a `state.selectedLane =` whose right-hand side is a `? null :` ternary on the current value |
+| 38 | selecting a lane fetches its context | same slice | contains `loadLaneContext(` after the `data-lane` branch opens |
+| 39 | the panel asks the collector for the nearest request at the cursor's moment, for that lane only | `functionSource(appJs, 'loadLaneContext')` | contains `/api/content/at`, `resolveCursor(`, and all three lane filters `main`, `span`, `agent` |
+| 40 | an answer that arrived after the selection moved on is dropped | same slice | a guard matching `/state\.selectedLane\s*!==\s*key/` **and** one matching `/state\.selectedSessionId\s*!==\s*id/`, both after the first `await` and before the `state.laneContext =` write |
+| 41 | the panel repaints in its own container, never by re-rendering the page | `functionSource(appJs, 'renderLanePanel')` | contains `lane-panel` and `renderContextPanel(`, and does **not** contain `renderDetail(` |
+| 42 | scrubbing moves the context with the cursor | `functionSource(appJs, 'scrubTo')` | contains `scheduleLaneContext(`; the existing case that it must not call `renderDetail(` still stands |
+| 43 | the scrub-driven fetch is debounced | `functionSource(appJs, 'scheduleLaneContext')` | contains `setTimeout` and `clearTimeout` — a drag must not fire one request per pixel |
+| 44 | live mode follows new requests into the panel | `functionSource(appJs, 'refresh')` | contains `loadLaneContext(` |
+| 45 | returning to live refetches the context | `detailListener(appJs, 'click')` | in the `data-cursor-live` branch, a `loadLaneContext(` — the moment moved, so the panel must too |
+| 46 | expanding a block is remembered, so a live refresh does not collapse it | `detailListener(appJs, 'click')` and `functionSource(appJs, 'renderLanePanel')` | the listener matches `/summary\[data-block\]/` and writes to `state.expanded`; `renderLanePanel` passes `state.expanded` to `renderContextPanel` |
+| 47 | selecting a session forgets the lane, its context and its expansions | `functionSource(appJs, 'selectSession')` | matches `/state\.selectedLane\s*=\s*null/` and writes both `state.laneContext` and `state.expanded` |
+| 48 | the page opens with no lane selected | the `const state = {` … `\n};` slice, taken the way the existing landing cases take it | matches `/\bselectedLane:\s*null\b/` |
+
+#### `tools/argus-ui/test/independence.test.mjs` — the new module is part of the project
+
+| # | Case | Input / state | Expected |
+| --- | --- | --- | --- |
+| 49 | the new module is guarded like the others | the two existing lists in that file | `'public/context.js'` added to the "everything a project needs" list and to the "the scan does not cover" list, so it must exist and must never import outside the project |
+
+#### What is deliberately untested, and why
+
+- **The click, the drag and the expansion in a browser.** There is no DOM
+  harness in this project and there will not be one: jsdom is a dependency, and
+  zero dependencies is the project's first rule. Cases 37–48 pin every wire in
+  the source; whether a pixel lands where it should is what the review looks at.
+- **The fetch itself.** `loadLaneContext` calls `fetch` through `api()`; testing
+  it would mean a fake `window`. The route it calls, its parameters and its
+  stale-answer guard are pinned as source facts, and the route is already covered
+  by `tools/argus`' own suite (`server.test.mjs`, `/api/content/at`).
+- **`tools/argus`.** Nothing in it changes (finding 5), so nothing in its suite
+  is re-run by this increment.
+- **The debounce actually elapsing.** Timing behind a `setTimeout` with no seam;
+  case 43 pins that the guard is in the code, and the alternative is a fake clock
+  for a 250 ms constant.
+- **Colours, the collapsed line's layout, the `max-height` of an expanded
+  block.** `node --test` sees strings; CSS is judged in the review.
+- **The tools an agent used up to the moment.** Increment 6 owns that criterion;
+  no case here may pin behaviour for it.
+- **Recordings made without the content flags.** Out of contract by the issue's
+  own decision.
+
+#### What counts as done
+
+```
+npm --prefix tools/argus-ui test
+```
+
+That one command, from the repository root, is the whole list. It runs the new
+`context.test.mjs` together with every existing case in the package, costs
+seconds and needs no install. `tools/argus`' suite and `./test.sh` are off the
+list on purpose: no file outside `tools/argus-ui` changes here, and the closing
+increment owns the full-suite run.
+
+#### What is already red
+
+I did not run the list, not once and not as a baseline; the first run belongs to
+whoever runs it downstream. I did run a capture — a throwaway collector and one
+`claude -p` session outside the repository — because the parser's whole design
+depends on the real shape of a request body, and that is a fact no amount of
+reading the repository produces; findings 1–6 are its output.
+
+From reading, nothing is red before this change, and no existing case turns red
+because of it:
+
+- No case asserts that a lane row is a `<div>`; every lane assertion in
+  `timeline.test.mjs` matches on `data-lane="`, on `lane-bar`, `lane-curve`,
+  `lane-mark` or `lane-meta`, all of which survive the change to `<button>`
+  unchanged.
+- `renderTimeline`'s third parameter is optional, so the one- and two-argument
+  calls in the existing cases keep resolving to `selectedKey = null`.
+- The three ordering cases over `renderDetail` (`renderTimeline(` <
+  `buildDensity(` and < `state.cursor`, and `renderTimeline(` <
+  `renderDetailViews(` < `id="tab-body"`) stay satisfied by the plan above, which
+  inserts `id="lane-panel"` between the timeline and the nav and keeps the
+  composed expression inline.
+- `page.test.mjs`'s flag-absence case scans every file under `public/`, the new
+  `context.js` included; it names none of those flags.
+- `independence.test.mjs` walks the whole project, so `context.js` is scanned for
+  outside imports from the moment it exists; it imports only `./format.js`.
