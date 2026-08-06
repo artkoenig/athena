@@ -7,6 +7,9 @@
  * `node bin/argus-ui.mjs` inside a throwaway sandbox.
  */
 
+import { esc, fmtNum, fmtCost, fmtDur, fmtClock, fmtAgo, isLive, shortId } from './format.js';
+import { buildLanes, renderTimeline, renderDetailViews } from './timeline.js';
+
 const TOKEN = new URLSearchParams(location.search).get('token');
 
 const state = {
@@ -15,7 +18,10 @@ const state = {
   config: null,
   selectedSessionId: null,
   session: null,
-  tab: 'overview',
+  // No technical view is open until one is asked for: a session opens on the
+  // timeline, and the views below it are where a reader goes next.
+  tab: null,
+  content: [],
   trace: null,
   selectedTraceId: null,
   selectedSpanId: null,
@@ -26,66 +32,6 @@ const state = {
   search: '',
   authError: false,
 };
-
-/* ------------------------------ formatting ------------------------------ */
-
-const esc = (value) =>
-  String(value ?? '').replace(
-    /[&<>"']/g,
-    (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char],
-  );
-
-function fmtNum(value) {
-  const n = Number(value) || 0;
-  if (Math.abs(n) >= 1e9) return `${(n / 1e9).toFixed(2)}B`;
-  if (Math.abs(n) >= 1e6) return `${(n / 1e6).toFixed(2)}M`;
-  if (Math.abs(n) >= 1000) return `${(n / 1000).toFixed(1)}k`;
-  return String(Math.round(n));
-}
-
-function fmtCost(value) {
-  const n = Number(value) || 0;
-  if (n === 0) return '$0';
-  if (n < 0.01) return `$${n.toFixed(4)}`;
-  if (n < 100) return `$${n.toFixed(3)}`;
-  return `$${n.toFixed(2)}`;
-}
-
-function fmtDur(ms) {
-  const n = Number(ms);
-  if (!Number.isFinite(n) || n <= 0) return '–';
-  if (n < 1) return '<1ms';
-  if (n < 1000) return `${Math.round(n)}ms`;
-  if (n < 60_000) return `${(n / 1000).toFixed(2)}s`;
-  const minutes = Math.floor(n / 60_000);
-  const seconds = Math.round((n % 60_000) / 1000);
-  if (minutes < 60) return `${minutes}m ${String(seconds).padStart(2, '0')}s`;
-  return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, '0')}m`;
-}
-
-function fmtClock(ms) {
-  if (!ms) return '–';
-  const date = new Date(ms);
-  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}:${String(
-    date.getSeconds(),
-  ).padStart(2, '0')}.${String(date.getMilliseconds()).padStart(3, '0')}`;
-}
-
-function fmtAgo(ms) {
-  if (!ms) return 'never';
-  const delta = Math.max(0, Date.now() - ms);
-  if (delta < 1000) return 'just now';
-  if (delta < 60_000) return `${Math.round(delta / 1000)}s ago`;
-  if (delta < 3_600_000) return `${Math.round(delta / 60_000)}m ago`;
-  if (delta < 86_400_000) return `${Math.round(delta / 3_600_000)}h ago`;
-  return `${Math.round(delta / 86_400_000)}d ago`;
-}
-
-const isLive = (session) => Date.now() - session.lastSeenMs < 90_000;
-
-function shortId(id, keep = 12) {
-  return id && id.length > keep + 3 ? `${id.slice(0, keep)}…` : id ?? '';
-}
 
 /* --------------------------------- api ---------------------------------- */
 
@@ -181,15 +127,6 @@ function renderSessionList() {
 
 /* -------------------------------- detail -------------------------------- */
 
-const TABS = [
-  { id: 'overview', label: 'Overview' },
-  { id: 'todos', label: 'Tasks' },
-  { id: 'traces', label: 'Traces' },
-  { id: 'events', label: 'Events' },
-  { id: 'metrics', label: 'Metrics' },
-  { id: 'raw', label: 'Attributes' },
-];
-
 function renderDetail() {
   const detail = document.getElementById('detail');
   const session = state.session;
@@ -225,14 +162,9 @@ function renderDetail() {
       </div>
     </div>
 
-    <nav class="tabs" role="tablist">
-      ${TABS.map(
-        (tab) => `<button type="button" class="tab" role="tab" data-tab="${tab.id}"
-          aria-selected="${state.tab === tab.id}">${tab.label}${
-            counts[tab.id] !== undefined ? `<span class="count">${fmtNum(counts[tab.id])}</span>` : ''
-          }</button>`,
-      ).join('')}
-    </nav>
+    ${renderTimeline(buildLanes({ session, content: state.content }))}
+
+    ${renderDetailViews({ selected: state.tab, counts })}
 
     <div id="tab-body"></div>
   `;
@@ -243,6 +175,10 @@ function renderTabBody() {
   const body = document.getElementById('tab-body');
   if (!body) return;
   switch (state.tab) {
+    // Nothing selected is the landing state: the timeline above stands alone.
+    case null:
+      body.innerHTML = '';
+      break;
     case 'todos':
       body.innerHTML = renderTodosTab();
       break;
@@ -394,9 +330,8 @@ function renderTodosTab() {
   if (!legacy && !tasks.length && !unlinked.length) {
     if (todos.callsSeen > 0) {
       return `<div class="placeholder">
-        ${todos.callsSeen} TodoWrite/TaskCreate/TaskUpdate call(s) seen, but no parameters were
-        captured. Set <code>OTEL_LOG_TOOL_DETAILS=1</code> in the agent environment to see task
-        content and status here.
+        ${todos.callsSeen} TodoWrite/TaskCreate/TaskUpdate call(s) seen, but the calls carried no
+        parameters we could read, so there is no task content or status to show.
       </div>`;
     }
     return '<div class="placeholder">No tasks recorded for this session.</div>';
@@ -502,8 +437,8 @@ function renderTracesTab() {
   const traces = state.session.traces ?? [];
   if (!traces.length) {
     return `<div class="placeholder">
-      No spans for this session. Traces are the beta signal — set
-      <code>CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1</code> and <code>OTEL_TRACES_EXPORTER=otlp</code>.
+      No spans for this session. Spans come with the environment block under Setup; a session
+      recorded without that block has none.
     </div>`;
   }
   const picker = traces
@@ -789,8 +724,7 @@ function renderEmptyState() {
         <pre id="setup-env">${esc(block)}</pre>
       </div>
       <p class="muted">
-        Metrics and events work on their own; spans additionally need
-        <code>CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1</code>, which the block above sets. Export
+        The block above already carries everything spans and conversation content need. Export
         intervals are lowered to 1s so short runs flush before the process exits.
       </p>
     </div>`;
@@ -887,6 +821,20 @@ async function loadSession() {
   }
 }
 
+/** The content index behind the lanes. A failure here costs the lanes, not the page. */
+async function loadTimeline() {
+  if (!state.selectedSessionId) {
+    state.content = [];
+    return;
+  }
+  try {
+    const data = await api('/api/content', { session: state.selectedSessionId, limit: 2000 });
+    state.content = data.items;
+  } catch {
+    state.content = [];
+  }
+}
+
 async function loadTabData() {
   if (!state.session) return;
   if (state.tab === 'traces') {
@@ -930,6 +878,7 @@ async function refresh({ sessions = true } = {}) {
   try {
     await Promise.all([loadStats(), sessions ? loadSessions() : Promise.resolve()]);
     await loadSession();
+    await loadTimeline();
     await loadTabData();
   } catch (error) {
     // A failed load must not skip the render. The empty state is the only thing
@@ -960,6 +909,9 @@ function selectSession(id, { render = true } = {}) {
   state.trace = null;
   state.events = [];
   state.metrics = [];
+  // Every session opens on its timeline, whatever view the previous one was on.
+  state.tab = null;
+  state.content = [];
   location.hash = `#/session/${encodeURIComponent(id)}`;
   if (render) refresh({ sessions: false }).then(renderSessionList);
 }
@@ -1017,7 +969,8 @@ function wireEvents() {
     }
     const tab = event.target.closest('[data-tab]');
     if (tab) {
-      state.tab = tab.dataset.tab;
+      // Clicking the open view closes it, which is the way back to the timeline alone.
+      state.tab = state.tab === tab.dataset.tab ? null : tab.dataset.tab;
       loadTabData().then(renderDetail);
       return;
     }

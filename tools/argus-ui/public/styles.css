@@ -783,6 +783,87 @@ td.name {
   margin-top: 14px;
 }
 
+/* ------------------------------- timeline ------------------------------- */
+
+.timeline-panel {
+  padding: 12px;
+  margin-bottom: 14px;
+}
+
+.timeline {
+  /* Lane labels are agent names, not span paths, so they need less room than
+     the waterfall's. */
+  --label-w: 180px;
+}
+
+.timeline-axis {
+  display: grid;
+  grid-template-columns: var(--label-w) 1fr 64px;
+  gap: 8px;
+  font-size: 10px;
+  color: var(--text-faint);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 4px;
+  margin-bottom: 6px;
+}
+
+.timeline-ticks {
+  display: flex;
+  justify-content: space-between;
+}
+
+.timeline-tick {
+  font-family: var(--mono);
+  white-space: nowrap;
+}
+
+.lane {
+  display: grid;
+  grid-template-columns: var(--label-w) 1fr 64px;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+}
+
+.lane-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+
+.lane-track {
+  position: relative;
+  height: 16px;
+}
+
+.lane-bar {
+  position: absolute;
+  top: 3px;
+  height: 10px;
+  min-width: 2px;
+  border-radius: 3px;
+  background: var(--accent);
+}
+
+.lane-bar[data-kind="main"] {
+  background: var(--accent);
+}
+
+.lane-bar[data-kind="agent"] {
+  background: var(--violet);
+}
+
+.lane-meta {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-faint);
+  text-align: right;
+  white-space: nowrap;
+}
+
 /* ------------------------------- events -------------------------------- */
 
 .filters {
@@ -994,6 +1075,10 @@ td.name {
 
   .waterfall {
     --label-w: 180px;
+  }
+
+  .timeline {
+    --label-w: 110px;
   }
 
   .stat-strip {

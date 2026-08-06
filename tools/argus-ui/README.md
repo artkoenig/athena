@@ -59,12 +59,14 @@ for an `HttpOnly; SameSite=Strict` cookie and drops it from the address bar.
 ## What it shows
 
 - **Sessions** — every session by last activity, with cost, tokens and errors.
+- **Timeline** — one lane for the main session and one per subagent, each
+  spanning that agent's lifetime; the views below it are reachable from there.
 - **Overview** — cost, tokens by type including cache hit rate, interactions,
   requests, tool calls, lines of code, commits, active time; tables per model
   and per tool.
 - **Tasks** — reconstructed `TodoWrite` / `TaskCreate` state.
 - **Traces** — waterfall per interaction, clicking a bar shows its attributes.
-- **Events** — filterable timeline, every row expandable.
+- **Events** — filterable event tail, every row expandable.
 - **Metrics** — buffered data points by metric and attribute combination.
 - **Attributes** — resource and standard attributes of a session.
 

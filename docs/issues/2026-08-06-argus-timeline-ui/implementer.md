@@ -187,3 +187,89 @@ Neither is a blocking question; I am reporting them rather than acting on them.
    `/api/events?search=` still stringifies bodies. The round's plan explicitly
    rules both out of scope and instructs that those surfaces not be edited here,
    so I left them alone.
+
+## Increment 2
+
+Implemented the plan's `tools/argus-ui` change: the formatting section moved into
+its own module, a new pure timeline module, the landing view and advisory edits
+in `app.js`, lane styles, the static empty state and the README. Nothing outside
+`tools/argus-ui` was touched, `src/` and `bin/` were not opened for editing, and
+no test file was edited.
+
+### Baseline: the planned tests were red for the right reason
+
+Ran `npm --prefix tools/argus-ui test` before changing anything: 18 tests, 13
+pass, 5 fail, exit 1. The failures were exactly the ones `test-author.md`
+records — `ERR_MODULE_NOT_FOUND` for `public/timeline.js` (which takes the whole
+of `timeline.test.mjs`, cases 1-3 and 5-18, down as one failure), the missing
+`./timeline.js` import in `app.js`, the four flag names still written into
+`public/`, and both `independence.test.mjs` cases for the two files that did not
+exist yet. Case 20 ("flags argus env does not set are still advised") passed
+before the change and after it, as the test-author predicted.
+
+### What changed
+
+| File | Change |
+| --- | --- |
+| `tools/argus-ui/public/format.js` | **New.** `esc`, `fmtNum`, `fmtCost`, `fmtDur`, `fmtClock`, `fmtAgo`, `isLive`, `shortId`, moved verbatim out of `app.js` and exported. No body changed. |
+| `tools/argus-ui/public/timeline.js` | **New.** `MIN_LANE_WIDTH_PCT`, `DETAIL_VIEWS`, `buildLanes`, `laneGeometry`, `renderTimeline`, `renderDetailViews`. Pure: it imports only `./format.js` and touches no `document`, `fetch` or `location`. |
+| `tools/argus-ui/public/app.js` | Imports both new modules; `state.tab` now starts `null` and `state.content: []` was added; the `TABS` constant and its inline nav markup are gone; `renderDetail` renders head, timeline, `renderDetailViews`, `#tab-body`; `renderTabBody` gained a `case null` that writes the empty string; new `loadTimeline()` called from `refresh()` between `loadSession()` and `loadTabData()`; `selectSession` resets `tab` and `content`; the tab click handler toggles the open view closed; the three advisory sites (todos placeholder, traces placeholder, empty state) rewritten. |
+| `tools/argus-ui/public/index.html` | The static empty state's muted paragraph, same wording as the rendered one. |
+| `tools/argus-ui/public/styles.css` | New `timeline` block after the waterfall (`.timeline-panel`, `.timeline`, `.timeline-axis`, `.timeline-ticks`, `.timeline-tick`, `.lane`, `.lane-label`, `.lane-track`, `.lane-bar`, `.lane-meta`), plus a `--label-w` override in the existing `max-width: 900px` block. No new custom property and no new colour: bars use `var(--accent)` and `var(--violet)`. |
+| `tools/argus-ui/README.md` | "What it shows" gained the **Timeline** bullet after Sessions; the **Events** bullet now reads "filterable event tail". |
+
+### Two places where the code follows the tests over the plan's prose
+
+1. **The axis ticks carry no inline `style`.** The plan describes ticks as
+   absolute positions in percent, the waterfall's pattern. Case 13 asserts that
+   *every* `style="…"` attribute in the rendered timeline contains both a `left:`
+   and a `width:`, which a tick positioned as `style="left:50.000%"` violates. So
+   `.timeline-ticks` is a flex row with `justify-content: space-between` and the
+   ticks carry no inline style at all; only the lane bars do. Same five
+   fractions, same `fmtClock` labels, same look.
+2. **`renderTimeline` takes the flat result of `buildLanes`.** The plan's prose
+   writes the signature as `renderTimeline({ window, lanes })` while `buildLanes`
+   returns a flat `{ startMs, endMs, durationMs, lanes }` and both the plan's own
+   wiring line and cases 13/16 compose them directly — the looseness the
+   test-author reported. The implementation takes the flat shape and derives the
+   window from it internally; `laneGeometry` keeps its documented
+   `(lane, window)` signature, and the `window` it is passed is
+   `{ startMs, endMs }`.
+
+Also worth the reviewer's eye: `laneGeometry` clamps `leftPct` to 0…100 and caps
+`widthPct` at `Math.max(0.6, 100 - leftPct)`, exactly as the plan specifies. That
+leaves one reachable overflow the plan accepts by construction — a zero-length
+lane starting exactly at the window end gets `leftPct === 100` and
+`widthPct === 0.6`, so the bar runs 0.6% past its track. I implemented the plan
+as written rather than adding an unplanned clamp; case 11 does not reach it.
+
+### Commands run
+
+- `npm --prefix tools/argus-ui test` (baseline, before any edit) — 18 tests, 13
+  pass, 5 fail, exit 1.
+- `npm --prefix tools/argus-ui test` (after the change) — 34 tests, 34 pass, 0
+  fail, exit 0. That is the whole of this increment's list.
+- `node --check` on a `.mjs` copy of `public/app.js` — a parse check only, since
+  no suite loads that file as a module; exit 0.
+
+`tools/argus` and `./test.sh` were not run: the plan puts both off this
+increment's list, and nothing outside `tools/argus-ui` changed.
+
+### Notes for the reviewer, acted on nowhere
+
+1. **The 15s repaint interval no longer repaints anything on the landing view.**
+   `boot()` ends with `setInterval(… if (state.session && state.tab === 'overview')
+   renderTabBody(), 15_000)`, so with `state.tab === null` a session left open on
+   its timeline gets no periodic repaint of the detail pane; the SSE `ingest`
+   event still triggers a full `refresh()` whenever telemetry arrives, which is
+   how the lanes grow. The plan does not mention the interval and I did not
+   touch it.
+2. **`loadTimeline()` runs on every refresh, for every session, tab or no tab.**
+   That is what the plan's wiring specifies (the timeline is never hidden, so its
+   data is never optional). It costs one `/api/content` request per refresh cycle.
+3. **Nothing pins the arrangement inside `renderDetail`** — that the timeline
+   sits above the nav, that `state.tab` starts `null`, that the click handler
+   toggles. The plan lists all three as deliberately untested for want of a DOM
+   harness, so they are a reading, and this is the round where they get read.
+4. **No blocking question.** Every fact the increment needed was in
+   `researcher.md`.
