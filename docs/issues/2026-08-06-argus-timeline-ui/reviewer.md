@@ -1127,3 +1127,122 @@ Met in the code, read from the diff against `main`.
   survives, and a second grab continues). Browser-only behaviour I cannot
   reproduce here, and the criterion stays reachable, so it is on the record
   without a reproduction.
+
+## Increment 4 — Round 1
+
+**Status: accepted, no finding requires a correction.** The scrub, the cursor
+and the live mode meet the criterion in the code, and the wiring that makes the
+scrub half work is now pinned: every deletion I could think of that would
+silently stop the timeline from scrubbing, from registering a drag, or from
+returning to live now turns the suite red.
+
+### Commands run
+
+- `npm --prefix tools/argus-ui test` — 106 cases, 106 pass, 0 fail, 0 cancelled,
+  0 skipped, 0 todo, exit 0. Nothing excluded. This is the only command my
+  prompt lists; `tools/argus`' suite and `./test.sh` were not run, by that list.
+- The same command five more times in a throwaway `git worktree` outside the
+  checkout, each against a single deliberate mutation, to check what the suite
+  would catch (results below). The worktree was removed and the checkout under
+  review was never modified — `git status --porcelain` is empty and
+  `git worktree list` names only the checkout.
+
+### Mutation checks on the criterion's wiring
+
+Each mutation was applied alone to a sandbox copy and the listed command run
+against it.
+
+| Mutation | Result |
+| --- | --- |
+| Delete the `if (event.target.id === 'timeline-scrub') { scrubTo(…); return; }` branch from the `input` listener (`app.js:1115-1118`) | 105 pass, 1 fail, exit 1 |
+| Delete the `pointerdown` listener on `#detail` (`app.js:1103-1105`) | 105 pass, 1 fail, exit 1 |
+| Delete the `[data-cursor-live]` branch from the `click` listener (`app.js:1057-1063`) | 105 pass, 1 fail, exit 1 |
+| Drop `state.cursor` from the `renderTimeline(…)` call in `renderDetail` (`app.js:188`) | 105 pass, 1 fail, exit 1 — `not ok 20 - the timeline is rendered with the page's cursor` |
+| Make `resolveCursor` prefer a finite `cursor.timeMs` even in live mode | 106 pass, exit 0 — but the mutation is inert, because `liveCursor()` returns `timeMs: null` and "the live cursor is a fresh object every call" pins that. Not a gap. |
+
+The first two are exactly the reproductions the `## Increment 4` section
+recorded as unpinned; the three cases added in `test/page.test.mjs:317-343`
+close them.
+
+### Criterion — the timeline scrubs, and a live mode follows the head
+
+Met, judged from the diff against `main` and from the mutation checks above.
+
+- **Scrubbed backward and forward to any point.** `renderTimeline`
+  (`tools/argus-ui/public/timeline.js:430-434`) emits
+  `<input type="range" id="timeline-scrub" min="{view.startMs}"
+  max="{view.endMs}" step="1">`. The bounds are the same window the lanes are
+  drawn in — `buildLanes` takes `startMs`/`endMs` from `session.firstSeenMs`,
+  `session.lastSeenMs` and every content record — and `step="1"` makes every
+  millisecond of the recording addressable in both directions. The delegated
+  `input` listener routes the slider to `scrubTo`, which writes
+  `scrubCursor(Number(input.value), …)` into `state.cursor` and repaints without
+  re-rendering. Pinned by "the scrub control spans the whole recorded session",
+  "a scrubbed cursor puts the thumb, the line and the readout on one moment" and
+  "the scrub control's input reaches the scrub".
+- **A live mode that follows the newest data.** `liveCursor()` carries no time
+  and `resolveCursor` resolves a live cursor to the window's *current* `endMs`
+  on every render, so each refresh moves it to the new head. The page opens live
+  (`app.js:42`) and every session selection resets to live
+  (`app.js:962`). Pinned by "live mode follows the head as new data arrives",
+  "a session opens live, with the cursor on the newest data", "the page opens
+  live" and "selecting a session returns to live".
+- **Scrubbing leaves live mode, head included.** `scrubCursor` returns
+  `live: false` unconditionally, clamped into the window. Pinned by "scrubbing
+  leaves live mode" and "scrubbing to the head still leaves live mode".
+- **A control returns to it.** The `Live` button carries `data-cursor-live` and
+  `aria-pressed`, and the delegated click handler writes a fresh `liveCursor()`
+  and re-renders. Pinned by "a control returns the page to live" and, at the
+  markup level, by the `aria-pressed` assertions in the two rendering cases.
+- **One resolution per render.** Thumb, cursor line, dimmed region and clock
+  readout all come from a single `resolveCursor` call — `timeline.js:428` per
+  render, `paintCursor` per drag — so they cannot drift. Pinned at 37.5% and at
+  100%.
+- **Edges are safe.** A zero-length window resolves to `leftPct: 100` instead of
+  dividing by zero, out-of-window and `NaN` times clamp to an end, and
+  `resolveCursor` leaves its argument untouched. All pinned, and two rendering
+  cases forbid `NaN` anywhere in the markup.
+
+### Beyond the criteria
+
+- **Increments 1–3 still hold.** `renderTimeline`'s second parameter is optional
+  and `cursor?.live !== false` resolves live, so the increment 2/3 call shape
+  `renderTimeline(view)` renders unchanged — pinned by "the timeline still
+  renders from a bare view with no cursor given". The one older case that
+  increment 4 edited now matches `.lane-bar` styles specifically and adds a
+  document-wide `doesNotMatch(/NaN/)`: strictly stronger than what it replaced.
+- **Nothing else reads the changed markup or CSS.** `.timeline-lanes` gained
+  `position: relative` and a first child carrying no `data-lane`; `.lane-track`
+  was already `position: relative` (`styles.css:869`), so the lane bars, curves
+  and activity marks keep their containing block. The overlay's
+  `left`/`right` use `--label-w`/`--meta-w`, declared on `.timeline`
+  (`styles.css:796`) with a narrow-screen override (`styles.css:1213`), so it
+  spans the lane track column at both widths, and `pointer-events: none` on
+  `.timeline-cursor` keeps it off anything below it.
+- **No new delegated handler shadows an old one.** The scrub branch in the
+  `input` listener returns before the `event-search` branch and matches only
+  `#timeline-scrub`; the `Live` branch in the `click` listener sits after
+  `[data-copy]` and before `[data-tab]`, and no other element carries
+  `data-cursor-live`.
+- **A stuck drag flag heals itself.** `pointerup`/`pointercancel` are bound on
+  `window`, not on the slider, so any release anywhere clears `scrubbing`, and
+  `scheduleRefresh` re-arms every 400 ms until it does. No path leaves refreshes
+  permanently deferred.
+- **No document made stale.** `tools/argus-ui/README.md` gained three lines that
+  say exactly what the criterion asks for. `skills/argus/SKILL.md` and
+  `tools/argus/README.md` mention only the *event* timeline (the `/api/events`
+  view), which this change does not touch.
+- **No scope beyond the criterion.** The increment 4 production diff is the
+  cursor functions, the scrub markup, its wiring, its CSS and the README lines.
+  Nothing reaches into the later increments' context or tool views.
+- **Observation, not a finding — arrow-key scrubbing is 1 ms per press.**
+  `step="1"` (`timeline.js:432`) is what makes every millisecond addressable, so
+  it serves the criterion, but on a ten-minute session one arrow key press moves
+  the cursor 0.00017% of the track. `Home`/`End`/`PageUp`/`PageDown` and a
+  pointer drag still reach any point, so the criterion is met; recorded in case
+  a later increment wants a coarser keyboard step.
+- **Observation, not a finding, carried over — the in-flight refresh window.**
+  `scrubbing` defers only refreshes that have not started; a `refresh()` already
+  awaiting the collector when the pointer goes down still calls `renderDetail()`
+  and replaces the slider mid-drag. The scrubbed value survives and a second
+  grab continues. Browser-only behaviour I cannot reproduce here.
