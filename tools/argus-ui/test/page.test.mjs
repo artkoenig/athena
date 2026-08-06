@@ -140,3 +140,41 @@ test('flags argus env does not set are still advised in app.js', () => {
     'the SDK block still advises this — argus env does not set it',
   );
 });
+
+// Criterion 5 — activity and context growth on the lanes themselves.
+
+test('the page asks the collector for the tool calls, incrementally', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const loadTimeline = functionSource(appJs, 'loadTimeline');
+  assert.match(loadTimeline, /\/api\/events/, 'loadTimeline must fetch tool events from the collector');
+  assert.match(loadTimeline, /TOOL_EVENT/, 'the tool-event fetch must be scoped to the tool-result event');
+  assert.match(loadTimeline, /sinceSeq/, 'the tool-event fetch must be incremental, or every refresh ships megabytes');
+});
+
+test('selecting a session forgets the previous session\'s tool calls', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const selectSession = functionSource(appJs, 'selectSession');
+  assert.match(
+    selectSession,
+    /state\.toolMarks\s*=\s*\[\]/,
+    'a newly selected session must not inherit the previous session\'s tool marks',
+  );
+  assert.match(
+    selectSession,
+    /state\.toolSeq\s*=\s*0/,
+    'the incremental watermark must reset too, or the new session\'s early tool calls are skipped as already seen',
+  );
+});
+
+test('the timeline is composed with its density, not around it', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const renderDetail = functionSource(appJs, 'renderDetail');
+  const timelineIdx = renderDetail.indexOf('renderTimeline(');
+  assert.ok(timelineIdx >= 0, 'renderDetail must call renderTimeline(...)');
+  const densityIdx = renderDetail.indexOf('buildDensity(');
+  assert.ok(densityIdx >= 0, 'renderDetail must call buildDensity(...)');
+  assert.ok(
+    timelineIdx < densityIdx,
+    'renderTimeline(buildDensity(...)) means the renderTimeline( call opens before the buildDensity( call',
+  );
+});

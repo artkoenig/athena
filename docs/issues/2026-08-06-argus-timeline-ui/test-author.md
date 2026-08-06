@@ -434,3 +434,125 @@ still a fact the plan's own "What the finding asks for" section asks to be
 pinned. No case was reworded or dropped over this; it is left for the
 researcher to reconcile if the intended reproduction for case 2 differs from
 what is written.
+
+## Increment 3
+
+Wrote every case in the Increment 3 test plan of `researcher.md` (its section
+"The criterion — each lane shows its activity over time, and the context size
+behind it"), 24 cases total, in the two files it named and their existing
+style: 21 unit cases appended to `tools/argus-ui/test/timeline.test.mjs`
+under a new `// Criterion 5 — activity and context growth on the lanes
+themselves` banner, and 3 source-level cases appended to
+`tools/argus-ui/test/page.test.mjs` under the same banner. No production file
+was opened — expected shapes came entirely from the plan's prose and code
+snippets (the new exports' signatures, the `buildDensity` algorithm, the
+markup additions, `loadTimeline`/`selectSession`/`renderDetail`'s expected
+contents). Two new local fixtures, both exactly as the plan specifies: a
+`toolMark(over)` factory next to `threeRecordContent()` in
+`timeline.test.mjs`, and no new helper in `page.test.mjs` (it reuses the
+existing `functionSource`). The plan offered an optional `density()` factory
+and explicitly permitted inlining `buildDensity(buildLanes(...), ...)` per
+case instead "if that reads better" — I inlined it in every case, since the
+21 cases vary both `session()` and `content` too much for one fixed factory
+to serve them cleanly.
+
+Ran both files. `timeline.test.mjs` fails to load at all — a `SyntaxError`
+from the module loader, not a typo of mine: `public/timeline.js` (as merged
+for increment 2) exports none of `buildDensity`, `contextPoints`,
+`areaPolygon`, `activityMarks`, `ACTIVITY_BUCKETS` or `MIN_CURVE_WIDTH_PCT`
+yet, so importing all six at once — exactly as the plan's own module map
+lists them as new — turns the whole file red in one shot:
+
+```
+node --test tools/argus-ui/test/timeline.test.mjs
+# file:///home/user/uroboros/tools/argus-ui/test/timeline.test.mjs:15
+#   ACTIVITY_BUCKETS,
+#   ^^^^^^^^^^^^^^^^
+# SyntaxError: The requested module '../public/timeline.js' does not provide an export named 'ACTIVITY_BUCKETS'
+# tests 1
+# pass 0
+# fail 1
+```
+
+That single failure covers all 21 cases below: none of them individually ran,
+because the whole module failed to import before `node:test` could register
+any of them. This is the same shape increment 2's own first run had for a
+brand-new module (there, `public/timeline.js` did not exist at all; here, the
+existing module lacks this increment's additions) — the correct red for "the
+behaviour does not exist yet", not a defect in the test file.
+
+| # | Case | Test name | Result |
+| --- | --- | --- | --- |
+| 1 | every lane comes back with a density, even an empty session | `'an empty session still returns a density: no activity, no context, no peak'` | fails: module load error above (all 21 `timeline.test.mjs` cases share this one failure) |
+| 2 | requests land on the lane that made them | `'requests land on the lane that made them'` | fails: module load error |
+| 3 | a tool call lands on the lane whose span it carries | `'a tool call lands on the lane whose span it carries'` | fails: module load error |
+| 4 | a tool call on a span no lane owns belongs to the main session | `'a tool call on a span no lane owns belongs to the main session'` | fails: module load error |
+| 5 | two concurrent agents of one type keep their own tool calls | `'two concurrent agents of one type keep their own tool calls, never merged'` | fails: module load error |
+| 6 | a response body is neither activity nor context | `'a response body is neither activity nor context'` | fails: module load error |
+| 7 | the curve is scaled across the whole session, not per lane | `'the curve is scaled across the whole session, not per lane'` | fails: module load error |
+| 8 | a session whose requests all report no size still yields a drawable curve | `'a session whose requests all report no size still yields a drawable curve'` | fails: module load error |
+| 9 | `contextPoints` places a record by time inside the window | `'contextPoints places a record by time inside the window, exact at round numbers'` | fails: module load error |
+| 10 | `contextPoints` survives a zero-length window | `'contextPoints survives a zero-length window'` | fails: module load error |
+| 11 | the area closes on the baseline | `'the area closes on the baseline'` | fails: module load error |
+| 12 | a single request is still a visible area | `'a single request is still a visible area, not a zero-width line'` | fails: module load error |
+| 13 | no requests, no polygon | `'no requests, no polygon'` | fails: module load error |
+| 14 | activity in one bucket is one mark carrying its count | `'activity in one bucket is one mark carrying its count'` | fails: module load error |
+| 15 | a tool call and an API request at the same moment stay two marks | `'a tool call and an API request at the same moment stay two marks'` | fails: module load error |
+| 16 | the marks are bounded however many records arrive | `'the marks are bounded however many records arrive, and lose none'` | fails: module load error |
+| 17 | a mark never leaves the track | `'a mark never leaves the track, even past the window end or against a zero-length window'` | fails: module load error |
+| 18 | the density is rendered behind the bar, not instead of it | `'the density is rendered behind the bar, not instead of it, for the lane it belongs to'` | fails: module load error |
+| 19 | a lane with nothing on it renders as a bare lane | `'a lane with nothing on it renders as a bare lane'` | fails: module load error |
+| 20 | the lane meta reports the size and the counts as data | `'the lane meta reports the size and the counts as data, not as a pinned sentence'` | fails: module load error |
+| 21 | the timeline still renders from lanes alone | `'the timeline still renders from a bare buildLanes view, with no density attached'` | fails: module load error |
+| 22 | the page asks the collector for the tool calls | `'the page asks the collector for the tool calls, incrementally'` | fails on its own assertion: `loadTimeline` in the current `public/app.js` fetches only `/api/content`; `assert.match(loadTimeline, /TOOL_EVENT/)` throws `'the tool-event fetch must be scoped to the tool-result event'` (the function body quoted in the failure has no second `api()` call at all) |
+| 23 | selecting a session forgets the previous session's tool calls | `'selecting a session forgets the previous session's tool calls'` | fails: `assert.match(selectSession, /state\.toolMarks\s*=\s*\[\]/)` throws `'a newly selected session must not inherit the previous session's tool marks'` — the current `selectSession` resets `state.content` but declares no `toolMarks`/`toolSeq` at all |
+| 24 | the timeline is rendered with its density | `'the timeline is composed with its density, not around it'` | fails: `assert.ok(densityIdx >= 0, 'renderDetail must call buildDensity(...)')` throws `'renderDetail must call buildDensity(...)'` — the current `renderDetail` calls `renderTimeline(buildLanes(...))` directly, with no `buildDensity` in between |
+
+### Commands run
+
+- `node --test tools/argus-ui/test/timeline.test.mjs` — 1 top-level failure
+  (module load error), 0 pass, 1 fail, exit 1. All 21 new cases share this one
+  failure; none registered individually because the import throws before
+  `node:test` can enumerate the file's tests.
+- `node --test tools/argus-ui/test/page.test.mjs` — 9 tests, 6 pass (the
+  pre-existing criteria 1 and 4 cases, untouched), 3 fail (cases 22–24 above),
+  exit code from the runner reflects the 3 failures.
+
+Not run: `npm --prefix tools/argus-ui test` and `./test.sh` — both are the
+implementer's and the closing increment's, per the plan's "What counts as
+done".
+
+### Deliberately not written
+
+Matches the plan's own list exactly, nothing added or dropped:
+
+- Colours, pixel positions and whether the curve reads well — `node --test`
+  sees strings; the numbers behind the drawing are pinned in cases 7–17 and
+  the look is for review.
+- `TOOL_EVENT`'s value as a contract with the collector — the name is
+  measured, not ours to pin as a string; case 22 pins that the UI asks for it.
+- The incremental fetch actually skipping records it already has — the
+  collector's `sinceSeq`, pinned in that project's own suite; case 22 pins
+  only that the UI asks for it.
+- `state.toolMarks` growing across refreshes — loader wiring in `app.js`,
+  which this project has no DOM harness for and will not grow one for.
+- `claude_code.subagent_completed`, `tool_decision`, `api_request` tokens —
+  measured by the researcher, used by nothing this increment builds.
+- Lane derivation, geometry, labels, escaping and the landing view —
+  increment 2's cases own them, left exactly as they stand; the command above
+  re-runs them alongside the new ones.
+- Recordings made without the content flags — out of contract by the issue's
+  own decision.
+- `tools/argus` and the collector — not touched by this increment.
+
+### Gaps and conflicts found in the plan
+
+None. The plan's algorithms for `contextPoints`, `areaPolygon`,
+`activityMarks` and `buildDensity` are exact enough (down to the SVG
+coordinate convention and the baseline-closing rule) that every expected
+value in cases 1–21 follows by direct calculation from the plan's own
+formulas, and cases 22–24's regexes are copied from the plan's literal
+phrasing (`TOOL_EVENT`, `sinceSeq`, `state.toolMarks = []`, `state.toolSeq =
+0`, the `renderTimeline(` / `buildDensity(` ordering). No case needed a
+guessed expectation and no criterion text conflicted with what the plan asked
+me to pin.

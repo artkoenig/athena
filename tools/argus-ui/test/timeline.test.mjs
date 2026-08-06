@@ -1,7 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildLanes, laneGeometry, renderTimeline, DETAIL_VIEWS, renderDetailViews } from '../public/timeline.js';
+import {
+  buildLanes,
+  laneGeometry,
+  renderTimeline,
+  DETAIL_VIEWS,
+  renderDetailViews,
+  buildDensity,
+  contextPoints,
+  areaPolygon,
+  activityMarks,
+  MIN_CURVE_WIDTH_PCT,
+  ACTIVITY_BUCKETS,
+} from '../public/timeline.js';
 
 // The two shapes every case builds its input from — nothing else.
 const session = (over = {}) => ({ id: 's1', name: null, firstSeenMs: 1000, lastSeenMs: 5000, ...over });
@@ -52,6 +64,9 @@ function threeRecordContent() {
     }),
   ];
 }
+
+// A tool-result mark on one span — reused by the density cases.
+const toolMark = (over = {}) => ({ seq: 1, timeMs: 2000, spanId: 'sp-a', ...over });
 
 // Criterion 1 — opening a session lands on the timeline, the technical views stay
 // reachable and subordinate.
@@ -249,4 +264,303 @@ test('two different agent names on different spans get two lanes with no disambi
   const result = buildLanes({ session: session(), content });
   const labels = result.lanes.filter((lane) => lane.kind === 'agent').map((lane) => lane.label);
   assert.deepEqual(labels.sort(), ['alpha', 'beta'], 'the suffix fires only where labels actually collide');
+});
+
+// Criterion 5 — activity and context growth on the lanes themselves.
+
+test('an empty session still returns a density: no activity, no context, no peak', () => {
+  const view = buildDensity(buildLanes({ session: session(), content: [] }), {});
+  assert.equal(view.lanes.length, 1);
+  assert.equal(view.maxBodyLength, 0);
+  const [main] = view.lanes;
+  assert.deepEqual(main.context, []);
+  assert.deepEqual(main.activity, []);
+  assert.equal(main.requests, 0);
+  assert.equal(main.toolCalls, 0);
+  assert.equal(main.peakBodyLength, 0);
+});
+
+test('requests land on the lane that made them', () => {
+  const content = threeRecordContent();
+  const view = buildDensity(buildLanes({ session: session(), content }), { content, tools: [] });
+  const main = view.lanes.find((lane) => lane.kind === 'main');
+  const agent = view.lanes.find((lane) => lane.kind === 'agent');
+  assert.equal(main.requests, 1);
+  assert.equal(agent.requests, 3);
+  assert.equal(main.context.length, 1);
+  assert.equal(agent.context.length, 3);
+});
+
+test('a tool call lands on the lane whose span it carries', () => {
+  const content = threeRecordContent();
+  const view = buildDensity(buildLanes({ session: session(), content }), {
+    content,
+    tools: [toolMark({ spanId: 'sp-a', timeMs: 2200 })],
+  });
+  const main = view.lanes.find((lane) => lane.kind === 'main');
+  const agent = view.lanes.find((lane) => lane.kind === 'agent');
+  assert.equal(agent.toolCalls, 1);
+  assert.equal(main.toolCalls, 0);
+});
+
+test('a tool call on a span no lane owns belongs to the main session', () => {
+  const content = threeRecordContent();
+  const view = buildDensity(buildLanes({ session: session(), content }), {
+    content,
+    tools: [toolMark({ spanId: 'interaction-1' }), toolMark({ seq: 2, spanId: '' })],
+  });
+  const main = view.lanes.find((lane) => lane.kind === 'main');
+  const agent = view.lanes.find((lane) => lane.kind === 'agent');
+  assert.equal(
+    main.toolCalls,
+    2,
+    'a tool call on the conversation span, not the agent tool span, belongs to the main lane',
+  );
+  assert.equal(agent.toolCalls, 0);
+});
+
+test('two concurrent agents of one type keep their own tool calls, never merged', () => {
+  const content = [
+    record({ seq: 1, timeMs: 2000, spanId: 'sp-a', agent: 'general-purpose', isSubagent: true }),
+    record({ seq: 2, timeMs: 3000, spanId: 'sp-a', agent: 'general-purpose', isSubagent: true }),
+    record({ seq: 3, timeMs: 2200, spanId: 'sp-b', agent: 'general-purpose', isSubagent: true }),
+    record({ seq: 4, timeMs: 3400, spanId: 'sp-b', agent: 'general-purpose', isSubagent: true }),
+  ];
+  const view = buildDensity(buildLanes({ session: session(), content }), {
+    content,
+    tools: [toolMark({ spanId: 'sp-a', timeMs: 2500 }), toolMark({ seq: 2, spanId: 'sp-b', timeMs: 2600 })],
+  });
+  const agentLanes = view.lanes.filter((lane) => lane.kind === 'agent');
+  assert.equal(agentLanes.length, 2);
+  for (const lane of agentLanes) {
+    assert.equal(lane.toolCalls, 1, `${lane.key} must keep only its own tool call, never the other agent's`);
+  }
+});
+
+test('a response body is neither activity nor context', () => {
+  const content = [
+    record({ seq: 1, timeMs: 1500 }),
+    record({ seq: 2, eventName: 'claude_code.api_response_body', timeMs: 2600, bodyLength: 900 }),
+  ];
+  const view = buildDensity(buildLanes({ session: session(), content }), { content, tools: [] });
+  const main = view.lanes.find((lane) => lane.kind === 'main');
+  assert.equal(main.requests, 1);
+  assert.equal(main.context.length, 1, 'a response body must not add a second context point');
+  const activityTotal = main.activity.reduce((sum, mark) => sum + mark.count, 0);
+  assert.equal(activityTotal, 1, 'a response body must contribute no activity mark');
+});
+
+test('the curve is scaled across the whole session, not per lane', () => {
+  const content = [
+    record({ seq: 1, timeMs: 1500, bodyLength: 100000 }),
+    record({ seq: 2, timeMs: 2000, spanId: 'sp-a', agent: 'x', isSubagent: true, bodyLength: 25000 }),
+  ];
+  const view = buildDensity(buildLanes({ session: session(), content }), { content, tools: [] });
+  assert.equal(view.maxBodyLength, 100000);
+  const main = view.lanes.find((lane) => lane.kind === 'main');
+  const agent = view.lanes.find((lane) => lane.kind === 'agent');
+  assert.equal(main.context[0].y, 0, 'the session-wide peak sits at the top of the curve');
+  assert.equal(agent.context[0].y, 75, 'a quarter of the peak sits three quarters down');
+  assert.equal(main.peakBodyLength, 100000);
+  assert.equal(agent.peakBodyLength, 25000);
+});
+
+test('a session whose requests all report no size still yields a drawable curve', () => {
+  const content = [
+    record({ seq: 1, timeMs: 1500, bodyLength: 0 }),
+    record({ seq: 2, timeMs: 3000, bodyLength: 0 }),
+  ];
+  const view = buildDensity(buildLanes({ session: session(), content }), { content, tools: [] });
+  const main = view.lanes.find((lane) => lane.kind === 'main');
+  assert.equal(main.context.length, 2);
+  for (const point of main.context) {
+    assert.equal(point.y, 100, 'with no size reported anywhere the curve must not divide by zero');
+    assert.ok(Number.isFinite(point.x));
+  }
+});
+
+test('contextPoints places a record by time inside the window, exact at round numbers', () => {
+  const window = { startMs: 1000, endMs: 5000 };
+  const points = contextPoints(
+    [
+      record({ seq: 1, timeMs: 1000, bodyLength: 10 }),
+      record({ seq: 2, timeMs: 3000, bodyLength: 20 }),
+      record({ seq: 3, timeMs: 5000, bodyLength: 20 }),
+    ],
+    window,
+    20,
+  );
+  assert.deepEqual(points.map((point) => point.x), [0, 50, 100]);
+  assert.deepEqual(points.map((point) => point.y), [50, 0, 0]);
+});
+
+test('contextPoints survives a zero-length window', () => {
+  const window = { startMs: 1000, endMs: 1000 };
+  const points = contextPoints(
+    [record({ seq: 1, timeMs: 1000, bodyLength: 10 }), record({ seq: 2, timeMs: 1000, bodyLength: 20 })],
+    window,
+    20,
+  );
+  assert.equal(points.length, 2);
+  for (const point of points) {
+    assert.ok(Number.isFinite(point.x), 'a session with one instant of data must not divide by zero into NaN');
+    assert.ok(Number.isFinite(point.y));
+    assert.ok(point.x >= 0 && point.x <= 100);
+    assert.ok(point.y >= 0 && point.y <= 100);
+  }
+});
+
+test('the area closes on the baseline', () => {
+  const points = [
+    { x: 10, y: 40 },
+    { x: 60, y: 90 },
+  ];
+  const polygon = areaPolygon(points);
+  assert.ok(polygon.startsWith('10.000,100.000'), 'the area must start on the baseline under the first point');
+  assert.ok(polygon.endsWith(',100.000'), 'the area must close back onto the baseline');
+  assert.match(polygon, /40\.000/, 'the first point\'s y must be present');
+  assert.match(polygon, /90\.000/, 'the second point\'s y must be present');
+  assert.doesNotMatch(polygon, /NaN/);
+});
+
+test('a single request is still a visible area, not a zero-width line', () => {
+  const polygon = areaPolygon([{ x: 10, y: 50 }]);
+  const vertices = polygon.split(' ').filter(Boolean);
+  assert.equal(vertices.length, 4, 'a single point must still close into a four-vertex plateau');
+  const lastX = Number(vertices[vertices.length - 1].split(',')[0]);
+  assert.ok(lastX >= 10 + MIN_CURVE_WIDTH_PCT, 'the plateau must be at least MIN_CURVE_WIDTH_PCT wide');
+  assert.ok(lastX <= 100, 'the plateau must never overflow the track');
+});
+
+test('no requests, no polygon', () => {
+  assert.equal(areaPolygon([]), '');
+});
+
+test('activity in one bucket is one mark carrying its count', () => {
+  const window = { startMs: 1000, endMs: 5000 };
+  const marks = activityMarks(
+    [
+      { timeMs: 2000, kind: 'request' },
+      { timeMs: 2001, kind: 'request' },
+    ],
+    window,
+  );
+  assert.equal(marks.length, 1);
+  assert.equal(marks[0].kind, 'request');
+  assert.equal(marks[0].count, 2);
+});
+
+test('a tool call and an API request at the same moment stay two marks', () => {
+  const window = { startMs: 1000, endMs: 5000 };
+  const marks = activityMarks(
+    [
+      { timeMs: 2000, kind: 'request' },
+      { timeMs: 2000, kind: 'tool' },
+    ],
+    window,
+  );
+  assert.equal(marks.length, 2, 'a request and a tool call at the same moment must not collapse into one mark');
+  assert.equal(marks[0].leftPct, marks[1].leftPct);
+  assert.deepEqual(
+    marks.map((mark) => mark.kind).sort(),
+    ['request', 'tool'],
+  );
+});
+
+test('the marks are bounded however many records arrive, and lose none', () => {
+  const window = { startMs: 1000, endMs: 5000 };
+  const items = [];
+  for (let i = 0; i < 500; i++) {
+    items.push({ timeMs: window.startMs + (i / 500) * (window.endMs - window.startMs), kind: 'request' });
+  }
+  const marks = activityMarks(items, window);
+  assert.ok(marks.length <= ACTIVITY_BUCKETS, 'a 2000-record session must not paint one element per record');
+  const total = marks.reduce((sum, mark) => sum + mark.count, 0);
+  assert.equal(total, 500, 'bucketing must lose no record');
+});
+
+test('a mark never leaves the track, even past the window end or against a zero-length window', () => {
+  const window = { startMs: 1000, endMs: 5000 };
+  const marks = activityMarks(
+    [
+      { timeMs: window.startMs, kind: 'request' },
+      { timeMs: window.endMs, kind: 'request' },
+      { timeMs: window.endMs + 1000, kind: 'request' },
+    ],
+    window,
+  );
+  for (const mark of marks) {
+    assert.ok(
+      mark.leftPct >= 0 && mark.leftPct < 100,
+      'a mark must never sit at or past the right edge of the track',
+    );
+  }
+
+  const zeroWindow = { startMs: 1000, endMs: 1000 };
+  const zeroMarks = activityMarks([{ timeMs: 1000, kind: 'request' }], zeroWindow);
+  for (const mark of zeroMarks) {
+    assert.ok(Number.isFinite(mark.leftPct), 'a zero-length window must not divide by zero into NaN');
+  }
+});
+
+test('the density is rendered behind the bar, not instead of it, for the lane it belongs to', () => {
+  const content = threeRecordContent();
+  const view = buildDensity(buildLanes({ session: session(), content }), {
+    content,
+    tools: [toolMark({ spanId: 'sp-a', timeMs: 2200 })],
+  });
+  const html = renderTimeline(view);
+  const laneMatch = html.match(/data-lane="([^"]*sp-a[^"]*)"/);
+  assert.ok(laneMatch, 'the agent lane must be present, keyed by its span');
+  const laneStart = laneMatch.index;
+  const nextLaneStart = html.indexOf('data-lane="', laneStart + 1);
+  const row = nextLaneStart === -1 ? html.slice(laneStart) : html.slice(laneStart, nextLaneStart);
+
+  const svgIdx = row.indexOf('<svg class="lane-curve"');
+  assert.ok(svgIdx >= 0, 'the agent lane must carry a context curve');
+  const barIdx = row.indexOf('<span class="lane-bar');
+  assert.ok(barIdx >= 0, 'the agent lane must carry its bar');
+  assert.ok(svgIdx < barIdx, 'the curve must sit behind the bar in the markup');
+
+  const pointsMatch = row.match(/<polygon points="([^"]*)"/);
+  assert.ok(pointsMatch, 'the curve must carry a points attribute');
+  assert.ok(pointsMatch[1].length > 0);
+  assert.doesNotMatch(row, /NaN/);
+  assert.match(row, /data-kind="request"/, 'the three requests on this lane must leave a request mark');
+  assert.match(row, /data-kind="tool"/, 'the tool call on this lane must leave a tool mark');
+});
+
+test('a lane with nothing on it renders as a bare lane', () => {
+  const view = buildDensity(buildLanes({ session: session(), content: [] }), {});
+  const html = renderTimeline(view);
+  const laneCount = (html.match(/data-lane="/g) ?? []).length;
+  assert.equal(laneCount, 1);
+  assert.ok(!html.includes('lane-curve'), 'a lane with no requests must render no curve');
+  assert.ok(!html.includes('lane-mark'), 'a lane with no activity must render no mark');
+  assert.doesNotMatch(html, /NaN/);
+});
+
+test('the lane meta reports the size and the counts as data, not as a pinned sentence', () => {
+  const content = threeRecordContent();
+  const view = buildDensity(buildLanes({ session: session(), content }), {
+    content,
+    tools: [toolMark({ spanId: 'sp-a', timeMs: 2200 })],
+  });
+  const html = renderTimeline(view);
+  const laneMatch = html.match(/data-lane="([^"]*sp-a[^"]*)"/);
+  assert.ok(laneMatch, 'the agent lane must be present');
+  const laneStart = laneMatch.index;
+  const nextLaneStart = html.indexOf('data-lane="', laneStart + 1);
+  const row = nextLaneStart === -1 ? html.slice(laneStart) : html.slice(laneStart, nextLaneStart);
+
+  assert.match(row, /data-peak="10"/, 'the lane\'s largest body length, from the fixture, must be readable as data');
+  assert.match(row, /data-requests="3"/);
+  assert.match(row, /data-tools="1"/);
+});
+
+test('the timeline still renders from a bare buildLanes view, with no density attached', () => {
+  const html = renderTimeline(buildLanes({ session: session(), content: threeRecordContent() }));
+  const laneCount = (html.match(/data-lane="/g) ?? []).length;
+  assert.equal(laneCount, 2, 'increment 2\'s call shape, renderTimeline(buildLanes(...)), must keep working');
+  assert.doesNotMatch(html, /NaN/);
 });
