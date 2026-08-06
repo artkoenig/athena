@@ -51,9 +51,13 @@ convention you did not write down. Answer all of this:
 - **Whether.** Tests, or none. A change with nothing a tool can check — prose,
   and nothing else — needs none. Then say so in one sentence and skip the rest.
 - **What.** Per acceptance criterion, the cases that prove it: input, state,
-  expected result, and the edges — empty, limit, repeat. Name what you leave
-  untested and why, so an omission reads as a decision. A criterion missing
-  from this list gets no test at all.
+  expected result, and the edges — empty, limit, repeat. At least one of those
+  cases has to fail if the criterion is taken back out of the implementation.
+  Hold every case against that before you write it down: one that still passes
+  without the asked-for behaviour proves nothing, and a criterion with only
+  such cases is untested however many it has. Name what you leave untested and
+  why, so an omission reads as a decision. A criterion missing from this list
+  gets no test at all.
 - **How.** Per case: the level (unit, integration, end-to-end), the test file
   by path, the framework, and the conventions of the tests already in that
   file — how a case is named, how fixtures and setup work, what is faked and
