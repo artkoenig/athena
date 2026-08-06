@@ -64,7 +64,11 @@ for an `HttpOnly; SameSite=Strict` cookie and drops it from the address bar.
   a tool and shaded behind with the size of the context it was carrying; the
   views below it are reachable from there. A time cursor can be dragged to any
   moment of the session; it starts in a live mode that follows the newest data,
-  which scrubbing leaves and the **Live** control returns to.
+  which scrubbing leaves and the **Live** control returns to. Clicking a lane
+  opens that agent's context as of the cursor's moment, as a list of blocks —
+  system prompt, messages, thinking, tool calls and results, and every other
+  field the request carried — each showing its size and expanding to its full
+  text.
 - **Overview** — cost, tokens by type including cache hit rate, interactions,
   requests, tool calls, lines of code, commits, active time; tables per model
   and per tool.

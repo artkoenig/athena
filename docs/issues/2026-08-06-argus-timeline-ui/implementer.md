@@ -836,3 +836,112 @@ None, and no question is blocking. Two notes for the reviewer, neither acted on:
   is recorded in the plan as an observation and explicitly not a finding ("**No
   action, no test, no code change for it.** Do not widen the guard"). I widened
   nothing and wrote nothing for it.
+
+## Increment 5
+
+Built the Increment 5 plan of `researcher.md` — selecting a lane at a time shows
+that agent's context as a message list. One new module, three edited files and
+one README sentence, all in `tools/argus-ui`; nothing in `tools/argus` changes,
+as finding 5 of the plan established. The suite named in "What counts as done"
+is green.
+
+### The tests came first, and they are not mine
+
+I ran the plan's one command before touching anything and reproduced the
+test-author's baseline exactly: `npm --prefix tools/argus-ui test` — **126 tests,
+105 pass, 21 fail, exit 1**. The 21 reds were the ones their handoff itemises:
+`context.test.mjs` failing to load whole (`ERR_MODULE_NOT_FOUND` for
+`public/context.js`, standing in for its 29 cases), 2 in `timeline.test.mjs` (a
+lane row is a `<div>`, no `aria-current`), 16 in `page.test.mjs` (every Increment
+5 wiring case), and 2 in `independence.test.mjs` (`public/context.js` is
+missing). Every one failed because the behaviour did not exist yet. I wrote no
+test and edited no test file.
+
+### What I changed
+
+| File | Change |
+| --- | --- |
+| `tools/argus-ui/public/context.js` | **New.** `contextBlocks(body)` and `renderContextPanel({lane,item,pending,expanded})`, plus an exported `PREVIEW_CHARS`. Pure: it imports `esc`, `fmtClock`, `fmtNum` and `shortId` from `./format.js` and touches no `document`, `fetch` or `location`. |
+| `tools/argus-ui/public/timeline.js` | `renderTimeline(view, cursor = null, selectedKey = null)` — a third optional parameter; the lane row is now `<button type="button" class="lane" … aria-current="…">` with its three children byte-identical. Nothing else in the module changed. |
+| `tools/argus-ui/public/app.js` | The selection mechanism: `renderContextPanel` imported from `./context.js`; `selectedLane`, `laneContext` and `expanded` added to the state literal; new `laneView`, `clearLaneContext`, `loadLaneContext`, `renderLanePanel`, `scheduleLaneContext`; `renderDetail` renders `<div id="lane-panel"></div>` between the timeline and the views, passes `state.selectedLane` to `renderTimeline` and calls `renderLanePanel()`; `refresh` awaits `loadLaneContext()` after `loadTimeline()`; `selectSession` resets all three new keys; `scrubTo` schedules a debounced fetch; the `click` listener gains a lane branch, a `summary[data-block]` branch, and a `loadLaneContext()` in the existing `data-cursor-live` branch. |
+| `tools/argus-ui/public/styles.css` | The button reset, `:hover`, `:focus-visible` and `[aria-current="true"]` on `.lane`, and a new `context` section (`.context-panel`, `.context-head`, `.context-title`, `.context-meta`, `.ctx-block`, its `summary`, `.ctx-label` with one colour per kind, `.ctx-preview`, `.ctx-size`, `.ctx-text` with `max-height: 50vh`). No new custom property and no new colour. |
+| `tools/argus-ui/README.md` | The **Timeline** bullet gains one sentence about clicking a lane. |
+
+Two places where I had to settle something the plan left open, both recorded
+rather than smuggled:
+
+1. **A `system` array entry's payload is `entry.text`, not the entry object.**
+   The plan's one-text rule ("string payload verbatim, anything else pretty
+   JSON") applied to the wrapper `{type:'text',text,cache_control}` would give
+   JSON, but case 3 (`the exact full text survives the parse, unescaped and
+   uncut`) requires the block's `text` to be the entry's own text character for
+   character. The wrapper carries only a type and a caching hint, neither of
+   which is context, so the entry's text is the payload; a comment in
+   `context.js` says so.
+2. **`loadLaneContext` clears through a helper.** The plan says the no-session /
+   no-lane early exit "writes `state.laneContext = { key: null, item: null }`",
+   but case 40 takes `indexOf('state.laneContext =')` and requires both staleness
+   guards to sit *before* it. An early literal write is the first occurrence and
+   turns that case red. The early exit therefore calls `clearLaneContext()`, and
+   the only `state.laneContext =` inside `loadLaneContext` is the guarded one.
+   Same reason the "lane not in the view" case became `filter = null` instead of
+   a second early write: one write site, after both guards.
+
+### Commands run
+
+The plan's "What counts as done" list is one command, and it is the only command
+that counts. Both runs below are of that command.
+
+- `npm --prefix tools/argus-ui test` (`node --test "test/*.test.mjs"`, from the
+  repository root), **before any change** — 126 tests, 105 pass, 21 fail, 0
+  skipped, exit 1. The baseline above.
+- `npm --prefix tools/argus-ui test`, **after the change** — **154 tests, 154
+  pass, 0 fail, 0 skipped, 0 todo, exit 0**. The count rises by 28 because
+  `context.test.mjs` now loads and reports its 29 cases individually instead of
+  one module-load failure. Nothing was excluded and nothing was skipped.
+
+Working runs, kept off that list and reported for completeness: `node --test`
+on `context.test.mjs`, `timeline.test.mjs`, `page.test.mjs` and
+`independence.test.mjs` individually while implementing (all exit 0 at the end),
+and `node --input-type=module --check` on `app.js` and `context.js` — a parse
+check only, because no test imports `app.js` and a syntax error there would be
+invisible to the suite.
+
+Deliberately not run, because the plan puts them off the list: `./test.sh` (the
+closing increment owns the full-suite run) and `tools/argus`' own suite (no file
+outside `tools/argus-ui` changed). There is no linter and no formatter in this
+repository.
+
+### Problems hit
+
+No blocking question. Three notes for the reviewer:
+
+- **Case 17 (`the one line is a one-line preview`) cannot pass under the plan's
+  literal preview rule, and I implemented the reading that satisfies it.** The
+  plan says the preview is the text "with every run of whitespace collapsed to
+  one space, trimmed, cut to 120 characters, with `…` appended when it was cut".
+  The case's input is `'a\n\n   b'.repeat(30)` — 210 raw characters, but only 90
+  once the whitespace runs collapse, so under the plan's ordering it is never
+  cut and never gets the `…` the case asserts. I therefore measure the cut on
+  the text itself and flatten what survives it: `text.slice(0, 120)`, whitespace
+  collapsed, trimmed, plus `…` when `text.length > 120`. Every one of the case's
+  four assertions holds (single line, no double space, at most 121 characters,
+  ends with `…`), the result is never longer than the plan's limit, and the
+  ellipsis now means what a reader expects it to mean — "the block holds more
+  text than this line shows". A comment in `previewOf` states the reasoning. If
+  the reviewer prefers the plan's literal ordering, the case has to change with
+  it, and that is the test-author's to do, not mine.
+- **The two conflicts the test-author flagged needed no action from me.** Case 10
+  (`a system given as a plain string still parses`) as written pins only that the
+  top-level `system` string yields one block carrying `'be brief'` — which the
+  plan's own algorithm does — and case 26 pins `data-truncated="true"` plus the
+  raw block still carrying its text, which it does. Neither narrowed case is
+  weaker than what I implemented; both would also pass against the plan's
+  literal wording.
+- **Beyond the criteria, noticed and left alone:** the `<pre class="ctx-text">`
+  of every block is written into the DOM on each repaint, so a 70 KB `tools`
+  block is serialised whether or not it is expanded. It is correct and bounded
+  by the same 2 MB the body itself is, and rendering only expanded blocks would
+  change the markup the suite pins (one `<pre>` per block, case 20). Not this
+  increment's scope; recorded so nobody has to rediscover it if the panel ever
+  feels slow on a very large context.

@@ -368,8 +368,9 @@ export function resolveCursor(cursor, window) {
  *
  * @param {{ startMs: number, endMs: number, lanes: object[] }} view
  * @param {{ live: boolean, timeMs: number|null }|null} cursor
+ * @param {string|null} selectedKey the lane whose context is open, if any
  */
-export function renderTimeline(view, cursor = null) {
+export function renderTimeline(view, cursor = null, selectedKey = null) {
   const lanes = view?.lanes ?? [];
   const window = { startMs: view?.startMs ?? 0, endMs: view?.endMs ?? 0 };
   const span = Math.max(0, window.endMs - window.startMs);
@@ -411,14 +412,17 @@ export function renderTimeline(view, cursor = null) {
           })} · peak context ${fmtNum(peak)} chars`,
         )}">${esc(peak > 0 ? `${duration} · ${fmtNum(peak)}` : duration)}</span>`;
 
-      return `<div class="lane" data-lane="${esc(lane.key)}" data-kind="${esc(lane.kind)}">
+      // A real button, so selecting a lane works from the keyboard and reads as
+      // a control to a screen reader — the pattern .span-row already follows.
+      return `<button type="button" class="lane" data-lane="${esc(lane.key)}" data-kind="${esc(lane.kind)}"
+        aria-current="${lane.key === selectedKey}">
         <span class="lane-label" title="${esc(lane.label)}">${esc(lane.label)}</span>
         <span class="lane-track">
           ${curve}<span class="lane-bar" data-kind="${esc(lane.kind)}"
             style="left:${leftPct.toFixed(3)}%;width:${widthPct.toFixed(3)}%"></span>${marks}
         </span>
         ${meta}
-      </div>`;
+      </button>`;
     })
     .join('');
 

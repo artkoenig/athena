@@ -8,6 +8,7 @@
  */
 
 import { esc, fmtNum, fmtCost, fmtDur, fmtClock, fmtAgo, isLive, shortId } from './format.js';
+import { renderContextPanel } from './context.js';
 import {
   buildLanes,
   buildDensity,
@@ -40,6 +41,13 @@ const state = {
   // A session opens live: the cursor sits on the newest data and moves with it
   // as more arrives. Scrubbing pins an absolute moment and leaves live mode.
   cursor: { live: true, timeMs: null },
+  // No lane is open until one is clicked, so the timeline stands alone first.
+  selectedLane: null,
+  // The record the panel is drawn from, tagged with the lane it was fetched
+  // for: an answer that arrives after the selection moved on must not be painted.
+  laneContext: { key: null, item: null },
+  // Which blocks the reader has expanded, so a live refresh does not shut them.
+  expanded: new Set(),
   trace: null,
   selectedTraceId: null,
   selectedSpanId: null,
@@ -186,13 +194,17 @@ function renderDetail() {
         tools: state.toolMarks,
       }),
       state.cursor,
+      state.selectedLane,
     )}
+
+    <div id="lane-panel"></div>
 
     ${renderDetailViews({ selected: state.tab, counts })}
 
     <div id="tab-body"></div>
   `;
   renderTabBody();
+  renderLanePanel();
 }
 
 function renderTabBody() {
@@ -879,6 +891,90 @@ async function loadTimeline() {
   state.toolSeq = merged.seq;
 }
 
+/**
+ * The lanes as the page currently holds them. The loader needs the window and
+ * the selected lane's span, and a second pure build over at most 2000 records
+ * costs nothing — but it must stay out of renderDetail, whose composed
+ * expression the suite pins by source order.
+ */
+function laneView() {
+  return buildLanes({ session: state.session, content: state.content });
+}
+
+/** With no lane selected there is nothing to draw, so the held answer goes too. */
+function clearLaneContext() {
+  state.laneContext = { key: null, item: null };
+}
+
+/**
+ * The context behind the selected lane, as of the cursor's moment.
+ *
+ * A failed fetch costs the panel and not the page, which is why the rejection
+ * is swallowed here rather than thrown at whoever is refreshing.
+ */
+async function loadLaneContext() {
+  const id = state.selectedSessionId;
+  const key = state.selectedLane;
+  if (!id || !key) {
+    clearLaneContext();
+    return;
+  }
+  const view = laneView();
+  const lane = view.lanes.find((entry) => entry.key === key);
+  // Exactly one lane filter goes on the wire: main traffic for the main lane, an
+  // agent lane's own span — the only thing that tells two concurrent agents of
+  // one type apart — and its name only when it carries no span at all.
+  const filter = !lane
+    ? null
+    : lane.kind === 'main'
+      ? { main: '1' }
+      : lane.spanId
+        ? { span: lane.spanId }
+        : { agent: lane.agent };
+  const answer = filter
+    ? await api('/api/content/at', {
+        session: id,
+        at: resolveCursor(state.cursor, view).timeMs,
+        ...filter,
+      }).catch(() => null)
+    : null;
+  // The selection can move while this is in flight — a click, a scrub or a
+  // session change. An answer for a lane the reader has left must never be
+  // painted under the lane they are on now.
+  if (state.selectedSessionId !== id || state.selectedLane !== key) return;
+  state.laneContext = { key, item: answer?.item ?? null };
+}
+
+/**
+ * The panel repaints inside its own container. A full re-render would replace
+ * the scrub slider under the pointer and end the drag that asked for it.
+ */
+function renderLanePanel() {
+  const container = document.getElementById('lane-panel');
+  if (!container) return;
+  const key = state.selectedLane;
+  const lane = key ? (laneView().lanes.find((entry) => entry.key === key) ?? null) : null;
+  // The held answer belongs to the lane it was fetched for; anything else means
+  // a fetch is still in flight, which is not the same as "there is nothing here".
+  const held = state.laneContext.key === key;
+  container.innerHTML = renderContextPanel({
+    lane,
+    item: held ? state.laneContext.item : null,
+    pending: !held,
+    expanded: state.expanded,
+  });
+}
+
+let laneContextTimer = null;
+/** A drag across the slider fires one fetch when it settles, not one per pixel. */
+function scheduleLaneContext(delay = 250) {
+  clearTimeout(laneContextTimer);
+  laneContextTimer = setTimeout(() => {
+    laneContextTimer = null;
+    loadLaneContext().then(renderLanePanel);
+  }, delay);
+}
+
 async function loadTabData() {
   if (!state.session) return;
   if (state.tab === 'traces') {
@@ -923,6 +1019,8 @@ async function refresh({ sessions = true } = {}) {
     await Promise.all([loadStats(), sessions ? loadSessions() : Promise.resolve()]);
     await loadSession();
     await loadTimeline();
+    // Live mode follows the head, so new requests have to reach the panel too.
+    await loadLaneContext();
     await loadTabData();
   } catch (error) {
     // A failed load must not skip the render. The empty state is the only thing
@@ -958,8 +1056,12 @@ function selectSession(id, { render = true } = {}) {
   state.content = [];
   state.toolMarks = [];
   state.toolSeq = 0;
-  // A new session never inherits a moment pinned in another one.
+  // A new session never inherits a moment pinned in another one, nor a lane, nor
+  // the context and expansions that belonged to it.
   state.cursor = liveCursor();
+  state.selectedLane = null;
+  state.laneContext = { key: null, item: null };
+  state.expanded = new Set();
   location.hash = `#/session/${encodeURIComponent(id)}`;
   if (render) refresh({ sessions: false }).then(renderSessionList);
 }
@@ -1011,6 +1113,7 @@ function paintCursor() {
 function scrubTo(input) {
   state.cursor = scrubCursor(Number(input.value), { startMs: Number(input.min), endMs: Number(input.max) });
   paintCursor();
+  scheduleLaneContext();
 }
 
 let refreshTimer = null;
@@ -1059,6 +1162,26 @@ function wireEvents() {
       // Returning to live is a full re-render, which is safe: no drag is in flight.
       state.cursor = liveCursor();
       renderDetail();
+      // The moment moved with it, so the panel has to be fetched again.
+      loadLaneContext().then(renderLanePanel);
+      return;
+    }
+    const laneRow = event.target.closest('[data-lane]');
+    if (laneRow) {
+      // Clicking the open lane closes it, the way the technical views work.
+      state.selectedLane = state.selectedLane === laneRow.dataset.lane ? null : laneRow.dataset.lane;
+      state.expanded = new Set();
+      renderLanePanel();
+      loadLaneContext().then(renderLanePanel);
+      return;
+    }
+    const block = event.target.closest('summary[data-block]');
+    if (block) {
+      // The browser has already opened or closed the <details>; this only
+      // remembers which, so the next repaint does not undo it. Bound to the
+      // summary alone: selecting text inside an expanded block is not a toggle.
+      if (state.expanded.has(block.dataset.block)) state.expanded.delete(block.dataset.block);
+      else state.expanded.add(block.dataset.block);
       return;
     }
     const tab = event.target.closest('[data-tab]');
