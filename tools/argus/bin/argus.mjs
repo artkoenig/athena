@@ -37,7 +37,8 @@ argus — monitor Claude Agent SDK / Claude Code sessions over OpenTelemetry
 
 Options
   -p, --port <n>                Port for OTLP ingest and the API     (default 4318)
-  -h, --host <addr>             Bind address                         (default 127.0.0.1)
+  -h, --host <addr>             Bind address                         (default 127.0.0.1,
+                                or 0.0.0.0 where a platform assigns PORT)
   -t, --token <secret>          Require "Authorization: Bearer <secret>"
       --tunnel [binary]         Open a Cloudflare quick tunnel, generate a token
                                 and print the env block for a cloud session.

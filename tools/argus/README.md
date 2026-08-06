@@ -431,7 +431,7 @@ exactly these routes and nothing else.
 | Flag                    | Env                          | Default        | Meaning                                          |
 | ----------------------- | ---------------------------- | -------------- | ------------------------------------------------ |
 | `-p, --port`            | `UROBOROS_OBS_PORT`            | `4318`         | Port for OTLP ingest **and** the JSON API        |
-| `-h, --host`            | `UROBOROS_OBS_HOST`            | `127.0.0.1`    | Bind address                                     |
+| `-h, --host`            | `UROBOROS_OBS_HOST`            | `127.0.0.1`    | Bind address (see below on a platform)           |
 | `-t, --token`           | `UROBOROS_OBS_TOKEN`           | –              | Require `Authorization: Bearer …`                |
 | `--background`          | –                            | –              | Start and return to the caller                   |
 | `--exit-with <pid>`     | `CLAUDE_PID`                 | the session    | Shut down when that process is gone              |
@@ -453,6 +453,21 @@ Durations accept `ms`, `s`, `m`, `h`, `d` (e.g. `--retention 90m`).
 Two more variables that platforms set themselves are read: `PORT` (Render, Fly, Railway,
 Heroku) as the port and `RENDER_EXTERNAL_URL` as the public address. Both rank below the
 `UROBOROS_OBS_*` variants, so a deliberately set value wins.
+
+A set `PORT` also moves the bind address to `0.0.0.0`. The platform routes to the
+container's public interface, so a loopback bind there is the deploy that fails while
+looking healthy — the log says the collector is listening, and the port scan finds
+nothing:
+
+```
+==> No open ports detected on 0.0.0.0, continuing to scan...
+==> Port scan timeout reached, no open ports detected on 0.0.0.0.
+    Detected open ports on localhost -- did you mean to bind one of these to 0.0.0.0?
+```
+
+On a machine someone is sitting at the default stays `127.0.0.1`: a collector without a
+token accepts telemetry from anyone who can reach it, so it does not go onto the LAN
+unless that was asked for. `--host` and `UROBOROS_OBS_HOST` decide it outright either way.
 
 ## How data is kept
 
