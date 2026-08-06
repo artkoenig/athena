@@ -462,6 +462,16 @@ Two lifetimes, deliberately separated:
   age and by count. That keeps memory use flat.
 - **Session aggregates** (tokens, cost, counters per model and tool) are cumulative and
   stay correct even once the raw data has long rolled out.
+- **Per-agent aggregates** (the same figures, plus the context occupancy of each model
+  call and an index of the captured request bodies) are cumulative too, bounded at 100
+  model calls per agent — about 35 KB per agent, so about 70 MB at the 500-session ceiling
+  with four agents each.
+
+The captured request payloads themselves are kept **only** in the raw event window, never
+copied onto the agent, so `--max-logs` is what bounds them. At the default 50 000 records
+with `OTEL_LOG_RAW_API_BODIES=1` and the CLI's 61 440-byte cap that is up to about 3 GB —
+`--max-logs 2000` (about 120 MB) is the setting to use when capturing bodies. A payload
+whose record has rolled out is served as gone, with its size intact.
 
 **Persistence is on by default.** A `start` creates
 `<cwd>/.uroboros-telemetry/<YYYY-MM-DDTHH-MM-SS>/` in the project being measured and appends
@@ -488,11 +498,16 @@ argus start --open .uroboros-telemetry/2026-08-03T14-22-05
 ## Sensitive data
 
 By default Claude Code exports structure only: durations, model names, tool names, token
-counts. Prompts, tool arguments and API bodies arrive only with
-`OTEL_LOG_USER_PROMPTS=1`, `OTEL_LOG_TOOL_DETAILS=1`, `OTEL_LOG_TOOL_CONTENT=1` and
-`OTEL_LOG_RAW_API_BODIES`. `argus env` deliberately does **not** set these. Anyone
-who switches them on should know that prompt and file contents then live in the
-collector's memory and — with `--persist` — on disk.
+counts. Prompts, responses, tool arguments and API bodies arrive only with
+`OTEL_LOG_USER_PROMPTS=1`, `OTEL_LOG_ASSISTANT_RESPONSES=1`, `OTEL_LOG_TOOL_DETAILS=1`,
+`OTEL_LOG_TOOL_CONTENT=1` and `OTEL_LOG_RAW_API_BODIES`. `argus env` deliberately does
+**not** set these. Anyone who switches them on should know that prompt and file contents
+then live in the collector's memory and — with `--persist` — on disk.
+
+`OTEL_LOG_RAW_API_BODIES` is the widest of the five by a distance: a captured body is the
+**entire** prompt of that call — the system blocks, every tool definition, and the whole
+message history including file contents and tool arguments. The Agents tab renders it as
+it arrived, and with persistence on it is written to disk as JSONL.
 
 `user.email`, `user.account_uuid` and `organization.id` are standard attributes and appear
 in the interface under "Attributes".
@@ -506,6 +521,7 @@ src/otlp/protobuf.mjs    schema-driven protobuf reader/writer (wire format)
 src/otlp/schema.mjs      field descriptors for opentelemetry-proto v1
 src/otlp/decode.mjs      OTLP (protobuf & JSON) → flat records
 src/claude.mjs           Claude Code domain knowledge: metric, event and span names
+src/agents.mjs           per-agent buckets: context occupancy, content, request bodies
 src/store.mjs            in-memory store, session aggregation, trace tree, queries
 src/persist.mjs          JSONL append, replay, one directory per measurement
 src/background.mjs       start in the background, end with the session
@@ -523,6 +539,9 @@ and new Claude Code attributes.
 | `POST /v1/{traces,metrics,logs}` | OTLP ingest (`http/protobuf`, `http/json`, gzip)   |
 | `GET /api/sessions`      | Session list (`search`, `limit`, `offset`)                 |
 | `GET /api/sessions/:id`  | Session aggregates including traces                        |
+| `GET /api/sessions/:id/agents` | Per-agent aggregation of one session, plus the capture report |
+| `GET /api/sessions/:id/agents/:key/content` | One agent's prompts, responses and tool calls (`limit`) |
+| `GET /api/sessions/:id/agents/:key/body/:seq` | One captured request payload, parsed when it is whole |
 | `GET /api/traces/:id`    | Spans of a trace, flat with `depth` in render order        |
 | `GET /api/events`        | Events (`session`, `event`, `trace`, `search`, `errors`)   |
 | `GET /api/metrics`       | Metric points (`session`, `name`)                          |
@@ -564,6 +583,15 @@ npm run demo      # emit a synthetic session
   completed task does not disappear from the table, it only gets the status
   `deleted`/`completed`. There is deliberately no aggregate counter here (unlike traces,
   events and metrics), because it could only grow monotonically.
+- **Tool calls are attributed per agent from `claude_code.tool` spans.** Without traces
+  they all count as the main session. The `tool_result` and `user_prompt` events carry no
+  agent attribution at all, which is why a record naming no agent is the main session.
+- **A request body the CLI cut at 61 440 bytes is served cut and never parsed.** The real
+  length is reported beside the delivered bytes; a half-parsed object would be worse than
+  the raw string.
+- **`OTEL_LOG_RAW_API_BODIES=file:<dir>` puts the payload in a file on the exporting
+  machine** and sends only its path. The collector reports where it went and never reads
+  it.
 - The store lives in the process. For long-term retention or alerting, the telemetry
   belongs in a real backend (Honeycomb, Grafana, Datadog, Langfuse) — both work in
   parallel, `OTEL_EXPORTER_OTLP_*` variables can point each signal at a different

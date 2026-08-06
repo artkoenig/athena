@@ -62,6 +62,9 @@ for an `HttpOnly; SameSite=Strict` cookie and drops it from the address bar.
 - **Overview** — cost, tokens by type including cache hit rate, interactions,
   requests, tool calls, lines of code, commits, active time; tables per model
   and per tool.
+- **Agents** — the main session and every subagent that ran in it, each with its
+  own figures, a context occupancy curve per model call, the prompts, responses
+  and tool calls it held, and the captured request payloads.
 - **Tasks** — reconstructed `TodoWrite` / `TaskCreate` state.
 - **Traces** — waterfall per interaction, clicking a bar shows its attributes.
 - **Events** — filterable timeline, every row expandable.

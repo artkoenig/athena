@@ -19,6 +19,11 @@ const state = {
   trace: null,
   selectedTraceId: null,
   selectedSpanId: null,
+  agents: null,
+  capture: null,
+  selectedAgentKey: null,
+  agentContent: null,
+  agentBody: null,
   events: [],
   eventFilters: { event: '', errorsOnly: false, search: '' },
   metrics: [],
@@ -183,6 +188,7 @@ function renderSessionList() {
 
 const TABS = [
   { id: 'overview', label: 'Overview' },
+  { id: 'agents', label: 'Agents' },
   { id: 'todos', label: 'Tasks' },
   { id: 'traces', label: 'Traces' },
   { id: 'events', label: 'Events' },
@@ -202,6 +208,7 @@ function renderDetail() {
     // No count badge for the tasks tab: completed/deleted tasks stay in the
     // reconstructed state (see #applyTodo), so a count only ever grows and
     // stops reflecting what currently exists — worse than no number at all.
+    agents: session.agentCount,
     traces: session.traceCount,
     events: session.counts.logs,
     metrics: session.counts.metricPoints,
@@ -243,6 +250,9 @@ function renderTabBody() {
   const body = document.getElementById('tab-body');
   if (!body) return;
   switch (state.tab) {
+    case 'agents':
+      body.innerHTML = renderAgentsTab();
+      break;
     case 'todos':
       body.innerHTML = renderTodosTab();
       break;
@@ -376,6 +386,418 @@ function renderOverviewTab() {
     : '';
 
   return `<div class="kpi-grid">${kpis}</div>${lastError}${models}${tools}`;
+}
+
+/* --------------------------------- agents -------------------------------- */
+
+/**
+ * What to set to see the thing that is missing.
+ *
+ * Every content switch is off by default, so an empty panel means "nobody
+ * turned it on" far more often than "nothing happened" — and only the page can
+ * tell the difference, because only the page knows how many carrying records
+ * arrived without their payload.
+ */
+function switchHint(html) {
+  return `<p class="switch-hint">${html}</p>`;
+}
+
+function capturePresent(kind) {
+  return Boolean(state.capture?.[kind]?.present);
+}
+
+const HINTS = {
+  prompts: () =>
+    switchHint(
+      `Prompt text was not exported. Set <code>OTEL_LOG_USER_PROMPTS=1</code> in the agent environment before the session starts.`,
+    ),
+  responses: () =>
+    switchHint(
+      `Response text was not exported. Set <code>OTEL_LOG_ASSISTANT_RESPONSES=1</code> (or <code>OTEL_LOG_USER_PROMPTS=1</code>, which it falls back to) in the agent environment.`,
+    ),
+  toolArguments: () =>
+    switchHint(`Tool arguments were not exported. Set <code>OTEL_LOG_TOOL_DETAILS=1</code> in the agent environment.`),
+  toolContent: () =>
+    switchHint(
+      `Tool output was not exported. Set <code>OTEL_LOG_TOOL_CONTENT=1</code> together with <code>CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1</code> in the agent environment.`,
+    ),
+  requestBodies: () =>
+    switchHint(
+      `No request payloads were exported. Set <code>OTEL_LOG_RAW_API_BODIES=1</code> in the agent environment — it captures the entire prompt of every call.`,
+    ),
+};
+
+function renderAgentsTab() {
+  const agents = state.agents;
+  if (!agents) return '<div class="placeholder">Loading agents…</div>';
+  if (!agents.length) {
+    return `<div class="placeholder">
+      Nothing has been attributed to an agent yet. Agents are split out of the same records the
+      Overview counts, so this fills in as soon as the session exports anything.
+    </div>`;
+  }
+  const selected = agents.find((agent) => agent.key === state.selectedAgentKey) ?? agents[0];
+
+  const picker = agents
+    .map(
+      (agent) => `<button type="button" class="trace-pill" data-agent="${esc(agent.key)}"
+        aria-current="${agent.key === selected.key}">
+        <span class="title">${esc(agent.label)}<span class="chip">${esc(agent.kind)}</span></span>
+        <span class="meta">${esc(fmtNum(agent.tokensTotal))} tok · ${esc(fmtCost(agent.costUsd))} · ${
+          agent.context.series.length
+        } model call${agent.context.series.length === 1 ? '' : 's'}</span>
+      </button>`,
+    )
+    .join('');
+
+  return `<div class="trace-picker">${picker}</div>${renderAgentDetail(selected)}`;
+}
+
+function renderAgentDetail(agent) {
+  const context = agent.context;
+  const ratio = context.lastCachedPrefixRatio;
+  const kpis = [
+    kpi('tokens', fmtNum(agent.tokensTotal), { sub: `source: ${agent.tokenSource}` }),
+    kpi('cost', fmtCost(agent.costUsd), { sub: `source: ${agent.costSource}`, tone: 'accent' }),
+    kpi('model calls', fmtNum(agent.counts.apiRequests), { sub: `${fmtNum(agent.counts.llmRequests)} spans` }),
+    kpi('tool calls', fmtNum(agent.counts.toolCalls), {
+      sub: agent.counts.toolFailures ? `${agent.counts.toolFailures} failed` : '',
+      tone: agent.counts.toolFailures ? 'error' : null,
+    }),
+    kpi('peak context', fmtNum(context.peakOccupancy)),
+    kpi('last context', fmtNum(context.lastOccupancy)),
+    kpi('cached prefix', fmtNum(context.lastCachedPrefixTokens), {
+      sub: ratio === null ? '–' : `${Math.round(ratio * 100)}% of last prompt`,
+    }),
+    kpi('wall time', fmtDur(agent.durationMs), { sub: `${fmtNum(agent.counts.userPrompts)} prompts` }),
+  ].join('');
+
+  const nameHint =
+    agent.name === 'custom'
+      ? switchHint(
+          `This agent reports its name as <code>custom</code>, which is what the CLI sends for user-defined agents and plugins. Set <code>OTEL_LOG_TOOL_DETAILS=1</code> to see its real name.`,
+        )
+      : '';
+
+  return `<div class="kpi-grid">${kpis}</div>
+    ${nameHint}
+    ${renderContextCurve(agent)}
+    ${renderAgentModels(agent)}
+    ${renderAgentTools(agent)}
+    ${renderCompletions(agent)}
+    ${renderBodiesPanel(agent)}
+    ${renderContentPanel()}`;
+}
+
+/**
+ * One stacked bar per model call: what the agent handed the model that time,
+ * split into the prefix it read from cache, the fresh input, and the prefix it
+ * wrote to cache. Output is not part of the bar — it is what came back, not what
+ * was held.
+ */
+function renderContextCurve(agent) {
+  const series = agent.context.series;
+  if (!series.length) {
+    return `<div class="panel"><h3>Context occupancy</h3>${switchHint(
+      `The curve is built from <code>claude_code.api_request</code> events and this agent exported none. Set <code>OTEL_LOGS_EXPORTER=otlp</code> in the agent environment.`,
+    )}</div>`;
+  }
+  const peak = Math.max(agent.context.peakOccupancy, 1);
+  const width = 1000;
+  const height = 220;
+  const slot = width / series.length;
+  const barWidth = Math.max(slot - Math.min(slot * 0.2, 3), 0.5);
+
+  const bars = series
+    .map((entry, index) => {
+      const x = index * slot;
+      let y = height;
+      const segments = [
+        ['cache-read', entry.cacheReadTokens],
+        ['input', entry.inputTokens],
+        ['cache-write', entry.cacheCreationTokens],
+      ];
+      const rects = segments
+        .map(([kind, value]) => {
+          const barHeight = (value / peak) * height;
+          if (barHeight <= 0) return '';
+          y -= barHeight;
+          return `<rect data-segment="${kind}" x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${barWidth.toFixed(
+            2,
+          )}" height="${barHeight.toFixed(2)}"></rect>`;
+        })
+        .join('');
+      const title = `${fmtClock(entry.atMs)} · ${fmtNum(entry.occupancy)} tokens in context — cache read ${fmtNum(
+        entry.cacheReadTokens,
+      )}, input ${fmtNum(entry.inputTokens)}, cache write ${fmtNum(entry.cacheCreationTokens)}, output ${fmtNum(
+        entry.outputTokens,
+      )}${entry.model ? ` · ${entry.model}` : ''}`;
+      return `<g><title>${esc(title)}</title>${rects}</g>`;
+    })
+    .join('');
+
+  return `<div class="panel">
+    <h3>Context occupancy <span class="muted">${series.length} model call${
+      series.length === 1 ? '' : 's'
+    }, peak ${esc(fmtNum(agent.context.peakOccupancy))} tokens</span></h3>
+    <div class="context-curve">
+      <div class="curve-axis"><span>${esc(fmtNum(peak))}</span><span>0</span></div>
+      <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img"
+        aria-label="context occupancy per model call">${bars}</svg>
+    </div>
+    <div class="curve-legend">
+      <span data-segment="cache-read">cache read</span>
+      <span data-segment="input">input</span>
+      <span data-segment="cache-write">cache write</span>
+    </div>
+  </div>`;
+}
+
+function renderAgentModels(agent) {
+  if (!agent.models.length) return '';
+  return `<div class="panel">
+    <h3>Models</h3>
+    <div class="table-scroll"><table>
+      <thead><tr>
+        <th>Model</th><th class="num">Requests</th><th class="num">Input</th><th class="num">Output</th>
+        <th class="num">Cache read</th><th class="num">Cost</th><th class="num">Avg latency</th>
+        <th class="num">Errors</th>
+      </tr></thead>
+      <tbody>${agent.models
+        .map(
+          (model) => `<tr>
+            <td class="name">${esc(model.name)}</td>
+            <td class="num">${fmtNum(model.requests)}</td>
+            <td class="num">${fmtNum(model.tokens.input)}</td>
+            <td class="num">${fmtNum(model.tokens.output)}</td>
+            <td class="num">${fmtNum(model.tokens.cacheRead)}</td>
+            <td class="num">${esc(fmtCost(model.costUsd))}</td>
+            <td class="num">${esc(fmtDur(model.avgDurationMs))}</td>
+            <td class="num${model.errors ? ' bad' : ''}">${model.errors}</td>
+          </tr>`,
+        )
+        .join('')}</tbody>
+    </table></div>
+  </div>`;
+}
+
+function renderAgentTools(agent) {
+  if (!agent.tools.length) {
+    return `<div class="panel"><h3>Tools</h3>${switchHint(
+      `Tool calls are attributed from <code>claude_code.tool</code> spans, so without traces they all count as the main session. Set <code>CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1</code> and <code>OTEL_TRACES_EXPORTER=otlp</code>.`,
+    )}</div>`;
+  }
+  return `<div class="panel">
+    <h3>Tools</h3>
+    <div class="table-scroll"><table>
+      <thead><tr>
+        <th>Tool</th><th class="num">Calls</th><th class="num">Failures</th>
+        <th class="num">Avg duration</th><th class="num">Total</th>
+      </tr></thead>
+      <tbody>${agent.tools
+        .map(
+          (tool) => `<tr>
+            <td class="name">${esc(tool.name)}</td>
+            <td class="num">${fmtNum(tool.calls)}</td>
+            <td class="num${tool.failures ? ' bad' : ''}">${tool.failures}</td>
+            <td class="num">${esc(fmtDur(tool.avgDurationMs))}</td>
+            <td class="num">${esc(fmtDur(tool.durationMsTotal))}</td>
+          </tr>`,
+        )
+        .join('')}</tbody>
+    </table></div>
+  </div>`;
+}
+
+function renderCompletions(agent) {
+  if (!agent.completions.length) return '';
+  return `<div class="panel">
+    <h3>Runs</h3>
+    <div class="table-scroll"><table>
+      <thead><tr>
+        <th>Finished</th><th>Type</th><th>Source</th><th>Model</th><th>Final model</th>
+        <th class="num">Tokens</th><th class="num">Tool uses</th><th class="num">Duration</th>
+      </tr></thead>
+      <tbody>${agent.completions
+        .map(
+          (run) => `<tr>
+            <td>${esc(fmtClock(run.atMs))}</td>
+            <td class="name">${esc(run.agentType ?? '—')}${run.isBuiltIn ? ' <span class="chip">built-in</span>' : ''}${
+              run.isAsync ? ' <span class="chip">async</span>' : ''
+            }</td>
+            <td>${esc(run.source ?? '—')}</td>
+            <td>${esc(run.model ?? '—')}</td>
+            <td>${esc(run.finalModel ?? '—')}${run.modelSwapped ? ' <span class="chip" data-tone="warn">swapped</span>' : ''}</td>
+            <td class="num">${fmtNum(run.totalTokens)}</td>
+            <td class="num">${fmtNum(run.totalToolUses)}</td>
+            <td class="num">${esc(fmtDur(run.durationMs))}</td>
+          </tr>`,
+        )
+        .join('')}</tbody>
+    </table></div>
+  </div>`;
+}
+
+function renderBodiesPanel(agent) {
+  if (!agent.bodies.length) {
+    return `<div class="panel"><h3>Request bodies</h3>${HINTS.requestBodies()}</div>`;
+  }
+  const rows = agent.bodies
+    .map(
+      (entry) => `<button type="button" class="body-row" data-body-seq="${entry.seq}"
+        aria-current="${state.agentBody?.seq === entry.seq}">
+        <span>${esc(fmtClock(entry.atMs))}</span>
+        <span class="name">${esc(entry.model ?? 'unknown model')}</span>
+        <span class="num">${esc(fmtNum(entry.bodyLength))} B</span>
+        ${entry.truncated ? '<span class="chip" data-tone="warn">truncated</span>' : ''}
+      </button>`,
+    )
+    .join('');
+  return `<div class="panel">
+    <h3>Request bodies <span class="muted">the whole prompt of each call</span></h3>
+    <div class="body-list">${rows}</div>
+    ${renderBodyDetail()}
+  </div>`;
+}
+
+function renderBodyDetail() {
+  const body = state.agentBody;
+  if (!body) return '<div class="placeholder">Select a request to see what was sent</div>';
+  if (body.available === false) {
+    return `<div class="placeholder">
+      This payload was ${esc(fmtNum(body.bodyLength))} bytes, but its record has rolled out of the raw
+      log buffer — the figures above survive, the payload does not. Start the collector with a smaller
+      <code>--max-logs</code> window if you need payloads to stay inspectable for longer.
+    </div>`;
+  }
+  if (body.error) {
+    return `<div class="placeholder">${esc(body.error)}</div>`;
+  }
+  if (body.bodyRef) {
+    return `<div class="placeholder">
+      <code>OTEL_LOG_RAW_API_BODIES=file:…</code> wrote this payload to
+      <code>${esc(body.bodyRef)}</code> on the exporting machine and sent only the path. The collector
+      never reads that file.
+    </div>`;
+  }
+  const banner = body.truncated
+    ? `<p class="switch-hint">The CLI cut this payload at ${esc(fmtNum(body.deliveredBytes))} of
+       ${esc(fmtNum(body.bodyLength))} bytes, so it is shown raw and not parsed.</p>`
+    : '';
+  if (!body.parsed) {
+    return `<div class="body-detail">
+      ${banner}
+      ${body.parseError ? `<p class="switch-hint">This payload did not parse as JSON: ${esc(body.parseError)}</p>` : ''}
+      <pre class="body-raw">${esc(body.body ?? '')}</pre>
+    </div>`;
+  }
+  return `<div class="body-detail">${renderParsedBody(body.parsed)}</div>`;
+}
+
+/** Text out of one Anthropic content block, whatever shape it arrived in. */
+function blockText(block) {
+  if (typeof block === 'string') return block;
+  if (!block || typeof block !== 'object') return '';
+  if (typeof block.text === 'string') return block.text;
+  if (typeof block.content === 'string') return block.content;
+  return JSON.stringify(block, null, 2);
+}
+
+function renderParsedBody(parsed) {
+  const system = Array.isArray(parsed.system) ? parsed.system : parsed.system ? [parsed.system] : [];
+  const tools = Array.isArray(parsed.tools) ? parsed.tools : [];
+  const messages = Array.isArray(parsed.messages) ? parsed.messages : [];
+
+  const systemHtml = system.length
+    ? `<h4>System (${system.length} block${system.length === 1 ? '' : 's'})</h4>
+       ${system.map((block) => `<pre class="body-block">${esc(blockText(block))}</pre>`).join('')}`
+    : '';
+  const toolsHtml = tools.length
+    ? `<h4>Tools (${tools.length})</h4>
+       <table class="attr-table"><tbody>${tools
+         .map(
+           (tool) => `<tr><td>${esc(tool?.name ?? '—')}</td><td>${esc(
+             String(tool?.description ?? '').slice(0, 400),
+           )}</td></tr>`,
+         )
+         .join('')}</tbody></table>`
+    : '';
+  const messagesHtml = messages.length
+    ? `<h4>Messages (${messages.length})</h4>
+       ${messages
+         .map((message) => {
+           const content = Array.isArray(message?.content) ? message.content : [message?.content];
+           return `<div class="body-message">
+             <span class="chip">${esc(message?.role ?? 'unknown')}</span>
+             ${content.map((block) => `<pre class="body-block">${esc(blockText(block))}</pre>`).join('')}
+           </div>`;
+         })
+         .join('')}`
+    : '';
+  return `${systemHtml}${toolsHtml}${messagesHtml}` || '<div class="placeholder">Nothing recognisable in this payload</div>';
+}
+
+function renderContentPanel() {
+  const content = state.agentContent;
+  if (!content) return '';
+  if (!content.items.length) {
+    return `<div class="panel"><h3>Context content</h3>
+      <div class="placeholder">No prompts, responses or tool calls of this agent are still buffered.</div>
+    </div>`;
+  }
+  const items = content.items.map((item) => renderContentItem(item)).join('');
+  return `<div class="panel">
+    <h3>Context content <span class="muted">${content.items.length} item${
+      content.items.length === 1 ? '' : 's'
+    }, from the raw window</span></h3>
+    ${content.truncated ? '<p class="muted">Older items were cut to the requested limit.</p>' : ''}
+    <div class="content-list">${items}</div>
+  </div>`;
+}
+
+function renderContentItem(item) {
+  if (item.kind === 'prompt' || item.kind === 'response') {
+    const captured = item.kind === 'prompt' ? capturePresent('prompts') : capturePresent('responses');
+    const bodyHtml = item.text
+      ? `<pre class="body-block">${esc(item.text)}</pre>`
+      : captured
+        ? `<p class="muted">${esc(fmtNum(item.length))} characters, not carried on this record.</p>`
+        : item.kind === 'prompt'
+          ? HINTS.prompts()
+          : HINTS.responses();
+    return `<div class="content-item" data-kind="${item.kind}">
+      <div class="content-head"><span class="chip">${item.kind}</span>
+        <span class="muted">${esc(fmtClock(item.atMs))}${
+          item.length ? ` · ${esc(fmtNum(item.length))} chars` : ''
+        }</span></div>
+      ${bodyHtml}
+    </div>`;
+  }
+  const args = item.arguments
+    ? `<pre class="body-block">${esc(JSON.stringify(item.arguments, null, 2))}</pre>`
+    : capturePresent('toolArguments')
+      ? '<p class="muted">This call carried no arguments.</p>'
+      : HINTS.toolArguments();
+  const output = item.output
+    ? `<pre class="body-block">${esc(
+        Object.entries(item.output)
+          .map(([key, value]) => `${key}: ${formatValue(value)}`)
+          .join('\n'),
+      )}</pre>`
+    : capturePresent('toolContent')
+      ? '<p class="muted">This call recorded no output.</p>'
+      : HINTS.toolContent();
+  return `<div class="content-item" data-kind="tool">
+    <div class="content-head">
+      <span class="chip"${item.success === false ? ' data-tone="error"' : ''}>${esc(item.toolName ?? 'tool')}</span>
+      <span class="muted">${esc(fmtClock(item.atMs))} · ${esc(fmtDur(item.durationMs))}${
+        item.resultBytes ? ` · ${esc(fmtNum(item.resultBytes))} B result` : ''
+      }</span>
+      ${item.detail ? `<span class="detail-note" title="${esc(item.detail)}">${esc(item.detail)}</span>` : ''}
+    </div>
+    ${args}
+    ${output}
+  </div>`;
 }
 
 /* --------------------------------- todos --------------------------------- */
@@ -898,6 +1320,18 @@ async function loadTabData() {
     state.trace = state.selectedTraceId
       ? await api(`/api/traces/${encodeURIComponent(state.selectedTraceId)}`).catch(() => null)
       : null;
+  } else if (state.tab === 'agents') {
+    const path = `/api/sessions/${encodeURIComponent(state.selectedSessionId)}/agents`;
+    const data = await api(path).catch(() => null);
+    state.agents = data?.agents ?? [];
+    state.capture = data?.capture ?? null;
+    if (!state.agents.some((agent) => agent.key === state.selectedAgentKey)) {
+      state.selectedAgentKey = state.agents[0]?.key ?? null;
+      state.agentBody = null;
+    }
+    state.agentContent = state.selectedAgentKey
+      ? await api(`${path}/${encodeURIComponent(state.selectedAgentKey)}/content`, { limit: 200 }).catch(() => null)
+      : null;
   } else if (state.tab === 'events') {
     const [events, facets] = await Promise.all([
       api('/api/events', {
@@ -914,6 +1348,32 @@ async function loadTabData() {
   } else if (state.tab === 'metrics') {
     const metrics = await api('/api/metrics', { session: state.selectedSessionId, limit: 2000 });
     state.metrics = metrics.items;
+  }
+}
+
+/**
+ * One captured payload, fetched only when it is clicked: a single body can be
+ * 60 KB, so the tab loads the index and never the payloads.
+ *
+ * A 404 here is an answer, not a failure — the collector returns the metadata it
+ * still has along with it, and that is what says the payload rolled out of the
+ * buffer rather than never having been captured.
+ */
+async function loadAgentBody(seq) {
+  if (state.agentBody?.seq === seq) {
+    state.agentBody = null;
+    return;
+  }
+  const path = `/api/sessions/${encodeURIComponent(state.selectedSessionId)}/agents/${encodeURIComponent(
+    state.selectedAgentKey,
+  )}/body/${seq}`;
+  const url = new URL(path, location.origin);
+  if (TOKEN) url.searchParams.set('token', TOKEN);
+  try {
+    const response = await fetch(url, { headers: { accept: 'application/json' } });
+    state.agentBody = await response.json();
+  } catch {
+    state.agentBody = null;
   }
 }
 
@@ -958,6 +1418,11 @@ function selectSession(id, { render = true } = {}) {
   state.selectedTraceId = null;
   state.selectedSpanId = null;
   state.trace = null;
+  state.agents = null;
+  state.capture = null;
+  state.selectedAgentKey = null;
+  state.agentContent = null;
+  state.agentBody = null;
   state.events = [];
   state.metrics = [];
   location.hash = `#/session/${encodeURIComponent(id)}`;
@@ -1026,6 +1491,18 @@ function wireEvents() {
       state.selectedTraceId = trace.dataset.trace;
       state.selectedSpanId = null;
       loadTabData().then(renderDetail);
+      return;
+    }
+    const agent = event.target.closest('[data-agent]');
+    if (agent) {
+      state.selectedAgentKey = agent.dataset.agent;
+      state.agentBody = null;
+      loadTabData().then(renderTabBody);
+      return;
+    }
+    const bodySeq = event.target.closest('[data-body-seq]');
+    if (bodySeq) {
+      loadAgentBody(Number(bodySeq.dataset.bodySeq)).then(renderTabBody);
       return;
     }
     const span = event.target.closest('[data-span]');

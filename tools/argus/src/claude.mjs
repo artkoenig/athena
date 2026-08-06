@@ -38,6 +38,7 @@ export const EVENT = {
   apiRefusal: 'claude_code.api_refusal',
   apiRequestBody: 'claude_code.api_request_body',
   apiResponseBody: 'claude_code.api_response_body',
+  subagentCompleted: 'claude_code.subagent_completed',
   permissionModeChanged: 'claude_code.permission_mode_changed',
   auth: 'claude_code.auth',
   mcpServerConnection: 'claude_code.mcp_server_connection',
@@ -186,6 +187,67 @@ export function attributionOf(attrs = {}) {
     if (attrs[key] !== undefined && attrs[key] !== null && attrs[key] !== '') out[key] = attrs[key];
   }
   return out;
+}
+
+/* ------------------------------ agent identity ----------------------------- */
+
+/** Bucket key for the session's own conversation, the one nothing is a subagent of. */
+export const MAIN_AGENT_KEY = 'main';
+
+/**
+ * `query_source` values that mean "this is the session itself". The docs list
+ * `main` and `repl_main_thread`; `sdk` is what an Agent SDK run actually sends
+ * and `cli` is its terminal counterpart, neither of which the enumeration
+ * mentions — both are the main conversation all the same.
+ */
+const MAIN_QUERY_SOURCES = new Set(['main', 'repl_main_thread', 'sdk', 'cli']);
+/** Sources the CLI drives itself: a compaction pass and internal helper queries. */
+const SYSTEM_QUERY_SOURCES = new Set(['auxiliary', 'compact']);
+/** Bucket for records that say "a subagent" without saying which one. */
+const UNNAMED_SUBAGENT_KEY = 'subagent';
+/** `agent:builtin:Explore` and `agent:plugin:acme:Digger` both name their last segment. */
+const AGENT_SOURCE_RE = /^agent:(?:.*:)?(.+)$/;
+
+const attr = (attrs, key) => {
+  const value = attrs?.[key];
+  return typeof value === 'string' && value !== '' ? value : null;
+};
+
+/**
+ * Resolve which agent — the main session or one subagent — a record belongs to.
+ *
+ * Attribution is spread over three attributes and no record carries all of them:
+ * `agent.name` and `query_source` ride on the api_request/api_error/api_refusal/
+ * api_request_body/assistant_response events and on the cost/token metrics,
+ * `agent_id` only on the `claude_code.llm_request` and `claude_code.tool` spans,
+ * and `user_prompt`/`tool_result` events carry none at all. A record that names
+ * nothing is the main session, which is what makes an un-instrumented session
+ * still add up. `agentId` comes back on every branch: it is the join the store
+ * uses to fold an id-keyed bucket into a named one.
+ *
+ * @returns {{key: string, name: string|null, kind: 'main'|'subagent'|'system', agentId: string|null}}
+ */
+export function agentRefOf(attrs = {}) {
+  const agentId = attr(attrs, 'agent_id');
+  const ref = (key, name, kind) => ({ key, name, kind, agentId });
+
+  const name = attr(attrs, 'agent.name');
+  if (name) return ref(name, name, 'subagent');
+
+  const source = attr(attrs, 'query_source');
+  if (source) {
+    if (MAIN_QUERY_SOURCES.has(source)) return ref(MAIN_AGENT_KEY, null, 'main');
+    const matched = source.match(AGENT_SOURCE_RE);
+    if (matched) return ref(matched[1], matched[1], 'subagent');
+    if (source === UNNAMED_SUBAGENT_KEY) return ref(UNNAMED_SUBAGENT_KEY, null, 'subagent');
+    if (SYSTEM_QUERY_SOURCES.has(source)) return ref(source, source, 'system');
+    // The docs enumerate every non-name value above, so anything left is a
+    // subagent name sent bare.
+    return ref(source, source, 'subagent');
+  }
+
+  if (agentId) return ref(`id:${agentId}`, null, 'subagent');
+  return ref(MAIN_AGENT_KEY, null, 'main');
 }
 
 const NUMERIC_RE = /^-?\d+(\.\d+)?$/;

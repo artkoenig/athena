@@ -176,6 +176,7 @@ export function createServer({ store, token = null, endpoint = '', persist = nul
           logs: store.options.maxLogs,
           metricPoints: store.options.maxMetricPoints,
           sessions: store.options.maxSessions,
+          agentCalls: store.options.maxAgentCalls,
         },
         env: otelEnvFor(endpoint, { token }),
       });
@@ -206,6 +207,39 @@ export function createServer({ store, token = null, endpoint = '', persist = nul
       const session = store.getSession(decodeURIComponent(sessionMatch[1]));
       if (!session) sendJson(res, 404, { error: 'unknown session' });
       else sendJson(res, 200, session);
+      return true;
+    }
+    const agentsMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/agents$/);
+    if (agentsMatch) {
+      const agents = store.getSessionAgents(decodeURIComponent(agentsMatch[1]));
+      if (!agents) sendJson(res, 404, { error: 'unknown session' });
+      else sendJson(res, 200, agents);
+      return true;
+    }
+    const contentMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/agents\/([^/]+)\/content$/);
+    if (contentMatch) {
+      const content = store.getAgentContent(
+        decodeURIComponent(contentMatch[1]),
+        decodeURIComponent(contentMatch[2]),
+        { limit: intParam(searchParams, 'limit', 200, 2000) },
+      );
+      if (!content) sendJson(res, 404, { error: 'unknown agent' });
+      else sendJson(res, 200, content);
+      return true;
+    }
+    const bodyMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/agents\/([^/]+)\/body\/(\d+)$/);
+    if (bodyMatch) {
+      const body = store.getAgentBody(
+        decodeURIComponent(bodyMatch[1]),
+        decodeURIComponent(bodyMatch[2]),
+        Number(bodyMatch[3]),
+      );
+      // A payload the raw window has dropped is a 404 that still says how big it
+      // was: "gone" and "never captured" are different answers to the same click.
+      if (!body) sendJson(res, 404, { error: 'unknown request body' });
+      else if (body.available === false) {
+        sendJson(res, 404, { ...body, error: 'request body is no longer buffered' });
+      } else sendJson(res, 200, body);
       return true;
     }
     const traceMatch = pathname.match(/^\/api\/traces\/([^/]+)$/);

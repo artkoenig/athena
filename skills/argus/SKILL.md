@@ -79,6 +79,9 @@ The collector serves JSON on its own port:
 | `GET /api/stats`        | Totals, top models, top tools                        |
 | `GET /api/events`       | The event timeline, filterable                       |
 | `GET /api/config`       | Endpoint, limits and the measurement directory        |
+| `GET /api/sessions/:id/agents` | The main session and every subagent that ran in it, each with its own tokens, cost, tool calls and context occupancy per model call |
+| `GET /api/sessions/:id/agents/:key/content` | One agent's prompts, responses and tool calls, in order |
+| `GET /api/sessions/:id/agents/:key/body/:seq` | One captured request payload, parsed when it arrived whole |
 
 A finished measurement is read back by starting a collector on its directory:
 
@@ -87,6 +90,29 @@ argus start --open .uroboros-telemetry/2026-08-03T14-22-05
 ```
 
 That replays it and writes nothing into it, however old it is.
+
+## See what was in the context
+
+By default Claude Code exports structure only — how many tokens, not which ones.
+The text itself needs five switches, each set beside the `argus env` block and,
+like everything else here, **before the session starts**:
+
+```bash
+export OTEL_LOG_USER_PROMPTS=1          # the prompt text of each turn
+export OTEL_LOG_ASSISTANT_RESPONSES=1   # the response text
+export OTEL_LOG_TOOL_DETAILS=1          # tool call arguments, and real subagent names
+export OTEL_LOG_TOOL_CONTENT=1          # tool output (needs CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1)
+export OTEL_LOG_RAW_API_BODIES=1        # the whole request payload of every model call
+```
+
+They are off by default because a captured request payload is the entire prompt
+of that call — the system blocks, every tool definition, and the whole message
+history including file contents. Set them on a throwaway measurement, not on
+one you will keep or share, and remember that `--persist` writes all of it to
+disk as JSONL.
+
+The Agents tab in `argus-ui` shows what each of them fills in, per agent. When a
+panel there is empty, it names the variable that would have filled it.
 
 ## An old session, or one already running
 

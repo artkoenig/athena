@@ -23,6 +23,7 @@ import {
   TASK_TOOL_NAMES,
   TOKEN_TYPES,
   EMPTY_TOKENS,
+  agentRefOf,
   bool,
   num,
   serviceNameOf,
@@ -30,6 +31,21 @@ import {
   sessionNameOf,
   toolParametersOf,
 } from './claude.mjs';
+import {
+  MAX_AGENT_CALLS,
+  MAX_AGENT_COMPLETIONS,
+  agentBucketFor,
+  collectAgentContent,
+  emptyModelStats,
+  emptyToolStats,
+  mergeUsage,
+  pushRing,
+  readAgentBody,
+  summarizeAgents,
+  summarizeCapture,
+  summarizeModels,
+  summarizeTools,
+} from './agents.mjs';
 
 /** Bound on how many stray TaskCreate calls a session keeps (see #applyTodo). */
 const MAX_UNLINKED_CREATES = 200;
@@ -41,6 +57,7 @@ const DEFAULTS = {
   maxLogs: 50_000,
   maxMetricPoints: 50_000,
   maxSessions: 500,
+  maxAgentCalls: MAX_AGENT_CALLS,
   retentionMs: 24 * 60 * 60 * 1000,
 };
 
@@ -62,33 +79,6 @@ const STICKY_ATTRS = [
   'terminal.type',
   'identity.source',
 ];
-
-function emptyModelStats() {
-  return {
-    requests: 0,
-    errors: 0,
-    durationMsTotal: 0,
-    ttftMsTotal: 0,
-    ttftCount: 0,
-    tokensMetric: EMPTY_TOKENS(),
-    tokensEvent: EMPTY_TOKENS(),
-    costMetric: 0,
-    costEvent: 0,
-  };
-}
-
-function emptyToolStats() {
-  return {
-    calls: 0,
-    failures: 0,
-    rejected: 0,
-    durationMsTotal: 0,
-    resultTokens: 0,
-    // Portion of resultTokens that is an estimate (see #applyResultTokenFallback)
-    // rather than the CLI's own `result_tokens` attribute.
-    resultTokensEstimated: 0,
-  };
-}
 
 /**
  * `result_tokens` is documented as an unconditional attribute on
@@ -138,6 +128,25 @@ function newSession(id, now) {
     startTypes: new Set(),
     models: new Map(),
     tools: new Map(),
+    // The session's second axis: one bucket per agent — the main conversation
+    // plus every subagent that ran in it (see agents.mjs).
+    agents: new Map(),
+    // agent_id -> bucket key, learned from any record carrying both.
+    agentByAgentId: new Map(),
+    // Which content the exporter was actually configured to send. Every one of
+    // these is off by default, so an empty panel needs to be told apart from a
+    // switch nobody set.
+    capture: {
+      promptEvents: 0,
+      promptText: false,
+      responseEvents: 0,
+      responseText: false,
+      toolResultEvents: 0,
+      toolArguments: false,
+      toolOutputContent: false,
+      requestBodyEvents: 0,
+      requestBodies: false,
+    },
     // tool_use_id -> stats, for a `claude_code.tool` span seen before its
     // matching tool_result log event. Spans and logs export on separate
     // OTLP pipelines with independent flush intervals, so arrival order
@@ -281,24 +290,32 @@ export class TelemetryStore {
     return session;
   }
 
-  #model(session, name) {
+  // `bucket` is either the session or one of its agents: both carry a `models`
+  // and a `tools` map of exactly the same shape, and every figure the session
+  // records is recorded on the agent that produced it too.
+  #model(bucket, name) {
     const key = name || 'unknown';
-    let stats = session.models.get(key);
+    let stats = bucket.models.get(key);
     if (!stats) {
       stats = emptyModelStats();
-      session.models.set(key, stats);
+      bucket.models.set(key, stats);
     }
     return stats;
   }
 
-  #tool(session, name) {
+  #tool(bucket, name) {
     const key = name || 'unknown';
-    let stats = session.tools.get(key);
+    let stats = bucket.tools.get(key);
     if (!stats) {
       stats = emptyToolStats();
-      session.tools.set(key, stats);
+      bucket.tools.set(key, stats);
     }
     return stats;
+  }
+
+  /** The agent bucket a record belongs to, created on first sight. */
+  #agent(session, record, ref = agentRefOf(record.attrs ?? {})) {
+    return agentBucketFor(session, record, ref, this.options.maxAgentCalls);
   }
 
   /**
@@ -335,6 +352,71 @@ export class TelemetryStore {
     pendingStats.resultTokensEstimated += estimate;
   }
 
+  /**
+   * One point on the agent's context curve, from one `claude_code.api_request`.
+   *
+   * What the model was handed for this call is the prompt it read: the fresh
+   * input, the prefix it read from cache, and the prefix it wrote to cache.
+   * Output tokens are not part of it — they are what came back. Series and peak
+   * live on the agent, so they stay correct after the raw event has been evicted.
+   */
+  #applyOccupancy(agent, log, tokens) {
+    const occupancy = tokens.input + tokens.cacheRead + tokens.cacheCreation;
+    pushRing(
+      agent.occupancy,
+      {
+        atMs: log.timeMs,
+        model: log.attrs?.model ?? null,
+        inputTokens: tokens.input,
+        cacheReadTokens: tokens.cacheRead,
+        cacheCreationTokens: tokens.cacheCreation,
+        outputTokens: tokens.output,
+        occupancy,
+      },
+      this.options.maxAgentCalls,
+    );
+    agent.peakOccupancy = Math.max(agent.peakOccupancy, occupancy);
+    agent.lastOccupancy = occupancy;
+    agent.lastCachedPrefixTokens = tokens.cacheRead;
+    agent.lastFreshTokens = tokens.input + tokens.cacheCreation;
+  }
+
+  /**
+   * `claude_code.subagent_completed` is by definition about a subagent, but it
+   * is emitted by the parent and so resolves to whoever ran it. When that is the
+   * main session, `agent_type` is the subagent the record is reporting on.
+   */
+  #applySubagentCompleted(session, log, resolved) {
+    const attrs = log.attrs ?? {};
+    const agentType = typeof attrs.agent_type === 'string' && attrs.agent_type !== '' ? attrs.agent_type : null;
+    const agent =
+      resolved.kind === 'main' && agentType
+        ? this.#agent(session, log, {
+            key: agentType,
+            name: agentType,
+            kind: 'subagent',
+            agentId: attrs.agent_id || null,
+          })
+        : resolved;
+    pushRing(
+      agent.completions,
+      {
+        atMs: log.timeMs,
+        agentType,
+        source: attrs['agent.source'] ?? null,
+        isBuiltIn: bool(attrs.is_built_in),
+        isAsync: bool(attrs.is_async),
+        model: attrs.model ?? null,
+        finalModel: attrs.final_model ?? null,
+        modelSwapped: bool(attrs.model_swapped),
+        totalTokens: num(attrs.total_tokens),
+        totalToolUses: num(attrs.total_tool_uses),
+        durationMs: num(attrs.duration_ms),
+      },
+      MAX_AGENT_COMPLETIONS,
+    );
+  }
+
   /* --------------------------------- spans ----------------------------- */
 
   #applySpan(session, span) {
@@ -352,22 +434,30 @@ export class TelemetryStore {
     }
 
     const attrs = span.attrs ?? {};
+    const agent = this.#agent(session, span);
     switch (span.name) {
       case SPAN.interaction:
         session.counts.interactions++;
         break;
       case SPAN.llmRequest: {
         session.counts.llmRequests++;
+        agent.counts.llmRequests++;
         const stats = this.#model(session, attrs.model);
-        stats.requests++;
-        stats.durationMsTotal += num(attrs.duration_ms, span.durationMs ?? 0);
+        const agentStats = this.#model(agent, attrs.model);
+        for (const target of [stats, agentStats]) {
+          target.requests++;
+          target.durationMsTotal += num(attrs.duration_ms, span.durationMs ?? 0);
+        }
         const ttft = num(attrs.ttft_ms, 0);
         if (ttft > 0) {
-          stats.ttftMsTotal += ttft;
-          stats.ttftCount++;
+          for (const target of [stats, agentStats]) {
+            target.ttftMsTotal += ttft;
+            target.ttftCount++;
+          }
         }
         if (attrs.success !== undefined && !bool(attrs.success)) {
           stats.errors++;
+          agentStats.errors++;
           session.lastError = {
             at: span.endMs || span.startMs,
             kind: 'llm_request',
@@ -378,19 +468,31 @@ export class TelemetryStore {
       }
       case SPAN.tool: {
         session.counts.toolCalls++;
+        agent.counts.toolCalls++;
         const stats = this.#tool(session, attrs.tool_name);
-        stats.calls++;
-        stats.durationMsTotal += num(attrs.duration_ms, span.durationMs ?? 0);
+        const agentStats = this.#tool(agent, attrs.tool_name);
+        for (const target of [stats, agentStats]) {
+          target.calls++;
+          target.durationMsTotal += num(attrs.duration_ms, span.durationMs ?? 0);
+        }
+        // The result-token fallback joins a span against a log event that
+        // carries no agent, so it stays session-level and is not duplicated.
         if (attrs.result_tokens !== undefined) {
-          stats.resultTokens += num(attrs.result_tokens, 0);
+          const tokens = num(attrs.result_tokens, 0);
+          stats.resultTokens += tokens;
+          agentStats.resultTokens += tokens;
         } else {
           this.#applyResultTokenFallback(session, stats, attrs.tool_use_id);
+        }
+        if ((span.events ?? []).some((event) => event.name === 'tool.output')) {
+          session.capture.toolOutputContent = true;
         }
         break;
       }
       case SPAN.toolExecution:
         if (attrs.success !== undefined && !bool(attrs.success)) {
           session.counts.toolFailures++;
+          agent.counts.toolFailures++;
           session.lastError = {
             at: span.endMs || span.startMs,
             kind: 'tool',
@@ -399,7 +501,10 @@ export class TelemetryStore {
         }
         break;
       case SPAN.toolBlocked:
-        if (attrs.decision === 'reject') this.#tool(session, attrs.tool_name).rejected++;
+        if (attrs.decision === 'reject') {
+          this.#tool(session, attrs.tool_name).rejected++;
+          this.#tool(agent, attrs.tool_name).rejected++;
+        }
         break;
       case SPAN.hook:
         session.counts.hooks++;
@@ -444,15 +549,26 @@ export class TelemetryStore {
     session.counts.logs++;
     this.logs.push(log);
     const attrs = log.attrs ?? {};
+    const agent = this.#agent(session, log);
     log.isError = ERROR_EVENTS.has(log.eventName) || log.severity === 'ERROR' || log.severity === 'FATAL';
 
     switch (log.eventName) {
       case EVENT.userPrompt:
         session.counts.userPrompts++;
+        agent.counts.userPrompts++;
+        session.capture.promptEvents++;
+        session.capture.promptText ||= typeof attrs.prompt === 'string' && attrs.prompt !== '';
+        break;
+      case EVENT.assistantResponse:
+        agent.counts.assistantResponses++;
+        session.capture.responseEvents++;
+        session.capture.responseText ||= typeof attrs.response === 'string' && attrs.response !== '';
         break;
       case EVENT.apiRequest: {
         session.counts.apiRequests++;
+        agent.counts.apiRequests++;
         const stats = this.#model(session, attrs.model);
+        const agentStats = this.#model(agent, attrs.model);
         const tokens = {
           input: num(attrs.input_tokens),
           output: num(attrs.output_tokens),
@@ -462,6 +578,8 @@ export class TelemetryStore {
         for (const [key, value] of Object.entries(tokens)) {
           session.tokensEvent[key] += value;
           stats.tokensEvent[key] += value;
+          agent.tokensEvent[key] += value;
+          agentStats.tokensEvent[key] += value;
         }
         // cost_usd_micros is the integer-safe form; prefer it when present.
         const cost =
@@ -470,12 +588,43 @@ export class TelemetryStore {
             : num(attrs.cost_usd);
         session.costEvent += cost;
         stats.costEvent += cost;
+        agent.costEvent += cost;
+        agentStats.costEvent += cost;
+        this.#applyOccupancy(agent, log, tokens);
         break;
       }
+      case EVENT.apiRequestBody: {
+        session.capture.requestBodyEvents++;
+        session.capture.requestBodies = true;
+        const body = typeof attrs.body === 'string' ? attrs.body : null;
+        const deliveredBytes = Buffer.byteLength(body ?? '');
+        const bodyLength = num(attrs.body_length, deliveredBytes);
+        // Only the metadata is copied onto the agent; the payload itself stays
+        // in the raw log window and is joined back on read (see readAgentBody).
+        pushRing(
+          agent.bodies,
+          {
+            seq: log.seq,
+            atMs: log.timeMs,
+            model: attrs.model ?? null,
+            bodyLength,
+            deliveredBytes,
+            truncated: bool(attrs.body_truncated) || bodyLength > deliveredBytes,
+            hasPayload: body !== null,
+          },
+          this.options.maxAgentCalls,
+        );
+        break;
+      }
+      case EVENT.subagentCompleted:
+        this.#applySubagentCompleted(session, log, agent);
+        break;
       case EVENT.apiError:
       case EVENT.apiRefusal:
         session.counts.apiErrors++;
+        agent.counts.apiErrors++;
         this.#model(session, attrs.model).errors++;
+        this.#model(agent, attrs.model).errors++;
         session.lastError = {
           at: log.timeMs,
           kind: log.eventName === EVENT.apiRefusal ? 'api_refusal' : 'api_error',
@@ -484,6 +633,11 @@ export class TelemetryStore {
         break;
       case EVENT.toolResult: {
         const stats = this.#tool(session, attrs.tool_name);
+        // Per-agent tool counts come from `claude_code.tool` spans instead: this
+        // event carries no attribution at all, so counting it here would put
+        // every tool call on the main session.
+        session.capture.toolResultEvents++;
+        session.capture.toolArguments ||= toolParametersOf(attrs) !== null;
         if (TASK_TOOL_NAMES.has(attrs.tool_name)) session.todos.callsSeen++;
         if (!bool(attrs.success)) {
           stats.failures++;
@@ -615,6 +769,9 @@ export class TelemetryStore {
     session.counts.metricPoints++;
     this.metricPoints.push(point);
     const attrs = point.attrs ?? {};
+    const agent = this.#agent(session, point);
+    // #delta stays session-level: the series key already includes the agent
+    // attributes, so one cumulative cursor per series is per-agent correct.
     const delta = this.#delta(session, point);
 
     switch (point.name) {
@@ -623,11 +780,15 @@ export class TelemetryStore {
         if (!type) break;
         session.tokensMetric[type] += delta;
         this.#model(session, attrs.model).tokensMetric[type] += delta;
+        agent.tokensMetric[type] += delta;
+        this.#model(agent, attrs.model).tokensMetric[type] += delta;
         break;
       }
       case METRIC.cost:
         session.costMetric += delta;
         this.#model(session, attrs.model).costMetric += delta;
+        agent.costMetric += delta;
+        this.#model(agent, attrs.model).costMetric += delta;
         break;
       case METRIC.linesOfCode:
         if (attrs.type === 'removed') session.linesRemoved += delta;
@@ -765,6 +926,32 @@ export class TelemetryStore {
       }))
       .sort((a, b) => b.firstMs - a.firstMs);
     return { ...summarizeSession(session), traces };
+  }
+
+  /** The session's agents, and what content the exporter was set up to send. */
+  getSessionAgents(id) {
+    const session = this.sessions.get(id);
+    if (!session) return null;
+    return {
+      sessionId: session.id,
+      capture: summarizeCapture(session),
+      agents: summarizeAgents(session),
+    };
+  }
+
+  /** One agent's records, joined live out of the raw windows. */
+  getAgentContent(id, agentKey, { limit = 200 } = {}) {
+    const session = this.sessions.get(id);
+    if (!session?.agents.has(agentKey)) return null;
+    return collectAgentContent(this, session, agentKey, { limit });
+  }
+
+  /** One captured request payload of one agent. */
+  getAgentBody(id, agentKey, seq) {
+    const session = this.sessions.get(id);
+    const agent = session?.agents.get(agentKey);
+    if (!agent) return null;
+    return readAgentBody(this, session, agent, seq);
   }
 
   /** All spans of a trace, arranged into the parent/child tree OTLP implies. */
@@ -932,27 +1119,6 @@ export class TelemetryStore {
   }
 }
 
-const hasTokens = (tokens) => Object.values(tokens).some((value) => value > 0);
-
-/**
- * Metrics, events and spans all carry overlapping token/cost data. Preferring
- * metrics and falling back to events means the numbers stay right whether the
- * user enabled OTEL_METRICS_EXPORTER, OTEL_LOGS_EXPORTER, or both — without
- * double counting when both are on.
- */
-function mergeUsage(tokensMetric, tokensEvent, costMetric, costEvent) {
-  const metricTokens = hasTokens(tokensMetric);
-  const tokens = metricTokens ? { ...tokensMetric } : { ...tokensEvent };
-  const tokensTotal = Object.values(tokens).reduce((sum, value) => sum + value, 0);
-  return {
-    tokens,
-    tokensTotal,
-    tokenSource: metricTokens ? 'metrics' : hasTokens(tokensEvent) ? 'events' : 'none',
-    costUsd: costMetric > 0 ? costMetric : costEvent,
-    costSource: costMetric > 0 ? 'metrics' : costEvent > 0 ? 'events' : 'none',
-  };
-}
-
 function summarizeTodos(session) {
   return {
     callsSeen: session.todos.callsSeen,
@@ -970,33 +1136,8 @@ export function summarizeSession(session) {
     session.costMetric,
     session.costEvent,
   );
-  const models = [...session.models.entries()]
-    .map(([name, stats]) => {
-      const merged = mergeUsage(
-        stats.tokensMetric,
-        stats.tokensEvent,
-        stats.costMetric,
-        stats.costEvent,
-      );
-      return {
-        name,
-        requests: stats.requests,
-        errors: stats.errors,
-        durationMsTotal: Math.round(stats.durationMsTotal),
-        avgDurationMs: stats.requests ? Math.round(stats.durationMsTotal / stats.requests) : 0,
-        avgTtftMs: stats.ttftCount ? Math.round(stats.ttftMsTotal / stats.ttftCount) : 0,
-        ...merged,
-      };
-    })
-    .sort((a, b) => b.tokensTotal - a.tokensTotal || b.requests - a.requests);
-  const tools = [...session.tools.entries()]
-    .map(([name, stats]) => ({
-      name,
-      ...stats,
-      durationMsTotal: Math.round(stats.durationMsTotal),
-      avgDurationMs: stats.calls ? Math.round(stats.durationMsTotal / stats.calls) : 0,
-    }))
-    .sort((a, b) => b.calls - a.calls);
+  const models = summarizeModels(session.models);
+  const tools = summarizeTools(session.tools);
 
   return {
     id: session.id,
@@ -1019,6 +1160,7 @@ export function summarizeSession(session) {
     models,
     tools,
     todos: summarizeTodos(session),
+    agentCount: session.agents.size,
     toolFailuresFromEvents: tools.reduce((sum, tool) => sum + tool.failures, 0),
     traceCount: session.traceIds.size,
     lastError: session.lastError,
