@@ -18,6 +18,9 @@
   "skills": [
     "./skills/"
   ],
+  "workflows": [
+    "./workflows/"
+  ],
   "agents": [
     "./agents/researcher.md",
     "./agents/implementer.md",

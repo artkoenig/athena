@@ -23,8 +23,8 @@ follows the human.
 a branch, and the human merges it.
 
 **A change to uroboros itself ends with the plugin cache deleted.** That means
-a change to this repository's agents or skills — `agents/*.md`, an agent's own
-`agents/<name>/skills/`, or `skills/`:
+a change to anything this repository ships as a plugin component — `agents/*.md`,
+an agent's own `agents/<name>/skills/`, `skills/`, or `workflows/`:
 
 ```bash
 rm -rf ~/.claude/plugins/cache/uroboros
@@ -55,7 +55,7 @@ The requirements are yours, the work is the subagents'.
 1. **Collect Requirements:** Conduct the initial interview ("grill") to clarify the user's intent.
 2. **Create the Issue File:** Establish the acceptance criteria and write them to a new issue file under `docs/issues/` (e.g. `docs/issues/<timestamp>-<slug>/issue.md`). It is an agent's whole brief, so put one instruction in one sentence, write that sentence in the imperative, and state each rule once. Commit and push that file — it is the one git operation you own, because the loop runs in the background and your turn ends before any agent could commit it for you.
 3. **Confirm the acceptance criteria** with the human.
-4. **Run the loop:** Once the issue is created and confirmed, run the `uroboros-loop` workflow (`.claude/workflows/uroboros-loop.js`) and hand it the issue directory as `args.issueDir`. The script calls researcher, test-author, implementer and reviewer in turn, stops after two correction rounds, and at the end pushes the branch and makes sure a pull request is open. The orchestration lives there and not in an agent because a subagent cannot start another one.
+4. **Run the loop:** Once the issue is created and confirmed, run the `uroboros:loop` workflow and hand it the issue directory as `args.issueDir`. The workflow ships with the plugin, so that name resolves in every project it is installed in; do not write a script of your own. The script calls researcher, test-author, implementer and reviewer in turn, stops after two correction rounds, and at the end pushes the branch and makes sure a pull request is open. The orchestration lives there and not in an agent because a subagent cannot start another one.
 
 And what you do not do here:
 

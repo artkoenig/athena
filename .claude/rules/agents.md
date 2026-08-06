@@ -62,7 +62,7 @@ wrong reader; it cannot make one exist where this directory does not.
 
 Three rules bind the session and the agents alike: English, the default branch
 moving only through a merged pull request, and the cache deletion after a change
-to uroboros' own agents or skills. They stand in the rulebook and in the shared
+to what uroboros ships. They stand in the rulebook and in the shared
 brief, because the two audiences have no channel in common. Edit one, edit the
 other.
 

@@ -19,9 +19,9 @@ messages.
 belongs to your caller, and the default branch moves only through a pull
 request a human merges.
 
-**A change to uroboros' own agents or skills ends with the plugin cache
-deleted.** If what you change touches `agents/*.md`, an agent's own
-`agents/<name>/skills/`, or `skills/` in the uroboros repository itself, run
+**A change to what uroboros ships ends with the plugin cache deleted.** If what
+you change touches `agents/*.md`, an agent's own `agents/<name>/skills/`,
+`skills/` or `workflows/` in the uroboros repository itself, run
 `rm -rf ~/.claude/plugins/cache/uroboros` in the same turn as the edit;
 otherwise the next session keeps loading the old copy. Working in any other
 project, this never comes up.

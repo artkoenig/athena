@@ -16,11 +16,11 @@ set -u
 # from here it reaches the session and stops there, identically everywhere,
 # and what an agent needs travels in the agent-brief skill instead.
 #
-# Skills and agents need nothing from here: plugin discovery exposes
-# skills/<name>/SKILL.md and agents/<name>.md on its own. What this script
-# adds for them is the self-check status, which counts what is actually
-# reachable in the plugin tree, so a session sees what it really has instead
-# of trusting the rulebook's role names.
+# Skills, agents and workflows need nothing from here: plugin discovery
+# exposes skills/<name>/SKILL.md, agents/<name>.md and workflows/<name>.js on
+# its own. What this script adds for them is the self-check status, which
+# counts what is actually reachable in the plugin tree, so a session sees what
+# it really has instead of trusting the rulebook's role names.
 #
 # stdout carries the hook JSON and nothing else.
 # ---------------------------------------------------------------------------
@@ -112,6 +112,20 @@ for entry in "${plugin_root}/agents"/*; do
     problems="${problems} agent not reachable: ${name%.md};"
   fi
 done
+# A workflow is a flat <name>.js under workflows/, and a session runs it as
+# uroboros:<name>. It is counted for the same reason the others are: Issue Mode
+# ends by running one, and a session that is about to hand a whole run to a
+# workflow should see whether the plugin it is talking to actually has one.
+workflows=0
+for entry in "${plugin_root}/workflows"/*; do
+  [ -e "$entry" ] || continue
+  name=$(basename "$entry")
+  if [ -f "$entry" ] && [ "${name%.js}" != "$name" ]; then
+    workflows=$((workflows + 1))
+  else
+    problems="${problems} workflow not reachable: ${name};"
+  fi
+done
 
 # 2. The rulebook itself, verbatim — a pointer to the file would leave the
 #    session free to skip it.
@@ -153,7 +167,7 @@ else
   fi
 fi
 
-status="Uroboros self-check: ${skills} skills and ${agents} agents reachable; ${rulebook_state}; ${guard_state};"
+status="Uroboros self-check: ${skills} skills, ${agents} agents and ${workflows} workflows reachable; ${rulebook_state}; ${guard_state};"
 if [ -z "$problems" ]; then
   status="${status} no problems."
 else

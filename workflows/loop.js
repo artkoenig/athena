@@ -1,5 +1,12 @@
+// This file is a plugin component, declared in plugin.json's `workflows`
+// field, and a session runs it as `uroboros:loop`. It sits here rather than in
+// `.claude/workflows/` because that directory exists in this checkout alone: a
+// loop kept there would run in this repository and be missing from every
+// project that installed uroboros, which is where the rulebook sends the
+// session in Issue Mode. Shipped, one file serves both, and a change to it
+// takes the same cache deletion as a change to an agent or a skill.
 export const meta = {
-  name: 'uroboros-loop',
+  name: 'loop',
   description: 'Runs the issue loop as a script: research, tests, implementation, review, correction.',
   whenToUse: 'When an issue file with confirmed acceptance criteria exists and the whole chain should run without the main session steering it. Pass the issue directory as args.issueDir.',
   phases: [

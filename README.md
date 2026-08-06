@@ -32,7 +32,7 @@ flowchart LR
     CRIT --> ISSUE[("issue.md<br/>the record of the run")]
     ISSUE ==> RES
 
-    subgraph LOOP["uroboros-loop.js — one agent per step, each commits its handoff into the issue directory"]
+    subgraph LOOP["uroboros:loop — one agent per step, each commits its handoff into the issue directory"]
         direction TB
         RES["researcher<br/>writes the implementation plan<br/>and the test plan"]
         TEST["test-author<br/>turns the planned cases<br/>into failing tests"]
@@ -50,8 +50,9 @@ flowchart LR
 The steps are [`researcher`](agents/researcher.md),
 [`test-author`](agents/test-author.md), [`implementer`](agents/implementer.md)
 and [`reviewer`](agents/reviewer.md), run by a script
-([`.claude/workflows/uroboros-loop.js`](.claude/workflows/uroboros-loop.js)) and
-not by an agent, because a subagent cannot start another one. Findings from the
+([`workflows/loop.js`](workflows/loop.js), which the plugin ships as the
+workflow `uroboros:loop`) and not by an agent, because a subagent cannot start
+another one. Findings from the
 review open a correction round; after two the loop stops and hands back.
 
 Whether, what and how to test is decided once, by the researcher — the only

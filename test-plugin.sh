@@ -30,7 +30,7 @@ plugin_copy() {
   mkdir -p "$dest"
   cp -R "$root/.claude-plugin" "$root/hooks" "$root/.githooks" "$dest/"
   cp "$root/rulebook.md" "$dest/"
-  for optional in skills agents; do
+  for optional in skills agents workflows; do
     [ -d "$root/$optional" ] && cp -R "$root/$optional" "$dest/"
   done
   return 0
@@ -113,7 +113,7 @@ echo "=== manifests"
 # installation keep its cached copy instead of picking up merged commits.
 node -e '
   const m = require(process.argv[1]);
-  const allowed = new Set(["name","description","author","homepage","repository","license","keywords","skills","agents"]);
+  const allowed = new Set(["name","description","author","homepage","repository","license","keywords","skills","agents","workflows"]);
   const problems = [];
   for (const k of Object.keys(m)) if (!allowed.has(k)) problems.push("unknown field: " + k);
   for (const k of ["name","description","author","repository","license"]) if (!m[k]) problems.push("missing field: " + k);
@@ -189,6 +189,35 @@ node -e '
   if (problems.length) { console.error(problems.join("; ")); process.exit(1); }
 ' "$root"
 check $? "the rulebook is rulebook.md, not a CLAUDE.md, and every agent page preloads the shared brief"
+
+# Issue Mode ends by running the loop, so the loop has to exist in the project
+# the session is running in — not only in this checkout. It used to sit in
+# .claude/workflows/, which no installing project has, and step 4 named a file
+# that was not there. As a plugin component it registers as uroboros:<basename>,
+# so the name the rulebook gives the session is only correct while the manifest
+# declares the directory and the file is named after what it registers as.
+node -e '
+  const fs = require("fs"), path = require("path");
+  const root = process.argv[1];
+  const problems = [];
+  const manifest = JSON.parse(fs.readFileSync(path.join(root, ".claude-plugin/plugin.json"), "utf8"));
+  if (!(manifest.workflows || []).includes("./workflows/"))
+    problems.push("plugin.json does not declare ./workflows/, so no workflow ships");
+  const dir = path.join(root, "workflows");
+  const shipped = fs.existsSync(dir) ? fs.readdirSync(dir).filter(f => f.endsWith(".js")) : [];
+  if (!shipped.includes("loop.js")) problems.push("no workflows/loop.js");
+  const rulebook = fs.readFileSync(path.join(root, "rulebook.md"), "utf8");
+  for (const file of shipped) {
+    const name = file.replace(/\.js$/, "");
+    const meta = fs.readFileSync(path.join(dir, file), "utf8").match(/name:\s*["\x27]([^"\x27]+)["\x27]/);
+    if (!meta) problems.push(file + ": no name in meta");
+    else if (meta[1] !== name) problems.push(file + ": registers as uroboros:" + meta[1] + ", not uroboros:" + name);
+  }
+  if (!/uroboros:loop/.test(rulebook)) problems.push("the rulebook does not send the session to uroboros:loop");
+  if (/\.claude\/workflows/.test(rulebook)) problems.push("the rulebook still names .claude/workflows/, which no installing project has");
+  if (problems.length) { console.error(problems.join("; ")); process.exit(1); }
+' "$root"
+check $? "the loop ships with the plugin as uroboros:loop, which is the name the rulebook gives the session"
 
 # the marketplace manifest offers exactly this repository as the
 # uroboros plugin, and pins no version either.
@@ -488,11 +517,12 @@ status="$(hook_status "$tmp/happy.json")"
 real_skills=$(( $(find "$root/skills" -mindepth 2 -maxdepth 2 -name SKILL.md 2>/dev/null | wc -l | tr -d ' ') \
               + $(find "$root/agents" -mindepth 4 -maxdepth 4 -path '*/skills/*' -name SKILL.md 2>/dev/null | wc -l | tr -d ' ') ))
 real_agents=$(find "$root/agents" -mindepth 1 -maxdepth 1 -name '*.md' 2>/dev/null | wc -l | tr -d ' ')
+real_workflows=$(find "$root/workflows" -mindepth 1 -maxdepth 1 -name '*.js' 2>/dev/null | wc -l | tr -d ' ')
 
 # the happy status names the real counts, the delivered rulebook and
 # the set guard, and reports no failure.
 case "$status" in
-  "Uroboros self-check: ${real_skills} skills and ${real_agents} agents reachable; rulebook delivered; push guard set; no problems.")
+  "Uroboros self-check: ${real_skills} skills, ${real_agents} agents and ${real_workflows} workflows reachable; rulebook delivered; push guard set; no problems.")
     ok "the status names the real counts, the rulebook and the guard, with no problems" ;;
   *) no "unexpected happy status: $status" ;;
 esac
@@ -503,12 +533,12 @@ esac
 # has behind it.
 empty_plugin="$tmp/empty-plugin"
 plugin_copy "$empty_plugin"
-rm -rf "$empty_plugin/skills" "$empty_plugin/agents"
+rm -rf "$empty_plugin/skills" "$empty_plugin/agents" "$empty_plugin/workflows"
 empty_project="$tmp/empty-project"
 project_repo "$empty_project"
 status="$(run_hook "$empty_plugin" "$empty_project" >"$tmp/empty.json" && hook_status "$tmp/empty.json")"
 case "$status" in
-  "Uroboros self-check: 0 skills and 0 agents reachable;"*"no problems.") ok "no skills and no agents is reported as zero, not as a failure" ;;
+  "Uroboros self-check: 0 skills, 0 agents and 0 workflows reachable;"*"no problems.") ok "no skills and no agents is reported as zero, not as a failure" ;;
   *) no "an empty shelf was not reported cleanly: $status" ;;
 esac
 
@@ -537,6 +567,19 @@ case "$status" in
   *) no "an unreachable agent went unreported: $status" ;;
 esac
 
+# and the same for a workflow that is not a flat .js file. Issue Mode ends by
+# running one, so a session about to hand a whole run to a workflow has to see
+# that the plugin it is talking to really has it.
+lost_workflow="$tmp/lost-workflow"
+plugin_copy "$lost_workflow"
+mkdir -p "$lost_workflow/workflows/nested"
+status="$(run_hook "$lost_workflow" "$empty_project" >"$tmp/lost-workflow.json" && hook_status "$tmp/lost-workflow.json")"
+case "$status" in
+  *"workflow not reachable: nested"*"FAILED"*) ok "a workflow that is not a flat .js file is named and success withdrawn" ;;
+  *"FAILED"*"workflow not reachable: nested"*) ok "a workflow that is not a flat .js file is named and success withdrawn" ;;
+  *) no "an unreachable workflow went unreported: $status" ;;
+esac
+
 # an agent's own directory, <name>/ beside <name>.md, is not a lost agent:
 # it holds the skills that agent preloads, and those reach a session through
 # plugin.json's skills paths. The skill inside is counted like any other.
@@ -551,7 +594,7 @@ project_repo "$own_project"
 status="$(run_hook "$own_dir" "$own_project" >"$tmp/own-dir.json" && hook_status "$tmp/own-dir.json")"
 case "$status" in
   *"not reachable"*) no "an agent's own directory was mistaken for a lost agent: $status" ;;
-  "Uroboros self-check: $((before_skills + 1)) skills and $((real_agents + 1)) agents reachable; rulebook delivered; push guard set; no problems.")
+  "Uroboros self-check: $((before_skills + 1)) skills, $((real_agents + 1)) agents and ${real_workflows} workflows reachable; rulebook delivered; push guard set; no problems.")
     ok "an agent's own directory carries its skill into the count and is no defect" ;;
   *) no "unexpected status for an agent with its own directory: $status" ;;
 esac
