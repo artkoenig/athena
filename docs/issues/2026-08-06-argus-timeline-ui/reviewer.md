@@ -699,3 +699,178 @@ and "context size" without a detail view. I raise neither as a finding.
   plateau to `MIN_CURVE_WIDTH_PCT` but clips at 100, so a lone request at
   x = 99.9 draws a 0.1-wide sliver instead of 0.6. Visual only, at the extreme
   right edge, and the clamp is deliberate; not worth a round.
+
+## Increment 3 — Round 1
+
+**Status: 1 finding requires a correction.** The lanes draw both halves of the
+criterion and the wiring race raised earlier is gone, but nothing in the suite
+ties an activity mark to the moment its tool call or API request happened: the
+whole time→position mapping for the marks can be replaced by a constant and the
+suite stays green, so "activity **over time**" is unverified.
+
+### Commands run
+
+- `npm --prefix tools/argus-ui test` — 73 cases, 73 pass, 0 fail, 0 skipped,
+  0 todo, exit 0. Nothing excluded. This is the only command my prompt lists and
+  the only one I ran; `tools/argus`' own suite and `./test.sh` were not run, by
+  that list.
+
+### Criterion — each lane shows its activity over time (tool calls, API requests) and, as a curve or area behind it, the context size over time
+
+Met in the code, read against the criterion word by word.
+
+- **Activity, both kinds, per lane.** `buildDensity`
+  (`tools/argus-ui/public/timeline.js:239`) feeds `activityMarks` (`:203`) one
+  `{kind:'request'}` item per `claude_code.api_request_body` content record and
+  one `{kind:'tool'}` item per fetched `claude_code.tool_result` event, bucketed
+  into at most `ACTIVITY_BUCKETS` (120) marks per lane, each keeping its
+  `count`. `renderTimeline` (`:321`) paints one
+  `<span class="lane-mark" data-kind="request|tool">` per bucket inside the same
+  `.lane-track` as the bar, coloured `--teal` / `--warn` (both defined in
+  `styles.css`), with a legend above the lanes.
+- **Attribution.** A request goes to the lane produced by `laneKeyOf` — the same
+  rule `buildLanes` keyed the lanes with — and a tool result to the lane whose
+  `spanId` it carries, falling back to `main` when no lane owns that span. Two
+  concurrent same-type subagents keep their own marks, since a lane is a span.
+- **Context size behind the bar.** `contextPoints` (`:162`) maps each request's
+  `bodyLength` into a 0…100 box scaled by the session peak (`maxBodyLength`),
+  not the lane's, so a subagent's hill reads smaller than the main session's
+  mountain; `areaPolygon` (`:181`) closes it on the baseline; `renderTimeline`
+  emits the `<svg class="lane-curve">` before the `<span class="lane-bar">` in
+  the row, and `styles.css` puts the curve at `inset: 0` and the bar at
+  `bottom: 0; height: 5px`, so the area is behind the bar rather than instead
+  of it.
+- **Without opening any detail.** `renderDetail` (`app.js:177`) composes
+  `renderTimeline(buildDensity(buildLanes(...)))` above the technical-views nav,
+  and the landing state (`tab: null`) opens no view.
+- **Numerics.** A zero-length window, a lane of one instant, a session where
+  every `body_length` is 0 and a mark past the window end all stay finite and
+  inside 0…100; no `style` attribute can carry `NaN`.
+- **The earlier stale-answer defect is fixed, and I checked the fix rather than
+  the claim.** `loadTimeline` (`app.js:857`) now re-reads
+  `state.selectedSessionId !== id` after both fetches resolve and before writing
+  any state, and accumulates through `mergeToolMarks` (`timeline.js:299`), which
+  drops an item whose `seq` is already held and returns the highest seq *held*.
+  Two overlapping refreshes for one session therefore double nothing, and a
+  response for a session that is no longer selected reaches neither the marks
+  nor the watermark.
+
+### Finding 1 — nothing pins an activity mark to the time its activity happened
+
+Criterion violated: "Each lane shows its activity over time (tool calls, API
+requests)". The position of a mark on the lane *is* the "over time" half of that
+sentence, and it is the one part of the drawing no case constrains.
+
+Reproduction (state, change, wrong result, and why nothing catches it):
+
+- State: `activityMarks` in `tools/argus-ui/public/timeline.js:203–225`, whose
+  only time-dependent output is `bucket` and the `leftPct` derived from it
+  (`:209–220`).
+- Change: force `const bucket = 0` (or emit `leftPct: 0` and keep the bucket
+  key). Every tool call and every API request of every lane then paints at the
+  left edge of the track, whatever moment it happened at, and the timeline no
+  longer shows activity over time at all.
+- Wrong result nobody sees: `npm --prefix tools/argus-ui test` still passes
+  73/73. I walked every assertion that touches these marks and each one survives
+  the change — `activity in one bucket is one mark carrying its count`
+  (`test/timeline.test.mjs:440`, asserts only count and kind), `a tool call and
+  an API request at the same moment stay two marks` (`:454`, asserts the two
+  `leftPct` values are *equal to each other*, which 0 === 0 satisfies), `the
+  marks are bounded however many records arrive, and lose none` (`:471`, asserts
+  `length <= 120` and a total of 500 — one bucket of 500 passes both), `a mark
+  never leaves the track` (`:483`, asserts `0 <= leftPct < 100` and finiteness),
+  and the render cases (`:507`, `:544`), which assert the presence of
+  `data-kind="request"` / `data-kind="tool"` and the absence of `NaN`. The one
+  case that reads a `style` attribute for `left:` (`:188`) renders a bare
+  `buildLanes` view, which carries no marks at all.
+- Expected: a case that fails when a mark's position stops following the item's
+  time — for instance, items at known offsets in a known window whose marks come
+  out at the matching fractions of the track (within one bucket width,
+  `100 / ACTIVITY_BUCKETS`), and a later item's mark strictly to the right of an
+  earlier one. Shape and file are the test-author's call; the gap is that the
+  mapping from `timeMs` to track position is unpinned for the marks.
+
+Note on why this is not pedantry: the *curve's* time mapping is pinned exactly
+(`contextPoints places a record by time inside the window, exact at round
+numbers`, `:383`, asserts `x` is `[0, 50, 100]`), and `areaPolygon` preserves
+those x values into the markup. The marks are the half of the criterion that has
+no equivalent.
+
+### The tests against the intent — the rest
+
+Beyond finding 1, both halves of the criterion have cases that fail if the
+behaviour breaks.
+
+- Context size: scaled session-wide and not per lane, exact at round numbers,
+  zero-length window, all-zero `bodyLength`, a single request still a
+  four-vertex plateau, no requests means no polygon, and the area closes on the
+  baseline.
+- Which lane a record belongs to: requests land on the lane that made them, a
+  tool call lands on the lane whose span it carries, a tool call on an unowned
+  span falls to `main`, two concurrent same-type agents never merge their tool
+  calls, and a response body contributes neither a context point nor an activity
+  mark.
+- Composition: the curve precedes the bar inside one lane row, a lane with
+  nothing on it renders neither curve nor mark, and increment 2's
+  `renderTimeline(buildLanes(...))` call shape still works.
+- Accumulation: `mergeToolMarks` is pinned for the empty index, a duplicate
+  `seq`, the same response merged twice, a watermark that may not run ahead of
+  what is held, an unusable `seq`, non-mutation of its input, out-of-order
+  items, a missing `spanId`, and that the merged index is what the density
+  reads.
+- Wiring is pinned at source level in `test/page.test.mjs` (the `/api/events`
+  fetch scoped to `TOOL_EVENT` with `sinceSeq`, the guard sitting after the
+  awaits and before `state.content =`, `mergeToolMarks` as the only path into
+  page state, the reset on session change, and
+  `renderTimeline(buildDensity(...))`). String assertions over `app.js` are what
+  this project can do without a DOM or a dependency; they pin that the calls
+  exist and in what order, not what they compute.
+
+### Nothing in the diff that no criterion asked for
+
+Increment 3's own commits (`20334e6`, `49daa02`, `8dafdcf`, `afff0b9`) touch,
+handoffs aside: `timeline.js` (the new exports and the richer row markup),
+`app.js` (the tool fetch, the stale-answer guard, the composition),
+`styles.css` (track height, curve, marks, legend, `--meta-w`),
+`tools/argus-ui/README.md` (one clause describing what the lanes now draw) and
+the two test files. The legend and the `lane-meta` data attributes are not
+literally named by the criterion but serve it directly — they are what makes a
+coloured mark and a shaded area readable as "API request", "tool call" and
+"context size" without a detail view. I raise neither as a finding. No file
+outside `tools/argus-ui` was touched by this increment.
+
+### Beyond the criteria (blast radius)
+
+- **The API the page calls exists and carries what it reads.** `/api/events`
+  accepts `session`, `event`, `sinceSeq` and a `limit` capped at 2000
+  (`tools/argus/src/server.mjs:219–226`) and spreads the stored log record, so
+  `seq`, `timeMs` and `spanId` — the three fields `mergeToolMarks` keeps — are
+  present. `api()` (`app.js:50`) drops only `null`/`undefined`/`''`, so
+  `sinceSeq: 0` is sent as `0`. No collector change was needed and none was made
+  by this increment.
+- **Project rules hold.** `timeline.js` imports only `./format.js`, touches no
+  `document`/`fetch`/`location`, and `independence.test.mjs` covers both new
+  public modules. No runtime dependency was added.
+- **Callers of what changed.** The only consumers of `timeline.js` are `app.js`
+  and the two test files; `renderTimeline` still accepts a bare `buildLanes`
+  view (`lane.context`/`lane.activity` default to empty), so increment 2's call
+  shape is not broken. `state.events` (Events tab) and `state.toolMarks` are
+  separate fields; the new fetch adds a request per refresh and changes no
+  existing one.
+- **No document made stale.** Only `tools/argus/README.md` and
+  `tools/argus-ui/README.md` mention a timeline or lanes; the former's single
+  hit is about the event tail, and the latter was updated in this diff. Neither
+  `CLAUDE.md` describes what a lane draws.
+- **Observation, not a finding — whether a subagent's tool calls really reach
+  its lane.** The attribution assumes a subagent's `api_request_body` record and
+  its `tool_result` events carry the same `spanId`. Nothing in this checkout
+  records real telemetry, so I can neither confirm nor refute it; if they
+  differ, every tool mark lands on the main lane and the suite stays green,
+  because that fallback is deliberate. On the record without a reproduction.
+- **Observation, not a finding — the 2000-record ceiling.** `loadTimeline`
+  fetches `/api/content` with `limit: 2000` (the server's maximum) on every
+  refresh, and that page holds request *and* response bodies, so a session past
+  roughly a thousand API turns loses its oldest records and the curve starts at
+  the cutoff. The tool marks accumulate instead, so activity and context history
+  can disagree at that scale. The content fetch and its limit came with
+  increment 2 and are unchanged here; increment 3 did not break it.
