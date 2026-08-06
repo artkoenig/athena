@@ -3,8 +3,7 @@
 // `.claude/workflows/` because that directory exists in this checkout alone: a
 // loop kept there would run in this repository and be missing from every
 // project that installed uroboros, which is where the rulebook sends the
-// session in Issue Mode. Shipped, one file serves both, and a change to it
-// takes the same cache deletion as a change to an agent or a skill.
+// session in Issue Mode. Shipped, one file serves both.
 export const meta = {
   name: 'loop',
   description: 'Runs the issue loop as a script: research, tests, implementation, review, correction.',

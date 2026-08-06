@@ -59,11 +59,10 @@ rule that binds a run: `docs/` had such a page, and its writing rules moved into
 the shared brief, where every project gets them. Scoping keeps a rule from the
 wrong reader; it cannot make one exist where this directory does not.
 
-Three rules bind the session and the agents alike: English, the default branch
-moving only through a merged pull request, and the cache deletion after a change
-to what uroboros ships. They stand in the rulebook and in the shared
-brief, because the two audiences have no channel in common. Edit one, edit the
-other.
+Two rules bind the session and the agents alike: English, and the default branch
+moving only through a merged pull request. They stand in the rulebook and in the
+shared brief, because the two audiences have no channel in common. Edit one,
+edit the other.
 
 So an agent page carries its role and the boundaries of that role alone, and
 restates nothing the shared brief already says. A rule that stands in both
