@@ -4231,3 +4231,672 @@ behaviour and their cases; `page.test.mjs:450`, `:511` and `:520-525` read
 `lane-panel`, `renderContextPanel(` and `state.expanded` inside
 `renderLanePanel`, and all three survive the new body; `independence.test.mjs`
 already lists `public/context.js` and this increment adds no import at all.
+
+## Increment 7
+
+The last increment. Selecting a lane already shows that agent's context at the
+cursor's moment; this adds the second half of the same click — the tools that
+agent had used by that moment, each with its name and the parameters it was
+called with — and closes the issue with `./test.sh` green.
+
+The data is already in the page. `loadTimeline` fetches
+`/api/events?event=claude_code.tool_result&sinceSeq=…` on every refresh and
+`mergeToolMarks` accumulates the answers, so every tool call of the session has
+already crossed the wire, exactly once each, carrying `tool_name` and
+`tool_input` in its attributes. What increment 3 did was throw the payload away
+at the merge (`{ seq, timeMs, spanId }` and nothing else) because a mark needed
+two numbers and a span. This increment keeps a bounded projection of it
+instead. **No new request, no collector change, no new route.**
+
+### What I checked, and what I did not run
+
+Read-only: `tools/argus-ui/public/{app,context,timeline,format}.js`,
+`index.html`, `styles.css`, the four UI test files, `tools/argus/src/server.mjs`
+(the `/api/events` shape), `tools/argus/src/claude.mjs` (`toolParametersOf`,
+`contentMetaOf`), `test.sh`, `test-repo.sh`, `tools/argus-ui/README.md`, and
+increments 1–6 of this file plus the planner's and reviewer's last sections.
+**I ran no test command and no collector**; every fact below is read off the
+code or off increment 3's measured capture (this file, Increment 3, findings
+1, 2 and 6), which is the only measurement of `claude_code.tool_result` this
+run has and needs no repeat.
+
+Facts that decide the design:
+
+1. **A tool call carries no attribution attribute at all** — no `agent.name`,
+   no `query_source`. Its `spanId` is the span of the *conversation* that made
+   it, which is exactly the lane's span. So: a call belongs to the agent lane
+   whose `spanId` it carries, and to the main lane otherwise. That is the rule
+   `buildDensity` already counts with (`timeline.js:248-261`), and the tool
+   list must use the same one or the panel and the lane's `data-tools` count
+   will disagree.
+2. **The parameters arrive as a JSON string** under `tool_input`, with
+   `tool_parameters` the pre-2.1 name (the collector's own `toolParametersOf`
+   at `tools/argus/src/claude.mjs:59-68` reads both, in that order; the UI may
+   not import it — `tools/argus-ui/CLAUDE.md`, "never imports from
+   `tools/argus`" — so the same two names are restated in the UI with a comment
+   naming why).
+3. **`/api/events` ships tool attributes whole.** `server.mjs:229-247` strips
+   the body only from `CONTENT_EVENTS` (the two `api_*_body` events);
+   `claude_code.tool_result` is not one, so its `tool_input` arrives untouched.
+   One `Write` call is a file's entire content, which is why holding every
+   call's parameters unbounded is the thing this plan must not do.
+
+### Implementation plan
+
+Seven files, all in `tools/argus-ui`. One is new.
+
+**A. `public/format.js` — the one-line-preview rule moves here.**
+
+`PREVIEW_CHARS` and `previewOf` move out of `context.js` verbatim, because both
+panels now collapse a text to one line and a second copy of the rule would
+drift. Append after `shortId`:
+
+```js
+/** A collapsed row shows this much of its text on one line. */
+export const PREVIEW_CHARS = 120;
+
+/**
+ * The one line a collapsed row shows.
+ *
+ * The cut is measured on the text itself rather than on its flattened form, so
+ * a text carrying more than one line's worth says so even when collapsing its
+ * whitespace would have brought it under the limit.
+ */
+export function previewOf(value) {
+  const text = typeof value === 'string' ? value : String(value ?? '');
+  const flat = text.slice(0, PREVIEW_CHARS).replace(/\s+/g, ' ').trim();
+  return text.length > PREVIEW_CHARS ? `${flat}…` : flat;
+}
+```
+
+For a string argument this is character-for-character what `context.js` does
+today, so every preview case in `context.test.mjs` keeps passing unchanged.
+
+**B. `public/context.js` — two lookups and one rule leave.**
+
+- Line 18 becomes
+  `import { esc, fmtClock, fmtNum, previewOf, shortId } from './format.js';`
+  and line 19 becomes `import { laneByKey, resolveCursor } from './timeline.js';`.
+- Delete lines 21-22 (`PREVIEW_CHARS`) and 41-51 (`previewOf`). Nothing else in
+  the module uses `PREVIEW_CHARS`.
+- `laneContentRequest` line 185 becomes
+  `const filter = laneContentQuery(laneByKey(view, key));`.
+- `lanePanelInput` line 243 becomes `const lane = laneByKey(view, key);`.
+- Nothing else moves. `renderContextPanel` is byte-identical, and both
+  functions keep their behaviour by construction: `laneByKey` is the same
+  `key ? lanes.find(…) ?? null : null` lifted out.
+
+**C. `public/timeline.js` — the lane rules both panels share, and the richer
+projection.**
+
+Add `previewOf` to the `./format.js` import. Add, beside `TOOL_EVENT`:
+
+```js
+/** A tool call's parameters are kept up to this much text; beyond it, a size. */
+export const TOOL_PARAM_CHARS = 2000;
+```
+
+Add `laneByKey` and `spanLaneKeys` (place them after `laneKeyOf`, whose rule
+they complete):
+
+```js
+/**
+ * The lane a key names, or none.
+ *
+ * One lookup for both panels: a context panel and a tool list that resolved the
+ * same key differently would put one agent's tools under another agent's
+ * context, and the reader could not tell. No key at all is no lane, which is how
+ * both panels disappear when the selection is let go.
+ */
+export function laneByKey(view, key) {
+  if (!key) return null;
+  return (view?.lanes ?? []).find((lane) => lane.key === key) ?? null;
+}
+
+/**
+ * Which lane each span belongs to — agent lanes by their own span, and nothing
+ * else.
+ *
+ * A tool call carries the span of the conversation that made it, so this map
+ * plus "the main lane otherwise" is the whole attribution rule: the one the
+ * density counts with and the one the tool list is filtered by, so a lane's
+ * `data-tools` count and the rows under it can never disagree.
+ */
+export function spanLaneKeys(lanes) {
+  const bySpan = new Map();
+  for (const lane of Array.isArray(lanes) ? lanes : []) {
+    if (lane?.kind !== 'agent' || !lane.spanId) continue;
+    if (!bySpan.has(lane.spanId)) bySpan.set(lane.spanId, lane.key);
+  }
+  return bySpan;
+}
+```
+
+`buildDensity` lines 248-252 collapse to `const spanToLane = spanLaneKeys(lanes);`
+— same map, same behaviour, one owner.
+
+Add the projection, directly above `mergeToolMarks`:
+
+```js
+/** The parameters as text: pretty JSON when they parse, the string as it arrived otherwise. */
+function paramText(raw) {
+  if (raw === undefined || raw === null) return '';
+  if (typeof raw !== 'string') return JSON.stringify(raw, null, 2) ?? '';
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object') return JSON.stringify(parsed, null, 2) ?? raw;
+  } catch {
+    // Not JSON: the string itself is what the call was made with.
+  }
+  return raw;
+}
+
+/**
+ * One tool-result event turned into the row a panel draws: which tool, what it
+ * was called with, and how much of that there was.
+ *
+ * The call carries no attribution of its own — only the span of the
+ * conversation that made it — so `spanId` is what later decides whose lane it
+ * belongs to. The parameters arrive as a JSON string under `tool_input`
+ * (`tool_parameters` on CLI versions before 2.1) and are pretty-printed so the
+ * row is readable.
+ *
+ * `chars` is the whole size and `text` is capped at TOOL_PARAM_CHARS: a single
+ * Write call carries a file's entire content, and a session's worth of those
+ * kept in page state is megabytes held for a line nobody reads to the end.
+ * `truncated` says the two differ, so the panel can never imply it is showing
+ * everything when it is not.
+ */
+export function toolCallOf(item) {
+  const attrs = item?.attrs ?? {};
+  const text = paramText(attrs.tool_input ?? attrs.tool_parameters);
+  const name = typeof attrs.tool_name === 'string' && attrs.tool_name ? attrs.tool_name : 'tool';
+  return {
+    seq: item.seq,
+    timeMs: item.timeMs,
+    spanId: item.spanId ?? null,
+    name,
+    chars: text.length,
+    preview: previewOf(text),
+    text: text.slice(0, TOOL_PARAM_CHARS),
+    truncated: text.length > TOOL_PARAM_CHARS,
+  };
+}
+```
+
+`mergeToolMarks` keeps its name, its dedup-by-`seq`, its held-not-seen
+watermark and its non-mutation; only line 308 changes, from the three-field
+literal to `merged.push(toolCallOf(item));`. Its doc comment's `@param` line
+and the sentence about what a mark carries are rewritten to name `toolCallOf`
+and the cap.
+
+**D. `public/tools.js` — new module, the tools one lane has used up to a
+moment.**
+
+```js
+/**
+ * argus-ui — the tools one lane has used, up to a moment.
+ *
+ * The sibling of `context.js` under the same click: that module answers "what
+ * was in this agent's context at this moment", this one answers "what had it
+ * done by then, and what for". It needs no fetch of its own — every tool call
+ * of the session is already in page state, put there by the incremental
+ * `/api/events` poll the lanes are drawn from — so the list paints the instant
+ * a lane is clicked, whether or not the context has arrived.
+ *
+ * No `document`, no `fetch`, no `location`, the same contract `timeline.js` and
+ * `context.js` keep.
+ */
+
+import { esc, fmtClock, fmtNum } from './format.js';
+import { laneByKey, resolveCursor, spanLaneKeys } from './timeline.js';
+
+/**
+ * The calls one lane had made by the cursor's moment, newest first.
+ *
+ * The moment is resolved by the same rule the context panel asks with — a live
+ * cursor means the head of the window, a parked one its own moment — so the two
+ * panels under one click can never be showing two different moments. A call
+ * belongs to the agent lane whose span it carries and to the main lane
+ * otherwise, which is the rule the lane's own tool count was computed with.
+ *
+ * @param {{ view: object|null, key: string|null, calls: object[], cursor: object|null, expanded: string[]|Set<string> }} input
+ * @returns {{ lane: object|null, calls: object[], atMs: number, expanded: string[]|Set<string> }}
+ */
+export function laneToolInput({ view = null, key = null, calls = [], cursor = null, expanded = [] } = {}) {
+  const lane = laneByKey(view, key);
+  const atMs = resolveCursor(cursor, view).timeMs;
+  if (!lane) return { lane: null, calls: [], atMs, expanded };
+  const owners = spanLaneKeys(view?.lanes ?? []);
+  const mine = (Array.isArray(calls) ? calls : []).filter(
+    (call) =>
+      Number.isFinite(call?.timeMs) &&
+      call.timeMs <= atMs &&
+      (owners.get(call.spanId) ?? 'main') === lane.key,
+  );
+  // Newest first: the reader parked the cursor on a moment and asks what led up
+  // to it, so the calls nearest that moment are the ones to read first.
+  mine.sort((a, b) => b.timeMs - a.timeMs || b.seq - a.seq);
+  return { lane, calls: mine, atMs, expanded };
+}
+
+/**
+ * The tool list for the selected lane, as of the cursor's moment.
+ *
+ * No attribute named `data-lane` may appear in here: the page binds
+ * `[data-lane]` to lane rows, so one in this markup would make every click
+ * inside the panel toggle the lane selection. The expansion keys are prefixed
+ * `tool:` so they cannot collide with a context block's `<seq>:<index>`.
+ *
+ * @param {{ lane: object|null, calls: object[], atMs: number, expanded: string[]|Set<string> }} input
+ */
+export function renderToolPanel({ lane = null, calls = [], atMs = 0, expanded = [] } = {}) {
+  if (!lane) return '';
+
+  const list = Array.isArray(calls) ? calls : [];
+  const head = `<div class="context-head"><span class="context-title">${esc(lane.label)} · tools</span>
+      <span class="tools-meta" data-calls="${esc(list.length)}" data-time="${esc(atMs)}">${esc(
+        `${list.length} tool call${list.length === 1 ? '' : 's'} · up to ${fmtClock(atMs)}`,
+      )}</span>
+    </div>`;
+  const shell = (dataState, inner) =>
+    `<div class="panel tools-panel" data-state="${dataState}" data-tools-lane="${esc(lane.key)}">${head}${inner}</div>`;
+
+  if (!list.length) {
+    return shell('empty', '<div class="placeholder">No tool call on this lane at or before this moment.</div>');
+  }
+
+  const openKeys = new Set(expanded ?? []);
+  const rows = list
+    .map((call) => {
+      const key = `tool:${call.seq}`;
+      const cut = call.truncated
+        ? `\n… ${fmtNum(call.chars - call.text.length)} more characters, not kept in the page`
+        : '';
+      return `<details class="ctx-block" data-kind="tool_use" data-tool="${esc(call.name)}"${
+        openKeys.has(key) ? ' open' : ''
+      }>
+      <summary data-block="${esc(key)}">
+        <span class="tool-time">${esc(fmtClock(call.timeMs))}</span><span class="ctx-label">${esc(call.name)}</span>
+        <span class="ctx-preview">${esc(call.preview)}</span>
+        <span class="ctx-size" data-chars="${esc(call.chars)}">${esc(fmtNum(call.chars))}</span>
+      </summary>
+      <pre class="ctx-text">${esc(call.text)}${esc(cut)}</pre>
+    </details>`;
+    })
+    .join('');
+
+  return shell('ready', `<div class="ctx-blocks">${rows}</div>`);
+}
+```
+
+The row classes are the context panel's own (`ctx-block`, `ctx-label`,
+`ctx-preview`, `ctx-size`, `ctx-text`, `ctx-blocks`, `context-head`,
+`context-title`): a collapsed row with a label, a line and a size is the same
+thing on screen, and reusing them keeps the CSS diff to four rules.
+
+**E. `public/app.js` — the click paints both panels.**
+
+- After line 11, add `import { laneToolInput, renderToolPanel } from './tools.js';`.
+- The state comment at lines 36-38 is false as of this increment. Replace it
+  with: `// Tool calls, kept as the row a panel draws — seq, moment, span, the`
+  / `// tool's name and its call parameters capped at TOOL_PARAM_CHARS. A whole`
+  / `// tool_input is a file's content, so the cap is what keeps a long`
+  / `// session's index bounded while still answering "which tools, and what for".`
+- `renderLanePanel` (lines 934-945) keeps its name, its doc comment, the
+  container lookup and the `if (!container) return;`. Its body becomes:
+
+```js
+  const view = laneView();
+  container.innerHTML =
+    renderContextPanel(
+      lanePanelInput({ view, key: state.selectedLane, held: state.laneContext, expanded: state.expanded }),
+    ) +
+    renderToolPanel(
+      laneToolInput({
+        view,
+        key: state.selectedLane,
+        calls: state.toolMarks,
+        cursor: state.cursor,
+        expanded: state.expanded,
+      }),
+    );
+```
+
+- **Nothing else in `app.js` changes.** Every repaint path already goes through
+  `renderLanePanel` — the lane click (1153-1154), the debounced scrub
+  (`scheduleLaneContext`, 953), the return-to-live control (1145) and
+  `renderDetail` (207) — so the tool list follows the selection and the cursor
+  with no new wiring. The `summary[data-block]` branch (1157-1164) already
+  records expansions by key, and the `tool:` prefix keeps the two namespaces
+  apart. `loadTimeline`, `mergeToolMarks`'s call site, `clearTimelineIndexes`
+  and `selectSession` are untouched.
+
+**F. `public/styles.css` — four rules, appended after the context section.**
+
+```css
+/* --------------------------------- tools -------------------------------- */
+
+.tools-panel {
+  padding: 10px 12px 4px;
+}
+
+.tools-meta {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-faint);
+}
+
+/* One column more than a context block: a tool row leads with its moment. */
+.tools-panel .ctx-block > summary {
+  grid-template-columns: 80px 120px 1fr 60px;
+}
+
+.tool-time {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-faint);
+}
+```
+
+**G. `tools/argus-ui/README.md` — one sentence.** The "Timeline" bullet ends
+with the context list; append to it: "The same click also lists, under the
+context, every tool that agent had called by that moment — newest first, each
+row naming the tool and expanding to the parameters it was called with."
+
+### Decisions, including the ones rejected
+
+1. **The tool list is drawn from page state, not from a request of its own.**
+   Every tool call already crosses the wire once, incrementally, for the
+   activity marks. Rejected: fetching per selection — `/api/events` has no span
+   filter and no `at` filter (`store.queryEvents`, `store.mjs:897-924`), so a
+   per-lane fetch would re-ship *every* tool call of the session, payload
+   included, on every click and every settled scrub. That is exactly the
+   regression increment 1 avoided for bodies. Rejected: adding a filtered
+   `/api/tools` route to the collector — it buys nothing the page does not
+   already hold and doubles the increment's blast radius across both packages
+   on the run's closing step.
+2. **The parameters are kept, capped at 2000 characters, with the true size
+   shown.** This reverses increment 3's "the payload is dropped" on purpose:
+   the payload had no use then and is the criterion now. The cap is what keeps
+   the reversal honest — worst case ~2 KB × the session's tool calls in page
+   memory, against a `Write` whose single `tool_input` is a whole file.
+   Rejected: keeping the parameters whole — unbounded page memory for text
+   beyond what "what for" needs, and the same string then sits a second time in
+   the DOM inside a `<pre>`. Rejected: keeping only a 120-character preview —
+   "with the call's parameters" then holds for a `Bash` command and fails for
+   anything structured. The `<pre>` of a cut call says how many characters are
+   missing, so the panel never implies it is complete; the untruncated
+   attribute remains readable in the Events view, which renders every attribute
+   of an event in full (`app.js:612-616`) and is one of the technical views the
+   timeline keeps reachable.
+3. **Every call up to the moment is listed — no row cap.** The criterion is a
+   completeness claim ("the tools that agent has used up to that moment"), and
+   a "showing the last 200 of 900" line would be a visible hole in it. The
+   memory and DOM cost is already bounded per row by decision 2.
+4. **Newest first.** The reader parks the cursor on a moment and asks what led
+   up to it; the calls nearest that moment are the ones to read first, and they
+   sit at the top where the click left the pointer. Rejected: chronological,
+   which matches the context list's order but buries the interesting end of a
+   long list.
+5. **Attribution goes through one shared `spanLaneKeys`, not a second copy of
+   the rule.** A lane's bar advertises `data-tools="N"` from `buildDensity`; if
+   the panel filtered by a rule of its own, the bar could say 7 and the list
+   show 6, and nothing would catch it. Rejected: re-deriving the map inside
+   `tools.js`.
+6. **The lane lookup moves to `timeline.js` as `laneByKey`, used by all three
+   call sites.** Two panels resolving one key differently is the failure this
+   forecloses; `context.js` already did the same `find` twice. The diff to
+   `context.js` is two call sites and one import, and increment 6's cases pin
+   `lanePanelInput` by value, so they cover the swap rather than being broken
+   by it.
+7. **The one-line-preview rule moves to `format.js`.** Rejected: exporting
+   `previewOf` from `context.js` and importing it into `tools.js` — that makes
+   one panel depend on the other for a text rule that belongs to neither.
+   Rejected: a third copy in `tools.js`.
+8. **The two panels share `#lane-panel` and one assignment.** Rejected: a
+   second container `#lane-tools` painted by a second function — four repaint
+   sites would each have to call both, and one forgotten call site is a panel
+   that silently stops following the cursor.
+9. **A scrub updates the tool list on the same 250 ms debounce as the context**,
+   although the list needs no fetch. Repainting a several-hundred-row panel on
+   every pixel of a drag is the cost this avoids; the two panels moving
+   together is also what keeps them showing one moment.
+10. **An agent lane with no `spanId`** (a subagent whose records carried no
+    span) owns no tool calls — they fall to the main lane. That is exactly what
+    `buildDensity` already counts, so the panel and the bar agree; changing it
+    would mean changing the density too, which no criterion of mine names.
+
+### Module map
+
+| Path | What it holds | Entry points |
+| --- | --- | --- |
+| `tools/argus-ui/public/tools.js` | **new**, ~90 lines: `laneToolInput` (lane lookup, cursor moment, span attribution, newest-first order), `renderToolPanel` (head, empty state, one `<details>` per call) | both exports; imported by `app.js` only |
+| `tools/argus-ui/public/timeline.js` (465 lines) | `TOOL_EVENT` 21, `laneKeyOf` 58, `buildLanes` 69, `laneGeometry` 146, `contextPoints` 162, `areaPolygon` 181, `activityMarks` 203, `buildDensity` 239 (the `spanToLane` block is 248-252), `mergeToolMarks` 299 (the push is line 308), `liveCursor` 320, `scrubCursor` 331, `resolveCursor` 346, `renderTimeline` 373, `renderDetailViews` 457 | gains `TOOL_PARAM_CHARS`, `laneByKey`, `spanLaneKeys`, `paramText` (private), `toolCallOf`; `buildDensity` and `mergeToolMarks` each lose a few lines to them |
+| `tools/argus-ui/public/context.js` (308 lines) | `PREVIEW_CHARS` 22, `textOf` 35, `previewOf` 48, `makeBlock` 53, `contextBlocks` 68, `laneContentQuery` 161, `laneContentRequest` 183 (lookup at 185), `fetchLaneContext` 204, `laneContextInput` 222, `lanePanelInput` 242 (lookup at 243), `renderContextPanel` 256 | imports at 18-19; the two lookups; `PREVIEW_CHARS`/`previewOf` leave |
+| `tools/argus-ui/public/format.js` (65 lines) | `esc` 9, `fmtNum` 15, `fmtCost` 23, `fmtDur` 31, `fmtClock` 43 (`0` renders as `–`), `fmtAgo` 51, `isLive` 61, `shortId` 63 | gains `PREVIEW_CHARS` and `previewOf` |
+| `tools/argus-ui/public/app.js` (1285 lines) | import block 10-22, `state` 26-60 (tool comment 36-38, `toolMarks` 39), `renderDetail` (timeline 191-198, `#lane-panel` 200), `loadTimeline` 872, `laneView` 900, `loadLaneContext` 915, `renderLanePanel` 934, `scheduleLaneContext` 949, `refresh` 988, `selectSession` 1025, `wireEvents` 1127 (live 1139, lane 1148, block 1157) | one import line, the state comment, the body of `renderLanePanel` |
+| `tools/argus-ui/public/styles.css` (1362 lines) | the context section is 1025-1140; `.ctx-block > summary` is a `160px 1fr 60px` grid at 1056 | four rules appended |
+| `tools/argus-ui/test/tools.test.mjs` | **new** | the cases below |
+| `tools/argus-ui/test/timeline.test.mjs` (979 lines) | factories 23-69 (`session`, `record`, `threeRecordContent`, `toolMark` 69), merge cases 575-669 | import line, two rewritten cases, new cases |
+| `tools/argus-ui/test/page.test.mjs` (568 lines) | helpers `functionSource` 20, `detailListener` 29; `renderLanePanel` cases 467-496 | one rewritten case, three new |
+| `tools/argus-ui/test/context.test.mjs` (779 lines) | imports 4-13 (`PREVIEW_CHARS` at 7) | the import line only |
+| `tools/argus-ui/test/independence.test.mjs` (79 lines) | the must-exist list 21-35, the must-be-scanned list 53-61 | `public/tools.js` in both |
+
+### Environment
+
+Node ≥ 20.11, already installed. Zero runtime dependencies, no install step, no
+build step, **no linter and no formatter in this repository** (no eslint config,
+no `.prettierrc`, no `.editorconfig`). Nothing to start: every case below is a
+pure import or a source read, and no test needs a collector or a DOM.
+
+The two commands this increment's test plan asks for, both from the repository
+root:
+
+```
+npm --prefix tools/argus-ui test
+./test.sh
+```
+
+The first is `node --test "test/*.test.mjs"` over the (now seven) files in
+`tools/argus-ui/test/`, seconds. The second runs five suites — `test-repo.sh`,
+`test-worktree.sh`, `tools/argus`, `tools/argus-ui`, `tools/log-parser` — and
+is the issue's own criterion; it takes a couple of minutes and needs no network
+and no argument. While working on a single file,
+`node --test tools/argus-ui/test/tools.test.mjs` runs just that one; it is not
+part of the closed list.
+
+### Test Plan
+
+Tests are needed. Everything is `node:test` + `node:assert/strict` in
+`tools/argus-ui/test/`, in the style already there: one
+`test('a sentence stating the fact', () => {…})` per fact, factories at the top
+of the file, a message on every non-obvious assert, nothing imported from
+`tools/argus`, nothing faked. The rule this run learned the hard way applies
+throughout: **a hop that can be pinned by value is pinned by value**; only the
+page's own DOM-writing hops are source assertions, and those read the exact
+statement rather than a mention.
+
+This section is the whole of what is asked for. Every case not named here stays
+exactly as it is.
+
+#### Criterion — the parameters and the tool's name survive the merge into page state
+
+Level: unit, `tools/argus-ui/test/timeline.test.mjs`. The import at line 4-20
+gains `toolCallOf`, `TOOL_PARAM_CHARS`, `spanLaneKeys` and `laneByKey`. Add one
+factory beside `toolMark` (line 69):
+
+```js
+/** A tool-result event as /api/events serves it. */
+const toolEvent = (over = {}) => ({
+  seq: 5,
+  timeMs: 2200,
+  spanId: 'sp-a',
+  eventName: 'claude_code.tool_result',
+  attrs: {
+    tool_name: 'Bash',
+    tool_use_id: 'toolu_01',
+    success: 'true',
+    tool_input: JSON.stringify({ command: 'echo hi', description: 'say hi' }),
+  },
+  ...over,
+});
+```
+
+| # | Case name | Input / state | Expected |
+| --- | --- | --- | --- |
+| T1 | `a tool call keeps the tool's name and the parameters it was called with` | `toolCallOf(toolEvent())` | `deepEqual` against the whole expected object: `{ seq: 5, timeMs: 2200, spanId: 'sp-a', name: 'Bash', chars: <computed>, preview: <computed>, text: JSON.stringify({ command: 'echo hi', description: 'say hi' }, null, 2), truncated: false }`, where the expected `text` is written out as that `JSON.stringify(…, null, 2)` expression, `chars` is `text.length` and `preview` is `previewOf(text)` imported from `../public/format.js`. Plus `assert.ok(out.text.includes('echo hi'), 'the command the call was made with is what answers "what for"')` |
+| T2 | `the pre-2.1 attribute name is read when the current one is absent` | `toolCallOf(toolEvent({ attrs: { tool_name: 'Read', tool_parameters: JSON.stringify({ file_path: '/tmp/a.txt' }) } }))` | `name === 'Read'` and `text.includes('/tmp/a.txt')`. Then both present at once: `attrs: { tool_name: 'Read', tool_input: '{"file_path":"/new"}', tool_parameters: '{"file_path":"/old"}' }` → `text.includes('/new')` and `!text.includes('/old')`, message: the current name wins |
+| T3 | `parameters that are not JSON are kept as they arrived, not dropped` | `toolCallOf(toolEvent({ attrs: { tool_name: 'Bash', tool_input: 'not json {' } }))` | `text === 'not json {'`, `chars === 10`, `truncated === false` — and the call did not throw |
+| T4 | `a call with no parameters and no name is still a row` | `toolCallOf({ seq: 1, timeMs: 1000, spanId: 'sp-a' })`; then `toolCallOf({ seq: 1, timeMs: 1000, spanId: 'sp-a', attrs: { tool_name: '' } })` | both `deepEqual` to `{ seq: 1, timeMs: 1000, spanId: 'sp-a', name: 'tool', chars: 0, preview: '', text: '', truncated: false }` |
+| T5 | `a call whose parameters are a whole file keeps a bounded amount of them, and says how much there was` | `const big = 'x'.repeat(50_000); const out = toolCallOf(toolEvent({ attrs: { tool_name: 'Write', tool_input: JSON.stringify({ file_path: '/tmp/big', content: big }) } }));` | `assert.equal(out.text.length, TOOL_PARAM_CHARS, 'the page may not hold a file per tool call')`; `assert.ok(out.chars > TOOL_PARAM_CHARS)`; `assert.equal(out.truncated, true)`; `assert.ok(out.text.startsWith('{\n  "file_path": "/tmp/big"'), 'what is kept is the beginning, where the parameters that name the call are')`; `assert.ok(out.preview.length <= 121, 'the collapsed line stays one line')`; `assert.ok(out.preview.endsWith('…'))` |
+| T6 | `a missing spanId becomes null rather than undefined` | **rewrite of the existing case at `timeline.test.mjs:653`** — `mergeToolMarks([], [{ seq: 3, timeMs: 2000 }])` | `deepEqual(result.marks, [{ seq: 3, timeMs: 2000, spanId: null, name: 'tool', chars: 0, preview: '', text: '', truncated: false }])`. The case keeps its name and its point |
+| T7 | **replaces** the case at `timeline.test.mjs:575`, renamed `merging into an empty index keeps every call, with the name and parameters a panel draws` | `mergeToolMarks([], [toolEvent({ seq: 4, timeMs: 2000 }), { seq: 7, timeMs: 3000, spanId: 'sp-b' }])` | `deepEqual(result.marks, [toolCallOf(toolEvent({ seq: 4, timeMs: 2000 })), toolCallOf({ seq: 7, timeMs: 3000, spanId: 'sp-b' })])` and `result.seq === 7`, with the message that the merge projects through `toolCallOf` and holds nothing else |
+
+The other merge cases at `:590`, `:602`, `:613`, `:621`, `:632`, `:643` and
+`:658` stay exactly as they are — dedup, watermark, non-mutation and the
+density's reading of the index are unchanged by the richer projection, and they
+must go on passing to show it.
+
+#### Criterion — a call lands on the lane that made it, and on no other
+
+Level: unit, `tools/argus-ui/test/timeline.test.mjs` for the shared rules and
+`tools/argus-ui/test/tools.test.mjs` for the list.
+
+| # | Case name | Input / state | Expected |
+| --- | --- | --- | --- |
+| T8 | `each agent lane's span names that lane, and nothing else does` | `spanLaneKeys(buildLanes({ session: session(), content: threeRecordContent() }).lanes)` — the existing fixture builds one main lane and one agent lane on `sp-a` | the map has exactly one entry, `'sp-a' → 'agent:sp-a:code-reviewer'`; `assert.equal(map.get(undefined), undefined)` and `assert.equal(map.size, 1, 'the main lane owns no span — a tool call reaches it by not matching any agent')`. Plus: two agent lanes with the same `spanId` keep the first (`spanLaneKeys([{ kind: 'agent', spanId: 's', key: 'a' }, { kind: 'agent', spanId: 's', key: 'b' }]).get('s') === 'a'`), an agent lane with no span is skipped, and `spanLaneKeys(undefined)` is an empty map |
+| T9 | `a key names its lane, and a key no lane carries names none` | `laneByKey` over `buildLanes({ session: session(), content: threeRecordContent() })` | `laneByKey(view, 'agent:sp-a:code-reviewer') === view.lanes[1]`; `laneByKey(view, 'main') === view.lanes[0]`; `laneByKey(view, 'agent:gone:x') === null`; `laneByKey(view, null) === null`; `laneByKey(null, 'main') === null`; `laneByKey({}, 'main') === null` |
+
+`tools.test.mjs` opens with its own factories, modelled on `context.test.mjs`'s
+so the two panels' cases read alike:
+
+```js
+import test from 'node:test';
+import assert from 'node:assert/strict';
+
+import { laneToolInput, renderToolPanel } from '../public/tools.js';
+import { toolCallOf, TOOL_PARAM_CHARS } from '../public/timeline.js';
+import { esc, fmtNum, previewOf } from '../public/format.js';
+
+const lane = (over = {}) => ({ key: 'main', kind: 'main', label: 'main session', spanId: null, agent: null, ...over });
+const agentLane = (over = {}) =>
+  lane({ key: 'agent:sp-b:probe', kind: 'agent', label: 'probe', spanId: 'sp-b', agent: 'probe', ...over });
+const view = (over = {}) => ({ startMs: 1000, endMs: 5000, durationMs: 4000, lanes: [lane(), agentLane()], ...over });
+
+/** A call as the merged index holds it: main traffic rides the interaction span. */
+const call = (over = {}) =>
+  toolCallOf({
+    seq: 1,
+    timeMs: 2000,
+    spanId: 'sp-main',
+    attrs: { tool_name: 'Bash', tool_input: JSON.stringify({ command: 'echo hi' }) },
+    ...over,
+  });
+
+/** The markup of each rendered row, in the order the panel prints them. */
+const rowChunks = (html) => [...html.matchAll(/<details class="ctx-block"[\s\S]*?<\/details>/g)].map((m) => m[0]);
+```
+
+| # | Case name | Input / state | Expected |
+| --- | --- | --- | --- |
+| U1 | `an agent lane lists its own calls, and the main lane the rest` | four calls: `call({ seq: 1, timeMs: 1500 })` and `call({ seq: 3, timeMs: 2500, attrs: { tool_name: 'Read', tool_input: '{"file_path":"/a"}' } })` on `sp-main`, `call({ seq: 2, timeMs: 2000, spanId: 'sp-b', attrs: { tool_name: 'Grep', tool_input: '{"pattern":"x"}' } })` on the probe's span, and `call({ seq: 4, timeMs: 2600, spanId: null })` | `laneToolInput({ view: view(), key: 'agent:sp-b:probe', calls, cursor: null }).calls.map((c) => c.seq)` is `[2]`, with the message that a subagent's list showing main-session calls is the mutation this catches; the same for `key: 'main'` is `[4, 3, 1]` — the span-less call included, the probe's excluded |
+| U2 | `only the calls made at or before the moment are listed` | the same four calls, `cursor: { live: false, timeMs: 2500 }` | main lane → `[3, 1]`: the call *at* 2500 is in (a boundary that excludes it hides the call the reader scrubbed to) and the one at 2600 is out. Then `timeMs: 1499` → `[]`, and `timeMs: 9999` (past the window) → clamped to the window end, `[4, 3, 1]` |
+| U3 | `a live cursor lists everything recorded, a parked one does not` | the same four calls and `key: 'main'`, with `cursor: null`, then `cursor: { live: true, timeMs: null }`, then `cursor: { live: false, timeMs: 2000 }` | the first two both give `[4, 3, 1]` and `atMs === 5000` (the window's end); the third gives `[1]` with `atMs === 2000`. Message: the tool list and the context fetch resolve the moment by the same rule, so one click cannot show two moments |
+| U4 | `the newest call is the first row` | calls at 1500, 2000, 2500 on the main span, given in ascending order | `calls.map((c) => c.timeMs)` is `[2500, 2000, 1500]`; and two calls with the same `timeMs` come back highest-`seq` first |
+| U5 | `no lane selected leaves nothing to list, and nothing to draw` | `laneToolInput({ view: view(), key: null, calls: [call()] })`, `…key: 'agent:gone:x'…`, and `laneToolInput()` with no argument | each has `lane === null` and `deepEqual(out.calls, [])`; and `assert.equal(renderToolPanel(laneToolInput({ view: view(), key: null, calls: [call()] })), '', 'no lane selected, no tool panel under the timeline')`; `renderToolPanel()` is `''` too |
+| U6 | `the index the page holds is not reordered under it` | `const calls = [call({ seq: 1, timeMs: 1500 }), call({ seq: 2, timeMs: 2500 })]; const before = calls.slice(); laneToolInput({ view: view(), key: 'main', calls });` | `deepEqual(calls, before)` — the sort must not run on the array page state holds |
+
+#### Criterion — the panel says which tool, and what it was called with
+
+Level: unit, `tools/argus-ui/test/tools.test.mjs`. Every case renders through
+`renderToolPanel(laneToolInput({…}))`, so what is asserted is what the page
+paints.
+
+| # | Case name | Input / state | Expected |
+| --- | --- | --- | --- |
+| R1 | `every row names its own tool` | three calls with distinct names (`Bash`, `Read`, `Grep`) and distinct moments on the main span, rendered for `key: 'main'` | `rowChunks(html).length === 3`; per row `assert.equal(chunk.match(/<span class="ctx-label">([\s\S]*?)<\/span>/)[1], esc(expected.name), 'row i must name its own tool — one name printed for every row is the mutation this catches')`; and `assert.match(chunk, new RegExp('data-tool="' + expected.name + '"'))` |
+| R2 | `every row carries that call's own parameters, in full where they fit` | the same three calls, each with a different `tool_input` (`{command:'echo hi'}`, `{file_path:'/tmp/a.txt'}`, `{pattern:'needle'}`) | per row: the `<pre class="ctx-text">…</pre>` content equals `esc(callAtThatRow.text)` exactly; `assert.ok(rows[1].includes('/tmp/a.txt'), 'the parameters are what answers "what for"')`; and `assert.ok(!rows[0].includes('/tmp/a.txt'), 'one call\'s parameters under another call\'s name is unreadable and wrong')` |
+| R3 | `every collapsed row shows that call's own size and its own one line` | the three calls, whose parameter texts differ in length | first `assert.ok(new Set(calls.map((c) => c.chars)).size > 1, 'the fixture must carry calls of differing sizes, or one size printed for all of them would pass')`; per row `data-chars` equals that call's `chars` and the visible text equals `esc(fmtNum(chars))`; per row the `<span class="ctx-preview">` content equals `esc(call.preview)`, with a guard that no preview in the fixture is empty |
+| R4 | `a call whose parameters were cut says how much is missing, and still reports the whole size` | one call built from `'x'.repeat(50_000)` as in T5 | the row's `data-chars` is the *untruncated* `chars`; the `<pre>` contains `esc(call.text)` and then `more characters, not kept in the page`; `assert.ok(!html.includes('x'.repeat(TOOL_PARAM_CHARS + 1)), 'the panel may not paint what the page deliberately did not keep')` |
+| R5 | `the panel names the lane it was drawn for, and how many calls up to when` | `key: 'agent:sp-b:probe'` with one call on `sp-b` at 2000, `cursor: { live: false, timeMs: 3000 }` | `data-tools-lane="agent:sp-b:probe"`, `data-state="ready"`, `data-calls="1"`, `data-time="3000"`, the label `probe` present, `1 tool call` (singular) present, and `assert.ok(!html.includes('main session'), 'a subagent\'s tools under the main session\'s heading is the mutation this catches')`. Then the main lane with two calls → `data-calls="2"` and `2 tool calls` |
+| R6 | `a lane that had used no tool by that moment says so rather than vanishing` | `key: 'main'`, calls all after the cursor | `data-state="empty"`, the placeholder sentence present, `rowChunks(html).length === 0`, and `assert.ok(html.includes('data-tools-lane="main"'), 'the panel stays, so the reader can tell "nothing yet" from "nothing selected"')` |
+| R7 | `an expanded row stays open across a repaint, and its key cannot collide with a context block's` | `expanded: ['tool:2']` over calls with `seq` 1, 2, 3 | the row whose `data-block="tool:2"` carries ` open`; the other two do not; every `data-block` in the markup starts with `tool:`; and `assert.ok(!/data-lane=/.test(html), 'a data-lane attribute here would make every click inside the panel toggle the lane selection')` |
+| R8 | `a parameter that looks like markup is shown, not run` | a call with `tool_input: JSON.stringify({ command: '<script>alert(1)</script> && echo "a" & b' })` | `assert.ok(!html.includes('<script>'))`; `assert.ok(html.includes('&lt;script&gt;'))`; and the same for the preview span — the escaped form appears in both the `<pre>` and the collapsed line |
+
+#### Criterion — the click paints the tool list, under the same selection and the same moment
+
+Level: source assertions over `app.js`, in `tools/argus-ui/test/page.test.mjs`.
+The page's own hop is DOM event → DOM write; there is no value in it to assert,
+so each case reads the exact statement (the honest ceiling this run settled on
+in increment 6).
+
+| # | Case name | Input / state | Expected |
+| --- | --- | --- | --- |
+| P1 | **new**, `app.js takes the tool panel from its module` | the whole `app.js` source | for each of `renderToolPanel` and `laneToolInput`: `assert.match(appJs, new RegExp('import\\s*\\{[^}]*\\b' + name + '\\b[^}]*\\}\\s*from\\s*[\'"]\\./tools\\.js[\'"]'), …)` — the same loop shape the existing case at `:349` uses for `context.js` |
+| P2 | **new**, `the markup the panels render is what reaches the container` | `functionSource(appJs, 'renderLanePanel')` | `assert.match(renderLanePanel, /container\.innerHTML\s*=\s*renderContextPanel\(/, 'a panel computed and then thrown away paints an empty box for every lane')` and `assert.match(renderLanePanel, /\+\s*renderToolPanel\(/, 'the tool list must be part of that same assignment, so no repaint can paint one panel without the other')`. This closes the reviewer's recorded M-K' hop, which now sits inside this increment's own chain |
+| P3 | **new**, `the tool list is drawn for the selected lane, at the cursor's moment, from the calls the page holds` | `functionSource(appJs, 'renderLanePanel')` sliced from `indexOf('renderToolPanel(')` to the next `';'` | the slice matches `/laneToolInput\(/`, `/\bview,/`, `/key:\s*state\.selectedLane\b/` (message: without it the list is empty for every lane), `/calls:\s*state\.toolMarks\b/` (message: the merged index is the only source there is), `/cursor:\s*state\.cursor\b/` (message: without it the list ignores the scrub) and `/expanded:\s*state\.expanded\b/` |
+| P4 | **rewrites two assertions** in the existing case at `page.test.mjs:481`, `the panel is drawn from the lane the reader selected and the answer held for it` | as today, plus `functionSource(appJs, 'renderLanePanel')` whole | the assertion `assert.match(slice, /view:\s*laneView\(\)/, …)` is replaced by two: `assert.match(renderLanePanel, /const view = laneView\(\);/, 'the page must build its lane view once and hand the same one to both panels')` and `assert.match(slice, /\bview,/, 'the page\'s own lane view must reach the panel')`. Every other assertion in that case stays untouched |
+
+The case at `page.test.mjs:467` (`renderLanePanel` writes into `lane-panel`,
+delegates to `renderContextPanel`, never calls `renderDetail`) and the one at
+`:511` (`state.expanded` reaches the panel) stay as they are and must keep
+passing over the new body.
+
+#### The project's own rules
+
+| # | Case name | Input / state | Expected |
+| --- | --- | --- | --- |
+| I1 | **edits** `tools/argus-ui/test/independence.test.mjs` | the two lists at lines 21-35 and 53-61 | `'public/tools.js'` is added to both, so the new module is required to exist and is required to be inside the import scan. No case body changes |
+| C1 | **edits** the import block of `tools/argus-ui/test/context.test.mjs` | lines 4-13 | `PREVIEW_CHARS` moves from the `../public/context.js` import list to the `../public/format.js` one. No case body changes, and every existing case in the file must keep passing — that is the evidence the move changed no behaviour |
+
+#### What is deliberately left untested, and why
+
+- **A real click in a real browser.** No DOM and no dependency is available
+  (`tools/argus-ui/CLAUDE.md`: zero runtime dependencies); P2 and P3 are the
+  sharpened source assertions that stand in for it, by the same decision
+  increment 6 recorded.
+- **The CSS.** Four declarative rules with no logic; nothing a `node --test`
+  case could assert about them that would not be a copy of the file.
+- **The README sentence.** Prose.
+- **The wire.** `/api/events`, its `sinceSeq` paging and the tool-event fetch
+  are unchanged here, and `page.test.mjs:156` and `tools/argus`' own suite
+  already cover them.
+- **`buildDensity`'s counts and marks.** Unchanged behaviour behind a lifted
+  helper; the existing density cases at `timeline.test.mjs:520-670` are the
+  regression test for the lift, and no new case is added for them.
+- **The debounce and the repaint paths.** `scheduleLaneContext`, the live
+  control and `refresh` are untouched and already pinned at
+  `page.test.mjs:495-520`; the tool list rides those paths without adding one.
+- **Recordings made without the content flags.** Out of contract for the whole
+  run (issue decision 5); no case may pin behaviour for a tool event with no
+  `tool_input`, beyond T4's "a call with no parameters is still a row", which
+  exists for a malformed record rather than for an unflagged recording.
+
+#### What counts as done
+
+Two commands, from the repository root, and nothing else:
+
+```
+npm --prefix tools/argus-ui test
+./test.sh
+```
+
+The first is the increment's own suite and points straight at what broke; the
+second is the issue's closing criterion and is the one that must be green for
+the issue to be complete. Nothing else is to be run: no linter exists, and
+`tools/argus` is untouched by this increment except as one of the five suites
+`./test.sh` already runs.
+
+#### What is already red
+
+Nothing, as far as reading shows: the working tree is clean at `57fac55`, the
+previous increment was accepted with 181 passing UI cases and exit 0, and this
+increment touches no other package. **I ran neither command, not even as a
+baseline** — a run would have bought no fact I could not state from the code,
+and the first run belongs to whoever runs it downstream. Two things will go red
+the moment the production change lands and before the test work is done, and
+they are expected: `timeline.test.mjs:575` and `:653` (the two `deepEqual`s over
+the old three-field mark shape) and `context.test.mjs`'s import of
+`PREVIEW_CHARS`, which will be an undefined binding until the import line moves.
+T6, T7 and C1 above are their fixes.
