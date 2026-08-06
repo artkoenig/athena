@@ -378,3 +378,159 @@ The only commands I ran were the three live captures described at the top of thi
 section, against a throwaway collector on a free port, and they exist because the
 issue asked for two questions to be settled that no file in this repository can
 answer.
+
+## Increment 1 — Round 1
+
+The reviewer raised one finding, and it is a coverage gap, not a defect: nothing
+in the suite touches `claude_code.api_response_body`, and the `eventName` filter
+of `listContent`/`contentAt` — reachable over the API only as `event=` — is never
+passed a value at any level. So the whole of this round is new test cases plus the
+two fixture helpers they need. I read `src/claude.mjs`, `src/store.mjs`,
+`src/server.mjs` and the three test files again to settle exactly that, and I ran
+nothing.
+
+### Implementation plan
+
+**No production file changes in this round.** The implementation already handles
+response bodies on every path the finding names, and I confirmed each by reading:
+
+- `CONTENT_EVENTS` holds both events (`src/claude.mjs:175`), so `#applyLog`
+  indexes a response body (`src/store.mjs:484`) and `/api/events` strips its
+  `body` (`src/server.mjs:240`);
+- `contentMetaOf` maps `request_id` → `requestId` (`src/claude.mjs:223`), which is
+  the attribute the live capture found on response bodies and only on them;
+- `describeEvent` has its own `EVENT.apiResponseBody` case
+  (`src/claude.mjs:286-287`) that names the size and never the text;
+- `matchesContent` compares `log.eventName` exactly (`src/store.mjs:199`), and the
+  routes pass `searchParams.get('event')` through — `null` means "no filter" on
+  `/api/content`, and `?? EVENT.apiRequestBody` supplies the documented default on
+  `/api/content/at` (`src/server.mjs:257`, `src/server.mjs:278`).
+
+The new cases are therefore regression pins that hold against the code as it
+stands: they are expected to pass on their first run, and their value is that
+deleting `EVENT.apiResponseBody` from `CONTENT_EVENTS` — the reviewer's own
+reproduction — turns three of them red at once. The implementer's work this round
+is to run the list and fix only what it reports; if every case is green with no
+production edit, that is the correct outcome and not a skipped correction.
+
+Two fixture helpers change, both in test files, both additive so no existing case
+is touched:
+
+1. `tools/argus/test/store.test.mjs` — `bodyLog` (lines 38-52) builds a
+   `claude_code.api_request_body` record. Add a sibling below it that reuses it:
+   ```js
+   // A response body as measured: same shape as a request body, plus request_id.
+   const responseBodyLog = (attributes = {}, timeMs = Date.now()) => ({
+     ...bodyLog({ request_id: 'req_011Cdm', ...attributes }, timeMs),
+     eventName: 'claude_code.api_response_body',
+   });
+   ```
+   Overriding a field on a spread of `bodyLog` is how the file already builds a
+   variant record (`{ ...bodyLog(...), spanId: 'span-a' }`, line 539).
+2. `tools/argus/test/server.test.mjs` — `contentLogsPayloadJson` (lines 73-103)
+   hardcodes `eventName: 'claude_code.api_request_body'` at line 85. Read it from
+   the overrides instead: `overrides.eventName ?? 'claude_code.api_request_body'`,
+   and append a `request_id` attribute when `overrides.requestId` is given. Both
+   defaults keep every existing caller byte-identical in behaviour.
+
+### Decisions I rejected
+
+- **Adding an `event=` case for `/api/content` on the request body as well.** The
+  request path is already covered end to end by the round-0 cases; what is
+  unverified is that the filter *discriminates*, and case 1 below proves that with
+  both event names in one store.
+- **Acting on the reviewer's two "beyond the criteria" notes** (span-carried tool
+  content is unstripped and unbudgeted; `/api/events?search=` stringifies bodies).
+  Neither violates a criterion of this increment and the reviewer filed neither as
+  a correction. They stay out of this round; the span/search surfaces are not to
+  be edited here.
+- **A case for the `contentAt` ordering note** ("last ingested at or before"
+  rather than "newest by timestamp"). The reviewer recorded it explicitly as not a
+  finding and could construct no real out-of-order arrival; pinning the current
+  order would freeze an accident.
+
+### Module map
+
+| Path | What it holds | What this round touches |
+| --- | --- | --- |
+| `tools/argus/test/store.test.mjs` | Store unit suite; fixture helpers `log`/`bodyLog` at the top | new `responseBodyLog` helper, two new cases |
+| `tools/argus/test/server.test.mjs` | HTTP API suite over `withServer`; fixture `contentLogsPayloadJson` | `eventName`/`requestId` overrides in the fixture, two new cases |
+| `tools/argus/test/claude.test.mjs` | Pure-function suite for `otelEnvFor`/`describeEvent` | one new case |
+| `tools/argus/src/claude.mjs` | `CONTENT_EVENTS`, `contentMetaOf`, `describeEvent` | read only — no change expected |
+| `tools/argus/src/store.mjs` | Content index, `listContent`, `contentAt` | read only — no change expected |
+| `tools/argus/src/server.mjs` | `/api/content`, `/api/content/at`, `/api/events` | read only — no change expected |
+
+### Environment
+
+- Node v22.22.2 at `/opt/node22/bin/node`; the package requires ≥ 20.11.
+- `tools/argus` has zero runtime and zero dev dependencies; `npm install` is not
+  needed and must not become needed.
+- Whole package, from the repository root: `npm --prefix tools/argus test`
+  (`node --test test/*.test.mjs`).
+- A single file, from the repository root:
+  `node --test tools/argus/test/store.test.mjs`, and the same shape for
+  `server.test.mjs` and `claude.test.mjs`.
+- There is no linter and no formatter in this repository — nothing to run.
+- `./test.sh` runs every suite in the repository and is not on this round's list;
+  the closing increment owns it.
+
+### Test plan
+
+Tests are needed: the finding is that a case is missing, so the correction *is*
+the case. Framework: `node:test` with `node:assert/strict`. Conventions, taken
+from the files themselves: a test name is a full lowercase sentence stating the
+fact; fixtures come from the local factory helpers at the top of each file;
+nothing is mocked beyond those fixtures; every `assert` that could be ambiguous
+carries a message argument saying what the fact is; and — from
+`tools/argus/CLAUDE.md` — a message is asserted as an absence, never as a
+wording.
+
+#### The cases
+
+| # | Case | File | Level |
+| --- | --- | --- | --- |
+| 1 | Ingest one `bodyLog()` and one `responseBodyLog({ 'prompt.id': 'p-resp' })` into one store. `listContent({ sessionId: SESSION, eventName: 'claude_code.api_response_body' })` returns exactly one item, whose `eventName` is the response event, whose `requestId` is `'req_011Cdm'`, and which has no `body` key. `listContent({ sessionId: SESSION, eventName: 'claude_code.api_request_body' })` returns exactly one item and it is the request record. Both together prove the response record is indexed *and* that the filter discriminates. | `tools/argus/test/store.test.mjs` | unit |
+| 2 | Ingest `bodyLog({ body: '<request text>' }, t)` and `responseBodyLog({ body: '<response text>' }, t + 10)`. `contentAt({ sessionId: SESSION, atMs: t + 100, eventName: 'claude_code.api_response_body' })` returns the exact response text; `contentAt({ sessionId: SESSION, atMs: t + 100 })` with no `eventName` returns the exact request text — the documented default, and proof the newer response record does not bleed into it. | `tools/argus/test/store.test.mjs` | unit |
+| 3 | POST `contentLogsPayloadJson('s-response', { eventName: 'claude_code.api_response_body', body: <a string distinct from the fixture default>, requestId: 'req_011Cdm' })` to `/v1/logs`. Then: `GET /api/content?session=s-response&event=claude_code.api_response_body` is 200 with one item carrying that `eventName` and no `body` key; `GET /api/content/at?session=s-response&at=<Number(T0/1000000n)>&event=claude_code.api_response_body` is 200 and `item.body` is that exact string; `GET /api/content/at?session=s-response&at=<same>` without `event=` is 200 with `item === null`, because the session holds no request body and the route defaults to that event. | `tools/argus/test/server.test.mjs` | integration (HTTP over `withServer`) |
+| 4 | POST the same fixture to its own session `s-response-tail`, then `GET /api/events?session=s-response-tail`: the single item's `attrs` has no `body` key, `item.content` is present, and `item.content.bodyChars` equals the posted body's length. A response body must not ship through the polled tail any more than a request body does. | `tools/argus/test/server.test.mjs` | integration |
+| 5 | `describeEvent` on a `claude_code.api_response_body` record whose body contains a recognisable secret string returns a summary that does not contain that string and does match the body length — the same absence assertion the request-body case at line 71 makes, for the other event. | `tools/argus/test/claude.test.mjs` | unit |
+
+Cases 1, 3 and 4 are the three the reviewer's reproduction turns red: removing
+`EVENT.apiResponseBody` from `CONTENT_EVENTS` stops the record being indexed
+(1, 3) and stops the tail stripping its body (4).
+
+#### Deliberately untested, and why
+
+- **The `event=` parameter with a value that is not a content event** (say
+  `claude_code.user_prompt`): it can only ever match nothing, since the index holds
+  content records alone, and no route promises otherwise.
+- **`limit`, `agent`, `main` and `span` on a response body**: those filters are
+  shared code (`matchesContent`), already pinned on the request body, and are not
+  event-specific.
+- **Recordings made without the content flags**: out of contract by the issue's
+  own decision — no case in this round or any later one may pin behaviour for
+  them.
+- **The two "beyond the criteria" notes in the review** (span-carried tool content,
+  search latency): not findings, not corrections, and no case is written for
+  either.
+- **Everything the round-0 plan covered**: it is already in the suite and is not
+  re-specified here; this section adds cases and removes none.
+
+#### What counts as done
+
+```
+npm --prefix tools/argus test
+```
+
+That one command, from the repository root, is the whole list. It runs the three
+files this round touches plus the rest of the package, costs seconds, and needs
+no install. `./test.sh` and the `argus-ui` suite are off the list: nothing outside
+`tools/argus/test` changes here.
+
+#### What is already red
+
+I did not run the list, not once and not as a baseline. I expect nothing red
+before the change and nothing red after it: the five cases assert behaviour the
+current implementation already has, and the two fixture edits are additive with
+defaults that leave every existing caller unchanged.
+
