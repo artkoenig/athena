@@ -3952,3 +3952,282 @@ exports no existing case names, `laneContentQuery`, `contextBlocks`,
 specifier that resolves inside the project, and `clearLaneContext`,
 `scheduleLaneContext`, `scrubTo`, `refresh`, `selectSession` and the delegated
 listeners keep every line the remaining cases read.
+
+## Increment 6
+
+The panel works. Three rounds of review read the production code line by line
+and found it meeting the criterion every time; what the suite cannot see is the
+last stretch of the chain from the click to the markup. This increment closes
+exactly that: the reviewer's five measured mutations (M-A … M-E) each have to
+fail a case when this increment is done, and nothing a reader of the page can
+see may move.
+
+The criterion carried forward from the blocked increment — "selecting a lane at
+the chosen time shows that agent's (or the main session's) context as of that
+moment, as a structured message list, each block collapsed to one line with its
+size, expandable to the exact full text" — is owned here now. It is met by the
+code as it stands; this section does not rebuild it, it pins it.
+
+### The planner's open question, answered per hop
+
+The planner asked, for each of the three hops, whether it can be made
+value-testable or whether a sharpened source assertion is the honest ceiling.
+
+| Hop | Finding | Answer |
+| --- | --- | --- |
+| The selected lane reaching the panel (M-A, M-C) | 1 | **Value-testable, by restructuring.** The lane lookup and the whole object `renderContextPanel` is called with move into `context.js` as one pure `lanePanelInput`. Both mutations then fail an executable case. One source assertion stays, over the four page values handed in. |
+| The click's own repaint (M-B) | 2 | **A sharpened source assertion is the ceiling, and it kills M-B.** The hop is DOM event → DOM write; there is no value in it to assert. Today's case reads only that `loadLaneContext(` appears in the branch. The new one reads the statement and requires the repaint chained on that fetch's own promise. |
+| The sizes and the preview in the markup (M-D, M-E) | 3 | **Already value-testable; only the assertions were loose.** No production change at all — the cases in `context.test.mjs` compare what the markup prints against the block's own `chars` and `preview`. |
+
+### Implementation plan
+
+Two production files change, both under `tools/argus-ui/public`. No markup, no
+CSS, no README, no file in `tools/argus`. The rendered output is byte-identical
+before and after.
+
+**A. `tools/argus-ui/public/context.js` — the panel's whole input becomes one
+pure value.**
+
+Add, directly after `laneContextInput` (which stays exactly as it is, export
+included) and before `renderContextPanel`:
+
+```js
+/**
+ * Everything `renderContextPanel` is drawn from, out of what the page holds.
+ *
+ * The lane is looked up by the key the reader selected and by nothing else: a
+ * lookup that lands on another lane paints one agent's context under another
+ * agent's heading, and the reader cannot tell. A key no lane in the view
+ * carries — and no key at all — resolves to no lane, which is how the panel
+ * disappears when the selection is let go.
+ *
+ * The four keys are the four `renderContextPanel` reads, so the result is its
+ * argument whole: the page cannot drop one of them on the way.
+ *
+ * @param {{ view: object|null, key: string|null, held: object|null, expanded: string[]|Set<string> }} input
+ * @returns {{ lane: object|null, item: object|null, pending: boolean, expanded: string[]|Set<string> }}
+ */
+export function lanePanelInput({ view = null, key = null, held = null, expanded = [] } = {}) {
+  const lane = key ? ((view?.lanes ?? []).find((entry) => entry.key === key) ?? null) : null;
+  return { lane, ...laneContextInput(key, held), expanded };
+}
+```
+
+The module header (lines 1-16) already says the module holds "what the page
+holds turned into what the panel is drawn from" — still true, leave it.
+
+**B. `tools/argus-ui/public/app.js` — the page hands its state over.**
+
+- Line 11 becomes
+  `import { fetchLaneContext, lanePanelInput, renderContextPanel } from './context.js';`.
+  `laneContextInput` leaves this import: the page no longer calls it.
+- `renderLanePanel` (lines 934-944) keeps its name, its doc comment, the
+  container lookup and the `if (!container) return;`. The `const key` and
+  `const lane` lines go, and the body becomes:
+
+```js
+  container.innerHTML = renderContextPanel(
+    lanePanelInput({
+      view: laneView(),
+      key: state.selectedLane,
+      held: state.laneContext,
+      expanded: state.expanded,
+    }),
+  );
+```
+
+- Nothing else in `app.js` changes. `loadLaneContext`, `clearLaneContext`,
+  `scheduleLaneContext`, `laneView`, `refresh`, `selectSession` and every
+  listener — the `[data-lane]` branch at 1147-1155 included — keep every line
+  they have. Finding 2 is closed by a test, not by an edit.
+
+### Decisions, including the ones rejected
+
+1. **`lanePanelInput` returns the whole argument object, not just the lane.**
+   M-A was "delete the `lane,` line from the object literal in `app.js`". Once
+   the object is built in the pure module there is no line in `app.js` to
+   delete, and the deletion that remains — dropping `key: state.selectedLane`
+   from the one call — is a named key a source assertion reads. Rejected: adding
+   only a pure `laneByKey(view, key)` and keeping the literal in `app.js`, which
+   pins M-C by value but leaves M-A exactly where it was, guarded by a source
+   assertion on a `lane:` property.
+2. **`laneContextInput` stays exported although `app.js` no longer imports it.**
+   Its three cases pin the fresh/foreign/absent mapping at the finest grain
+   there is, and the export is what lets them run. This is the same call the
+   previous round made for `laneContentQuery`; making it private would delete a
+   closed finding's answer.
+3. **Finding 2 gets a sharpened assertion and no production change.** Rejected:
+   consolidating the three `loadLaneContext().then(renderLanePanel)` call sites
+   (`scheduleLaneContext` 952, the live control 1144, the lane click 1153) into
+   one `refreshLanePanel()` helper — it moves the mutation surface without
+   making it executable, and it edits two call sites no criterion of mine names.
+   Rejected: a hand-rolled DOM so a test could import `app.js` and dispatch a
+   real click — `app.js:24` reads `location.search` at module top level and the
+   module exports nothing, so driving it needs fakes for `document`,
+   `closest`, `querySelectorAll`, `EventSource`, `fetch`, `setInterval` and
+   `navigator`; that is a jsdom-sized harness hand-written into the suite, and a
+   dependency is forbidden (`tools/argus-ui/CLAUDE.md`, "Zero runtime
+   dependencies").
+4. **`laneView()` is now called on every panel repaint, including when no lane
+   is selected.** Today the lookup is guarded by `key ? … : null`, so a repaint
+   with nothing selected skips the build. Passing the view unconditionally is
+   what keeps the call one flat expression a source assertion can read. The cost
+   is one `buildLanes` over at most 2000 records per repaint, which the comment
+   above `laneView` (app.js:894-899) already judges free, and the panel with no
+   lane still renders the empty string, so nothing on screen changes.
+5. **Finding 3 changes no production code.** The renderer already prints
+   `block.chars` and `block.preview`; M-D and M-E are mutations of correct code
+   that the assertions failed to read. Rejected: restructuring the summary line
+   into a helper "so it can be unit-tested" — the markup is already the unit,
+   and touching it would risk the one thing this increment must not move.
+
+### Module map
+
+| Path | What it holds | Entry points |
+| --- | --- | --- |
+| `tools/argus-ui/public/context.js` (288 lines) | header 1-16, imports `format.js` 18 and `resolveCursor` from `timeline.js` 19, `PREVIEW_CHARS` 22, `textOf` 35, `previewOf` 48, `makeBlock` 53, `contextBlocks` 68, `laneContentQuery` 161, private `laneContentRequest` 183, `fetchLaneContext` 204, `laneContextInput` 222, `renderContextPanel` 236 (head 265-269, block rows 271-285; the size span is line 280, the preview span line 279) | gains the export `lanePanelInput` after line 225 |
+| `tools/argus-ui/public/app.js` (1284 lines) | import from `context.js` 11, `laneView` 900, `clearLaneContext` 905, `loadLaneContext` 915, `renderLanePanel` 934, `scheduleLaneContext` 948, `refresh` 987 (refetch 1001), `selectSession` 1024, `paintCursor` 1073, `scrubTo` 1091, `wireEvents` 1126 (live branch 1138-1146, lane branch 1147-1155, block-expand branch 1156-1164) | line 11 and the body of `renderLanePanel` |
+| `tools/argus-ui/public/timeline.js` (465 lines) | `buildLanes` (lane = `{ key, kind, agent, spanId, label, startMs, endMs, records }`; view = `{ startMs, endMs, durationMs, lanes }`), `resolveCursor` 346, `renderTimeline` — **read only, unchanged** | — |
+| `tools/argus-ui/public/format.js` | `esc` 9, `fmtNum` 15 (`>=1000` → `1.2k`, else the exact digits), `fmtClock` 43, `shortId` 63 — **unchanged** | the test computes expected sizes through `fmtNum` |
+| `tools/argus-ui/test/context.test.mjs` (648 lines) | imports 4-12; factories `requestBody` 17, `item` 43, `lane` 55, `agentLane` 57, `view` 60, `recorder` 63; the render block 275-382; the round-1 block 384-452; `laneContentQuery` 454-482; `fetchLaneContext`/`laneContextInput` 484-647 | one import line, one helper, three rewritten assertions, four new cases |
+| `tools/argus-ui/test/page.test.mjs` (549 lines) | helpers `functionSource` 20, `detailListener` 29; increment 5's block 346-548 | two rewritten cases (349, 462), one new case |
+| `tools/argus-ui/test/independence.test.mjs` | the project-wide import rule; already lists `public/context.js` — **unchanged** | — |
+
+### Environment
+
+Node ≥ 20.11, already installed. Zero runtime dependencies, no install step, no
+build step, and **there is no linter and no formatter in this repository** — no
+eslint config, no `.prettierrc`, no `.editorconfig`.
+
+The one command this increment's test plan asks anyone to run, from the
+repository root:
+
+```
+npm --prefix tools/argus-ui test
+```
+
+It runs `node --test "test/*.test.mjs"` over the six files in
+`tools/argus-ui/test/` and takes seconds. While working on a single file,
+`node --test tools/argus-ui/test/context.test.mjs` and
+`node --test tools/argus-ui/test/page.test.mjs` run just that file; neither is
+part of the closed list below.
+
+### Test Plan
+
+Tests are needed, and they are the whole point of the increment: every case
+below exists because a measured mutation survives without it. Everything is
+`node:test` + `node:assert/strict` in `tools/argus-ui/test/`, in the style
+already in those files — one `test('a sentence stating the fact', () => {…})`
+per fact, factories at the top of the file, a message on every non-obvious
+assert, nothing faked beyond the `recorder` api function already there. No test
+imports `tools/argus`, and no test needs a DOM.
+
+This section's list is the whole of what is asked for. Every other case in both
+files stays exactly as it is; the two rewrites named below are the only existing
+cases that may be touched, and they are touched because the production change
+makes them read a line that no longer exists.
+
+#### Criterion — the panel is drawn from the lane the reader selected (M-A, M-C)
+
+Level: unit, executable, in `tools/argus-ui/test/context.test.mjs`, plus one
+source assertion in `tools/argus-ui/test/page.test.mjs`. The import at line 4-11
+of `context.test.mjs` gains `lanePanelInput`. The existing `lane()`,
+`agentLane()`, `view()` and `item()` factories are the whole input; `view()`
+already carries `[lane(), agentLane()]`, i.e. the main lane and
+`agent:sp-b:probe`.
+
+| # | Case name | Input / state | Expected |
+| --- | --- | --- | --- |
+| C1 | `the panel input is built from the lane whose key the reader selected` | `const v = view(); const rec = item();` then `lanePanelInput({ view: v, key: 'agent:sp-b:probe', held: { key: 'agent:sp-b:probe', item: rec }, expanded: ['12:0'] })` | `assert.deepEqual(out, { lane: v.lanes[1], item: rec, pending: false, expanded: ['12:0'] })` and `assert.equal(out.lane, v.lanes[1], 'the agent lane itself — a lookup that lands on the main lane puts a subagent under the main session\'s heading')`. Then the same for `key: 'main'` with `held: { key: 'main', item: rec }`: `out.lane === v.lanes[0]` |
+| C2 | `a key no lane carries, and no key at all, leave nothing to draw` | `lanePanelInput({ view: view(), key: 'agent:gone:x', held: null })`; `lanePanelInput({ view: view(), key: null, held: { key: null, item: null } })`; `lanePanelInput()` with no argument | `lane === null` all three times; the last is `deepEqual` to `{ lane: null, item: null, pending: true, expanded: [] }`; and `assert.equal(renderContextPanel(lanePanelInput({ view: view(), key: null, held: null })), '', 'no lane selected, no panel under the timeline')` |
+| C3 | `a subagent lane's context is drawn under that subagent's own heading` | `const rec = item();` then `renderContextPanel(lanePanelInput({ view: view(), key: 'agent:sp-b:probe', held: { key: 'agent:sp-b:probe', item: rec }, expanded: [] }))` | `assert.match(html, /data-state="ready"/, 'an input with no lane renders the empty string — this is the case a dropped lane fails')`; `assert.ok(html.includes('data-context-lane="agent:sp-b:probe"'))`; `assert.ok(html.includes('probe'))`; `assert.ok(!html.includes('main session'), 'the main session\'s heading over a subagent\'s context is the mutation this case exists to catch')`; `assert.ok(html.includes('the answer'), 'the record\'s own content must be what the panel shows')`. Then the main-lane counterpart with `key: 'main'`: `data-context-lane="main"` and `html.includes('main session')` |
+| P2 | **replaces** `page.test.mjs:462`, renamed to `the panel is drawn from the lane the reader selected and the answer held for it` | `functionSource(appJs, 'renderLanePanel')`, sliced from `indexOf('renderContextPanel(')` to the next `';'` (the call spans lines and contains no `;` of its own) | the slice matches `/lanePanelInput\(/`, `/view:\s*laneView\(\)/`, `/key:\s*state\.selectedLane\b/` (message: without it the panel paints empty for every lane), `/held:\s*state\.laneContext\b/` and `/expanded:\s*state\.expanded\b/`. The old `/\.\.\.laneContextInput\(\s*key\s*,\s*state\.laneContext\s*\)/` assertion is **deleted**: that call now lives inside `lanePanelInput` and C1 pins it by value |
+| P1 | **replaces** `page.test.mjs:349`, keeping its name `app.js takes the context panel from its module` | the whole `app.js` source | the loop's name list becomes `['renderContextPanel', 'fetchLaneContext', 'lanePanelInput']` — `laneContextInput` is dropped from it, because the page no longer imports it and the case would otherwise go red on a correct change |
+
+#### Criterion — selecting a lane repaints the panel when its own fetch resolves (M-B)
+
+Level: source assertion over `app.js`, in `tools/argus-ui/test/page.test.mjs`.
+The honest ceiling for this hop, per the table above.
+
+| # | Case name | Input / state | Expected |
+| --- | --- | --- | --- |
+| P3 | **new**, `selecting a lane repaints the panel once its own fetch resolves, without waiting for an ingest` | `const clickListener = detailListener(appJs, 'click');` then `const laneIdx = clickListener.indexOf('data-lane');`, `const loadIdx = clickListener.indexOf('loadLaneContext(', laneIdx);`, `const endIdx = clickListener.indexOf(';', loadIdx);`, `const slice = clickListener.slice(loadIdx, endIdx);` | `assert.ok(laneIdx >= 0)`, `assert.ok(loadIdx > laneIdx, 'the lane branch must fetch the context it is about to show')`, `assert.ok(endIdx > loadIdx)`, and `assert.match(slice, /\.then\(\s*(?:renderLanePanel\b|\(\s*\)\s*=>\s*renderLanePanel\s*\()/, 'the fetch the click started must repaint the panel when it resolves — a finished session receives no further ingest, so nothing else ever repaints it and the panel keeps its pending line forever')` |
+
+The existing case at `page.test.mjs:394`, `selecting a lane fetches its
+context`, stays as it is: it pins that the fetch happens, P3 pins that its
+answer is painted.
+
+#### Criterion — the sizes and the one line reach the markup (M-D, M-E)
+
+Level: unit, executable, in `tools/argus-ui/test/context.test.mjs`. No
+production change. `fmtNum` joins `esc` in the import from
+`../public/format.js` at line 12. Add one helper beside the factories, used by
+the two new cases only:
+
+```js
+/** The markup of each rendered block, in the order the panel prints them. */
+const blockChunks = (html) => [...html.matchAll(/<details class="ctx-block"[\s\S]*?<\/details>/g)].map((m) => m[0]);
+```
+
+| # | Case name | Input / state | Expected |
+| --- | --- | --- | --- |
+| C4 | `every collapsed line shows that block's own size` | `const { blocks } = contextBlocks(requestBody()); const chunks = blockChunks(renderContextPanel({ lane: lane(), item: item() }));` | first `assert.ok(new Set(blocks.map((b) => b.chars)).size > 1, 'the fixture must carry blocks of differing sizes, or one size printed for all of them would pass')` and `assert.equal(chunks.length, blocks.length)`; then per block `const m = chunks[i].match(/<span class="ctx-size" data-chars="(\d+)">([\s\S]*?)<\/span>/);` `assert.ok(m, …)`, `assert.equal(Number(m[1]), blocks[i].chars, 'block i must advertise its own measured size')`, `assert.equal(m[2], esc(fmtNum(blocks[i].chars)), 'and the reader must see that same size, not another block\'s and not zero')` |
+| C5 | **rewrites two assertions inside the existing case at `context.test.mjs:302`**, `the head names the lane and the record the context came from` | `const body = requestBody(); const html = renderContextPanel({ lane: lane(), item: item({ body }) });` | the loose `assert.match(html, /data-chars="\d+"/)` on line 305 becomes `assert.match(html, new RegExp('<span class="context-meta" data-chars="' + body.length + '"'), 'the head\'s total must be the body\'s own length, not any number')`, and one assertion is added: `assert.ok(html.includes(fmtNum(body.length) + ' chars'), 'the readable line must carry the same total the data attribute does')`. Every other assertion in that case stays |
+| C6 | `the one line a collapsed block shows reaches the markup` | `const { blocks } = contextBlocks(requestBody()); const chunks = blockChunks(renderContextPanel({ lane: lane(), item: item() }));` | first `assert.ok(blocks.every((b) => b.preview.length > 0), 'no block of the fixture may preview as nothing, or an emptied preview span would pass')` and `assert.ok(blocks.some((b) => b.preview.endsWith('…')), 'at least one preview must be a real cut, so this case cannot pass on previews that are just the whole text')`; then per block `const m = chunks[i].match(/<span class="ctx-preview">([\s\S]*?)<\/span>/);` `assert.ok(m, …)`, `assert.equal(m[1], esc(blocks[i].preview), 'block i\'s collapsed line must be its own preview')` |
+
+The existing case at `context.test.mjs:282` — one `<details>` per block, in
+order, each with a `ctx-size` span and a `<pre>` — stays untouched: it pins the
+count and the order, which C4 and C6 do not.
+
+#### What is deliberately left untested, and why
+
+- **A real click in a real browser.** No DOM and no dependency is available;
+  P3 is the sharpened source assertion that the measured mutation fails, and the
+  table at the top of this section says so as a decision.
+- **The other two repaint chains** — the debounced scrub (`scheduleLaneContext`)
+  and the return-to-live control. Their fetches are pinned by the existing cases
+  at `page.test.mjs:478` and `:502`; no criterion of mine names their repaint,
+  and no mutation was measured on them.
+- **The transport.** `app.js`'s own `api()` and the collector's
+  `/api/content/at` are unchanged here, and `tools/argus`' suite covers the
+  route.
+- **The parser.** `contextBlocks`, `previewOf`, `textOf` and `laneContentQuery`
+  keep the 40-odd cases they have; this increment reads what the renderer prints,
+  not what the parser computes.
+- **The reviewer's round-2 observations** — the expansion set collapsing when a
+  newer record arrives, the whole body refetched every refresh, the
+  `main`/`span`/`agent` names agreeing across the UI/collector boundary. None is
+  a finding, and no case may pin behaviour for them.
+- **Everything increment 7 owns** — the tools an agent used up to the moment.
+
+#### What counts as done
+
+```
+npm --prefix tools/argus-ui test
+```
+
+That one command, from the repository root, is the whole list. Only files under
+`tools/argus-ui/public` and `tools/argus-ui/test` change; `tools/argus`' suite
+and `./test.sh` stay off the list, as in every round of increment 5.
+
+#### What is already red
+
+I ran nothing — not the list, not a baseline. The reviewer's round-2 run
+establishes that `HEAD` is green at 175 cases, and no run of mine would add a
+fact to that.
+
+From reading, exactly two cases go red **during** the work, both by design and
+both rewritten above rather than repaired anywhere else:
+
+- `page.test.mjs:349` goes red the moment `app.js` stops importing
+  `laneContextInput`; P1 is its replacement.
+- `page.test.mjs:462` goes red the moment `...laneContextInput(key,
+  state.laneContext)` leaves `renderLanePanel`; P2 is its replacement.
+
+Nothing else turns red. `lanePanelInput` is a new export no existing case names;
+`laneContextInput`, `laneContentQuery`, `fetchLaneContext`, `contextBlocks`,
+`renderContextPanel` and every fixture in `context.test.mjs` keep their
+behaviour and their cases; `page.test.mjs:450`, `:511` and `:520-525` read
+`lane-panel`, `renderContextPanel(` and `state.expanded` inside
+`renderLanePanel`, and all three survive the new body; `independence.test.mjs`
+already lists `public/context.js` and this increment adds no import at all.
