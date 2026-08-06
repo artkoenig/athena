@@ -76,9 +76,16 @@ const VERDICT = {
       type: 'string',
       description: 'Path of the findings file you wrote, relative to the repo root.',
     },
+    reason: {
+      type: 'string',
+      description:
+        'Why another correction round is needed, in one or two sentences a human ' +
+        'reads in the chat without opening a file: what is wrong and which ' +
+        'acceptance criterion it misses. Empty string when findings is 0.',
+    },
     summary: { type: 'string' },
   },
-  required: ['findings', 'handoffFile', 'summary'],
+  required: ['findings', 'handoffFile', 'reason', 'summary'],
   additionalProperties: false,
 }
 
@@ -155,7 +162,13 @@ if (plan.needsTests) {
   )
 }
 
+// Why each round was restarted, in the reviewer's own words. The human sits in
+// the main conversation and does not read the findings files, so a round that
+// sends the loop back has to say why where they are looking: `log` puts it in
+// front of them while the loop runs, and `rounds` comes back with the result so
+// the session can repeat it once the loop is done.
 let verdict
+const rounds = []
 for (let round = 0; round <= MAX_CORRECTIONS; round++) {
   if (round > 0) {
     plan = await research(round)
@@ -186,8 +199,23 @@ for (let round = 0; round <= MAX_CORRECTIONS; round++) {
     { agentType: 'uroboros:reviewer', phase: 'Review', label: `review:${round}`, schema: VERDICT },
   )
 
-  log(`Round ${round}: ${verdict.findings} findings — ${verdict.summary}`)
-  if (verdict.findings === 0) break
+  const reason = verdict.reason || verdict.summary
+  rounds.push({
+    round,
+    findings: verdict.findings,
+    reason,
+    findingsFile: verdict.handoffFile,
+  })
+
+  if (verdict.findings === 0) {
+    log(`Round ${round}: accepted — ${verdict.summary}`)
+    break
+  }
+  if (round === MAX_CORRECTIONS) {
+    log(`Round ${round}: ${verdict.findings} findings, last round used up — ${reason}`)
+    break
+  }
+  log(`Round ${round}: ${verdict.findings} findings, correcting — ${reason}`)
 }
 
 const accepted = verdict.findings === 0
@@ -229,4 +257,4 @@ const push = await agent(
 log(`Push: ${push.pushed ? 'ok' : 'FAILED'} — ${push.summary}`)
 log(`Pull request: ${push.prUrl || 'none'}${push.prCreated ? ' (opened by this run)' : ''}`)
 
-return { ran: true, accepted, verdict, issueDir: dir, push }
+return { ran: true, accepted, rounds, verdict, issueDir: dir, push }

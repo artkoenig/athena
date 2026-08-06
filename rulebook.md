@@ -56,6 +56,8 @@ The requirements are yours, the work is the subagents'.
 3. **Confirm the acceptance criteria** with the human.
 4. **Run the loop:** Once the issue is created and confirmed, run the `uroboros:loop` workflow and hand it the issue directory as `args.issueDir`. The workflow ships with the plugin, so that name resolves in every project it is installed in; do not write a script of your own. The script calls researcher, test-author, implementer and reviewer in turn, stops after two correction rounds, and at the end pushes the branch and makes sure a pull request is open. The orchestration lives there and not in an agent because a subagent cannot start another one.
 
+5. **Say why the loop turned back:** The result carries a `rounds` entry per review round. For every round the reviewer did not accept, give the human one line in the chat with its reason, before you say anything about the pull request. That line is the reason itself, not a pointer to the findings file.
+
 And what you do not do here:
 
 - **No Implementation Plan:** You do NOT write implementation plans.
