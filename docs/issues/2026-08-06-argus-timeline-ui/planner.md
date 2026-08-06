@@ -282,3 +282,73 @@ that increment as its reason.
 
 Budget: 4 of at most 8 increments spent; two remain planned, so the run
 still fits with room to split twice if a detail panel demands it.
+
+## After increment 5
+
+**Closed.** context-inspector is `blocked` — the review refused it on round 2
+with three findings open, after both correction rounds were spent. This is
+the run's first block, and its shape matters for the re-cut: in all three
+rounds the reviewer read the production code line by line and found it
+meeting the criterion. What failed was never the panel; it was verifiability.
+Each round's mutation probes walked the click-to-markup chain one hop further
+— round 0 caught the renderer and the lane-to-query mapping, round 1 the
+moment on the wire and the fetched record reaching page state, round 2 the
+last stretch: the selected lane reaching the panel, the click's own repaint,
+and the sizes arriving in the markup. Each correction round closed exactly
+what was named and the next probe found the next hop. The chain was simply
+longer than two correction rounds.
+
+**The answer is a successor, not a drop.** context-pinning (new id; the old
+one stays with the blocked increment) carries the parent criterion forward —
+the issue's "lane-at-time selection shows the context as a message list" now
+lands in context-pinning, so the criterion map in "The cut" is amended to
+that extent — plus three explicit criteria, one per open finding, each
+phrased as "the suite goes red when …" with the reviewer's measured mutations
+as the reference. Dropping instead would mean reporting the issue's central
+view undeliverable while the reviewer attests the code delivers it; the only
+missing thing is proof, and the reviewer's round-2 section names exactly what
+each test has to catch. That is small, bounded work with an unambiguous
+done-condition, which is why it gets its own increment rather than being
+folded into tool-usage: folding would hand increment 7's reviewer a diff
+mixing a new feature with the repair of an old verdict, and a second refusal
+would then take both down together.
+
+**Why the block happened, for the next researcher.** The pattern that closed
+findings in every round was the same: lift the hop out of the page module
+into the pure, importable module and pin it by value; source-level grepping
+over the page module never survived a mutation probe. The reviewer's round-2
+text concedes that string assertions are what the harness can do over the
+page module without a DOM — and then shows the current ones read too little.
+So the open question I put on context-pinning's researcher: for each of the
+three hops, decide whether it can be made value-testable (the reviewer
+himself suggests lifting the lane lookup beside `laneContextInput`) or
+whether a sharpened source assertion that would have caught the measured
+mutation is the honest ceiling — and say which, per hop, in the handoff. What
+I am not doing is prescribing the split; that is theirs.
+
+**tool-usage stands, one sentence touched.** Its delivers-line now says the
+mechanism it rides exists as built and is verified by context-pinning, so its
+researcher neither rebuilds the selection nor waits on doubt about it. Its
+criteria are unchanged, and it stays last: it carries the `./test.sh` green
+criterion that closes the run. Order between the two: context-pinning first,
+while the chain and the reviewer's mutation table are fresh, and so that
+tool-usage's own panel work starts from a selection mechanism whose
+verification discipline is already settled instead of inheriting the same
+gap.
+
+**What stays out.** The round-2 observations join the recorded-not-scheduled
+list, none violating a criterion, none with a demonstrated failure: a live
+refresh collapses expanded blocks when a newer request arrives (a test name
+promises more than the code does there — worth tightening if context-pinning
+touches that file anyway, not a criterion), the whole body refetched every
+refresh cycle, and the `main`/`span`/`agent` parameter names agreeing across
+the UI/collector boundary by reading only, since the project rule forbids a
+cross-boundary test. The earlier notes stand unchanged: the 2000-record
+ceilings, span-carried tool content unbudgeted, `search=` walking bodies,
+the 32 MB ingest cap, the unused `subagent_completed` end-marker, the
+mid-drag slider replacement, and 1 ms arrow-key steps.
+
+Budget: 5 of at most 8 increments spent; two remain planned, so the run
+still fits, with one increment of slack left — enough to split tool-usage
+once if it demands it, and a reason to keep context-pinning as narrow as its
+criteria.

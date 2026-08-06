@@ -135,7 +135,7 @@ and `reviewer.md`.
 
 ## context-inspector — Selecting a lane at a time shows that agent's context as a message list
 
-**Status:** todo
+**Status:** blocked
 
 **Delivers:** Selecting a lane at the chosen time opens that agent's (or the
 main session's) context as of that moment, rendered as a structured,
@@ -150,13 +150,60 @@ mechanism; tool-usage rides it.
   prompt, user, assistant, tool call, tool result — each block collapsed to
   one line with its size, expandable to the exact full text.
 
+**Outcome:** Blocked — the review refused it on round 2 with three findings
+open, after both correction rounds were spent. In all three rounds the
+reviewer's line-by-line reading found the production code meeting the
+criterion; what stayed unverifiable was the wiring chain from the click to
+the markup, and each round's mutation probes walked that chain one hop
+further than the round before could see. Open at the end (all measured, each
+leaving the suite at 175 pass, exit 0): the selected lane never has to reach
+the panel (an empty panel for every lane, or a subagent lane headed as the
+main session, fails nothing), the click's own fetch never has to repaint the
+panel (a session with no further ingest stays on "Reading the context…"
+forever), and the size on a collapsed line is never read (every block can
+report 0). The criterion moves to context-pinning, which carries those three
+gaps as explicit criteria. Details in `reviewer.md` (Increment 5, rounds 0–2)
+and `researcher.md` (Increment 5).
+
+## context-pinning — The lane-at-time context panel is verified end to end
+
+**Status:** todo
+
+**Delivers:** Closes the criterion context-inspector left blocked. The
+panel's production behavior already meets it by the reviewer's reading;
+this increment makes the three still-unverifiable hops of the
+click-to-markup chain fail a test when broken — restructuring where that is
+what pinning takes — so the criterion is demonstrated instead of read off
+the source. The three gaps are named exactly, with measured reproductions,
+in `reviewer.md` under "Increment 5 — Round 2" (findings 1–3).
+
+**Acceptance criteria:**
+- Selecting a lane at the chosen time shows that agent's (or the main
+  session's) context as of that moment: the body of the nearest API request
+  at or before that time, rendered as a structured message list — system
+  prompt, user, assistant, tool call, tool result — each block collapsed to
+  one line with its size, expandable to the exact full text. (Carried
+  unchanged from context-inspector; this increment now owns it.)
+- The suite goes red when the panel is not drawn from the lane the reader
+  selected: a panel that paints empty for every lane, and a subagent lane
+  presented under the main session's heading, each fail a test (reviewer's
+  finding 1, mutations M-A and M-C).
+- The suite goes red when selecting a lane never repaints the panel after
+  the fetch that click started has resolved — including on a session that
+  receives no further ingest (reviewer's finding 2, mutation M-B).
+- The suite goes red when a collapsed line's size is not that block's own
+  measured size, when the head's total is not the body's own length, or when
+  the collapsed one-line preview never reaches the markup (reviewer's
+  finding 3, mutations M-D and M-E).
+
 ## tool-usage — Selecting a lane at a time also shows the tools used up to that moment
 
 **Status:** todo
 
 **Delivers:** The same lane-at-time selection also answers "which tools, and
 what for": every tool the agent has used up to that moment, with name and
-call parameters. Closes the run with the full suite green.
+call parameters. Rides the selection mechanism context-inspector built and
+context-pinning verifies. Closes the run with the full suite green.
 
 **Acceptance criteria:**
 - Selecting a lane at the chosen time also shows the tools that agent has
