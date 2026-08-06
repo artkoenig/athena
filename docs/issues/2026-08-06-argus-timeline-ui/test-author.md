@@ -353,3 +353,84 @@ no test I wrote depends on which reading is correct.
 
 No other gap or conflict: every case in the plan mapped to a concrete,
 checkable expectation from its own field lists and algorithm description.
+
+## Increment 2 — Round 1
+
+The reviewer's reproduction spec for this round is criterion 1's landing
+behaviour: `tab: 'overview'` back in the state literal, and the
+`renderTimeline(...)` line deleted from `renderDetail`. Wrote exactly the
+three cases the Round 1 test plan of `researcher.md` names for that spec, plus
+the `functionSource` helper it specifies, both in the existing
+`tools/argus-ui/test/page.test.mjs`, under its `// Criterion 1` banner and
+after the existing import/module case — nothing else. No production file was
+opened to author them: the expected regex shapes and the slicing technique
+came entirely from the plan's own snippets and prose. No other test file
+changes this round; the plan asks for none.
+
+The plan states these three cases pass against the current `public/app.js`
+with no production edit needed — the finding was a missing guard, not broken
+behaviour — and names, per case, which half of the reviewer's own
+reproduction would turn it red. That is a reading the plan already supplies,
+not something I can reproduce myself: production code is off limits to a
+test-author, so I did not apply either mutation to check it. I ran the file
+as it stands and confirm the plan's "passes on write" prediction:
+
+| # | Case | Test name | Result | Turns red under (per the plan's reading) |
+| --- | --- | --- | --- | --- |
+| 1 | the initial state opens no technical view | `'the page loads with no technical view open'` | passes | putting `tab: 'overview'` back into the state literal — both assertions in this case fail: the `/\btab:\s*null\b/` match is lost and the `/\btab:\s*['"]/` match now hits |
+| 2 | selecting a session returns to the timeline | `'selecting a session returns to the timeline'` | passes | not directly targeted by either half of the reproduction as the plan describes it; it pins `state.tab = null` inside `selectSession`, which the reproduction does not touch — included because the plan lists it as one of the three facts a case must pin, not because the reproduction turns it red |
+| 3 | the timeline is rendered above the technical views | `'the timeline is rendered above the technical views'` | passes | deleting the `renderTimeline(...)` line from `renderDetail` — the first `assert.ok(timelineIdx >= 0, …)` fails on its own message before any ordering comparison runs |
+
+### Commands run
+
+- `node --test tools/argus-ui/test/page.test.mjs` — 6 tests, 6 pass, exit 0
+  (the file's three pre-existing cases plus these three new ones).
+
+Not run this round: `npm --prefix tools/argus-ui test` and `./test.sh` — the
+plan reserves both for the implementer, and this round touches only
+`test/page.test.mjs`.
+
+### A gap in the plan's own case table
+
+The plan's case table (`researcher.md`, Round 1, "Together the three fail
+under either half of the reviewer's reproduction") states putting
+`tab: 'overview'` back turns case 1 red and deleting the `renderTimeline(...)`
+line turns case 3 red, but does not say which half of the reproduction, if
+either, turns case 2 red. Read literally, neither mutation the plan names
+touches `selectSession`, so case 2 is not "caught" by either half of this
+round's specific reproduction — it instead pins one of the three facts the
+plan's own "What the finding asks for" section lists (`state.tab = null` in
+`selectSession`), a fact neither of the reviewer's two edits happens to
+break. I wrote the case as specified regardless, since the plan lists it
+explicitly as case 2 of three with a concrete expected regex, and dropping it
+would leave that fact unpinned; flagging the coverage question here rather
+than guessing a third mutation the plan never named.
+
+### Deliberately not written
+
+Matches the round's own list exactly, nothing added or dropped:
+
+- That the lanes are visually above the nav on screen — pixels are not
+  something `node --test` can see; case 3 pins the call order instead.
+- The argument passed to `renderTimeline(...)` — pinning
+  `renderTimeline(buildLanes({ session, content: state.content }))` verbatim
+  would break on a rename that keeps the behaviour; the plan explicitly
+  rejects this.
+- `renderTabBody`'s `case null:` branch — case 3 already pins that the
+  container sits below the nav; pinning the switch as source text would break
+  on any restructuring that keeps the behaviour.
+- Everything the other three criteria (2, 3, 4) cover, and everything
+  Increment 1 and its Round 1 covered — untouched this round, and not
+  `tools/argus-ui`'s or this round's list to re-specify.
+- `tools/argus` and the collector — untouched this round.
+
+### Gaps and conflicts found in the plan
+
+One coverage question, detailed above under "A gap in the plan's own case
+table": the plan's closing sentence for this case list ("the three fail under
+either half of the reviewer's reproduction") does not hold for case 2 read
+literally — neither named mutation touches `selectSession` — though case 2 is
+still a fact the plan's own "What the finding asks for" section asks to be
+pinned. No case was reworded or dropped over this; it is left for the
+researcher to reconcile if the intended reproduction for case 2 differs from
+what is written.

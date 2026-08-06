@@ -16,6 +16,15 @@ function walk(dir, found = []) {
   return found;
 }
 
+/** The source of one top-level function declaration, up to the next one. */
+function functionSource(source, name) {
+  const start = source.indexOf(`function ${name}(`);
+  assert.ok(start >= 0, `app.js must still declare ${name}()`);
+  const body = source.slice(start + 1);
+  const next = body.search(/\nfunction \w+\(/);
+  return next === -1 ? body : body.slice(0, next);
+}
+
 // Criterion 1 — opening a session lands on the timeline, the technical views stay
 // reachable and subordinate.
 
@@ -33,6 +42,58 @@ test('app.js imports the timeline module, and index.html loads app.js as a modul
     (tag) => /src=["']\/app\.js["']/.test(tag) && /type=["']module["']/.test(tag),
   );
   assert.ok(loadsAppAsModule, 'index.html must load /app.js as a module, so its import of timeline.js can resolve');
+});
+
+test('the page loads with no technical view open', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const start = appJs.indexOf('const state = {');
+  assert.ok(start >= 0, 'app.js must still declare the state literal');
+  const end = appJs.indexOf('\n};', start);
+  assert.ok(end >= 0, 'the state literal must still close with `\\n};`');
+  const stateSlice = appJs.slice(start, end);
+
+  assert.match(
+    stateSlice,
+    /\btab:\s*null\b/,
+    'the initial state must open on the timeline, with no technical view selected',
+  );
+  assert.doesNotMatch(
+    stateSlice,
+    /\btab:\s*['"]/,
+    'a string default (e.g. "overview") would open a technical view on load instead of the timeline',
+  );
+});
+
+test('selecting a session returns to the timeline', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const selectSession = functionSource(appJs, 'selectSession');
+
+  assert.match(
+    selectSession,
+    /state\.tab\s*=\s*null/,
+    'every session must open on its timeline, whatever technical view the previous session was left on',
+  );
+});
+
+test('the timeline is rendered above the technical views', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const renderDetail = functionSource(appJs, 'renderDetail');
+
+  const timelineIdx = renderDetail.indexOf('renderTimeline(');
+  assert.ok(timelineIdx >= 0, 'renderDetail must call renderTimeline(...)');
+  const viewsIdx = renderDetail.indexOf('renderDetailViews(');
+  assert.ok(viewsIdx >= 0, 'renderDetail must call renderDetailViews(...)');
+  const tabBodyIdx = renderDetail.indexOf('id="tab-body"');
+  assert.ok(tabBodyIdx >= 0, 'renderDetail must render the tab-body container');
+
+  assert.ok(
+    timelineIdx < viewsIdx,
+    'the timeline must be composed before the technical-views nav, so it sits above it',
+  );
+  assert.ok(
+    viewsIdx < tabBodyIdx,
+    'the technical-views nav must be composed before the tab-body container it controls',
+  );
 });
 
 // Criterion 4 — the UI no longer advises a flag argus env sets by default.
