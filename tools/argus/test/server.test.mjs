@@ -70,6 +70,38 @@ function logsPayloadJson(sessionId) {
   });
 }
 
+function contentLogsPayloadJson(sessionId, overrides = {}) {
+  const body = overrides.body ?? '{"messages":[{"role":"user","content":"hello"}]}';
+  return JSON.stringify({
+    resourceLogs: [
+      {
+        resource: { attributes: [{ key: 'session.id', value: { stringValue: sessionId } }] },
+        scopeLogs: [
+          {
+            logRecords: [
+              {
+                timeUnixNano: String(overrides.timeUnixNano ?? T0),
+                severityNumber: 9,
+                eventName: 'claude_code.api_request_body',
+                attributes: [
+                  { key: 'session.id', value: { stringValue: sessionId } },
+                  { key: 'model', value: { stringValue: 'claude-sonnet-5' } },
+                  { key: 'query_source', value: { stringValue: 'sdk' } },
+                  { key: 'prompt.id', value: { stringValue: 'prompt-1' } },
+                  { key: 'event.sequence', value: { stringValue: '5' } },
+                  { key: 'body', value: { stringValue: body } },
+                  { key: 'body_length', value: { stringValue: String(body.length) } },
+                  { key: 'body_truncated', value: { stringValue: 'false' } },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+}
+
 async function withServer(options, run) {
   const store = new TelemetryStore();
   const server = createServer({ store, endpoint: 'http://test', log: () => {}, ...options });
@@ -246,7 +278,85 @@ test('/api/config returns a ready-to-paste agent environment', async () => {
     assert.equal(config.env.CLAUDE_CODE_ENABLE_TELEMETRY, '1');
     assert.equal(config.env.CLAUDE_CODE_ENHANCED_TELEMETRY_BETA, '1');
     assert.equal(config.env.OTEL_METRIC_EXPORT_INTERVAL, '1000');
+    assert.equal(config.env.OTEL_LOG_RAW_API_BODIES, '1');
     assert.equal(config.requiresToken, false);
+  });
+});
+
+test('POST of an api_request_body log is served by GET /api/content, without the body', async () => {
+  await withServer({}, async ({ base }) => {
+    const ingested = await fetch(`${base}/v1/logs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: contentLogsPayloadJson('s-content'),
+    });
+    assert.equal(ingested.status, 200);
+
+    const listed = await (await fetch(`${base}/api/content?session=s-content`)).json();
+    assert.equal(listed.items.length, 1);
+    assert.equal(listed.items[0].model, 'claude-sonnet-5');
+    assert.ok(!('body' in listed.items[0]), 'the index route must never carry the body');
+  });
+});
+
+test('GET /api/content/at at the record time answers with the full body', async () => {
+  await withServer({}, async ({ base }) => {
+    await fetch(`${base}/v1/logs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: contentLogsPayloadJson('s-content-at'),
+    });
+    const atMs = Number(T0 / 1000000n);
+    const response = await fetch(`${base}/api/content/at?session=s-content-at&at=${atMs}`);
+    assert.equal(response.status, 200);
+    const { item } = await response.json();
+    assert.equal(item.body, '{"messages":[{"role":"user","content":"hello"}]}');
+  });
+});
+
+test('GET /api/content/at before the first record answers 200 with a null item, not 404', async () => {
+  await withServer({}, async ({ base }) => {
+    await fetch(`${base}/v1/logs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: contentLogsPayloadJson('s-content-early'),
+    });
+    const atMs = Number(T0 / 1000000n) - 60_000;
+    const response = await fetch(`${base}/api/content/at?session=s-content-early&at=${atMs}`);
+    assert.equal(response.status, 200);
+    const { item } = await response.json();
+    assert.equal(item, null);
+  });
+});
+
+test('GET /api/content/at without a session is a 400', async () => {
+  await withServer({}, async ({ base }) => {
+    assert.equal((await fetch(`${base}/api/content/at?at=0`)).status, 400);
+  });
+});
+
+test('/api/events strips the body but keeps its length, and /api/content/at still serves the whole body afterwards', async () => {
+  await withServer({}, async ({ base }) => {
+    await fetch(`${base}/v1/logs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: contentLogsPayloadJson('s-tail'),
+    });
+
+    const events = await (await fetch(`${base}/api/events?session=s-tail`)).json();
+    assert.equal(events.items.length, 1);
+    const item = events.items[0];
+    assert.ok(!item.attrs || !('body' in item.attrs), 'the event tail must not ship the body');
+    assert.ok(item.content, 'the event tail must carry the content metadata instead of the body');
+    assert.equal(item.content.bodyChars, '{"messages":[{"role":"user","content":"hello"}]}'.length);
+
+    const atMs = Number(T0 / 1000000n);
+    const at = await (await fetch(`${base}/api/content/at?session=s-tail&at=${atMs}`)).json();
+    assert.equal(
+      at.item.body,
+      '{"messages":[{"role":"user","content":"hello"}]}',
+      'the API projection on /api/events must not have mutated the stored record',
+    );
   });
 });
 
