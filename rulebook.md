@@ -21,20 +21,6 @@ follows the human.
 **The default branch moves only through a merged pull request.** Work lands on
 a branch, and the human merges it.
 
-**A change to uroboros itself ends with the plugin cache deleted.** That means
-a change to anything this repository ships as a plugin component — `agents/*.md`,
-an agent's own `agents/<name>/skills/`, `skills/`, or `workflows/`:
-
-```bash
-rm -rf ~/.claude/plugins/cache/uroboros
-```
-
-Claude's plugin update mechanism does not detect the new version, so without
-that deletion the cached copy keeps loading and the next session still runs the
-old agents and skills. Deleted, the cache is installed fresh and the next
-session gets what was just written. The deletion belongs to the change, in the
-same turn as the edit, not to a later cleanup.
-
 ## The two modes
 
 A task runs in one of them: **Issue Mode**, where the subagents do the work, and

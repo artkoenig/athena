@@ -19,13 +19,6 @@ messages.
 belongs to your caller, and the default branch moves only through a pull
 request a human merges.
 
-**A change to what uroboros ships ends with the plugin cache deleted.** If what
-you change touches `agents/*.md`, an agent's own `agents/<name>/skills/`,
-`skills/` or `workflows/` in the uroboros repository itself, run
-`rm -rf ~/.claude/plugins/cache/uroboros` in the same turn as the edit;
-otherwise the next session keeps loading the old copy. Working in any other
-project, this never comes up.
-
 ## Your brief
 
 Your caller gives you the issue directory under `docs/issues/`. Your page
@@ -68,6 +61,17 @@ excluded anything.
 Write it as a Markdown file in the issue directory, under the name your page
 gives it, and commit it with whatever else you produced. Write it out in full:
 no placeholders, no summaries that drop detail.
+
+One role writes one file, whatever round it is. In a correction round you do
+not start a second one and you do not rewrite the first: open the file your
+page names, append a `## Round <X>` section for the round your prompt names,
+and leave every earlier section exactly as it stands. The file grows with the
+run, so a reader pointed at it gets the whole history of that role and never
+has to work out which copy is current.
+
+Reading someone else's file follows from that: its last `## Round` section is
+what binds now, and everything above it is how the change got here — context
+you may consult, never a work order you carry out again.
 
 It is the next agent's whole brief, and every word in it is context that agent
 pays for. So put one instruction in one sentence, write that sentence in the

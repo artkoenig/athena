@@ -123,6 +123,31 @@ else
 fi
 
 echo
+echo "=== a correction round reuses the handoff it already has"
+
+# The loop used to hand every round its own file — `researcher-1.md`,
+# `implementer-2.md` — so an issue directory of a three-round run held twelve
+# handoffs and a reader had to work out which copy was current. One role now
+# writes one file for the whole run and a later round appends a section to it,
+# so no prompt in the loop may build a round-suffixed handoff name again.
+suffixed="$(grep -n -- '-\${round}\.md\|-<X>\.md' \
+  "$root/workflows/loop.js" "$root"/agents/*.md "$root"/skills/agent-brief/SKILL.md 2>/dev/null || true)"
+if [ -z "$suffixed" ]; then
+  ok "no round-suffixed handoff file name is left in the loop or the agent pages"
+else
+  no "these lines still name a per-round handoff file:"
+  echo "$suffixed" | sed 's/^/       /'
+fi
+
+# The other direction: the loop has to say what a correction round does with
+# the file instead, or every agent decides for itself and some overwrite it.
+if grep -q 'Append a .*## Round' "$root/workflows/loop.js"; then
+  ok "the loop tells a correction round to append its section"
+else
+  no "the loop no longer tells a correction round to append its section"
+fi
+
+echo
 echo "=== remote operation deploys the collector alone"
 
 # Dockerfile, compose.yaml and render.yaml build and run argus. The interface

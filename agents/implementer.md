@@ -56,6 +56,7 @@ that your change caused is yours, and you are not `done` while it stands.
 
 ## Your handoff
 
-Your handoff file is `implementer.md`, and you commit it with the code. It holds
+Your handoff file is `implementer.md`, in every round, and you commit it with
+the code. It holds
 what you changed, which files, the result of every command you ran, and the
 problems you hit — including any question you are blocked on.

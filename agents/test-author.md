@@ -42,9 +42,9 @@ implementer's misreading.
    once the code exists.
 
 In a correction round the criterion is a reviewer's reproduction spec instead of
-the whole intent, and `researcher-<X>.md` carries the test plan for it. Write
-that case and nothing else. Earlier rounds are done with. The reviewer never
-writes tests; you do.
+the whole intent, and the newest round section of `researcher.md` carries the
+test plan for it. Write that case and nothing else. Earlier rounds are done
+with. The reviewer never writes tests; you do.
 
 ## Boundaries
 
@@ -54,7 +54,8 @@ writes tests; you do.
 
 ## Your handoff
 
-Your handoff file is `test-author.md`. Walk the test plan case by case: which
+Your handoff file is `test-author.md`, in every round. Walk the test plan case
+by case: which
 test file and test name each case became, its failure output, and for anything
 you did not write, which case it was and why. Every gap and conflict you found
 in the plan belongs here too — that is where the researcher picks them up.
