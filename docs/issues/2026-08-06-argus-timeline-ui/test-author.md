@@ -780,3 +780,120 @@ expected `leftPct` values (including the deliberate non-equality tolerance
 for case 2, and the exact regex for reading marks out of rendered markup for
 case 3), so every case mapped to one concrete assertion with no guessed
 expectation.
+
+## Increment 4
+
+Wrote every case in the Increment 4 test plan of `researcher.md` — 26 new
+cases plus the one narrowing edit to an existing case — in the two files the
+plan named, in their existing style. No production file was opened: the
+plan's own prose (the exact `resolveCursor`/`scrubCursor`/`liveCursor`
+signatures, the exact markup with `data-cursor-pos`/`data-cursor-live`/
+`timeline-cursor-time`, the `functionSource` names `paintCursor`/`scrubTo`/
+`scheduleRefresh`/`wireEvents`) gave every expectation with nothing to guess.
+`tools/argus-ui/test/timeline.test.mjs` and `tools/argus-ui/test/page.test.mjs`
+were read first only to take the existing fixtures (`session()`, `record()`,
+`threeRecordContent()`, `functionSource()`) and confirm the exact markup the
+existing "one bar for main, one for the subagent" case scans, per the plan's
+own instruction to narrow it — both test files, never production code.
+
+### The narrowing edit
+
+`timeline.test.mjs`, the case `'the rendered timeline carries one bar for the
+main session and one for the subagent, each with valid geometry'`: the style
+scan is narrowed from every `style="…"` in the whole markup to
+`<span class="lane-bar"[^>]*style="([^"]*)"`, `assert.equal(styles.length, 2,
+…)` replaces `assert.ok(styles.length > 0, …)`, and a trailing
+`assert.doesNotMatch(html, /NaN/)` is added — exactly as the plan specifies,
+so the case keeps passing once the cursor overlay's `left:`-only styles exist
+alongside the two lane bars.
+
+### Criterion 6 — the timeline scrubs to any point, and a live mode follows the head
+
+| # | Case | Test | File | Result |
+| --- | --- | --- | --- | --- |
+| 1 | a session opens live, with the cursor on the newest data | `'a session opens live, with the cursor on the newest data'` | `timeline.test.mjs` | see "Result of the whole file" below |
+| 2 | live mode follows the head as new data arrives | `'live mode follows the head as new data arrives'` | `timeline.test.mjs` | " |
+| 3 | a scrubbed cursor stays on its moment while the session grows | `'a scrubbed cursor stays on its moment while the session grows'` | `timeline.test.mjs` | " |
+| 4 | the cursor never leaves the recorded session | `'the cursor never leaves the recorded session'` | `timeline.test.mjs` | " |
+| 5 | a pinned cursor with no usable time falls back to the head and stays out of live | `'a pinned cursor with no usable time falls back to the head and stays out of live'` | `timeline.test.mjs` | " |
+| 6 | no cursor at all is live | `'no cursor at all is live'` | `timeline.test.mjs` | " |
+| 7 | a one-instant session resolves to a finite position at the head | `'a one-instant session resolves to a finite position at the head'` | `timeline.test.mjs` | " |
+| 8 | resolving does not mutate the cursor it was given | `'resolving does not mutate the cursor it was given'` | `timeline.test.mjs` | " |
+| 9 | scrubbing leaves live mode | `'scrubbing leaves live mode'` | `timeline.test.mjs` | " |
+| 10 | scrubbing to the head still leaves live mode | `'scrubbing to the head still leaves live mode'` | `timeline.test.mjs` | " |
+| 11 | a scrub past either end is pinned to the end it passed | `'a scrub past either end is pinned to the end it passed'` | `timeline.test.mjs` | " |
+| 12 | a scrub with no usable number lands on the head, never on NaN | `'a scrub with no usable number lands on the head, never on NaN'` | `timeline.test.mjs` | " |
+| 13 | the live cursor is a fresh object every call | `'the live cursor is a fresh object every call'` | `timeline.test.mjs` | " |
+| 14 | the scrub control spans the whole recorded session | `'the scrub control spans the whole recorded session'` | `timeline.test.mjs` | " |
+| 15 | a scrubbed cursor puts the thumb, the line and the readout on one moment | `'a scrubbed cursor puts the thumb, the line and the readout on one moment'` | `timeline.test.mjs` | " |
+| 16 | live puts all three on the head | `'live puts all three on the head'` | `timeline.test.mjs` | " |
+| 17 | the timeline still renders from a bare view with no cursor given | `'the timeline still renders from a bare view with no cursor given'` | `timeline.test.mjs` | " |
+| 18 | a one-instant session still renders a cursor inside the track | `'a one-instant session still renders a cursor inside the track'` | `timeline.test.mjs` | " |
+| 19 | the page opens live | `'the page opens live'` | `page.test.mjs` | fails: `a session must open with the cursor in live mode` — `state` has no `cursor` key today |
+| 20 | the timeline is rendered with the page's cursor | `'the timeline is rendered with the page's cursor'` | `page.test.mjs` | fails: `renderDetail must pass state.cursor to the renderer` — `renderDetail` calls `renderTimeline(buildDensity(...))` with no second argument today |
+| 21 | selecting a session returns to live | `'selecting a session returns to live'` | `page.test.mjs` | fails: `a new session must never inherit a moment pinned in another one` — `selectSession` has no `state.cursor` reset today |
+| 22 | a drag moves the cursor without re-rendering the page under the pointer | `'a drag moves the cursor without re-rendering the page under the pointer'` | `page.test.mjs` | fails: `app.js must still declare scrubTo()` — the function does not exist yet |
+| 23 | the cursor is painted from one resolution | `'the cursor is painted from one resolution, so the line and the readout cannot disagree'` | `page.test.mjs` | fails: `app.js must still declare paintCursor()` — the function does not exist yet |
+| 24 | a control returns the page to live | `'a control returns the page to live'` | `page.test.mjs` | fails: `wireEvents must act on the live control the markup renders` — no `data-cursor-live` reference in `wireEvents` today |
+| 25 | a refresh never yanks the slider out from under a drag | `'a refresh never yanks the slider out from under a drag'` | `page.test.mjs` | fails: `a refresh in flight during a drag must defer rather than re-render` — `scheduleRefresh` has no `scrubbing` guard today |
+| 26 | app.js takes the cursor functions from the timeline module | `'app.js takes the cursor functions from the timeline module'` | `page.test.mjs` | fails: `app.js must import resolveCursor from timeline.js, so the tested function is the one the page runs` — no such import today |
+
+### Commands run
+
+- `node --test tools/argus-ui/test/timeline.test.mjs` — fails to load, exit 1:
+  ```
+  SyntaxError: The requested module '../public/timeline.js' does not provide an export named 'liveCursor'
+  ```
+  Confirmed by `grep -n '^export' tools/argus-ui/public/timeline.js`, which
+  lists no `liveCursor`, `scrubCursor` or `resolveCursor` today — the plan
+  names all three as new. This is the correct "not implemented yet" shape,
+  identical to the one increment 1's `store.test.mjs` produced for the same
+  reason: every case in the file (the 51 pre-existing plus this round's 18
+  new ones, cases 1–18 above) reports as this one module-load failure until
+  the exports exist; once they do, each resolves on its own merits. It is not
+  a typo on this end — the import list matches the plan's signatures exactly
+  (`liveCursor()`, `scrubCursor(timeMs, window)`, `resolveCursor(cursor,
+  window)`).
+- `node --test tools/argus-ui/test/page.test.mjs` — 20 tests, 12 pass
+  (pre-existing, unaffected), 8 fail (cases 19–26, quoted individually above),
+  exit 1.
+
+Not run: `npm --prefix tools/argus-ui test`, `npm --prefix tools/argus test`
+and `./test.sh` — the plan reserves the full-suite run for the implementer,
+and this increment touches only the two files above.
+
+### Deliberately not written
+
+Matches the plan's own "Deliberately untested" list exactly, nothing added
+or dropped:
+
+- The drag itself (`pointerdown`/`pointerup`, thumb pixels, whether the line
+  lands under the thumb) — no DOM harness, and the project keeps zero
+  dependencies; case 22 pins that a drag does not re-render, the plan
+  reserves the rest for review.
+- That `scheduleRefresh` actually defers and then resumes — a `setTimeout`
+  with no seam to fake; case 25 pins only that the `scrubbing` guard is in
+  the code.
+- Colours, the dimming after the cursor, and whether the overlay aligns with
+  the lane tracks — CSS, judged at review, not by `node --test`.
+- Selecting a lane at the cursor, the context message list, tool names and
+  parameters — increments 5 and 6 own them; no case here pins them.
+- Lane derivation, density, marks, the merge, labels, escaping and the
+  landing view — increments 2 and 3's cases own them and are unchanged apart
+  from the one narrowing edit above.
+- `tools/argus` — not touched by this increment.
+- Recordings made without the content flags — out of contract by the issue's
+  own decision.
+
+### Gaps and conflicts found in the plan
+
+None. The plan gave exact function signatures, exact markup (attribute order
+included), exact `functionSource` targets and exact expected values for every
+case (including the `left:37.500%` and `left:100.000%` arithmetic), so every
+case mapped to one concrete assertion with nothing guessed. The one place the
+plan left a choice open — how to word the regex reading `data-cursor-pos`
+elements out of the markup, since the two elements (`.timeline-ahead` and
+`.timeline-cursor-line`) carry the attribute in a different position relative
+to `class` — was decided the small way the brief allows: a `[^>]*` gap
+regardless of attribute order, matching the pattern the file's own existing
+cases already use for `data-lane`/`data-kind` attributes.

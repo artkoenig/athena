@@ -215,3 +215,88 @@ test('app.js takes the merge from the timeline module', () => {
     'app.js must import mergeToolMarks from timeline.js, so the tested function is the one the page runs',
   );
 });
+
+// Criterion 6 — the timeline scrubs, and a live mode follows the head.
+
+test('the page opens live', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const start = appJs.indexOf('const state = {');
+  assert.ok(start >= 0, 'app.js must still declare the state literal');
+  const end = appJs.indexOf('\n};', start);
+  assert.ok(end >= 0, 'the state literal must still close with `\\n};`');
+  const stateSlice = appJs.slice(start, end);
+
+  assert.match(stateSlice, /\bcursor:\s*\{\s*live:\s*true\b/, 'a session must open with the cursor in live mode');
+  assert.doesNotMatch(
+    stateSlice,
+    /\bcursor:\s*\{\s*live:\s*false\b/,
+    'the landing state must not pin a moment before any session is even open',
+  );
+});
+
+test('the timeline is rendered with the page\'s cursor', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const renderDetail = functionSource(appJs, 'renderDetail');
+  const timelineIdx = renderDetail.indexOf('renderTimeline(');
+  assert.ok(timelineIdx >= 0, 'renderDetail must call renderTimeline(...)');
+  const cursorIdx = renderDetail.indexOf('state.cursor');
+  assert.ok(cursorIdx >= 0, 'renderDetail must pass state.cursor to the renderer');
+  assert.ok(
+    timelineIdx < cursorIdx,
+    'state.cursor must reach the renderTimeline( call, not some other call in renderDetail',
+  );
+});
+
+test('selecting a session returns to live', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const selectSession = functionSource(appJs, 'selectSession');
+  assert.match(
+    selectSession,
+    /state\.cursor\s*=\s*liveCursor\(\)/,
+    'a new session must never inherit a moment pinned in another one',
+  );
+});
+
+test('a drag moves the cursor without re-rendering the page under the pointer', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const scrubTo = functionSource(appJs, 'scrubTo');
+  assert.match(scrubTo, /scrubCursor\(/, 'a drag must resolve to a scrubbed cursor');
+  assert.match(scrubTo, /paintCursor\(/, 'a drag must paint its new position');
+  assert.doesNotMatch(
+    scrubTo,
+    /renderDetail\(/,
+    'a full re-render would replace the slider under the pointer and end the drag',
+  );
+});
+
+test('the cursor is painted from one resolution, so the line and the readout cannot disagree', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const paintCursor = functionSource(appJs, 'paintCursor');
+  assert.match(paintCursor, /resolveCursor\(/, 'paintCursor must resolve the cursor itself, once');
+  assert.match(paintCursor, /data-cursor-pos/, 'paintCursor must write the position onto the cursor-position hooks');
+});
+
+test('a control returns the page to live', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const wireEvents = functionSource(appJs, 'wireEvents');
+  assert.match(wireEvents, /data-cursor-live/, 'wireEvents must act on the live control the markup renders');
+  assert.match(
+    wireEvents,
+    /state\.cursor\s*=\s*liveCursor\(\)/,
+    'clicking the live control must write a fresh live cursor back',
+  );
+});
+
+test('a refresh never yanks the slider out from under a drag', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const scheduleRefresh = functionSource(appJs, 'scheduleRefresh');
+  assert.match(scheduleRefresh, /scrubbing/, 'a refresh in flight during a drag must defer rather than re-render');
+});
+
+test('app.js takes the cursor functions from the timeline module', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  for (const name of ['resolveCursor', 'scrubCursor', 'liveCursor']) {
+    const re = new RegExp(`import\\s*\\{[^}]*\\b${name}\\b[^}]*\\}\\s*from\\s*['"]\\./timeline\\.js['"]`);
+    assert.match(appJs, re, `app.js must import ${name} from timeline.js, so the tested function is the one the page runs`);
+  }
+});

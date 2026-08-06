@@ -14,6 +14,9 @@ import {
   MIN_CURVE_WIDTH_PCT,
   ACTIVITY_BUCKETS,
   mergeToolMarks,
+  liveCursor,
+  scrubCursor,
+  resolveCursor,
 } from '../public/timeline.js';
 
 // The two shapes every case builds its input from — nothing else.
@@ -192,13 +195,14 @@ test('the rendered timeline carries one bar for the main session and one for the
   assert.ok(laneKeys.includes('main'));
   assert.ok(laneKeys.some((key) => key.includes('sp-a')));
 
-  const styles = [...html.matchAll(/style="([^"]*)"/g)].map((m) => m[1]);
-  assert.ok(styles.length > 0, 'at least the two lane bars carry a style attribute');
+  const styles = [...html.matchAll(/<span class="lane-bar"[^>]*style="([^"]*)"/g)].map((m) => m[1]);
+  assert.equal(styles.length, 2, 'both lane bars must carry their geometry as a style');
   for (const style of styles) {
     assert.match(style, /left:/);
     assert.match(style, /width:/);
     assert.doesNotMatch(style, /NaN/);
   }
+  assert.doesNotMatch(html, /NaN/);
 });
 
 test('a hostile agent label is escaped in the rendered timeline, never raw', () => {
@@ -746,4 +750,192 @@ test('a mark keeps following its moment when the window does not start at zero',
     [0, 25],
     'a mark\'s position is measured from the window start, not from the epoch',
   );
+});
+
+// Criterion 6 — the timeline scrubs, and a live mode follows the head.
+// `window` below means `{ startMs: 1000, endMs: 5000 }` unless a case says otherwise.
+
+test('a session opens live, with the cursor on the newest data', () => {
+  const window = { startMs: 1000, endMs: 5000 };
+  assert.deepEqual(resolveCursor(liveCursor(), window), { live: true, timeMs: 5000, leftPct: 100 });
+});
+
+test('live mode follows the head as new data arrives', () => {
+  const cursor = liveCursor();
+  const first = resolveCursor(cursor, { startMs: 1000, endMs: 5000 });
+  const second = resolveCursor(cursor, { startMs: 1000, endMs: 9000 });
+  assert.equal(first.timeMs, 5000);
+  assert.equal(first.leftPct, 100);
+  assert.equal(second.timeMs, 9000, 'live follows the head, it does not merely start at the first end it saw');
+  assert.equal(second.leftPct, 100);
+});
+
+test('a scrubbed cursor stays on its moment while the session grows', () => {
+  const cursor = { live: false, timeMs: 3000 };
+  const first = resolveCursor(cursor, { startMs: 1000, endMs: 5000 });
+  const second = resolveCursor(cursor, { startMs: 1000, endMs: 9000 });
+  assert.equal(first.timeMs, 3000);
+  assert.equal(first.leftPct, 50);
+  assert.equal(second.timeMs, 3000, 'a pinned moment must not drift when the window widens around it');
+  assert.equal(second.leftPct, 25);
+});
+
+test('the cursor never leaves the recorded session', () => {
+  const window = { startMs: 1000, endMs: 5000 };
+  const below = resolveCursor({ live: false, timeMs: 0 }, window);
+  assert.equal(below.timeMs, 1000);
+  assert.equal(below.leftPct, 0);
+  const above = resolveCursor({ live: false, timeMs: 99999 }, window);
+  assert.equal(above.timeMs, 5000);
+  assert.equal(above.leftPct, 100);
+});
+
+test('a pinned cursor with no usable time falls back to the head and stays out of live', () => {
+  const window = { startMs: 1000, endMs: 5000 };
+  assert.deepEqual(resolveCursor({ live: false, timeMs: null }, window), { live: false, timeMs: 5000, leftPct: 100 });
+  assert.deepEqual(resolveCursor({ live: false }, window), { live: false, timeMs: 5000, leftPct: 100 });
+});
+
+test('no cursor at all is live', () => {
+  const window = { startMs: 1000, endMs: 5000 };
+  for (const cursor of [undefined, null, {}]) {
+    const resolved = resolveCursor(cursor, window);
+    assert.equal(resolved.live, true, 'renderTimeline(view) with no cursor argument must still resolve live');
+    assert.equal(resolved.timeMs, 5000);
+  }
+});
+
+test('a one-instant session resolves to a finite position at the head', () => {
+  const window = { startMs: 1000, endMs: 1000 };
+  const live = resolveCursor(liveCursor(), window);
+  const pinned = resolveCursor({ live: false, timeMs: 1000 }, window);
+  assert.equal(live.timeMs, 1000);
+  assert.equal(live.leftPct, 100);
+  assert.equal(pinned.timeMs, 1000);
+  assert.equal(pinned.leftPct, 100);
+  assert.ok(Number.isFinite(live.leftPct), 'a zero-length window must not divide by zero into NaN');
+  assert.ok(Number.isFinite(pinned.leftPct));
+});
+
+test('resolving does not mutate the cursor it was given', () => {
+  const window = { startMs: 1000, endMs: 5000 };
+  const cursor = { live: false, timeMs: 99999 };
+  resolveCursor(cursor, window);
+  assert.deepEqual(cursor, { live: false, timeMs: 99999 }, 'resolveCursor must leave its argument untouched');
+});
+
+test('scrubbing leaves live mode', () => {
+  const window = { startMs: 1000, endMs: 5000 };
+  assert.deepEqual(scrubCursor(3000, window), { live: false, timeMs: 3000 });
+});
+
+test('scrubbing to the head still leaves live mode', () => {
+  const window = { startMs: 1000, endMs: 5000 };
+  assert.deepEqual(
+    scrubCursor(5000, window),
+    { live: false, timeMs: 5000 },
+    'landing on the head is not the same as following it',
+  );
+});
+
+test('a scrub past either end is pinned to the end it passed', () => {
+  const window = { startMs: 1000, endMs: 5000 };
+  const low = scrubCursor(-10, window);
+  assert.equal(low.timeMs, 1000);
+  assert.equal(low.live, false);
+  const high = scrubCursor(10_000_000, window);
+  assert.equal(high.timeMs, 5000);
+  assert.equal(high.live, false);
+});
+
+test('a scrub with no usable number lands on the head, never on NaN', () => {
+  const window = { startMs: 1000, endMs: 5000 };
+  assert.deepEqual(scrubCursor(Number.NaN, window), { live: false, timeMs: 5000 });
+  assert.deepEqual(scrubCursor(undefined, window), { live: false, timeMs: 5000 });
+});
+
+test('the live cursor is a fresh object every call', () => {
+  const a = liveCursor();
+  const b = liveCursor();
+  assert.deepEqual(a, { live: true, timeMs: null });
+  assert.deepEqual(b, { live: true, timeMs: null });
+  assert.notEqual(a, b, 'a shared default would be mutable-by-reference from the page');
+});
+
+test('the scrub control spans the whole recorded session', () => {
+  const content = threeRecordContent();
+  const view = buildDensity(buildLanes({ session: session(), content }), { content, tools: [] });
+  const html = renderTimeline(view);
+  const inputMatch = html.match(/<input[^>]*id="timeline-scrub"[^>]*>/);
+  assert.ok(inputMatch, 'the timeline must carry a range input for the scrub control');
+  assert.match(inputMatch[0], /type="range"/);
+  assert.match(inputMatch[0], /min="1000"/);
+  assert.match(inputMatch[0], /max="5000"/);
+  assert.match(inputMatch[0], /step="[^"]+"/);
+  assert.match(inputMatch[0], /value="5000"/);
+});
+
+test('a scrubbed cursor puts the thumb, the line and the readout on one moment', () => {
+  const content = threeRecordContent();
+  const view = buildDensity(buildLanes({ session: session(), content }), { content, tools: [] });
+  const html = renderTimeline(view, { live: false, timeMs: 2500 });
+
+  const inputMatch = html.match(/<input[^>]*id="timeline-scrub"[^>]*>/);
+  assert.ok(inputMatch, 'the scrub input must be present');
+  assert.match(inputMatch[0], /value="2500"/);
+
+  const positions = [...html.matchAll(/data-cursor-pos[^>]*style="left:([0-9.]+)%"/g)].map((m) => m[1]);
+  assert.equal(positions.length, 2, 'the dimmed region and the cursor line both carry a position');
+  for (const left of positions) assert.equal(left, '37.500');
+
+  const timeMatch = html.match(/id="timeline-cursor-time"[^>]*data-time="([^"]*)"/);
+  assert.ok(timeMatch, 'the readout must carry the cursor\'s moment as data, not as a pinned wording');
+  assert.equal(timeMatch[1], '2500');
+
+  const liveMatch = html.match(/data-cursor-live[^>]*aria-pressed="([^"]*)"/);
+  assert.ok(liveMatch, 'the live control must be present');
+  assert.equal(liveMatch[1], 'false');
+});
+
+test('live puts all three on the head', () => {
+  const content = threeRecordContent();
+  const view = buildDensity(buildLanes({ session: session(), content }), { content, tools: [] });
+  const html = renderTimeline(view, liveCursor());
+
+  const inputMatch = html.match(/<input[^>]*id="timeline-scrub"[^>]*>/);
+  assert.ok(inputMatch, 'the scrub input must be present');
+  assert.match(inputMatch[0], /value="5000"/);
+
+  const positions = [...html.matchAll(/data-cursor-pos[^>]*style="left:([0-9.]+)%"/g)].map((m) => m[1]);
+  assert.equal(positions.length, 2);
+  for (const left of positions) assert.equal(left, '100.000');
+
+  const timeMatch = html.match(/id="timeline-cursor-time"[^>]*data-time="([^"]*)"/);
+  assert.ok(timeMatch);
+  assert.equal(timeMatch[1], '5000');
+
+  const liveMatch = html.match(/data-cursor-live[^>]*aria-pressed="([^"]*)"/);
+  assert.ok(liveMatch);
+  assert.equal(liveMatch[1], 'true');
+});
+
+test('the timeline still renders from a bare view with no cursor given', () => {
+  const html = renderTimeline(buildLanes({ session: session(), content: threeRecordContent() }));
+  const laneCount = (html.match(/data-lane="/g) ?? []).length;
+  assert.equal(laneCount, 2, 'increment 2 and 3\'s call shape, renderTimeline(buildLanes(...)), must keep working');
+  assert.equal((html.match(/data-cursor-live/g) ?? []).length, 1, 'a missing cursor still renders the live control');
+  assert.match(html, /data-cursor-live[^>]*aria-pressed="true"/, 'a missing cursor resolves live');
+  assert.match(html, /data-cursor-pos[^>]*style="left:100\.000%"/);
+  assert.doesNotMatch(html, /NaN/);
+});
+
+test('a one-instant session still renders a cursor inside the track', () => {
+  const view = buildDensity(buildLanes({ session: session({ firstSeenMs: 1000, lastSeenMs: 1000 }), content: [] }), {});
+  const html = renderTimeline(view);
+  const inputMatch = html.match(/<input[^>]*id="timeline-scrub"[^>]*>/);
+  assert.ok(inputMatch, 'the scrub input must be present even for a one-instant session');
+  assert.match(inputMatch[0], /min="1000"/);
+  assert.match(inputMatch[0], /max="1000"/);
+  assert.match(html, /data-cursor-pos[^>]*style="left:100\.000%"/);
+  assert.doesNotMatch(html, /NaN/);
 });
