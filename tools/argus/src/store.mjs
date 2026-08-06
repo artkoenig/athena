@@ -147,13 +147,14 @@ function newSession(id, now) {
       requestBodyEvents: 0,
       requestBodies: false,
     },
-    // tool_use_id -> stats, for a `claude_code.tool` span seen before its
-    // matching tool_result log event. Spans and logs export on separate
-    // OTLP pipelines with independent flush intervals, so arrival order
-    // between the two is never guaranteed.
-    pendingToolSpanStats: new Map(),
-    // tool_use_id -> tool_result_size_bytes, for the reverse ordering.
-    pendingToolResultBytes: new Map(),
+    // tool_use_id -> the `claude_code.tool` span record, for a span seen
+    // before its matching tool_result log event. Spans and logs export on
+    // separate OTLP pipelines with independent flush intervals, so arrival
+    // order between the two is never guaranteed. The entry is deleted the
+    // moment the two meet.
+    pendingToolSpans: new Map(),
+    // tool_use_id -> { bytes, failed }, for the reverse ordering.
+    pendingToolResults: new Map(),
     traceIds: new Set(),
     lastError: null,
     // Todo/task state reconstructed from TodoWrite/TaskCreate/TaskUpdate
@@ -319,37 +320,61 @@ export class TelemetryStore {
   }
 
   /**
-   * A `claude_code.tool` span without `result_tokens` — join it against the
-   * matching tool_result log event's `tool_result_size_bytes`, whichever of
-   * the two arrives second.
+   * The span side of the `tool_use_id` join: register a `claude_code.tool`
+   * span against the matching tool_result log event, whichever of the two
+   * arrives second. The span carries the agent the event lacks, and its
+   * `tool_result_size_bytes` stands in for a missing `result_tokens`.
+   *
+   * The span record is parked, never a stats object: `agentBucketFor` folds
+   * an id-keyed agent bucket into the named one as soon as a record names the
+   * agent, so a parked stats reference would point into a discarded bucket.
+   * Re-resolving the bucket from the record at join time follows the fold.
    */
-  #applyResultTokenFallback(session, stats, toolUseId) {
+  #registerToolSpan(session, span) {
+    const toolUseId = span.attrs?.tool_use_id;
     if (!toolUseId) return;
-    const bytes = session.pendingToolResultBytes.get(toolUseId);
-    if (bytes === undefined) {
-      session.pendingToolSpanStats.set(toolUseId, stats);
+    const result = session.pendingToolResults.get(toolUseId);
+    if (result === undefined) {
+      session.pendingToolSpans.set(toolUseId, span);
       return;
     }
-    session.pendingToolResultBytes.delete(toolUseId);
-    const estimate = estimateTokensFromBytes(bytes);
-    stats.resultTokens += estimate;
-    stats.resultTokensEstimated += estimate;
+    session.pendingToolResults.delete(toolUseId);
+    this.#applyToolJoin(session, span, result);
   }
 
-  /** The log-side half of #applyResultTokenFallback. */
-  #applyResultBytesFallback(session, toolUseId, sizeBytesAttr) {
+  /** The log-side half of #registerToolSpan. */
+  #registerToolResult(session, toolUseId, sizeBytesAttr, failed) {
     if (!toolUseId) return;
-    const bytes = num(sizeBytesAttr, NaN);
-    if (!Number.isFinite(bytes)) return;
-    const pendingStats = session.pendingToolSpanStats.get(toolUseId);
-    if (!pendingStats) {
-      session.pendingToolResultBytes.set(toolUseId, bytes);
+    const rawBytes = num(sizeBytesAttr, NaN);
+    const result = { bytes: Number.isFinite(rawBytes) ? rawBytes : null, failed };
+    const span = session.pendingToolSpans.get(toolUseId);
+    if (!span) {
+      session.pendingToolResults.set(toolUseId, result);
       return;
     }
-    session.pendingToolSpanStats.delete(toolUseId);
-    const estimate = estimateTokensFromBytes(bytes);
-    pendingStats.resultTokens += estimate;
-    pendingStats.resultTokensEstimated += estimate;
+    session.pendingToolSpans.delete(toolUseId);
+    this.#applyToolJoin(session, span, result);
+  }
+
+  /**
+   * The two halves have met: attribute the failure to the agent that made the
+   * call, and fall back to a byte estimate when the CLI sent no
+   * `result_tokens`. The session's `failures` is counted off the event
+   * directly, so the join must not add to it again.
+   */
+  #applyToolJoin(session, span, { bytes, failed }) {
+    const attrs = span.attrs ?? {};
+    const agent = this.#agent(session, span);
+    const stats = this.#tool(session, attrs.tool_name);
+    const agentStats = this.#tool(agent, attrs.tool_name);
+    if (attrs.result_tokens === undefined && bytes !== null) {
+      const estimate = estimateTokensFromBytes(bytes);
+      for (const target of [stats, agentStats]) {
+        target.resultTokens += estimate;
+        target.resultTokensEstimated += estimate;
+      }
+    }
+    if (failed) agentStats.failures++;
   }
 
   /**
@@ -475,15 +500,14 @@ export class TelemetryStore {
           target.calls++;
           target.durationMsTotal += num(attrs.duration_ms, span.durationMs ?? 0);
         }
-        // The result-token fallback joins a span against a log event that
-        // carries no agent, so it stays session-level and is not duplicated.
         if (attrs.result_tokens !== undefined) {
           const tokens = num(attrs.result_tokens, 0);
           stats.resultTokens += tokens;
           agentStats.resultTokens += tokens;
-        } else {
-          this.#applyResultTokenFallback(session, stats, attrs.tool_use_id);
         }
+        // Register even when `result_tokens` is present: the join also carries
+        // the failure, which only the matching tool_result event knows about.
+        this.#registerToolSpan(session, span);
         if ((span.events ?? []).some((event) => event.name === 'tool.output')) {
           session.capture.toolOutputContent = true;
         }
@@ -633,9 +657,10 @@ export class TelemetryStore {
         break;
       case EVENT.toolResult: {
         const stats = this.#tool(session, attrs.tool_name);
-        // Per-agent tool counts come from `claude_code.tool` spans instead: this
+        // Per-agent tool calls come from `claude_code.tool` spans instead: this
         // event carries no attribution at all, so counting it here would put
-        // every tool call on the main session.
+        // every tool call on the main session. A failure reaches its agent
+        // through the `tool_use_id` join below, never by counting this event.
         session.capture.toolResultEvents++;
         session.capture.toolArguments ||= toolParametersOf(attrs) !== null;
         if (TASK_TOOL_NAMES.has(attrs.tool_name)) session.todos.callsSeen++;
@@ -649,7 +674,12 @@ export class TelemetryStore {
         } else {
           this.#applyTodo(session, log);
         }
-        this.#applyResultBytesFallback(session, attrs.tool_use_id, attrs.tool_result_size_bytes);
+        this.#registerToolResult(
+          session,
+          attrs.tool_use_id,
+          attrs.tool_result_size_bytes,
+          !bool(attrs.success),
+        );
         break;
       }
       case EVENT.toolDecision:

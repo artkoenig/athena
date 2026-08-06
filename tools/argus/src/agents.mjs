@@ -60,7 +60,7 @@ export function emptyToolStats() {
     rejected: 0,
     durationMsTotal: 0,
     resultTokens: 0,
-    // Portion of resultTokens that is an estimate (see #applyResultTokenFallback)
+    // Portion of resultTokens that is an estimate (see store.mjs #applyToolJoin)
     // rather than the CLI's own `result_tokens` attribute.
     resultTokensEstimated: 0,
   };
