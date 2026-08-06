@@ -534,3 +534,392 @@ before the change and nothing red after it: the five cases assert behaviour the
 current implementation already has, and the two fixture edits are additive with
 defaults that leave every existing caller unchanged.
 
+## Increment 2 — the timeline is the central session view, one lane per agent
+
+Everything below changes `tools/argus-ui` only. The collector is not touched:
+increment 1 already serves every fact a lane needs, and adding an endpoint for
+data the UI can derive in one request would be a second implementation of the
+same grouping. I ran no command except `node --version` (v22.22.2 at
+`/opt/node22/bin/node`) — no capture was needed, because the two questions this
+increment turns on are answered by increment 1's measurements and by reading the
+collector's query code.
+
+### Finding: what marks a lane's start and end
+
+The backlog asks this increment to settle it. **A lane is a span, and its start
+and end are the first and last content record carrying that span**, read off
+`GET /api/content?session=<id>&limit=2000`. The main lane is the exception: it
+spans the session's own `firstSeenMs`…`lastSeenMs` from
+`GET /api/sessions/<id>`, because the main session exists before its first API
+request and after its last one.
+
+Why not the alternatives:
+
+- **Spans (`claude_code.tool` with `subagent_type`, or `tool.execution`)** give
+  the exact tool-call lifetime, but the collector serves spans only through
+  `GET /api/traces/<traceId>`, one request per trace, and a session has one trace
+  per interaction. That is N requests and N whole span trees per refresh for two
+  timestamps per lane, against one request for the content index. The store has
+  no per-session span query and adding one is collector work this increment does
+  not need.
+- **`claude_code.subagent_completed`** — increment 1 measured that the CLI emits
+  it (attributes `agent_type`, `total_tokens`, `total_tool_uses`, `duration_ms`)
+  but did not record whether it arrives as a log record (and so reaches
+  `/api/events` today, unnamed by `claude.mjs` but stored like any other log) or
+  as a span event (in which case only the trace routes carry it). Nothing in this
+  repository answers that, and settling it costs a live capture. The plan does not
+  depend on it, so the question stays open: a later increment that wants an exact
+  lane end must measure it first.
+
+Consequences to know, and to accept rather than paper over:
+
+- A lane's end is its last API body, so the agent's last few seconds — handing
+  the final result back through the Task tool — fall outside the bar.
+- A subagent that never called the model gets no lane. This does not occur: a
+  Task subagent's first act is a model call, which is a request body.
+- `/api/content` returns the newest 2000 records when a session has more (the
+  store walks newest-first, then reverses). A session past that cap loses its
+  oldest lanes, the same window every other list in this UI has.
+- Increment 1 measured that two concurrent subagents of one type share a
+  `query_source` and differ only by `spanId`. Keying the lane on the span is
+  therefore not a detail: it is the whole of criterion 3.
+
+### Implementation plan
+
+Two new files under `public/`, three edited, plus the README. `src/` and `bin/`
+are untouched.
+
+**A. `public/format.js` — new. The formatting section, moved verbatim.**
+
+Cut `public/app.js` lines 30–88 (the block between the `formatting` banner
+comment and the `api` banner comment: `esc`, `fmtNum`, `fmtCost`, `fmtDur`,
+`fmtClock`, `fmtAgo`, `isLive`, `shortId`) into this file and `export` each one.
+No body changes. `app.js` gains
+`import { esc, fmtNum, fmtCost, fmtDur, fmtClock, fmtAgo, isLive, shortId } from './format.js';`
+at the top. The move exists so `timeline.js` can escape and format without a
+second copy of `esc`; it is a move, not a rewrite, and nothing else about those
+functions changes.
+
+**B. `public/timeline.js` — new. The timeline view: pure functions, no DOM.**
+
+It imports `esc`, `fmtClock` and `fmtDur` from `./format.js` and touches
+`document`, `fetch` and `location` nowhere — that is what makes it testable under
+`node --test`. Exports:
+
+- `buildLanes({ session, content })` → `{ startMs, endMs, durationMs, lanes }`.
+  `session` is the `/api/sessions/<id>` payload, `content` the `items` array of
+  `/api/content`. Algorithm, exactly:
+  1. `records` = the entries of `content` with a finite `timeMs > 0`.
+  2. Main lane: `startMs` is `session.firstSeenMs` when it is a finite number
+     above 0, otherwise the earliest main record's `timeMs`, otherwise 0; `endMs`
+     is the largest of `session.lastSeenMs`, that `startMs`, and the latest main
+     record's `timeMs`. A main record is one with `isSubagent !== true`.
+  3. Agent lanes: for every record with `isSubagent === true`, the key is
+     `` `agent:${record.spanId ?? ''}:${record.agent ?? ''}` `` — one rule, no
+     branch, so a record with no span groups by name and a record with a span
+     never merges with another span. Accumulate `startMs` = min `timeMs`,
+     `endMs` = max `timeMs`, `records` = count.
+  4. Sort agent lanes by `startMs`, ties broken by `key`, so the order is
+     deterministic whatever order the API returned.
+  5. Labels: `record.agent || 'subagent'`. When two or more lanes end up with the
+     same label, suffix each with ` #1`, ` #2` … in that sorted order, so two
+     concurrent `general-purpose` agents are told apart on screen and not only in
+     the DOM.
+  6. Window: `startMs` = the smallest lane start, `endMs` = the largest lane end,
+     `durationMs = Math.max(0, endMs - startMs)`.
+  7. Return the main lane first, then the agent lanes. Each lane is
+     `{ key, kind: 'main' | 'agent', agent, spanId, label, startMs, endMs, records }`;
+     the main lane has `key: 'main'`, `agent: null`, `spanId: null`,
+     `label: 'main session'`.
+  Never use truthiness on `isSubagent` or `agent`: the API sends real booleans and
+  a `null` agent, and `agent` may legitimately be the string `custom`.
+- `laneGeometry(lane, window)` → `{ leftPct, widthPct }`, with
+  `span = Math.max(1, window.endMs - window.startMs)`,
+  `leftPct` = `(lane.startMs - window.startMs) / span * 100` clamped to 0…100,
+  and `widthPct` = `(lane.endMs - lane.startMs) / span * 100` raised to at least
+  `MIN_LANE_WIDTH_PCT = 0.6` and then capped at `Math.max(0.6, 100 - leftPct)`.
+  The `Math.max(1, …)` is what keeps a session with one instant of data from
+  dividing by zero and painting `NaN%` into the style attribute.
+- `renderTimeline({ window, lanes })` → the markup, as a string like every other
+  renderer in this project:
+  ```html
+  <div class="panel timeline-panel">
+    <div class="timeline">
+      <div class="timeline-axis"><span></span><span class="axis-ticks">…5 ticks…</span></div>
+      <div class="lane" data-lane="main" data-kind="main">
+        <span class="lane-label" title="main session">main session</span>
+        <span class="lane-track">
+          <span class="lane-bar" data-kind="main" style="left:0.000%;width:100.000%"></span>
+        </span>
+        <span class="lane-meta">1m 20s</span>
+      </div>
+      …one .lane per agent lane, data-lane="<key>" data-kind="agent"…
+    </div>
+  </div>
+  ```
+  Ticks are the waterfall's pattern (`0, .25, .5, .75, 1` of the window, absolute
+  positions in percent, labelled with `fmtClock` of the wall time at that
+  fraction). `lane-meta` is `fmtDur(lane.endMs - lane.startMs)`. Every label and
+  key goes through `esc`.
+- `DETAIL_VIEWS` — the six existing views, moved from `app.js`'s `TABS` constant
+  unchanged: `overview/Overview`, `todos/Tasks`, `traces/Traces`,
+  `events/Events`, `metrics/Metrics`, `raw/Attributes`.
+- `renderDetailViews({ selected, counts })` → the existing `.tabs` / `.tab`
+  markup, wrapped in `<nav class="tabs" role="tablist" aria-label="Technical
+  views">`, with `aria-selected="true"` on the view whose id equals `selected`
+  and `"false"` on every other — so `selected: null` renders every view reachable
+  and none open.
+
+**C. `public/app.js` — the landing view, the loader, the wiring, the advisories.**
+
+- State: `tab: null` instead of `'overview'`; add `content: []`. `null` is what
+  makes opening a session land on the timeline with no technical view open.
+- `TABS` and its inline nav markup in `renderDetail` are gone, replaced by
+  `renderDetailViews` from the new module.
+- `renderDetail` renders, in this order: the existing `.detail-head`, then
+  `renderTimeline(buildLanes({ session: state.session, content: state.content }))`,
+  then `renderDetailViews({ selected: state.tab, counts })`, then
+  `<div id="tab-body"></div>`. The timeline is not behind a tab and is never
+  hidden; the technical views hang below it. That is the whole of "central, and
+  the others subordinate to it".
+- `renderTabBody` gains a `state.tab === null` case that writes the empty string,
+  and keeps `overview` as the `default` branch for when a view is selected.
+- New `loadTimeline()`: when a session is selected, `state.content = (await
+  api('/api/content', { session: state.selectedSessionId, limit: 2000 })).items`,
+  and `[]` on a rejection or with no session, so a failing content request costs
+  the lanes and not the page. Call it from `refresh()` inside the existing `try`,
+  after `loadSession()` and before `loadTabData()`.
+- `selectSession` resets `state.tab = null` and `state.content = []` alongside the
+  resets it already does, so every session opens on the timeline.
+- The tab click handler toggles: `state.tab = state.tab === tab.dataset.tab ? null
+  : tab.dataset.tab`, so a reader can close a technical view and be back at the
+  timeline alone.
+- Advisories for flags `argus env` now sets, all four sites (criterion 4):
+  - `renderTodosTab`, the `todos.callsSeen > 0` placeholder: drop the
+    `OTEL_LOG_TOOL_DETAILS=1` sentence. The branch stays — it now means "the calls
+    carried no parameters we could read" and says only that.
+  - `renderTracesTab`, the no-spans placeholder: drop
+    `CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1` and `OTEL_TRACES_EXPORTER=otlp`; say
+    that spans come with the environment block under Setup and that a session
+    recorded without it has none.
+  - `renderEmptyState`, the muted paragraph under the env block: drop the
+    `CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1` mention; say the block already carries
+    what spans and content need, and keep the sentence about 1s export intervals.
+  - `index.html`, the static empty state's muted paragraph: the same edit, same
+    wording. It is markup the page replaces on first render, but it is what a
+    reader sees before the first response arrives.
+  Left alone deliberately: `OTEL_RESOURCE_ATTRIBUTES` in the setup dialog and
+  `CLAUDE_CODE_OTEL_DIAG_STDERR=1` under the SDK block. `argus env` sets neither,
+  so advising them is still true.
+
+**D. `public/styles.css` — lane styles, appended near the waterfall block.**
+
+`.timeline` (with its own `--label-w`, narrower than the waterfall's 320px),
+`.timeline-axis` and `.lane` reuse the waterfall's two-column grid;
+`.lane-track` is the `.span-track` pattern; `.lane-bar[data-kind="main"]` uses
+`var(--accent)` and `[data-kind="agent"]` `var(--violet)`, both already defined
+in `:root` and in the light-mode block. No new custom property, no new colour.
+
+**E. `README.md` (in `tools/argus-ui`) — two edits.**
+
+"What it shows" gains **Timeline** as its first bullet after Sessions ("one lane
+for the main session and one per subagent, each spanning that agent's lifetime;
+the views below it are reachable from there"), and the **Events** bullet loses
+the word "timeline" so the two names stop colliding ("filterable event tail,
+every row expandable"). `CLAUDE.md` needs no change: no convention changes.
+
+### Decisions I rejected
+
+- **A `timeline` tab next to the others.** The issue's decision 2 rejects "an
+  additional tab" by name; a first tab among equals is exactly that, and it makes
+  the timeline subordinate to the tab strip rather than the other way round.
+- **Deleting the technical views.** The same decision keeps them reachable.
+- **Building lanes in the collector** (a `/api/agents` or `/api/lanes` route).
+  Everything the grouping needs is already on the content index, one request; a
+  collector route would put the same `spanId`-keyed grouping in a second place and
+  the UI would still need the geometry. Kept in reserve for the day a session
+  outgrows the 2000-record window.
+- **Lanes from spans.** Exact lifetimes, N requests per refresh, and it fails
+  entirely when traces are off. Recorded above as the finding.
+- **Grouping lanes by `agent` name.** It merges two concurrent same-type agents
+  into one lane, which is precisely what criterion 3 forbids.
+- **A DOM test harness (jsdom or similar).** A dependency, and this project's
+  first rule is zero of them. The way out is the one taken above: the derivation
+  and the markup are pure functions in a module `node --test` can import, and only
+  the wiring in `app.js` stays unpinned.
+- **Scrub cursor, live-mode control, activity blocks, context curves, per-lane
+  selection.** All named as later increments; a lane here is a bar with a label.
+- **Touching `/api/events?search=` or the span-carried tool content** — the two
+  notes the round-1 reviewer filed as "beyond the criteria". Still beyond them.
+
+### Module map
+
+| Path | What it holds | Entry points |
+| --- | --- | --- |
+| `tools/argus-ui/public/format.js` | **New.** `esc`, `fmtNum`, `fmtCost`, `fmtDur`, `fmtClock`, `fmtAgo`, `isLive`, `shortId`, moved verbatim out of `app.js` | all exports; no behaviour change |
+| `tools/argus-ui/public/timeline.js` | **New.** Lane derivation and the timeline markup; pure, no DOM | `buildLanes`, `laneGeometry`, `renderTimeline`, `DETAIL_VIEWS`, `renderDetailViews` |
+| `tools/argus-ui/public/app.js` | The page: state, fetching, rendering, wiring | `state` defaults, `renderDetail`, `renderTabBody`, new `loadTimeline`, `refresh`, `selectSession`, the click handler, `renderTodosTab`, `renderTracesTab`, `renderEmptyState` |
+| `tools/argus-ui/public/index.html` | The shell: topbar, sidebar, detail pane, setup dialog | the static empty state's muted paragraph |
+| `tools/argus-ui/public/styles.css` | Every style; dark-first with a light-mode `:root` | new `.timeline*` / `.lane*` rules |
+| `tools/argus-ui/README.md` | User-facing page | "What it shows" |
+| `tools/argus-ui/src/server.mjs` | Static files plus a proxy for `/api/*` and `/v1/*` | none — it serves any file under `public/`, so the new modules need no route |
+
+Facts about the collector's API that the plan rests on, so nobody has to open
+that project: `GET /api/sessions/<id>` returns `id`, `name`, `firstSeenMs`,
+`lastSeenMs`, `durationMs`, `counts`, `traceCount`, `traces[]`;
+`GET /api/content?session=&agent=&main=1&span=&event=&limit=` returns
+`{ items: [...] }` ascending by time, each item
+`{ seq, timeMs, sessionId, traceId, spanId, eventName, querySource, agent,
+isSubagent, model, requestId, promptId, eventSequence, bodyLength, bodyChars,
+truncated, bodyRef }` and never a body; `limit` is capped at 2000 and the walk is
+newest-first, so an over-long session yields its newest 2000 records. `agent` is
+the subagent's name or `null` for main traffic, `isSubagent` a real boolean.
+
+### Environment
+
+- Node v22.22.2 at `/opt/node22/bin/node`, on the `PATH`; the package requires
+  ≥ 20.11.
+- `tools/argus-ui` has **zero runtime and zero dev dependencies**; `npm install`
+  is not needed and must not become needed. Adding a dependency is not a coding
+  decision — it goes to the human.
+- Whole package, from the repository root: `npm --prefix tools/argus-ui test`
+  (`node --test "test/*.test.mjs"`).
+- A single file, from the repository root:
+  `node --test tools/argus-ui/test/timeline.test.mjs`, same shape for
+  `page.test.mjs`, `server.test.mjs`, `config.test.mjs`, `independence.test.mjs`.
+- `public/*.js` is importable by `node --test` because the package is
+  `"type": "module"`: `import { buildLanes } from '../public/timeline.js';` works
+  with no loader flag.
+- **There is no linter and no formatter in this repository** — nothing to run,
+  nothing to configure.
+- `./test.sh` runs every suite in the repository. It is **not** on this
+  increment's list: the closing increment (`tool-usage`) owns it, and nothing
+  outside `tools/argus-ui` changes here.
+
+### Test plan
+
+Tests are needed. Framework: `node:test` with `node:assert/strict`, the only
+thing this project uses. Conventions, taken from the files themselves: a test
+name is a full lowercase sentence stating the fact ('the interface serves the
+page on its own port'); fixtures are local factory helpers at the top of the file
+(`startFakeCollector`, `withUi` in `server.test.mjs`; `walk` in
+`independence.test.mjs`); nothing is mocked beyond those; an assertion that could
+be read two ways carries a message saying what the fact is; and — from
+`tools/argus/CLAUDE.md`, which this project follows in style — a message is
+asserted as an absence, never as a wording.
+
+Two new files, plus two additions to an existing one:
+
+- `tools/argus-ui/test/timeline.test.mjs` — **new**, unit level, imports
+  `../public/timeline.js`. Two local factories at the top:
+  `const session = (over = {}) => ({ id: 's1', name: null, firstSeenMs: 1000, lastSeenMs: 5000, ...over });`
+  and
+  `const record = (over = {}) => ({ seq: 1, timeMs: 1000, sessionId: 's1', traceId: 't', spanId: '', eventName: 'claude_code.api_request_body', querySource: 'sdk', agent: null, isSubagent: false, model: 'claude-sonnet-5', bodyLength: 10, bodyChars: 10, truncated: false, ...over });`
+  Every case builds its input from those two and nothing else.
+- `tools/argus-ui/test/page.test.mjs` — **new**, source level, reads the files
+  under `public/` with `fs.readFileSync` and a `walk` helper copied in the shape
+  of `independence.test.mjs`'s.
+- `tools/argus-ui/test/independence.test.mjs` — **edited**: add
+  `'public/timeline.js'` and `'public/format.js'` to the existence list in the
+  first case and to the `owned` list in the second, so the new modules are inside
+  the import scan rather than beside it.
+
+#### Criterion 1 — opening a session lands on the timeline, the technical views stay reachable and subordinate
+
+| # | Case | File | Level |
+| --- | --- | --- | --- |
+| 1 | `DETAIL_VIEWS` carries exactly the six ids `overview`, `todos`, `traces`, `events`, `metrics`, `raw`, each with a non-empty label — the timeline took the landing spot and dropped none of them | `test/timeline.test.mjs` | unit |
+| 2 | `renderDetailViews({ selected: null })` renders one `data-tab="<id>"` button per entry of `DETAIL_VIEWS` and no `aria-selected="true"` anywhere: a freshly opened session offers every technical view and opens none | `test/timeline.test.mjs` | unit |
+| 3 | `renderDetailViews({ selected: 'events' })` marks exactly one button selected and it is the events one (assert the count of `aria-selected="true"` is 1 and that the events button carries it) | `test/timeline.test.mjs` | unit |
+| 4 | `public/app.js` imports `./timeline.js` and `public/index.html` loads `/app.js` as a module — the timeline module is reached by the page and is not a tested island | `test/page.test.mjs` | source |
+
+Case 4 is deliberately the only source-level claim about `app.js`'s structure.
+
+#### Criterion 2 — one lane for the main session, one per subagent, each spanning its lifetime
+
+| # | Case | Expected | File |
+| --- | --- | --- | --- |
+| 5 | `buildLanes({ session: session(), content: [] })` | exactly one lane; `kind === 'main'`, `key === 'main'`, `startMs === 1000`, `endMs === 5000`, `label === 'main session'`; `window.startMs`/`window.endMs` are 1000/5000 | `test/timeline.test.mjs` |
+| 6 | A main record plus three subagent records for one span (`spanId: 'sp-a'`, `agent: 'code-reviewer'`, `isSubagent: true`) at 2000, 2500, 3000 | two lanes; the main lane is first and still spans 1000…5000; the agent lane has `startMs === 2000`, `endMs === 3000`, `label === 'code-reviewer'`, `spanId === 'sp-a'`, `records === 3` | `test/timeline.test.mjs` |
+| 7 | The same records passed newest-first | `deepEqual` to the result of case 6 — the lanes do not depend on the order the API returned | `test/timeline.test.mjs` |
+| 8 | Two subagent records on one span at 6000 and 7000, i.e. past `session.lastSeenMs` | `window.endMs === 7000`; the main lane still ends at 5000 — the window covers every lane, and the main lane is not stretched to cover a subagent | `test/timeline.test.mjs` |
+| 9 | Records with `timeMs: 0` (and one with a missing `timeMs`) mixed into case 6's input | identical lanes to case 6 — a record with no usable time widens nothing | `test/timeline.test.mjs` |
+| 10 | `laneGeometry` for a lane covering the whole window, and for one covering the second half (window 0…1000, lane 500…1000) | `{ leftPct: 0, widthPct: 100 }` and `{ leftPct: 50, widthPct: 50 }` — exact, the arithmetic is exact at these values | `test/timeline.test.mjs` |
+| 11 | `laneGeometry` for a single-record lane (`startMs === endMs`) inside a real window | `widthPct >= 0.6` and `leftPct + widthPct <= 100`: an instant is still a visible bar and never overflows the track | `test/timeline.test.mjs` |
+| 12 | `laneGeometry` against a zero-length window (`startMs === endMs`) | both numbers are finite (`Number.isFinite`) and inside 0…100 — the division-by-zero edge of a session with one instant of data | `test/timeline.test.mjs` |
+| 13 | `renderTimeline(buildLanes(…))` for case 6's input | the markup carries exactly two `data-lane="` occurrences, one `data-lane="main"`, one whose value contains `sp-a`, and each bar's `style` carries a `left:` and a `width:` with no `NaN` | `test/timeline.test.mjs` |
+| 14 | A subagent whose `agent` is `<img src=x onerror=alert(1)>` | `renderTimeline` output contains no `<img` and does contain the escaped form — every label goes through `esc` | `test/timeline.test.mjs` |
+
+#### Criterion 3 — two concurrent subagents of one type get two lanes
+
+| # | Case | Expected | File |
+| --- | --- | --- | --- |
+| 15 | Four subagent records, all `agent: 'general-purpose'`, two on `spanId: 'sp-a'` (2000, 3000) and two on `spanId: 'sp-b'` (2200, 3400) — the overlapping same-type pair increment 1 measured | three lanes (main plus two); the two agent lanes have different `key`s carrying `sp-a` and `sp-b`, bounds 2000…3000 and 2200…3400, and labels `general-purpose #1` and `general-purpose #2` so they are told apart on screen | `test/timeline.test.mjs` |
+| 16 | The same four records through `renderTimeline` | three `data-lane="` occurrences, and both `sp-a` and `sp-b` appear — the merge is impossible in the markup too | `test/timeline.test.mjs` |
+| 17 | Two records on one span, same agent, at 2000 and 3000 | exactly two lanes: a lane is a span, not a record, and one agent is not split per request | `test/timeline.test.mjs` |
+| 18 | Two subagent records with different `agent` names on different spans | two agent lanes, labels `alpha` and `beta` with **no** `#1`/`#2` suffix — the disambiguation fires only where labels actually collide | `test/timeline.test.mjs` |
+
+#### Criterion 4 — the UI no longer advises a flag `argus env` sets
+
+| # | Case | Expected | File |
+| --- | --- | --- | --- |
+| 19 | Walk every file under `public/` and assert none of them contains any of these names: `CLAUDE_CODE_ENABLE_TELEMETRY`, `CLAUDE_CODE_ENHANCED_TELEMETRY_BETA`, `CLAUDE_CODE_OTEL_CONTENT_MAX_LENGTH`, `OTEL_METRICS_EXPORTER`, `OTEL_LOGS_EXPORTER`, `OTEL_TRACES_EXPORTER`, `OTEL_EXPORTER_OTLP_PROTOCOL`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_LOG_USER_PROMPTS`, `OTEL_LOG_TOOL_DETAILS`, `OTEL_LOG_TOOL_CONTENT`, `OTEL_LOG_RAW_API_BODIES`, `OTEL_METRIC_EXPORT_INTERVAL`, `OTEL_LOGS_EXPORT_INTERVAL`, `OTEL_TRACES_EXPORT_INTERVAL` — the failure message names the file and the flag | `test/page.test.mjs` | source |
+| 20 | The same walk finds `OTEL_RESOURCE_ATTRIBUTES` and `CLAUDE_CODE_OTEL_DIAG_STDERR` still present in `public/app.js` | advice about flags `argus env` does *not* set is not collateral damage of case 19 | `test/page.test.mjs` | source |
+
+Case 19 is an absence assertion by design: the page still shows every flag,
+because the setup dialog and the empty state render the block that
+`GET /api/config` hands them at runtime. What may not be there is a flag name
+written into the markup as something the reader should go and set. That is why
+the rule is "no such name in `public/`" rather than a match on a sentence — a
+wording test would fail on a better sentence, and this one only fails on the
+thing the criterion forbids.
+
+Case 19 also spans `styles.css` and `index.html` for free, which is where two of
+the four advisory sites live.
+
+#### Deliberately untested, and why
+
+- **That `renderDetail` puts the timeline above the nav, and that `state.tab`
+  starts as `null`.** Both are DOM wiring in `app.js`, which this project has no
+  harness for and will not grow one for (jsdom is a dependency, and the project's
+  first rule is zero). Cases 1–4 pin what the landing view is made of and that the
+  module is wired in; the arrangement itself is a reading, and the review is
+  where it is read.
+- **Whether a lane bar is visually where it should be.** Geometry is pinned as
+  numbers (cases 10–12); pixels are not a thing `node --test` can see.
+- **The `/api/content` fetch itself** — `loadTimeline` is three lines of the same
+  `api()` helper every other loader uses, and `server.test.mjs` already proves the
+  proxy forwards `/api/*` with its query string intact.
+- **The 2000-record window.** It is the collector's cap, pinned in that project's
+  suite; re-asserting it here would pin someone else's number.
+- **A subagent record with an empty `spanId`.** `argus env` sets the trace flags,
+  so under contract every content record carries a span; the key rule handles the
+  case without a branch and nothing promises behaviour for it.
+- **Recordings made without the content flags** — out of contract by the issue's
+  own decision; no case in this increment may pin any behaviour for them.
+- **`format.js`** — a verbatim move of functions no case asserts today; moving
+  code is not a reason to grow coverage for it.
+- **Everything increment 1 covered** — untouched here, and `tools/argus` is not on
+  this increment's command list.
+
+#### What counts as done
+
+```
+npm --prefix tools/argus-ui test
+```
+
+That one command, from the repository root, is the whole list. It runs the two
+new files, the edited `independence.test.mjs`, and the rest of the package,
+costs seconds, and needs no install. `tools/argus` and `./test.sh` are off the
+list on purpose: nothing outside `tools/argus-ui` changes in this increment, and
+the closing increment owns the full-suite run.
+
+#### What is already red
+
+I did not run the list, not once and not as a baseline. From reading, I expect
+`independence.test.mjs` to be the only existing case this increment can turn red,
+and only if `public/timeline.js` or `public/format.js` imports something outside
+the project — which the plan does not do. No existing case asserts anything about
+`state.tab`, the tab strip, or the text of any placeholder, so the four advisory
+edits and the new landing view collide with nothing already in the suite.
+
