@@ -1246,3 +1246,190 @@ Met, judged from the diff against `main` and from the mutation checks above.
   awaiting the collector when the pointer goes down still calls `renderDetail()`
   and replaces the slider mid-drag. The scrubbed value survives and a second
   grab continues. Browser-only behaviour I cannot reproduce here.
+
+## Increment 5
+
+**Status: 3 findings require a correction.** The production code meets the
+criterion — I read every line of it and could not make it misbehave — but three
+clauses of the criterion are unverifiable: nothing in the suite fails when the
+expanded block stops showing the full text, when every lane is queried as the
+main session, or when the `assistant` kind disappears. Each is proven by a
+mutation run below, not suspected.
+
+### Commands run
+
+- `npm --prefix tools/argus-ui test` — 154 cases, 154 pass, 0 fail, 0 cancelled,
+  0 skipped, 0 todo, exit 0. Nothing excluded. This is the only command my
+  prompt lists; `tools/argus`' suite and `./test.sh` were not run, by that list.
+- The same command four more times in a throwaway `git worktree` outside the
+  checkout (baseline plus three single mutations), to find out what the suite
+  would catch. The worktree was removed; `git worktree list` names only the
+  checkout and `git status --porcelain` is empty. The checkout under review was
+  never modified.
+
+| Sandbox run | Result |
+| --- | --- |
+| Unmutated copy of `HEAD` | exit 0 |
+| M1 — `ROLE_KINDS` at `context.js:21` becomes `new Set(['user', 'system'])` | 154 pass, exit 0 |
+| M2 — the whole filter at `app.js:927-933` becomes `const filter = !lane ? null : { main: '1' };` | 154 pass, exit 0 |
+| M3 — `context.js:199` becomes `<pre class="ctx-text">${esc(block.preview)}</pre>` | 154 pass, exit 0 |
+
+### Criterion — selecting a lane at the chosen time shows that agent's context as a message list
+
+Met in the code, judged from the diff against `main`.
+
+- **Selecting a lane.** `renderTimeline` emits each lane row as
+  `<button type="button" class="lane" data-lane="…" aria-current="…">`
+  (`tools/argus-ui/public/timeline.js:415-425`), so the row is reachable by
+  pointer and keyboard; the delegated `click` handler on `#detail`
+  (`app.js:1170-1177`) toggles `state.selectedLane` and clicking the open lane
+  lets go. `.timeline-cursor` carries `pointer-events: none`
+  (`styles.css:1004`), so the dimmed-ahead overlay drawn across the lane track
+  cannot swallow a click on the part of a lane right of the cursor.
+- **At the chosen time, for that lane.** `loadLaneContext` (`app.js:911-943`)
+  resolves the page's own cursor through `resolveCursor(state.cursor, view)` and
+  asks `GET /api/content/at?session=…&at=<that moment>` with exactly one lane
+  filter — `main=1`, else the lane's `span`, else its `agent` name. The
+  collector's `contentAt` defaults `eventName` to `claude_code.api_request_body`
+  and returns the newest matching record with `timeMs <= atMs`, so "the nearest
+  API request at or before that time" is what arrives. Live mode refetches it
+  (`refresh`, `app.js:1022`), a scrub refetches it debounced
+  (`scrubTo` → `scheduleLaneContext`, `app.js:1113-1116` and `app.js:975-983`),
+  and returning to live refetches it (`app.js:1163-1168`). A stale answer is
+  dropped by the session and lane guards after the await (`app.js:940-942`).
+- **A structured message list.** `contextBlocks` (`context.js:64-142`) walks the
+  system prompt (string or array of text entries), then every message in order —
+  `text` under the message's role, `thinking`, `tool_use` labelled with the tool
+  name, `tool_result` labelled with its `tool_use_id` and marked `error` — then
+  every remaining top-level field. Order is the order in the body; nothing is
+  dropped, and an unknown content block is kept under its own type.
+- **One line with its size, expandable to the full text.** Each block renders as
+  `<details><summary>` label + preview + `ctx-size` `</summary><pre>` full text
+  `</pre></details>` (`context.js:194-200`), collapsed unless its
+  `"<seq>:<index>"` key is in the expanded set. `chars` is the length of the very
+  string the `<pre>` carries (`makeBlock`, `context.js:49-52`), so the number and
+  the thing behind it are one measurement. Everything printed goes through
+  `esc`.
+- **Edges.** No body, an empty body, a non-object body and a body cut mid-JSON
+  all render (raw block or nothing, never a crash); a moment before the lane's
+  first request says so; a fetch in flight says something different from "there
+  is nothing here".
+
+### Finding 1 — "expandable to the exact full text" is unpinned in the renderer
+
+`tools/argus-ui/public/context.js:199`. Only the *parser* half of this clause is
+tested: `block.text` is asserted to be exact and uncut. What the panel actually
+puts inside `<pre class="ctx-text">` is never read by any assertion — the
+rendering cases count `<pre class="ctx-text">` tags and grep for a substring that
+the collapsed preview also contains.
+
+Reproduction (measured, M3 above): change `context.js:199` to
+`<pre class="ctx-text">${esc(block.preview)}</pre>`. A 70 KB tool result then
+expands to 120 characters plus an ellipsis — the criterion's "exact full text"
+is gone — and `npm --prefix tools/argus-ui test` still reports 154 pass, exit 0.
+Every panel case survives: `data-chars` still reports the true size, so the
+collapsed line now advertises 70,000 chars behind an expansion that shows 121.
+
+What a test has to catch: for a block whose text is longer than `PREVIEW_CHARS`,
+the text between that block's `<pre class="ctx-text">` and `</pre>` is the whole
+of `esc(block.text)`, not the preview and not a cut of it.
+
+### Finding 2 — "that agent's (or the main session's) context" is unpinned: nothing ties a lane to its query
+
+`tools/argus-ui/public/app.js:927-933`, against
+`tools/argus-ui/test/page.test.mjs:404` ("the panel asks the collector for the
+nearest request at the cursor's moment, for that lane only"). That case asserts
+that the source of `loadLaneContext` matches `/\bmain\b/`, `/\bspan\b/` and
+`/\bagent\b/` — and the three-line comment above the filter
+("main traffic for the main lane, an agent lane's own span … its name only when
+it carries no span at all") contains all three words on its own. The mapping
+from a lane to the query it produces is therefore asserted by nothing.
+
+Reproduction (measured, M2 above): replace the whole filter expression with
+`const filter = !lane ? null : { main: '1' };`, leaving the comment in place.
+Selecting the `agent:sp-a:probe` lane then sends
+`/api/content/at?session=…&at=…&main=1` and the panel shows the **main
+session's** request body under the subagent's lane — the criterion's "that
+agent's … context" is violated for every subagent — and the suite still reports
+154 pass, exit 0.
+
+What a test has to catch: a lane of kind `agent` with `spanId: 'sp-a'` must
+produce a query carrying `span=sp-a` and neither `main` nor a bare session
+query; an agent lane with no span must fall back to its `agent` name; the main
+lane must produce `main=1`. Whether that means exporting the lane→filter mapping
+as a pure function or driving the loader some other way is the implementer's
+call, not mine.
+
+### Finding 3 — the `assistant` kind, one of the five the criterion names, is unpinned
+
+`tools/argus-ui/public/context.js:21`, against
+`tools/argus-ui/test/context.test.mjs:51` ("the five kinds the criterion names
+all reach the list"). The kind sequence that case asserts is
+`['system','system','user','system','thinking','tool_use','tool_result','field',
+'field','field','field']` — there is no `assistant` in it. Every `assistant`
+message in every fixture of the file carries only `thinking` and `tool_use`
+parts, whose kinds ignore the role, so no assertion in the suite ever observes
+an assistant text block.
+
+Reproduction (measured, M1 above): change `context.js:21` to
+`new Set(['user', 'system'])`. A body containing
+`{ role: 'assistant', content: [{ type: 'text', text: 'answer' }] }` — the shape
+of every assistant turn in a real context — then renders that block as kind
+`other`, losing the assistant colour and the criterion's named kind, and the
+suite still reports 154 pass, exit 0. The same fixture gap hides a worse
+mutation: dropping `case 'text'` for assistant messages would delete every
+assistant reply from the list, and no case would notice.
+
+What a test has to catch: a message with `role: 'assistant'` and a `text`
+content part yields exactly one block that the panel identifies as an assistant
+block, carrying that text.
+
+### Beyond the criteria
+
+- **Increments 1–4 still hold.** `renderTimeline`'s third parameter defaults to
+  `null`, so the two-argument call shape keeps working (pinned by "with nothing
+  selected no lane claims to be current"). The lane row's change from `<div>` to
+  `<button>` is fully reset in CSS — `appearance: none; width: 100%;
+  background: none; border: 0; color: inherit; font: inherit; text-align: left`
+  (`styles.css:857-865`) — so the `--label-w | 1fr | --meta-w` grid, the bars,
+  the curves and the activity marks keep their geometry, and every custom
+  property the new rules use (`--panel-hover`, `--accent-soft`, `--violet`,
+  `--teal`, `--warn`, `--bg-sunken`, `--text-dim`, `--text-faint`, `--mono`,
+  `--radius`) is declared in both the dark and the light block.
+- **No delegated handler shadows another.** The new `[data-lane]` branch sits
+  after `[data-copy]` and `[data-cursor-live]` and before `[data-tab]`; no lane
+  row contains any of those attributes, and the panel deliberately carries
+  `data-context-lane` rather than `data-lane` (pinned). The
+  `summary[data-block]` branch only records the expansion the browser already
+  performed, so it cannot fight `<details>`.
+- **A failing panel costs the panel only.** `loadLaneContext` swallows its own
+  rejection (`.catch(() => null)`), so the new `await` inside `refresh`
+  (`app.js:1022`) cannot abort the render chain.
+- **Nothing in the diff is outside the criterion**, with one deliberate
+  extension recorded here rather than as a finding: blocks of kind `field` (every
+  non-message top-level key — `tools`, `max_tokens`, `stream`, `model`) and
+  `thinking` go beyond the five kinds the criterion names. They add to the list
+  rather than replacing anything in it, and without them the per-block sizes
+  would not add up to the body the head reports. Triage may still call it scope.
+- **No document made stale.** `tools/argus-ui/README.md` gained five lines that
+  describe exactly this criterion. `skills/argus/SKILL.md`, `tools/argus/README.md`
+  and the root `README.md` mention only the collector, its API and how to start
+  the interface; none of them describes lane selection.
+- **Observation, not a finding — a live refresh collapses the expanded blocks
+  when a new request arrives.** The expansion key is `"<seq>:<index>"`
+  (`context.js:193`), so as soon as live mode moves the panel to a newer record
+  every block shuts. That is defensible (it is a different context) and no
+  criterion speaks to it, but the case named "expanding a block is remembered,
+  so a live refresh does not collapse it" (`page.test.mjs`) promises more than
+  the code does, since it only greps for `state.expanded`.
+- **Observation, not a finding — the whole body is refetched every refresh.**
+  `refresh()` awaits `loadLaneContext()` on every cycle (≈400 ms after each
+  ingest event) even when the cursor is pinned and the record has not changed,
+  and `argus env` now allows bodies up to 2,000,000 chars. I cannot reproduce a
+  user-visible failure from it here; recorded for whoever measures the UI next.
+- **Observation, not a finding — an agent lane with neither span nor name.** If a
+  record ever arrived with `query_source` exactly `"agent:"` and an empty
+  `spanId`, its lane would get `{ agent: null }`, `api()` drops null parameters,
+  and the unfiltered query would answer with main-session traffic. I could not
+  construct that record from the collector's own parsing rules (`agentOf` falls
+  back to the source segment), so it stays an observation.
