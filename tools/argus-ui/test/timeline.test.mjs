@@ -939,3 +939,41 @@ test('a one-instant session still renders a cursor inside the track', () => {
   assert.match(html, /data-cursor-pos[^>]*style="left:100\.000%"/);
   assert.doesNotMatch(html, /NaN/);
 });
+
+// Increment 5 — selecting a lane at a time shows that agent's context as a
+// message list. The lane row itself becomes a selectable control.
+
+test('a lane row is a control a human can click and a keyboard can reach', () => {
+  const content = threeRecordContent();
+  const view = buildDensity(buildLanes({ session: session(), content }), { content, tools: [] });
+  const html = renderTimeline(view);
+  const laneTags = [...html.matchAll(/<[^>]*data-lane="[^"]*"[^>]*>/g)];
+  assert.equal(laneTags.length, 2, 'the main lane and the one agent lane from threeRecordContent');
+  for (const tag of laneTags) {
+    assert.match(tag[0], /^<button\b/, 'a lane row must be a real button, not a div dressed up as one');
+    assert.match(tag[0], /type="button"/);
+  }
+});
+
+test('the selected lane is marked as the current one', () => {
+  const content = threeRecordContent();
+  const view = buildDensity(buildLanes({ session: session(), content }), { content, tools: [] });
+  const html = renderTimeline(view, null, 'main');
+
+  const mainTag = html.match(/<[^>]*data-lane="main"[^>]*>/);
+  assert.ok(mainTag, 'the main lane row must be present');
+  assert.match(mainTag[0], /aria-current="true"/, 'the selected lane must be marked current');
+
+  const agentTag = html.match(/<[^>]*data-lane="[^"]*sp-a[^"]*"[^>]*>/);
+  assert.ok(agentTag, 'the agent lane row must be present');
+  assert.match(agentTag[0], /aria-current="false"/, 'an unselected lane must not claim to be current');
+});
+
+test('with nothing selected no lane claims to be current', () => {
+  const content = threeRecordContent();
+  const view = buildDensity(buildLanes({ session: session(), content }), { content, tools: [] });
+  const html = renderTimeline(view);
+  assert.ok(!html.includes('aria-current="true"'), 'nothing selected means no lane is current');
+  const laneTags = [...html.matchAll(/<[^>]*data-lane="[^"]*"[^>]*>/g)];
+  assert.equal(laneTags.length, 2, 'the two-argument call shape of increment 4 must keep working');
+});

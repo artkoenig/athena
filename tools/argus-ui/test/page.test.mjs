@@ -342,3 +342,170 @@ test('releasing the pointer lets refreshes resume', () => {
   assert.match(wireEvents, /pointercancel/, 'a cancelled drag must end too, or refreshes stop forever');
   assert.match(wireEvents, /scrubbing\s*=\s*false/, 'releasing the pointer must clear the scrubbing flag');
 });
+
+// Increment 5 — selecting a lane at a time shows that agent's context as a
+// message list.
+
+test('app.js takes the context panel from its module', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  assert.match(
+    appJs,
+    /import\s*\{[^}]*\brenderContextPanel\b[^}]*\}\s*from\s*['"]\.\/context\.js['"]/,
+    'app.js must import renderContextPanel from context.js, so the tested function is the one the page runs',
+  );
+});
+
+test('the context panel has a container of its own, between the timeline and the technical views', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const renderDetail = functionSource(appJs, 'renderDetail');
+  assert.ok(renderDetail.includes('id="lane-panel"'), 'renderDetail must render a container for the lane panel');
+  const timelineIdx = renderDetail.indexOf('renderTimeline(');
+  const panelIdx = renderDetail.indexOf('id="lane-panel"');
+  const viewsIdx = renderDetail.indexOf('renderDetailViews(');
+  assert.ok(timelineIdx >= 0 && timelineIdx < panelIdx, 'the lane panel must sit after the timeline');
+  assert.ok(panelIdx >= 0 && panelIdx < viewsIdx, 'the lane panel must sit before the technical-views nav');
+});
+
+test('a full render repaints the panel', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const renderDetail = functionSource(appJs, 'renderDetail');
+  assert.match(renderDetail, /renderLanePanel\(/, 'renderDetail must repaint the lane panel too');
+});
+
+test('the timeline is told which lane is selected', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const renderDetail = functionSource(appJs, 'renderDetail');
+  const timelineIdx = renderDetail.indexOf('renderTimeline(');
+  assert.ok(timelineIdx >= 0, 'renderDetail must call renderTimeline(...)');
+  const selectedIdx = renderDetail.indexOf('state.selectedLane', timelineIdx);
+  assert.ok(selectedIdx > timelineIdx, 'state.selectedLane must reach the renderTimeline( call, at an index after it opens');
+});
+
+test('clicking a lane selects it, and clicking it again lets go', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const clickListener = detailListener(appJs, 'click');
+  assert.match(clickListener, /data-lane/, 'the click handler must recognise a lane row by its data-lane attribute');
+  assert.match(
+    clickListener,
+    /state\.selectedLane\s*=\s*state\.selectedLane\s*===[^?]*\?\s*null\s*:/,
+    'selecting the already-selected lane must let go of the selection — a toggle on the current value',
+  );
+});
+
+test('selecting a lane fetches its context', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const clickListener = detailListener(appJs, 'click');
+  const laneIdx = clickListener.indexOf('data-lane');
+  assert.ok(laneIdx >= 0, 'the click handler must have a data-lane branch');
+  const loadIdx = clickListener.indexOf('loadLaneContext(', laneIdx);
+  assert.ok(loadIdx > laneIdx, 'selecting a lane must fetch its context inside that same branch');
+});
+
+test('the panel asks the collector for the nearest request at the cursor\'s moment, for that lane only', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const loadLaneContext = functionSource(appJs, 'loadLaneContext');
+  assert.match(loadLaneContext, /\/api\/content\/at/, 'loadLaneContext must fetch the nearest-at-or-before content record');
+  assert.match(loadLaneContext, /resolveCursor\(/, 'the moment fetched must be the cursor\'s own resolved moment');
+  assert.match(loadLaneContext, /\bmain\b/, 'the main lane must be filterable');
+  assert.match(loadLaneContext, /\bspan\b/, 'an agent lane must be filterable by its span');
+  assert.match(loadLaneContext, /\bagent\b/, 'an agent lane must be filterable by its name as a fallback');
+});
+
+test('an answer that arrived after the selection moved on is dropped', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const loadLaneContext = functionSource(appJs, 'loadLaneContext');
+  const awaitIdx = loadLaneContext.indexOf('await');
+  assert.ok(awaitIdx >= 0, 'loadLaneContext must await its fetch');
+  const laneGuardIdx = loadLaneContext.search(/state\.selectedLane\s*!==\s*key/);
+  assert.ok(laneGuardIdx >= 0, 'loadLaneContext must guard against a stale lane selection');
+  const sessionGuardIdx = loadLaneContext.search(/state\.selectedSessionId\s*!==\s*id/);
+  assert.ok(sessionGuardIdx >= 0, 'loadLaneContext must guard against a stale session selection');
+  const writeIdx = loadLaneContext.indexOf('state.laneContext =');
+  assert.ok(writeIdx >= 0, 'loadLaneContext must still write state.laneContext');
+  assert.ok(laneGuardIdx > awaitIdx && sessionGuardIdx > awaitIdx, 'both guards must come after the fetch is awaited');
+  assert.ok(laneGuardIdx < writeIdx && sessionGuardIdx < writeIdx, 'both guards must come before state is written');
+});
+
+test('the panel repaints in its own container, never by re-rendering the page', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const renderLanePanel = functionSource(appJs, 'renderLanePanel');
+  assert.match(renderLanePanel, /lane-panel/, 'renderLanePanel must write into the lane panel container');
+  assert.match(renderLanePanel, /renderContextPanel\(/, 'renderLanePanel must delegate to renderContextPanel');
+  assert.doesNotMatch(
+    renderLanePanel,
+    /renderDetail\(/,
+    'repainting the panel must never re-render the whole page, or a scrub would replace the slider under the pointer',
+  );
+});
+
+test('scrubbing moves the context with the cursor', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const scrubTo = functionSource(appJs, 'scrubTo');
+  assert.match(scrubTo, /scheduleLaneContext\(/, 'a scrub must schedule a context fetch for the new moment');
+  assert.doesNotMatch(
+    scrubTo,
+    /renderDetail\(/,
+    'a full re-render would replace the slider under the pointer and end the drag',
+  );
+});
+
+test('the scrub-driven fetch is debounced', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const scheduleLaneContext = functionSource(appJs, 'scheduleLaneContext');
+  assert.match(scheduleLaneContext, /setTimeout/, 'a drag must not fire one request per pixel');
+  assert.match(scheduleLaneContext, /clearTimeout/, 'a trailing debounce must clear the previous timer');
+});
+
+test('live mode follows new requests into the panel', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const refresh = functionSource(appJs, 'refresh');
+  assert.match(refresh, /loadLaneContext\(/, 'a live refresh must refetch the panel\'s context too');
+});
+
+test('returning to live refetches the context', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const clickListener = detailListener(appJs, 'click');
+  const liveIdx = clickListener.indexOf('data-cursor-live');
+  assert.ok(liveIdx >= 0, 'the click handler must still act on the live control');
+  const loadIdx = clickListener.indexOf('loadLaneContext(', liveIdx);
+  assert.ok(loadIdx > liveIdx, 'returning to live must refetch the panel\'s context, since the moment moved');
+});
+
+test('expanding a block is remembered, so a live refresh does not collapse it', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const clickListener = detailListener(appJs, 'click');
+  assert.match(
+    clickListener,
+    /summary\[data-block\]/,
+    'the expansion toggle must be bound to a block\'s summary specifically, never to the whole block',
+  );
+  assert.match(clickListener, /state\.expanded/, 'the click handler must record which block was opened or closed');
+  const renderLanePanel = functionSource(appJs, 'renderLanePanel');
+  assert.match(
+    renderLanePanel,
+    /state\.expanded/,
+    'renderLanePanel must pass the remembered expansion state to renderContextPanel',
+  );
+});
+
+test('selecting a session forgets the lane, its context and its expansions', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const selectSession = functionSource(appJs, 'selectSession');
+  assert.match(
+    selectSession,
+    /state\.selectedLane\s*=\s*null/,
+    'a new session must not inherit the previous one\'s lane selection',
+  );
+  assert.match(selectSession, /state\.laneContext\s*=/, 'a new session must not inherit the previous one\'s context answer');
+  assert.match(selectSession, /state\.expanded\s*=/, 'a new session must not inherit the previous one\'s expanded blocks');
+});
+
+test('the page opens with no lane selected', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const start = appJs.indexOf('const state = {');
+  assert.ok(start >= 0, 'app.js must still declare the state literal');
+  const end = appJs.indexOf('\n};', start);
+  assert.ok(end >= 0, 'the state literal must still close with `\\n};`');
+  const stateSlice = appJs.slice(start, end);
+  assert.match(stateSlice, /\bselectedLane:\s*null\b/, 'a freshly opened session must select no lane');
+});

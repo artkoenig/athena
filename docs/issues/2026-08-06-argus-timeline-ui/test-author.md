@@ -1014,3 +1014,182 @@ None. The plan's helper snippet, the two verbatim quotes of the current
 nothing to guess; every case mapped to one concrete assertion, and the
 verbatim quotes matched the actual file character for character when
 checked.
+
+## Increment 5
+
+Wrote every case in the Increment 5 test plan of `researcher.md` — 29 cases in
+a new `tools/argus-ui/test/context.test.mjs`, 3 in
+`tools/argus-ui/test/timeline.test.mjs`, 16 in `tools/argus-ui/test/page.test.mjs`,
+and the one project-membership edit to `tools/argus-ui/test/independence.test.mjs`
+that case 49 asks for. No production file was opened: the plan's own
+`contextBlocks`/`renderContextPanel` contract (finding 3's captured body
+shapes, the block-kind table, the one-text rule, the exact markup skeleton)
+and its exact `functionSource`/`detailListener` targets and regex fragments
+gave every expectation with nothing to guess. `tools/argus-ui/test/timeline.test.mjs`
+and `tools/argus-ui/test/page.test.mjs` were read first, in full, only to take
+the existing fixtures (`session()`, `record()`, `threeRecordContent()`,
+`functionSource()`, `detailListener()`, the `PUBLIC` constant) and confirm the
+file's own conventions — both test files, never production code.
+`tools/argus-ui/test/independence.test.mjs` was read the same way, to find the
+two lists case 49 names.
+
+### The cases
+
+| # | Case | Test name | File |
+| --- | --- | --- | --- |
+| 1 | the five kinds the criterion names all reach the list, system prompt first | `'the five kinds the criterion names all reach the list, system prompt first'` | `context.test.mjs` |
+| 2 | a block's size is the size of the text it expands to | `'a block\'s size is the size of the text it expands to'` | `context.test.mjs` |
+| 3 | the exact full text survives the parse, unescaped and uncut | `'the exact full text survives the parse, unescaped and uncut'` | `context.test.mjs` |
+| 4 | a tool call names its tool and keeps the whole call | `'a tool call names its tool and keeps the whole call'` | `context.test.mjs` |
+| 5 | a tool result expands to the result text and is tied to its call | `'a tool result expands to the result text and is tied to its call'` | `context.test.mjs` |
+| 6 | a failed tool result says so on its one line | `'a failed tool result says so on its one line'` | `context.test.mjs` |
+| 7 | a message whose content is a plain string is one block of that role | `'a message whose content is a plain string is one block of that role'` | `context.test.mjs` |
+| 8 | thinking is its own block | `'thinking is its own block'` | `context.test.mjs` |
+| 9 | an unknown content block is kept, labelled by its type | `'an unknown content block is kept, labelled by its type'` | `context.test.mjs` |
+| 10 | a system given as a plain string still parses | `'a system given as a plain string still parses'` | `context.test.mjs` — narrowed, see conflict below |
+| 11 | the fields that are not messages are accounted for, so the sizes tell the truth | `'the fields that are not messages are accounted for, so the sizes tell the truth'` | `context.test.mjs` |
+| 12 | the whole body's size is reported alongside the blocks | `'the whole body\'s size is reported alongside the blocks'` | `context.test.mjs` |
+| 13 | a truncated body becomes one raw block carrying every character it has | `'a truncated body becomes one raw block carrying every character it has'` | `context.test.mjs` |
+| 14 | no body at all is no blocks, never a crash | `'no body at all is no blocks, never a crash'` | `context.test.mjs` |
+| 15 | a body that parses to something other than an object is raw, not empty | `'a body that parses to something other than an object is raw, not empty'` | `context.test.mjs` |
+| 16 | a message with no content contributes nothing | `'a message with no content contributes nothing'` | `context.test.mjs` |
+| 17 | the one line is a one-line preview | `'the one line is a one-line preview'` | `context.test.mjs` |
+| 18 | block indexes are their positions, in order | `'block indexes are their positions, in order'` | `context.test.mjs` |
+| 19 | nothing selected renders nothing | `'nothing selected renders nothing'` | `context.test.mjs` |
+| 20 | a selected lane at a moment renders one expandable block per block, each with its size | `'a selected lane at a moment renders one expandable block per block, each with its size'` | `context.test.mjs` |
+| 21 | the head names the lane and the record the context came from | `'the head names the lane and the record the context came from'` | `context.test.mjs` |
+| 22 | every block is collapsed until it is asked for | `'every block is collapsed until it is asked for'` | `context.test.mjs` |
+| 23 | an expanded block stays expanded, and only that one | `'an expanded block stays expanded, and only that one'` | `context.test.mjs` |
+| 24 | a moment before this lane's first request says so, with no blocks | `'a moment before this lane\'s first request says so, with no blocks'` | `context.test.mjs` |
+| 25 | a fetch in flight does not claim there is nothing | `'a fetch in flight does not claim there is nothing'` | `context.test.mjs` |
+| 26 | a truncated record is marked as one | `'a truncated record is marked as one'` | `context.test.mjs` — narrowed, see conflict below |
+| 27 | the panel escapes everything it prints | `'the panel escapes everything it prints'` | `context.test.mjs` |
+| 28 | the panel carries no attribute the lane click handler would catch | `'the panel carries no attribute the lane click handler would catch'` | `context.test.mjs` |
+| 29 | the panel prints no NaN and no undefined | `'the panel prints no NaN and no undefined'` | `context.test.mjs` |
+| 30 | a lane row is a control a human can click and a keyboard can reach | `'a lane row is a control a human can click and a keyboard can reach'` | `timeline.test.mjs` |
+| 31 | the selected lane is marked as the current one | `'the selected lane is marked as the current one'` | `timeline.test.mjs` |
+| 32 | with nothing selected no lane claims to be current | `'with nothing selected no lane claims to be current'` | `timeline.test.mjs` |
+| 33 | app.js takes the context panel from its module | `'app.js takes the context panel from its module'` | `page.test.mjs` |
+| 34 | the context panel has a container of its own, between the timeline and the technical views | `'the context panel has a container of its own, between the timeline and the technical views'` | `page.test.mjs` |
+| 35 | a full render repaints the panel | `'a full render repaints the panel'` | `page.test.mjs` |
+| 36 | the timeline is told which lane is selected | `'the timeline is told which lane is selected'` | `page.test.mjs` |
+| 37 | clicking a lane selects it, and clicking it again lets go | `'clicking a lane selects it, and clicking it again lets go'` | `page.test.mjs` |
+| 38 | selecting a lane fetches its context | `'selecting a lane fetches its context'` | `page.test.mjs` |
+| 39 | the panel asks the collector for the nearest request at the cursor's moment, for that lane only | `'the panel asks the collector for the nearest request at the cursor\'s moment, for that lane only'` | `page.test.mjs` |
+| 40 | an answer that arrived after the selection moved on is dropped | `'an answer that arrived after the selection moved on is dropped'` | `page.test.mjs` |
+| 41 | the panel repaints in its own container, never by re-rendering the page | `'the panel repaints in its own container, never by re-rendering the page'` | `page.test.mjs` |
+| 42 | scrubbing moves the context with the cursor | `'scrubbing moves the context with the cursor'` | `page.test.mjs` |
+| 43 | the scrub-driven fetch is debounced | `'the scrub-driven fetch is debounced'` | `page.test.mjs` |
+| 44 | live mode follows new requests into the panel | `'live mode follows new requests into the panel'` | `page.test.mjs` |
+| 45 | returning to live refetches the context | `'returning to live refetches the context'` | `page.test.mjs` |
+| 46 | expanding a block is remembered, so a live refresh does not collapse it | `'expanding a block is remembered, so a live refresh does not collapse it'` | `page.test.mjs` |
+| 47 | selecting a session forgets the lane, its context and its expansions | `'selecting a session forgets the lane, its context and its expansions'` | `page.test.mjs` |
+| 48 | the page opens with no lane selected | `'the page opens with no lane selected'` | `page.test.mjs` |
+| 49 | the new module is guarded like the others | edits to `'the interface is a project of its own, with everything a project needs'` and `'nothing in the interface reaches outside the interface'` | `independence.test.mjs` |
+
+### Commands run
+
+- `node --test tools/argus-ui/test/context.test.mjs` — fails to load, exit 1:
+  ```
+  Error [ERR_MODULE_NOT_FOUND]: Cannot find module
+  '/home/user/uroboros/tools/argus-ui/public/context.js' imported from
+  /home/user/uroboros/tools/argus-ui/test/context.test.mjs
+  ```
+  This is the correct "not implemented yet" shape: the module named in the
+  plan does not exist, so all 29 cases in the file report as this one
+  module-load failure until it does; once it exists each resolves on its own
+  merits, exactly as increment 4's `timeline.test.mjs` did for `liveCursor`.
+- `node --test tools/argus-ui/test/timeline.test.mjs` — 72 tests, 70 pass
+  (69 pre-existing plus case 32, which already holds against the unmodified
+  markup — see the conflict note below), 2 fail:
+  - case 30, `'a lane row is a control a human can click and a keyboard can
+    reach'`: `AssertionError: a lane row must be a real button, not a div
+    dressed up as one`, actual `'<div class="lane" data-lane="main"
+    data-kind="main">'`.
+  - case 31, `'the selected lane is marked as the current one'`:
+    `AssertionError: the selected lane must be marked current`, actual
+    `'<div class="lane" data-lane="main" data-kind="main">'` (no
+    `aria-current` attribute at all).
+- `node --test tools/argus-ui/test/page.test.mjs` — 39 tests, 23 pass
+  (pre-existing, unaffected), 16 fail (cases 33–48 above), each on the
+  assertion message the case's own regex names — for example case 33
+  (`'app.js takes the context panel from its module'`):
+  `AssertionError: app.js must import renderContextPanel from context.js, so
+  the tested function is the one the page runs`; case 39 (`'the panel asks
+  the collector for the nearest request…'`) fails on
+  `functionSource(appJs, 'loadLaneContext')`'s own guard —
+  `AssertionError: app.js must still declare loadLaneContext()`. Every one of
+  the 16 fails on the fact its own test states, not on a crash or a typo.
+- `node --test tools/argus-ui/test/independence.test.mjs` — 2 tests, 0 pass,
+  2 fail: `'the interface is a project of its own, with everything a project
+  needs'` fails on `tools/argus-ui/public/context.js is missing`;
+  `'nothing in the interface reaches outside the interface'` fails on `the
+  scan does not cover public/context.js — it is not there to check`.
+- `npm --prefix tools/argus-ui test` (run once, to confirm nothing else in
+  the package took collateral damage) — 126 tests, 105 pass, 21 fail, exit 1.
+  The 21 failures are exactly the ones itemised above (1 file-load failure
+  standing in for context.test.mjs's 29 cases, plus 2 timeline.test.mjs, 16
+  page.test.mjs, 2 independence.test.mjs); `config.test.mjs` and
+  `server.test.mjs`, which this increment does not touch, pass in full. This
+  is a confirmation run, not a substitute for the implementer's own.
+
+Not run: `npm --prefix tools/argus test` and `./test.sh` — the plan's own
+"What counts as done" names only `npm --prefix tools/argus-ui test`, and
+finding 5 established that no file in `tools/argus` changes in this
+increment.
+
+### Deliberately not written
+
+Matches the plan's own "Deliberately untested" list exactly, nothing added or
+dropped:
+
+- The click, the drag and the expansion in a browser — no DOM harness exists
+  and none may be added, the project's first rule is zero dependencies; cases
+  37–48 pin every wire in the source, the rest is for review.
+- The fetch itself (`loadLaneContext`'s call to `fetch` through `api()`) —
+  would need a fake `window`; case 39 pins the route, its parameters and the
+  stale-answer guard as source facts instead.
+- `tools/argus` — finding 5 established nothing there changes, so nothing in
+  its suite is re-run here.
+- The debounce actually elapsing — timing behind a `setTimeout` with no seam;
+  case 43 pins that the guard is in the code.
+- Colours, the collapsed line's layout, the expanded block's `max-height` —
+  CSS, judged at review, not by `node --test`.
+- The tools an agent used up to the moment — increment 6 owns that criterion;
+  no case here pins it, matching the scope this run was given.
+- Recordings made without the content flags — out of contract by the issue's
+  own decision.
+
+### Gaps and conflicts found in the plan
+
+One conflict, in case 10 (`'a system given as a plain string still parses'`).
+The plan's expected outcome is "`requestBody({ system: 'be brief' })` →
+exactly one `kind === 'system'` block, `text === 'be brief'`". But the same
+plan's own parsing rule (used by, and confirmed against, case 1's expected
+block-kind list `['system','system','user','system','thinking','tool_use',
+'tool_result','field','field','field','field']`) gives a `kind: 'system'`
+block to *any* message whose `content` is a plain string and whose `role` is
+`'system'` — and the `requestBody` factory's default `messages` array (left
+untouched by `{ system: 'be brief' }`, which overrides only the `system` key)
+already contains exactly such a message at index 1
+(`{ role: 'system', content: '<system-reminder>context</system-reminder>' }`).
+So a correct implementation of the plan's own algorithm produces *two*
+`kind === 'system'` blocks for case 10's input, not one, which contradicts
+the case's literal expected count. I wrote the unambiguous half — that the
+top-level `system` string still parses into exactly one block carrying
+`text === 'be brief'` — and left the "exactly one `kind === 'system'` block"
+total uncovered, with a comment in the test pointing at this note, rather
+than pin a count the plan's own rules cannot produce.
+
+The same tension shades case 26 (`'a truncated record is marked as one'`):
+the plan's expected `<pre class="ctx-text">` content for the raw block
+(`item({ truncated: true, body: '{"messages":[' })`) is not given verbatim,
+only "the one `kind='raw'` block still renders its text" — and rendering
+that text means escaping it through whatever `esc()` does with the `"`
+characters the fixture body contains, which the plan does not specify (the
+escaping rule for `<`/`>`/`&` is pinned elsewhere, by case 27's `&lt;script`
+assertion, but quote-escaping is not). I wrote the case against what is
+unambiguous — the `data-truncated="true"` flag, and that the raw block is
+present and still carries its text (`'messages'` as a substring), rather
+than assert an exact escaped string that would pin an escaping choice the
+plan never made.
