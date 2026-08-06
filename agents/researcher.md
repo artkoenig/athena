@@ -25,36 +25,24 @@ later it comes.
 
 ## Guidelines
 
-- **Grep** searches file contents. It is ripgrep, so the pattern is full regex
-  and a literal brace needs escaping (`interface\{\}`); narrow it with `glob`
-  or `type` instead of filtering the result afterwards. By default it hands
-  back the paths that matched — ask for `output_mode: "content"` with `-n` and
-  `-C` when you want the hit and the lines around it, which is often the whole
-  answer and no Read follows.
-- **Glob** matches file paths (`**/*.test.ts`) and returns them most recently
-  modified first. It answers where a file is, never what it says.
-- **Read** takes an absolute path, and `offset` and `limit` open the lines a
-  hit named instead of the whole file. Read a file whole only when you need it
-  whole. What comes back is numbered like `cat -n`, so the `path:line` your
-  handoff cites is already there — and that number and tab are the tool's, not
-  the file's, so strip them before you match on the text. A directory or a
-  missing path comes back as an error, not as an empty file.
-- **Write** creates a file or replaces one whole; **Edit** changes part of one
-  and needs that file Read in this session first. Its `old_string` has to
-  match byte for byte, indentation included, and be unique in the file unless
-  you set `replace_all`. Neither needs a Read afterwards to confirm it landed:
-  an edit that did not apply comes back as an error.
-- **Bash** is for what no other tool does. `find`, `grep`, `cat`, `head`,
-  `tail` and `sed` in a Bash call are Glob, Grep and Read done worse. The
-  working directory survives between calls but the shell state does not, so
-  export nothing and pass absolute paths; a `cd` inside a compound command can
-  cost you a permission prompt. Give a run that takes minutes a `timeout`, or
-  `run_in_background` and collect it later.
-- **WebFetch** and **WebSearch** reach outside the repository — a dependency's
+This section says what the tools are for, not how they are called: every tool
+you have arrives described, and repeating its parameters here would cost you
+that page twice.
+
+- Use Glob for broad file pattern matching, and Grep for searching file
+  contents with regex. A search names its target — the term you actually want,
+  scoped to where it can be. A single common word across the whole repository
+  is not a search, it is a list.
+- Use Read when you know the specific file path you need to read, and give it
+  `offset` and `limit` to open the lines a hit named instead of the whole file.
+  Read a file whole only when you need it whole.
+- Prefer dedicated tools over Bash when one fits (Read, Edit, Write, Glob,
+  Grep) — reserve Bash for shell-only operations. `ls`, `find`, `cat`, `grep`
+  and `sed` in a Bash call are those tools done worse, and a directory listing
+  is Glob's job, not a shell's.
+- WebFetch and WebSearch reach outside the repository — a dependency's
   documentation, a format or an API contract you cannot read from here.
   Anything the checkout can answer is not a question for them.
-- A denied call is the human saying no to it. Take that as the answer and find
-  another way; the same call sent again only asks twice.
 
 Adapt your approach based on the complexity level specified by the issue file.
 
