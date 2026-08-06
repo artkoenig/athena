@@ -1606,3 +1606,275 @@ prose, flag or view was added that no criterion asked for.
   the page's refresh down with it.
 - Nothing else found: no caller of the changed functions outside `app.js`, and
   no document made stale by this increment.
+
+## Increment 5 — Round 2
+
+**Status: 3 findings require a correction.** Round 1's two findings are closed
+and the production code meets the criterion when I read it line by line. What is
+still unverifiable is the last stretch of the same chain: the suite stays green
+when the selected lane never reaches the panel, when the panel never repaints
+after the click's own fetch, and when every collapsed line reports its size as
+zero. Each is proven by a single-line mutation measured below, not suspected.
+
+### Commands run
+
+- `npm --prefix tools/argus-ui test` — `node --test "test/*.test.mjs"`, 175
+  cases, 175 pass, 0 fail, 0 cancelled, 0 skipped, 0 todo, exit 0. Nothing was
+  excluded. This is the only command my prompt lists; `tools/argus`' suite and
+  `./test.sh` were not run, by that list. Nothing was red, so no run at the merge
+  base was needed.
+- The same command six more times in a throwaway `git worktree` outside the
+  checkout — one unmutated baseline and five single mutations — to find out what
+  the suite would catch. The worktree was removed afterwards; `git worktree list`
+  names only the checkout and `git status --porcelain` is empty. The checkout
+  under review was never modified, and no test was written to produce these
+  findings.
+
+| Sandbox run | Result |
+| --- | --- |
+| Unmutated copy of `HEAD` | 175 pass, exit 0 |
+| M-A — `lane,` deleted from the `renderContextPanel({…})` call in `renderLanePanel` (`app.js:939-943`) | 175 pass, exit 0 |
+| M-B — `loadLaneContext().then(renderLanePanel);` in the `[data-lane]` click branch (`app.js:1153`) becomes `loadLaneContext();` | 175 pass, exit 0 |
+| M-C — the lane lookup in `renderLanePanel` (`app.js:938`) finds by `entry.kind === 'main'` instead of `entry.key === key` | 175 pass, exit 0 |
+| M-D — the size span in `renderContextPanel` (`context.js:280`) becomes `<span class="ctx-size" data-chars="0">0</span>` | 175 pass, exit 0 |
+| M-E — the preview span (`context.js:279`) becomes `<span class="ctx-preview"></span>` | 175 pass, exit 0 |
+
+### Criterion — selecting a lane at the chosen time shows that agent's (or the main session's) context as of that moment, as a structured message list
+
+Met in the code, read clause by clause against the diff to `main`.
+
+- **Selecting a lane.** Each lane row is
+  `<button type="button" class="lane" data-lane="…" aria-current="…">`
+  (`tools/argus-ui/public/timeline.js:417-425`), reachable by pointer and by
+  keyboard; the delegated `click` handler on `#detail` (`app.js:1147-1155`)
+  toggles `state.selectedLane`, clears the expansions, repaints and refetches.
+  The dimmed-ahead overlay across the track carries `pointer-events: none`
+  (`styles.css`), so it cannot swallow a click on the part of a lane right of the
+  cursor. Nothing in the panel carries `data-lane`, so no click inside it toggles
+  the selection.
+- **That agent's, or the main session's.** `laneContentQuery`
+  (`context.js:161-167`) produces exactly one filter — `{ main: '1' }` for the
+  main lane, else the lane's `{ span }`, else its `{ agent }`, else `null` — and
+  a `null` filter fires no request at all, so no lane can be answered with the
+  main session's traffic by accident. I checked the three names against the
+  collector's route: `/api/content/at` reads `main === '1'`, `span` and `agent`
+  (`tools/argus/src/server.mjs:263-281`) and ANDs them in `matchesContent`
+  (`store.mjs:197-205`), so the parameter names the UI sends are the ones the
+  collector filters on.
+- **As of that moment, nearest at or before.** `laneContentRequest`
+  (`context.js:183-188`) resolves the moment with `resolveCursor(cursor, view)`
+  and puts it on the wire as `at`; `contentAt` (`store.mjs:953-968`) walks the
+  content index backwards and returns the first record with `timeMs <= atMs`,
+  defaulting `eventName` to `claude_code.api_request_body`. Live mode refetches
+  (`refresh`, `app.js:1001`), a scrub refetches debounced (`scrubTo` →
+  `scheduleLaneContext`, `app.js:1094` and `app.js:948-954`), returning to live
+  refetches (`app.js:1144`), and the session and lane guards after the await
+  (`app.js:926`) drop an answer that arrived after the reader moved on.
+- **A structured message list — system prompt, user, assistant, tool call, tool
+  result.** `contextBlocks` (`context.js:68-146`) emits the system prompt (string
+  or array of text entries) first, then every message in order — `text` under the
+  message's role, `thinking`, `tool_use` labelled with the tool name,
+  `tool_result` labelled with its `tool_use_id` and marked `error` — then every
+  remaining top-level field. Nothing is dropped; an unknown content block is kept
+  under its own type.
+- **One line with its size, expandable to the exact full text.** Each block is
+  `<details><summary>` label + preview + `ctx-size` `</summary><pre>` full text
+  `</pre></details>` (`context.js:277-283`), collapsed unless its
+  `"<seq>:<index>"` key is in the expanded set, and `chars` is the length of the
+  very string the `<pre>` carries (`makeBlock`, `context.js:53-56`). Everything
+  printed goes through `esc`.
+- **Edges.** No body, an empty body, a non-object body and a body cut mid-JSON
+  all render (raw block or nothing, never a crash); a moment before the lane's
+  first request says so; a fetch in flight says something different from "there
+  is nothing here".
+
+### Round 1's two findings are closed
+
+Checked against the code and the new cases, not against the claim.
+
+- **The moment on the wire.** The request object is built in one pure function
+  and pinned by value: `fetchLaneContext` cases assert the params `deepEqual`
+  `{ session, at, main|span }`, that a live cursor asks for the window's `endMs`,
+  and that a moment outside the window is clamped rather than sent raw
+  (`context.test.mjs:487-527`). Round 1's M1 — deleting the `at` line — now
+  fails.
+- **The fetched record reaching the panel.** `fetchLaneContext` returns
+  `{ key, item }` pinned by identity, `laneContextInput` is pinned by value for
+  the fresh, foreign, missing and null-held cases, and `page.test.mjs:418-433`
+  requires that `state.laneContext` is written from the variable
+  `fetchLaneContext` was awaited into. Round 1's M2 — writing
+  `{ key, item: null }` — now fails.
+
+### Finding 1 — the lane the reader selected never has to reach the panel
+
+**Criterion clause missed:** "Selecting a lane at the chosen time shows that
+agent's (or the main session's) context."
+
+`tools/argus-ui/public/app.js:934-944`. `renderContextPanel` renders the empty
+string for `lane: null` (`context.js:237`), so `lane` is the argument that
+decides whether anything is shown at all and whose label says whose context it
+is. `page.test.mjs:462-476` — the case named "the panel is drawn from the answer
+held for the lane it belongs to" — slices the `renderContextPanel(` call and
+asserts only `...laneContextInput(key, state.laneContext)` and
+`expanded: state.expanded`. Nothing in the suite reads the `lane` argument.
+
+Reproduction, measured:
+
+- M-A: delete the line `lane,` from the object passed to `renderContextPanel` in
+  `renderLanePanel`. Clicking any lane, at any cursor position, then paints an
+  empty `#lane-panel` — the whole increment produces nothing visible — and
+  `npm --prefix tools/argus-ui test` reports 175 pass, exit 0.
+- M-C: change the lookup on `app.js:938` from
+  `laneView().lanes.find((entry) => entry.key === key)` to
+  `.find((entry) => entry.kind === 'main')`. Selecting the subagent lane
+  `agent:sp-a:probe` then shows a panel headed "main session" — the reader cannot
+  tell whose context is on screen — and the suite reports 175 pass, exit 0.
+
+What a test has to catch: the lane object handed to `renderContextPanel` is the
+lane whose key is `state.selectedLane`, and no lane means no panel. Whether that
+means asserting on the call's `lane` argument at source level or lifting the
+lookup into a pure function beside `laneContextInput` is the implementer's call,
+not mine.
+
+### Finding 2 — nothing fails when selecting a lane never repaints the panel
+
+**Criterion clause missed:** the same one — "Selecting a lane at the chosen time
+shows … context".
+
+`tools/argus-ui/public/app.js:1147-1155`. The click branch paints the pending
+panel, then fetches and repaints: `loadLaneContext().then(renderLanePanel);`.
+The only case over this branch (`page.test.mjs:394-401`, "selecting a lane
+fetches its context") asserts that `loadLaneContext(` appears after `data-lane`
+and stops there; the repaint that turns the answer into markup is unread.
+
+Reproduction, measured (M-B): change that line to `loadLaneContext();`. Open a
+session that receives no further telemetry — a finished run, which is the normal
+case for reading a session back — and click a lane. `state.laneContext` fills
+correctly, but `#lane-panel` is never repainted: the panel keeps saying "Reading
+the context at this moment…" for the life of the page, because the only other
+repaint is `renderDetail` inside `refresh()`, and `refresh()` runs only on an
+SSE `ingest` event (`app.js:1116-1118`); the 15-second `setInterval` in `boot`
+repaints the session list and the overview tab only (`app.js:1277-1280`). The
+suite reports 175 pass, exit 0.
+
+What a test has to catch: selecting a lane repaints the panel once the fetch it
+started has resolved, not only on the next refresh.
+
+### Finding 3 — the size on a collapsed line is never read
+
+**Criterion clause missed:** "each block collapsed to one line **with its
+size**".
+
+`tools/argus-ui/public/context.js:280`, against `context.test.mjs:296-297`. That
+assertion counts `<span class="ctx-size" data-chars="\d+">` tags and compares the
+count to the number of blocks; the digits it matches are never compared to
+anything. `chars` is pinned at parser level (`block.chars === block.text.length`)
+and the expanded text is pinned exactly, but the number the collapsed line prints
+is not tied to either.
+
+Reproduction, measured (M-D): replace the size span with
+`<span class="ctx-size" data-chars="0">0</span>`. Every block of every context
+then advertises a size of 0 — the panel's whole "where does the context go"
+purpose is gone, and a 70 KB tool result looks the same as a four-character user
+message — and `npm --prefix tools/argus-ui test` reports 175 pass, exit 0. The
+head's total is loose in the same way: `context.test.mjs:305` matches
+`data-chars="\d+"` without a value, so the body-size figure beside the model can
+be replaced by any number.
+
+What a test has to catch: for each block, the size the collapsed line shows is
+that block's own `chars`, and the head's total is the body's own length.
+
+Same measurement, recorded as part of this finding and not as a fourth: M-E —
+emptying `<span class="ctx-preview">` — also leaves 175 pass, exit 0, so the one
+line a collapsed block shows is unread in the markup too. The parser's `preview`
+is pinned (cut to `PREVIEW_CHARS`, single line, ellipsis), only its arrival in
+the panel is not.
+
+### The tests against the intent — the rest
+
+Everything else this criterion asks for has a case that fails when it breaks.
+
+- The five named kinds reach the list in order, `assistant` included, each with
+  its own `data-kind` in the markup; a tool call carries its tool name and its
+  whole input; a tool result is tied to its `tool_use_id` and says `error` when
+  it failed; the system prompt parses as a string and as an array of entries.
+- Every block expands to `esc(block.text)`, exactly, in order, with an explicit
+  guard that the fixture is longer than `PREVIEW_CHARS` so the case cannot pass
+  vacuously.
+- The lane→query mapping is pinned by value for all four cases, and the request
+  `fetchLaneContext` puts on the wire is pinned by value including the cursor's
+  moment, the live head and the clamp.
+- Failure and edge behaviour: a rejected fetch, an answer with no record, no
+  lane, no session, a lane the filter cannot identify (no request fired at all),
+  a truncated body, a non-object body, a message with no content, an unknown
+  content part, escaping of hostile text, no `NaN` and no `undefined`, and no
+  `data-lane` anywhere in the panel.
+- Wiring is pinned at source level in `page.test.mjs` (the imports, the
+  container's position between timeline and views, the toggle-to-deselect, the
+  guards after the await and before the write, the debounce, the live refetch,
+  the return-to-live refetch, forgetting the lane on session change, and the
+  page opening with no lane). String assertions over `app.js` are what this
+  project can do without a DOM or a dependency; findings 1 and 2 are the two
+  hops of the chain where that method still reads nothing.
+
+### Nothing in the diff that no criterion asked for
+
+Increment 5's files, handoffs aside: `public/context.js` (new), the lane
+`<button>` and the `selectedKey` parameter in `public/timeline.js`, the panel
+state, loader and click branches in `public/app.js`, the `.lane` button reset and
+the `.context-*`/`.ctx-*` rules in `public/styles.css`, one README paragraph, and
+the three test files. Round 2 added no behaviour: it moved the request building
+and the held-answer mapping out of `app.js` into `context.js` unchanged (I
+diffed `f244f56..HEAD` — 20 lines out of `app.js`, the same logic in
+`laneContentRequest`/`fetchLaneContext`/`laneContextInput`) and extended the two
+test files. The blocks beyond the five named kinds — `thinking`, `field`
+(`tools`, `model`, `max_tokens`, `stream`), `other`, `raw` — are more than the
+criterion enumerates, but dropping them would make the panel's sizes lie about
+what fills the context, so I do not raise them. No prose, flag or view was added
+that no criterion asked for, and nothing from the deliberately excluded
+increment (the per-lane tool list) was built ahead of time.
+
+### Beyond the criteria (blast radius)
+
+- **The round-2 move creates no import cycle and breaks no rule.**
+  `context.js` now imports `resolveCursor` from `./timeline.js`, which imports
+  `./format.js` and nothing else; `app.js` imports both. No `document`, `fetch`
+  or `location` reaches `context.js` — the api function is injected — so
+  `node --test` can import it, and `independence.test.mjs` covers the file for
+  both project rules.
+- **`app.js` has no dangling import.** `laneContentQuery` was dropped from its
+  import list and has no remaining reference there; `resolveCursor` is still
+  imported and still used by `paintCursor`, which `page.test.mjs:306-312`
+  requires.
+- **Callers of what changed.** `renderTimeline`'s third parameter defaults to
+  `null`, so the two-argument calls the earlier increments' cases make still
+  render with every lane `aria-current="false"`. `renderContextPanel` is called
+  from `renderLanePanel` only. Nothing outside `tools/argus-ui/public` and its
+  tests references the new module.
+- **The collector is untouched by this increment**, and the route the panel uses
+  already existed: `/api/content/at` with `session`, `at`, and one of
+  `main`/`span`/`agent`. `tools/argus-ui/src/server.mjs` forwards any `/api/`
+  path with its query string intact, so no route of its own was needed.
+- **No document made stale.** `tools/argus-ui/README.md` gained the paragraph
+  that describes exactly this criterion; `tools/argus/README.md`,
+  `skills/argus/SKILL.md` and the root `README.md` describe the collector, its
+  API and how to start the interface, none of them lane selection.
+  `tools/argus-ui/CLAUDE.md`'s "one test file per `src/` module" is not broken by
+  a fourth test file over a `public/` module, which is the pattern
+  `timeline.test.mjs` already set.
+- **Observation, not a finding — a live refresh collapses the expanded blocks
+  when a newer request arrives.** The expansion key is `"<seq>:<index>"`
+  (`context.js:276`), so as soon as live mode moves the panel to a newer record
+  every block shuts. Defensible (it is a different context) and no criterion
+  speaks to it, but the case named "expanding a block is remembered, so a live
+  refresh does not collapse it" promises more than the code does.
+- **Observation, not a finding — the whole body is refetched every refresh.**
+  `refresh()` awaits `loadLaneContext()` on every cycle (≈400 ms after each
+  ingest) even when the cursor is parked and the record has not changed, and
+  `argus env` allows bodies up to 2,000,000 chars. No user-visible failure I can
+  reproduce here; on the record for whoever measures the UI next.
+- **Observation, not a finding — no test crosses the UI/collector boundary for
+  the three filter names.** The project rule forbids importing `tools/argus`, so
+  `main`/`span`/`agent` agreeing with the collector's route is something I
+  verified by reading both sides, not something either suite checks. They agree
+  today; a rename on the collector side would be caught by neither suite.
