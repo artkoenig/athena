@@ -96,9 +96,18 @@ claude plugin install uroboros@uroboros
 ```
 
 A session then gets the subagents, the skills and the `uroboros:loop` workflow
-of the current `main`. Updates come with the next session, not with a
-re-installation. The plugin registers no hook and touches nothing in the
-project it is installed in — the rulebook is a page, and the session reads it.
+of the current `main`. The plugin pins no version, so every push to `main` is a
+new version, and updates come with the next session, not with a
+re-installation. The rulebook is a page, and the session reads it.
+
+The one hook the plugin registers updates nothing — an update from inside a
+session could only reach the next one, so keeping the installation current is
+the job of the environment's setup script (`claude plugin marketplace update
+uroboros && claude plugin update uroboros@uroboros`) and of the CLI's own
+background auto-update. What the hook does is the one thing a session can do
+about its own staleness: in a cloud session it compares the running version
+against the tip of the marketplace repository and warns when the two differ.
+Locally it does nothing.
 
 ## What reaches whom
 
