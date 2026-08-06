@@ -411,12 +411,38 @@ test('a claude_code.api_request_body record is exposed over /api/events with its
     });
     assert.equal(ingest.status, 200);
 
-    const events = await (await fetch(`${base}/api/events?event=claude_code.api_request_body`)).json();
+    const events = await (
+      await fetch(`${base}/api/events?session=s-body&event=claude_code.api_request_body`)
+    ).json();
     assert.equal(events.items.length, 1);
-    assert.ok(
-      JSON.stringify(events.items[0]).includes(bodyText),
+    assert.equal(
+      events.items[0].attrs.body,
+      bodyText,
       'the body attribute must survive the round trip, untruncated — content is exposed like any other signal',
     );
+  });
+});
+
+test('an oversized request body comes back from /api/events uncut', async () => {
+  await withServer({}, async ({ base }) => {
+    const bodyText = JSON.stringify({ system: 'x'.repeat(200000), messages: [] });
+    const ingest = await fetch(`${base}/v1/logs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: bodyEventPayload('s-body-big', bodyText),
+    });
+    assert.equal(ingest.status, 200);
+
+    const events = await (
+      await fetch(`${base}/api/events?session=s-body-big&event=claude_code.api_request_body`)
+    ).json();
+    assert.equal(events.items.length, 1);
+    assert.equal(
+      events.items[0].attrs.body.length,
+      bodyText.length,
+      'an oversized body must not be truncated on its way through the API — the whole point of the CLAUDE_CODE_OTEL_CONTENT_MAX_LENGTH raise',
+    );
+    assert.equal(events.items[0].attrs.body, bodyText, 'the oversized body must survive the round trip byte-for-byte');
   });
 });
 

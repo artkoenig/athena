@@ -140,3 +140,97 @@ Each file was run individually with the command the plan names:
 No pre-existing case in any of these files broke — the researcher's note that
 `test/server.test.mjs`'s `/api/config` case tolerates new env keys held; I did
 not touch it.
+
+## Round 1
+
+Correction round for the reviewer's Finding 1 (`reviewer.md`, Round 0):
+`tools/argus/test/server.test.mjs`'s body-round-trip case asserted an
+unescaped literal against a serialized-then-escaped haystack, which no
+Messages-API body containing a `"` could ever satisfy. Only this file
+changed; no production file was touched, matching the researcher's plan for
+this round.
+
+### What I wrote
+
+Replaced the case at the old lines 404–421 with the two the plan specifies,
+both in `tools/argus/test/server.test.mjs`, same command:
+`node --test tools/argus/test/server.test.mjs`.
+
+- **Case 1 → `a claude_code.api_request_body record is exposed over
+  /api/events with its body attribute intact`.** Kept the plan's required
+  name verbatim. Ingests one `claude_code.api_request_body` record for
+  session `s-body` with `bodyText = JSON.stringify({ system: 'hi', messages:
+  [] })`, reads `GET /api/events?session=s-body&event=claude_code.api_request_body`,
+  and asserts `events.items[0].attrs.body === bodyText` — equality on the
+  value, not a substring check on the serialized item. Filters by `session=`
+  as the plan asks, so the second case's record can never be seen by this
+  one.
+- **Case 2 → `an oversized request body comes back from /api/events
+  uncut`.** Ingests a second record, session `s-body-big`, body
+  `JSON.stringify({ system: 'x'.repeat(200000), messages: [] })` — well past
+  the CLI's 61 440-unit default — and asserts both
+  `events.items[0].attrs.body.length === bodyText.length` and
+  `events.items[0].attrs.body === bodyText`.
+
+Both reuse `bodyEventPayload` and `withServer` exactly as they already exist
+in the file; no helper was added, per the plan. Both carry a third-argument
+message stating what must hold, in the file's existing voice.
+
+### Result: the corrected case is green, as the plan said it would be
+
+The plan states plainly that this is not a red-first case: "the corrected
+case is expected to pass against the untouched collector on its first run
+... I have read the path end to end and expect green." I ran
+`node --test tools/argus/test/server.test.mjs` from the repository root and
+both new cases pass on the untouched collector:
+
+```
+# Subtest: a claude_code.api_request_body record is exposed over /api/events with its body attribute intact
+ok 17 - a claude_code.api_request_body record is exposed over /api/events with its body attribute intact
+# Subtest: an oversized request body comes back from /api/events uncut
+ok 18 - an oversized request body comes back from /api/events uncut
+...
+1..21
+# tests 21
+# suites 0
+# pass 21
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+```
+
+21 tests total (20 before this round, minus the one replaced case, plus the
+two new ones = 21), all pass, exit 0. No pre-existing case in the file broke.
+This matches the plan's own account exactly, so there is nothing to flag as
+an unexpected red: the fix was a test-only repair of an unsatisfiable
+assertion, confirmed correct by reading `#applyLog`, `/api/events` and
+`describeEvent` (as the plan's "What is wrong, and what the fix is" section
+lays out), not by chasing a failure that was never expected to appear.
+
+### What I did not write, and why
+
+Nothing else — the plan states "Nothing from Round 0's test plan is asked
+for again... every other case in the tree stays exactly as it is," and this
+round's "What" section names exactly these two cases and no more. I left
+Round 0's 26 cases, including the ones in this same file, untouched.
+
+### Decisions I made where the plan left small things open
+
+- **Case order and exact wording of the assertion messages**: the plan gives
+  the field path (`attrs.body`) and the two expected equalities but not the
+  literal message strings; I wrote messages that state what each equality
+  proves, matching the file's existing voice, per its convention.
+- **Query string on the read**: the plan's prose doesn't spell out
+  `session=` on the `GET /api/events` call for either case, only that "the
+  two cases [get] different session ids and filter by `session=` so neither
+  sees the other's record" in the "How" section — I applied that literally
+  to both cases' fetch URLs.
+
+### No questions this round
+
+The Round 0 question about the field path `/api/events` uses for raw
+attributes (`attrs.body`) is answered by this round's plan itself, in "What
+is wrong, and what the fix is": `/api/events` spreads the stored record, so
+`attrs` reaches the client verbatim. No open question remains from this
+round.
