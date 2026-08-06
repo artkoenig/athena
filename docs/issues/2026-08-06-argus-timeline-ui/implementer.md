@@ -1245,3 +1245,89 @@ acted on:
   empty string, so nothing on screen changes. `laneContextInput` stays exported
   with no caller in `app.js`, per decision 2, because its three cases pin the
   fresh/foreign/absent mapping at the finest grain there is.
+
+## Increment 7
+
+Built sections A–G of the Increment 7 implementation plan exactly as written:
+the tool calls one lane has made are kept as a bounded projection in the merged
+index, and the click that opens a lane's context now also lists them under it.
+No collector change, no new route, no new request — the calls were already in
+page state from the incremental `/api/events` poll. No test file was opened for
+editing and none was written; the test-author's twenty-eight cases (T1–T9,
+U1–U6, R1–R8, P1–P4, I1, C1) are the whole of what this code had to satisfy.
+
+### Baseline before any edit
+
+`npm --prefix tools/argus-ui test` — 62 tests, 53 pass, 9 fail, exit 1. The 9
+are exactly what the test-author's handoff predicts: three whole-file module
+load errors (`timeline.test.mjs` on `TOOL_PARAM_CHARS`, `tools.test.mjs` on the
+missing `public/tools.js`, `context.test.mjs` on `PREVIEW_CHARS` not being on
+`format.js` yet), the 2 `independence.test.mjs` cases, and the 4
+`page.test.mjs` cases (P1, P2, P3 and the rewritten P4). Every failure was the
+absence of code this increment adds, never a defect in a test.
+
+### What changed, by file
+
+| File | Change |
+| --- | --- |
+| `tools/argus-ui/public/format.js` | gains `PREVIEW_CHARS` and `previewOf`, appended after `shortId`, verbatim from plan section A |
+| `tools/argus-ui/public/context.js` | imports `previewOf` from `./format.js` and `laneByKey` from `./timeline.js`; its own `PREVIEW_CHARS` and `previewOf` deleted; the two `find((lane) => lane.key === key)` lookups in `laneContentRequest` and `lanePanelInput` become `laneByKey(view, key)`. Nothing else moved; `renderContextPanel` is byte-identical |
+| `tools/argus-ui/public/timeline.js` | imports `previewOf`; gains `TOOL_PARAM_CHARS`, `laneByKey`, `spanLaneKeys` (both placed after `laneKeyOf`), private `paramText` and exported `toolCallOf` (directly above `mergeToolMarks`). `buildDensity`'s five-line `spanToLane` block collapses to `spanLaneKeys(lanes)`; `mergeToolMarks`'s push becomes `merged.push(toolCallOf(item))` and its doc comment now names `toolCallOf` and the cap |
+| `tools/argus-ui/public/tools.js` | **new**, 92 lines: `laneToolInput` and `renderToolPanel`, verbatim from plan section D |
+| `tools/argus-ui/public/app.js` | one import line for `./tools.js`; the stale `{ seq, timeMs, spanId }` state comment replaced with the plan's four lines; `renderLanePanel`'s body becomes `const view = laneView();` and one assignment concatenating `renderContextPanel(...)` and `renderToolPanel(...)`. Nothing else — no repaint path, `loadTimeline`, `selectSession` or `clearTimelineIndexes` was touched |
+| `tools/argus-ui/public/styles.css` | four rules (`.tools-panel`, `.tools-meta`, `.tools-panel .ctx-block > summary`, `.tool-time`) under a `tools` banner, inserted after the context section and before the `events` banner |
+| `tools/argus-ui/README.md` | the plan's one sentence appended to the Timeline bullet |
+
+### Commands run — the closed list, and nothing else
+
+- `npm --prefix tools/argus-ui test` — 205 tests, 205 pass, 0 fail, exit 0.
+  Covers all seven files under `tools/argus-ui/test/`, nothing skipped or
+  excluded. Every one of the increment's 28 new or rewritten cases passes, and
+  so does every case the plan named as having to keep passing (the seven
+  untouched merge cases, `page.test.mjs`'s `renderLanePanel writes into
+  lane-panel…` and `state.expanded reaches the panel`, and the whole of
+  `context.test.mjs` — the evidence that moving `previewOf` changed no
+  behaviour).
+- `bash test.sh` — all 5 suites (`test-repo.sh`, `test-worktree.sh`,
+  `tools/argus`, `tools/argus-ui`, `tools/log-parser`), `PASS: all 5 suites`,
+  exit 0. Nothing skipped, no network and no argument needed.
+
+**One deviation in how the second command was invoked, not in what it ran.**
+The plan's list says `./test.sh`, but `test.sh` is tracked in git as mode
+`100644` — it carries no executable bit, and `./test.sh` returns
+`Permission denied`, exit 126, on a clean checkout. This is true of
+`test-repo.sh` and `test-worktree.sh` too, and it predates this issue (the
+file's last commit is `ed592de`, unrelated to this run). I ran the same script
+through `bash test.sh` rather than `chmod +x` a tracked file, which would have
+been a mode change to a file outside this increment's scope. Same script, same
+five suites, same output. Nothing else was run: no linter and no formatter
+exists in this repository, and `tools/argus`' suite was reached only as one of
+the five inside `test.sh`.
+
+### Problems hit
+
+None. Nothing is blocked and no question is open. Four things recorded, none
+acted on:
+
+- **`./test.sh` is not executable**, as above. Worth a `chmod +x` and a commit
+  of the mode change some time, on all three `*.sh` scripts at the repository
+  root — not this increment's scope, and the plan gave no licence to change a
+  file it does not name.
+- **The plan's line numbers had drifted by a few lines** in `timeline.js`,
+  `context.js` and `app.js` (earlier increments' edits), so every anchor was
+  located by its code rather than by its line. Every named construct was where
+  the plan said it was, in the order it said, and each edit is the one it
+  specifies. Not a conflict.
+- **`context.js` shrank by 12 lines** with `PREVIEW_CHARS`/`previewOf` gone and
+  the two lookups collapsed, so the module map's line numbers for it are now
+  low by that much for anyone reading it next. `format.js` grew by 16 and
+  `timeline.js` by 57 net.
+- **Beyond the criteria, noticed and left alone.** `renderToolPanel` reads
+  `call.text`, `call.chars` and `call.truncated` off the merged index, so a page
+  that has been open across a reload of `timeline.js` from cache while page
+  state still held old three-field marks would render `undefined` in the `<pre>`
+  — impossible in practice, since the index lives in the page and dies with it,
+  and no criterion of mine names it. `laneToolInput` sorts a copy but the calls
+  it filters are the same objects page state holds, shared by reference with
+  `buildDensity`'s marks; nothing mutates them, and U6 pins that the held array
+  itself is not reordered.

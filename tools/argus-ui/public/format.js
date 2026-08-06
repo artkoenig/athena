@@ -63,3 +63,19 @@ export const isLive = (session) => Date.now() - session.lastSeenMs < 90_000;
 export function shortId(id, keep = 12) {
   return id && id.length > keep + 3 ? `${id.slice(0, keep)}…` : id ?? '';
 }
+
+/** A collapsed row shows this much of its text on one line. */
+export const PREVIEW_CHARS = 120;
+
+/**
+ * The one line a collapsed row shows.
+ *
+ * The cut is measured on the text itself rather than on its flattened form, so
+ * a text carrying more than one line's worth says so even when collapsing its
+ * whitespace would have brought it under the limit.
+ */
+export function previewOf(value) {
+  const text = typeof value === 'string' ? value : String(value ?? '');
+  const flat = text.slice(0, PREVIEW_CHARS).replace(/\s+/g, ' ').trim();
+  return text.length > PREVIEW_CHARS ? `${flat}…` : flat;
+}

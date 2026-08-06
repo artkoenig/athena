@@ -9,6 +9,7 @@
 
 import { esc, fmtNum, fmtCost, fmtDur, fmtClock, fmtAgo, isLive, shortId } from './format.js';
 import { fetchLaneContext, lanePanelInput, renderContextPanel } from './context.js';
+import { laneToolInput, renderToolPanel } from './tools.js';
 import {
   buildLanes,
   buildDensity,
@@ -33,9 +34,10 @@ const state = {
   // timeline, and the views below it are where a reader goes next.
   tab: null,
   content: [],
-  // Tool calls, kept as { seq, timeMs, spanId } and nothing else: a tool result
-  // carries its whole call parameters, and holding those would put megabytes in
-  // the page for two numbers and a span.
+  // Tool calls, kept as the row a panel draws — seq, moment, span, the
+  // tool's name and its call parameters capped at TOOL_PARAM_CHARS. A whole
+  // tool_input is a file's content, so the cap is what keeps a long
+  // session's index bounded while still answering "which tools, and what for".
   toolMarks: [],
   toolSeq: 0,
   // A session opens live: the cursor sits on the newest data and moves with it
@@ -934,14 +936,20 @@ async function loadLaneContext() {
 function renderLanePanel() {
   const container = document.getElementById('lane-panel');
   if (!container) return;
-  container.innerHTML = renderContextPanel(
-    lanePanelInput({
-      view: laneView(),
-      key: state.selectedLane,
-      held: state.laneContext,
-      expanded: state.expanded,
-    }),
-  );
+  const view = laneView();
+  container.innerHTML =
+    renderContextPanel(
+      lanePanelInput({ view, key: state.selectedLane, held: state.laneContext, expanded: state.expanded }),
+    ) +
+    renderToolPanel(
+      laneToolInput({
+        view,
+        key: state.selectedLane,
+        calls: state.toolMarks,
+        cursor: state.cursor,
+        expanded: state.expanded,
+      }),
+    );
 }
 
 let laneContextTimer = null;

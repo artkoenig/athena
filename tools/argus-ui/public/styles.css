@@ -1138,6 +1138,29 @@ td.name {
   border-radius: var(--radius);
 }
 
+/* --------------------------------- tools -------------------------------- */
+
+.tools-panel {
+  padding: 10px 12px 4px;
+}
+
+.tools-meta {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-faint);
+}
+
+/* One column more than a context block: a tool row leads with its moment. */
+.tools-panel .ctx-block > summary {
+  grid-template-columns: 80px 120px 1fr 60px;
+}
+
+.tool-time {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-faint);
+}
+
 /* ------------------------------- events -------------------------------- */
 
 .filters {

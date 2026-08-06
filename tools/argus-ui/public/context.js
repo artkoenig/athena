@@ -15,11 +15,8 @@
  * third of it.
  */
 
-import { esc, fmtClock, fmtNum, shortId } from './format.js';
-import { resolveCursor } from './timeline.js';
-
-/** A collapsed block shows this much of its text on one line. */
-export const PREVIEW_CHARS = 120;
+import { esc, fmtClock, fmtNum, previewOf, shortId } from './format.js';
+import { laneByKey, resolveCursor } from './timeline.js';
 
 /** The roles that get a colour of their own; anything else is `other`. */
 const ROLE_KINDS = new Set(['user', 'assistant', 'system']);
@@ -36,18 +33,6 @@ function textOf(payload) {
   if (typeof payload === 'string') return payload;
   if (payload === undefined) return '';
   return JSON.stringify(payload, null, 2) ?? '';
-}
-
-/**
- * The one line a collapsed block shows.
- *
- * The cut is measured on the text itself rather than on its flattened form, so
- * a block carrying more than one line's worth of text says so even when
- * collapsing its whitespace would have brought it under the limit.
- */
-function previewOf(text) {
-  const flat = text.slice(0, PREVIEW_CHARS).replace(/\s+/g, ' ').trim();
-  return text.length > PREVIEW_CHARS ? `${flat}…` : flat;
 }
 
 const makeBlock = (index, kind, label, payload) => {
@@ -182,7 +167,7 @@ export function laneContentQuery(lane) {
  */
 function laneContentRequest({ session = null, key = null, view = null, cursor = null } = {}) {
   if (!session || !key) return null;
-  const filter = laneContentQuery((view?.lanes ?? []).find((lane) => lane.key === key));
+  const filter = laneContentQuery(laneByKey(view, key));
   if (!filter) return null;
   return { session, at: resolveCursor(cursor, view).timeMs, ...filter };
 }
@@ -240,7 +225,7 @@ export function laneContextInput(key, held) {
  * @returns {{ lane: object|null, item: object|null, pending: boolean, expanded: string[]|Set<string> }}
  */
 export function lanePanelInput({ view = null, key = null, held = null, expanded = [] } = {}) {
-  const lane = key ? ((view?.lanes ?? []).find((entry) => entry.key === key) ?? null) : null;
+  const lane = laneByKey(view, key);
   return { lane, ...laneContextInput(key, held), expanded };
 }
 
