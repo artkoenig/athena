@@ -8,7 +8,7 @@
  */
 
 import { esc, fmtNum, fmtCost, fmtDur, fmtClock, fmtAgo, isLive, shortId } from './format.js';
-import { renderContextPanel } from './context.js';
+import { laneContentQuery, renderContextPanel } from './context.js';
 import {
   buildLanes,
   buildDensity,
@@ -920,17 +920,7 @@ async function loadLaneContext() {
     return;
   }
   const view = laneView();
-  const lane = view.lanes.find((entry) => entry.key === key);
-  // Exactly one lane filter goes on the wire: main traffic for the main lane, an
-  // agent lane's own span — the only thing that tells two concurrent agents of
-  // one type apart — and its name only when it carries no span at all.
-  const filter = !lane
-    ? null
-    : lane.kind === 'main'
-      ? { main: '1' }
-      : lane.spanId
-        ? { span: lane.spanId }
-        : { agent: lane.agent };
+  const filter = laneContentQuery(view.lanes.find((entry) => entry.key === key));
   const answer = filter
     ? await api('/api/content/at', {
         session: id,

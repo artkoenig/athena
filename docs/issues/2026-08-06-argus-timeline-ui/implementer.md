@@ -945,3 +945,92 @@ No blocking question. Three notes for the reviewer:
   change the markup the suite pins (one `<pre>` per block, case 20). Not this
   increment's scope; recorded so nobody has to rediscover it if the panel ever
   feels slow on a very large context.
+
+## Increment 5 — Round 1
+
+Built the Increment 5 — Round 1 plan of `researcher.md`. Two production files
+changed, both for finding 2 only: `laneContentQuery` is now a pure, exported
+function of `public/context.js`, and `loadLaneContext` in `public/app.js`
+delegates to it. Findings 1 and 3 needed no production change — the plan says so
+and the suite confirms it. Nothing in `tools/argus` changed and no documentation
+changed. The one command in "What counts as done" is green.
+
+### The tests came first, and they are not mine
+
+I ran the plan's one command before touching anything and reproduced the
+test-author's baseline exactly: `npm --prefix tools/argus-ui test` — **126 tests,
+123 pass, 3 fail, exit 1**. The three reds were the ones their handoff itemises:
+
+- `not ok 2 - test/context.test.mjs` — the whole file fails to load with
+  `SyntaxError: The requested module '../public/context.js' does not provide an
+  export named 'laneContentQuery'`, standing in for the file's 33 cases (the 29
+  round-0 cases, the fixture-updated kind-sequence case, and R1–R7).
+- `not ok 31 - app.js takes the context panel from its module` (R9), at
+  `test/page.test.mjs:349`, on the assertion message `app.js must import
+  laneContentQuery from context.js, so the function the unit cases test is the
+  one the page runs`.
+- `not ok 37 - the panel asks the collector for the nearest request at the
+  cursor's moment, for that lane only` (R8), on the assertion that
+  `loadLaneContext`'s source matches `/laneContentQuery\(/`.
+
+Every one failed because the behaviour did not exist yet — a missing export and
+a call site that did not call it — never because of a mistake in a test. I wrote
+no test and edited no test file; `git status` before my first edit showed the
+test files already committed and untouched by me.
+
+### What I changed
+
+| File | Change |
+| --- | --- |
+| `tools/argus-ui/public/context.js` | New exported `laneContentQuery(lane)` between `contextBlocks` and `renderContextPanel`, with the plan's doc comment verbatim: `null` for a falsy lane, `{ main: '1' }` for `kind === 'main'`, `{ span: lane.spanId }` when a span is present, `{ agent: lane.agent }` when only a name is, and `null` when the lane identifies nothing. The module header's first sentence now describes the whole module — which record a lane asks for, how the body parses into blocks, and how those blocks render. Nothing else in the file moved. |
+| `tools/argus-ui/public/app.js` | Line 11 is now `import { laneContentQuery, renderContextPanel } from './context.js';`. Inside `loadLaneContext`, the `const lane = …` line, the three-line comment above the filter and the six-line ternary chain are replaced by the single line `const filter = laneContentQuery(view.lanes.find((entry) => entry.key === key));`. Nothing was put in the comment's place — a comment naming `laneContentQuery` would satisfy R8's source assertion without the code calling anything. Every other line of `loadLaneContext` is byte for byte as it was: the id/key capture, `laneView()`, `resolveCursor(state.cursor, view).timeMs`, the `.catch(() => null)`, both staleness guards and the single `state.laneContext` write, in that order. |
+
+Net diff: 2 files, 28 insertions, 16 deletions. No CSS, no README, no test file,
+no file outside `tools/argus-ui/public/`.
+
+Nothing in the plan was left open for me to settle: the function body, its doc
+comment, the import line and the replacement line were all given literally, and
+I used them as written.
+
+### Commands run
+
+The plan's "What counts as done" list is one command, and it is the only command
+that counts. Both runs below are of that command, from the repository root.
+
+- `npm --prefix tools/argus-ui test` (`node --test "test/*.test.mjs"`), **before
+  any change** — 126 tests, 123 pass, 3 fail, 0 skipped, 0 todo, exit 1. The
+  baseline above.
+- `npm --prefix tools/argus-ui test`, **after the change** — **161 tests, 161
+  pass, 0 fail, 0 skipped, 0 todo, exit 0**. The count rises by 35 because
+  `context.test.mjs` now loads and reports its cases individually instead of one
+  module-load failure. Nothing was excluded and nothing was skipped.
+
+Deliberately not run, because the plan puts them off the list: `./test.sh` (the
+closing increment owns the full-suite run) and `tools/argus`' own suite (no file
+outside `tools/argus-ui` changed). There is no linter and no formatter in this
+repository, so there was nothing else to run.
+
+### Problems hit
+
+No blocking question, and nothing red anywhere. Two notes for the reviewer:
+
+- **The plan's prediction that `page.test.mjs:404` goes red mid-change did not
+  materialise as a separate event.** It predicted that removing the filter chain
+  from `loadLaneContext` would drop `\bmain\b`, `\bspan\b` and `\bagent\b` from
+  that function and turn the old case red, with R8 as its replacement. The
+  test-author had already landed R8 before I started, so that case was red at my
+  baseline for the *new* reason (no `laneContentQuery(` call) and went green with
+  the change. The same holds for the kind-sequence case at `context.test.mjs`: the
+  fixture change and its updated expected array arrived together in the
+  test-author's commit, so it was never red on its own. Both are the plan's
+  "red during this round by design", already resolved when I arrived.
+- **Beyond the criteria, noticed and left alone:** with the chain gone,
+  `loadLaneContext` no longer names any query key in its own source, so a reader
+  of `app.js` has to open `context.js` to see what goes on the wire. That is the
+  point of the change — the mapping is now pinned by value rather than by prose —
+  and R8 forbids putting the explanation back as a comment there. Recorded only
+  so nobody reads the missing comment as an oversight. The reviewer's four
+  observations (the refetch cadence, the expansion set collapsing when the record
+  changes, the wording of the existing case, the impossible `"agent:"` record)
+  were left alone as the plan directs; the last is closed by
+  `laneContentQuery`'s final `return null`.

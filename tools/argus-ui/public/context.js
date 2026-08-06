@@ -1,10 +1,11 @@
 /**
  * argus-ui — the context behind one lane.
  *
- * Pure functions over the payload of `GET /api/content/at`: parse the request
- * body that *was* the context at a moment into a list of blocks, and render
- * that list. No `document`, no `fetch`, no `location` — which is what lets
- * `node --test` import this directly, the same contract `timeline.js` keeps.
+ * Pure functions over `GET /api/content/at`: which record a lane asks for,
+ * how the request body that *was* the context at a moment parses into a list
+ * of blocks, and how that list renders. No `document`, no `fetch`, no
+ * `location` — which is what lets `node --test` import this directly, the same
+ * contract `timeline.js` keeps.
  *
  * Two-thirds of a real context is the `tools` array, which is not a message, so
  * every top-level field the body carries gets a block of its own: a list that
@@ -139,6 +140,27 @@ export function contextBlocks(body) {
   }
 
   return { ok: true, chars, blocks };
+}
+
+/**
+ * The one lane filter that goes on the wire for a lane's context.
+ *
+ * Main traffic for the main lane; an agent lane's own span — the only thing
+ * that tells two concurrent agents of one type apart — and its name only when
+ * it carries no span at all. A lane that offers neither gets no query rather
+ * than an empty one: an unfiltered request would answer with the main
+ * session's context under an agent's lane, which is the one thing this
+ * mapping exists to prevent.
+ *
+ * @param {{ kind: string, spanId: string|null, agent: string|null }|null|undefined} lane
+ * @returns {{ main: string }|{ span: string }|{ agent: string }|null}
+ */
+export function laneContentQuery(lane) {
+  if (!lane) return null;
+  if (lane.kind === 'main') return { main: '1' };
+  if (lane.spanId) return { span: lane.spanId };
+  if (lane.agent) return { agent: lane.agent };
+  return null;
 }
 
 /**
