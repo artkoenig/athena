@@ -1547,3 +1547,288 @@ case 21 exists precisely to keep `renderTimeline(buildLanes(…))` — the shape
 cases call — working while the density is optional. `independence.test.mjs` adds
 no file to guard, and `page.test.mjs`'s flag-absence case is untouched by anything
 this increment writes (`claude_code.tool_result` is an event name, not a flag).
+
+## Increment 3 — Round 1
+
+The reviewer's `## Increment 3` section raises **one finding**, and this section
+plans that fix and nothing else. Everything the earlier sections asked for is
+built and pinned; no case or command from them carries over. What binds now is
+below.
+
+### The finding, restated as the defect to remove
+
+`tools/argus-ui/public/app.js:839–857`. `loadTimeline` captures
+`const id = state.selectedSessionId`, awaits two fetches, and then writes the
+answer into shared page state without asking whether that session is still the
+selected one:
+
+```js
+  state.content = content?.items ?? [];
+  for (const item of tools?.items ?? []) {
+    state.toolMarks.push({ seq: item.seq, timeMs: item.timeMs, spanId: item.spanId });
+    if (item.seq > state.toolSeq) state.toolSeq = item.seq;
+  }
+```
+
+Two refreshes can be in flight at once — `scheduleRefresh` (`app.js:958`) guards
+only a pending timer, while `selectSession` (`app.js:939`) calls `refresh()`
+directly. Two consequences, both real:
+
+1. **Cross-session contamination that never recovers.** A response for session A
+   landing after the user selected session B appends A's tool marks to B's array
+   and raises `state.toolSeq` to A's highest `seq`. Because `seq` is one global
+   counter in the collector, every later fetch for B asks
+   `sinceSeq=<A's max seq>` and gets nothing: B's lanes show A's tool calls and
+   none of B's, for the life of the page.
+2. **Double counting within one session.** Two overlapping refreshes read the
+   same `state.toolSeq`, fetch the same events and both append them, so a
+   bucket's `count` — the "N tool calls" in the mark's tooltip — is inflated.
+
+Both are the criterion's own words failing: a lane must show *its* activity over
+time.
+
+### Implementation plan
+
+Two production files change. No new file, no collector change, no dependency, no
+style or README edit.
+
+**A. `public/timeline.js` — one new exported pure function.**
+
+The accumulation is the half that carries the bug and the half a `node --test`
+process can actually execute, so it moves out of `app.js` into the pure module
+next to the functions that consume its result:
+
+```js
+/**
+ * Merge a page of tool events into the marks already held.
+ *
+ * The watermark comes back as the highest `seq` *held*, never as the highest
+ * seen: a record that was not kept can then never be skipped as already seen,
+ * which is what turns a stale or duplicated response into a no-op instead of a
+ * permanent hole. Duplicates are dropped by `seq`, and the input array is left
+ * untouched.
+ *
+ * @param {{ seq: number, timeMs: number, spanId: string|null }[]} marks
+ * @param {object[]} items
+ * @returns {{ marks: object[], seq: number }}
+ */
+export function mergeToolMarks(marks, items) {
+  const held = Array.isArray(marks) ? marks : [];
+  const merged = held.slice();
+  const seen = new Set(held.map((mark) => mark?.seq));
+  let seq = 0;
+  for (const mark of held) if (Number.isFinite(mark?.seq) && mark.seq > seq) seq = mark.seq;
+  for (const item of Array.isArray(items) ? items : []) {
+    if (!Number.isFinite(item?.seq) || seen.has(item.seq)) continue;
+    seen.add(item.seq);
+    merged.push({ seq: item.seq, timeMs: item.timeMs, spanId: item.spanId ?? null });
+    if (item.seq > seq) seq = item.seq;
+  }
+  return { marks: merged, seq };
+}
+```
+
+Rules it fixes in one place: only `{ seq, timeMs, spanId }` is kept (a
+`tool_result` carries its whole `tool_input`, which must never reach page
+state); an item without a finite `seq` is dropped, because a record that cannot
+be de-duplicated cannot be held safely; nothing is mutated in place. The module
+header comment says its inputs are the payloads of `/api/sessions/<id>` and
+`/api/content` — extend that sentence to name `/api/events` too, so the doc
+stays true.
+
+**B. `public/app.js` — the guard and the delegation.**
+
+- Add `mergeToolMarks` to the existing
+  `import { … } from './timeline.js';` line (`app.js:11`).
+- `loadTimeline` keeps its two parallel fetches exactly as they are, and
+  replaces the write block with a guard first and a merge second:
+
+  ```js
+    const [content, tools] = await Promise.all([ /* unchanged */ ]);
+    // A second refresh can start while these are in flight — selectSession calls
+    // refresh() directly. An answer for a session that is no longer selected must
+    // be dropped whole: appending it would put another session's tool calls on
+    // these lanes and push the watermark past this session's own records.
+    if (state.selectedSessionId !== id) return;
+    state.content = content?.items ?? [];
+    const merged = mergeToolMarks(state.toolMarks, tools?.items ?? []);
+    state.toolMarks = merged.marks;
+    state.toolSeq = merged.seq;
+  ```
+
+- `selectSession` keeps `state.toolMarks = []` and `state.toolSeq = 0`
+  unchanged: with the watermark derived from what is held, the reset stays
+  self-consistent, and the existing case pins it.
+- Nothing else in `app.js` changes. The guard also removes increment 2's milder
+  stale write on `state.content`; that is the same line, not extra scope.
+
+### Decisions I rejected
+
+- **A source-level assertion alone, leaving the loop in `app.js`.** It pins the
+  words of a fix, never its behaviour, and it is exactly what the hole fell
+  through last round. Moving the accumulation into the pure module is what buys
+  a case that fails on the defect and passes on the fix.
+- **Keying page state by session (`state.toolMarksBySession`).** It removes the
+  race by construction, but grows unbounded as a user browses sessions and adds
+  a second lookup to every render, to solve what one comparison solves.
+- **A monotonically increasing request token (`state.timelineSeq`) instead of
+  comparing the session id.** The only thing that invalidates the accumulation is
+  a selection change, and the id already says that. A token would additionally
+  discard a same-session overlap that the `seq` de-duplication now makes
+  harmless.
+- **Serialising refreshes (an in-flight promise the next refresh awaits).** It
+  fixes this symptom by making every ingest event queue behind the last fetch,
+  which is a page-wide behaviour change for a two-line bug, and it leaves the
+  cross-session write possible on the very next tick anyway.
+- **De-duplicating inside `buildDensity` instead.** That hides double counting in
+  the drawing while page state stays wrong, and it re-does the work on every
+  render rather than once per response.
+- **Keeping items with no `seq` and de-duplicating by `timeMs`+`spanId`.** Two
+  tool calls in one millisecond on one span are indistinguishable that way, and
+  the collector puts a `seq` on every stored log record — so the case does not
+  arise, and guessing costs correctness where it does.
+- **Any change to `styles.css`, `README.md` or the collector.** The finding is
+  wiring; the drawing the reviewer accepted stays byte-identical.
+
+### Consequences to accept
+
+- A tool event whose `seq` the page already holds is never re-read, so an event
+  the collector *rewrote* under the same `seq` would keep its first
+  `timeMs`/`spanId`. The collector's `seq` is an append-only counter; it does not
+  rewrite.
+- Dropping an item with no finite `seq` means such an item never paints a mark.
+  Nothing observed emits one.
+- A response discarded by the guard is simply refetched by the next refresh,
+  which is at most one SSE tick away.
+
+### Module map
+
+| Path | What it holds | Entry points |
+| --- | --- | --- |
+| `tools/argus-ui/public/timeline.js` | Lane derivation, density and the timeline markup; pure, no DOM, no `fetch` | **new** `mergeToolMarks`; header comment extended to name `/api/events`; everything else unchanged |
+| `tools/argus-ui/public/app.js` | The page: state, fetching, rendering, wiring | `loadTimeline` (`:839`, the guard and the merge), the `./timeline.js` import line (`:11`); `selectSession` and `renderDetail` unchanged |
+| `tools/argus-ui/test/timeline.test.mjs` | Unit cases over the pure module; factories `session()`, `record()`, `threeRecordContent()`, `toolMark()` at the top | new cases appended under a new banner |
+| `tools/argus-ui/test/page.test.mjs` | Source-level cases over `public/`; helpers `walk()`, `functionSource()` | `functionSource` tightened, new cases appended |
+| `tools/argus-ui/public/styles.css`, `tools/argus-ui/README.md`, `tools/argus/**` | — | **untouched this round** |
+
+Facts nobody has to open another project for: `GET /api/events` items are the
+stored log record, which always carries a numeric `seq`, a `timeMs` and a
+`spanId` (`''` when the record had none); `seq` is a single global counter across
+all sessions in the collector's store, which is why a foreign watermark is
+poison rather than merely wrong; `sinceSeq` returns only records with a strictly
+greater `seq`, walking newest-first and stopping at the first record at or below
+it.
+
+### Environment
+
+- Node v22.22.2 at `/opt/node22/bin/node`, on the `PATH`; the package requires
+  ≥ 20.11.
+- `tools/argus-ui` has zero runtime and zero dev dependencies. `npm install` is
+  not needed and must not become needed; adding a dependency goes to the human.
+- Whole package, from the repository root: `npm --prefix tools/argus-ui test`
+  (`node --test "test/*.test.mjs"`).
+- A single file, from the repository root:
+  `node --test tools/argus-ui/test/timeline.test.mjs`, and the same shape for
+  `page.test.mjs`.
+- `public/timeline.js` is importable by `node --test` because the package is
+  `"type": "module"`: `import { mergeToolMarks } from '../public/timeline.js';`
+  needs no loader flag. `public/app.js` is **not** importable — it reads
+  `location` at module scope — which is why cases about it are source-level.
+- There is no linter and no formatter in this repository: nothing to run.
+
+### Test Plan
+
+Tests are needed: the finding is a behaviour defect, and the de-duplication half
+is directly executable. Framework: `node:test` with `node:assert/strict`, the
+only thing this project uses.
+
+Conventions for both files, taken from the files themselves: every test name is a
+full lowercase sentence stating the fact; fixtures are the local factories
+already at the top of the file (`session()`, `record()`, `threeRecordContent()`,
+`toolMark()` in `timeline.test.mjs`; `walk()`, `functionSource()` in
+`page.test.mjs`); nothing is mocked beyond those — no DOM, no `fetch`, no fake
+timers; each assertion that could be read two ways carries a message saying what
+the fact is; banner comments separate the groups; and no case asserts a
+user-visible sentence, only structure and numbers.
+
+**A helper change first.** `functionSource` in `page.test.mjs` ends a function at
+`/\nfunction \w+\(/`, which does not stop at an `async function` — so today its
+`loadTimeline` slice runs on through `loadTabData` and `refresh`. Change that
+regex to `/\n(?:async )?function \w+\(/`. Checked against the current `app.js`:
+the only slice it shortens is `loadTimeline`'s; `renderDetail` (next plain
+function `renderTabBody`) and `selectSession` (next plain function `copyFrom`)
+are unaffected, and every existing assertion targets text genuinely inside its
+function, so no existing case changes result.
+
+Two files are edited; no test file is created, and every existing case stays
+exactly as it is.
+
+#### Cases — the tool-mark index accumulates without duplicating or skipping
+
+New banner in `tools/argus-ui/test/timeline.test.mjs`, appended after the
+existing cases:
+`// Criterion 5, round 1 — the tool-mark index survives an overlapping refresh.`
+Add `mergeToolMarks` to the import list at the top of that file.
+
+| # | Case | Input / state | Expected | File | Level |
+| --- | --- | --- | --- | --- | --- |
+| 1 | merging into an empty index keeps every item, and only the three fields a mark needs | `mergeToolMarks([], [{ seq: 4, timeMs: 2000, spanId: 'sp-a', attrs: { tool_input: 'x'.repeat(100) } }, { seq: 7, timeMs: 3000, spanId: 'sp-b' }])` | `assert.deepEqual(result.marks, [{ seq: 4, timeMs: 2000, spanId: 'sp-a' }, { seq: 7, timeMs: 3000, spanId: 'sp-b' }])` and `result.seq === 7` — the payload is dropped, not carried into page state | `timeline.test.mjs` | unit |
+| 2 | an event already held is not counted twice | held `[{ seq: 4, timeMs: 2000, spanId: 'sp-a' }]`, items `[{ seq: 4, timeMs: 2000, spanId: 'sp-a' }, { seq: 5, timeMs: 2100, spanId: 'sp-a' }]` | `marks.length === 2`, exactly one mark with `seq === 4`, `seq === 5` — the overlapping-refresh double count | `timeline.test.mjs` | unit |
+| 3 | merging the same response twice changes nothing the second time | `const first = mergeToolMarks([], items); const second = mergeToolMarks(first.marks, items);` with the two items of case 1 | `assert.deepEqual(second.marks, first.marks)` and `second.seq === first.seq` | `timeline.test.mjs` | unit |
+| 4 | the watermark is what is held, never what was seen | `mergeToolMarks([], [])` and `mergeToolMarks([{ seq: 9, timeMs: 4000, spanId: 'sp-a' }], [])` | `{ marks: [], seq: 0 }` for the first; `seq === 9` and `marks.length === 1` for the second — a watermark can never run ahead of the records behind it, which is what made the finding permanent | `timeline.test.mjs` | unit |
+| 5 | an item with no usable seq is dropped rather than held un-deduplicable | items `[{ timeMs: 2000, spanId: 'sp-a' }, { seq: null, timeMs: 2100, spanId: 'sp-a' }, { seq: 'x', timeMs: 2200, spanId: 'sp-a' }]` into an empty index | `marks` is `[]` and `seq === 0` | `timeline.test.mjs` | unit |
+| 6 | merging does not mutate the index it was given | held array of one mark, items of two new marks | the held array still has `length === 1` afterwards, and `result.marks !== held` | `timeline.test.mjs` | unit |
+| 7 | out-of-order items still leave the highest seq as the watermark | items `[{ seq: 9, … }, { seq: 4, … }]` into an empty index | both held, `seq === 9` (the maximum, not the last) | `timeline.test.mjs` | unit |
+| 8 | a missing spanId becomes null rather than undefined | item `{ seq: 3, timeMs: 2000 }` | the mark is `{ seq: 3, timeMs: 2000, spanId: null }` | `timeline.test.mjs` | unit |
+| 9 | the merged index is what the density reads | `buildDensity(buildLanes({ session: session(), content: threeRecordContent() }), { content: threeRecordContent(), tools: mergeToolMarks([], [toolMark({ seq: 5, timeMs: 2200, spanId: 'sp-a' })]).marks })` | the `sp-a` agent lane has `toolCalls === 1` and one `activity` mark of `kind === 'tool'` | `timeline.test.mjs` | unit |
+
+#### Cases — the loader drops an answer whose session is gone
+
+New banner in `tools/argus-ui/test/page.test.mjs`:
+`// Criterion 5, round 1 — a refresh answer for another session never reaches these lanes.`
+All three use the tightened `functionSource`.
+
+| # | Case | Input / state | Expected | File | Level |
+| --- | --- | --- | --- | --- | --- |
+| 10 | the timeline loader drops an answer that arrived after the selection moved on | `functionSource(appJs, 'loadTimeline')` | matches `/state\.selectedSessionId\s*!==\s*id/`; the index of that guard is greater than `indexOf('await')` and smaller than `indexOf('state.content =')` — assert each index `>= 0` first, with its own message, so a missing piece fails on its own name | `page.test.mjs` | source |
+| 11 | the timeline loader merges tool events instead of appending them blind | `functionSource(appJs, 'loadTimeline')` | matches `/mergeToolMarks\(/`, and `assert.doesNotMatch(…, /state\.toolMarks\.push\(/)` — the de-duplicating merge is the only way in | `page.test.mjs` | source |
+| 12 | app.js takes the merge from the timeline module | the whole `app.js` source | the `from './timeline.js'` import statement names `mergeToolMarks` (match `/import\s*\{[^}]*\bmergeToolMarks\b[^}]*\}\s*from\s*['"]\.\/timeline\.js['"]/`) — so the tested function is the one the page runs | `page.test.mjs` | source |
+
+#### Deliberately untested, and why
+
+- **The race itself, end to end** (two overlapping `refresh()` calls against a
+  fake collector). It needs a DOM and a fetch harness; jsdom is a dependency, and
+  zero dependencies is this project's first rule. Cases 1–9 pin the state
+  transition that made the race destructive, and cases 10–12 pin that
+  `loadTimeline` is wired to it — which is as close as this project reaches.
+- **The collector's `sinceSeq` semantics.** Owned by `tools/argus`' suite;
+  re-asserting them here would pin someone else's behaviour.
+- **`state.content`'s stale write.** Fixed by the same guard, and case 10 pins
+  that the guard precedes the `state.content` write, so it needs no case of its
+  own.
+- **Everything increment 3's earlier round already pins** — buckets, curve
+  scaling, geometry, escaping, the composition — is untouched by this change and
+  re-run by the command below.
+- **`tools/argus`, `styles.css`, `README.md`, the landing view, scrubbing, live
+  mode and per-lane selection.** Not touched, or not this increment's.
+
+#### What counts as done
+
+```
+npm --prefix tools/argus-ui test
+```
+
+That one command, from the repository root, is the whole list. It runs the new
+cases together with all five existing test files, costs seconds and needs no
+install. `tools/argus` and `./test.sh` stay off the list: nothing outside
+`tools/argus-ui` changes, and the closing increment owns the full-suite run.
+
+#### What is already red
+
+I did not run the list, not once and not as a baseline; the first run belongs to
+whoever runs it downstream. From reading: the reviewer's run was 61 cases, 0
+failed, and nothing has changed since, so the twelve new cases are the only ones
+whose first result is unknown — and before the fix they are red by construction
+(`mergeToolMarks` does not exist, and `loadTimeline` carries neither the guard
+nor the merge). The `functionSource` change turns no existing case red, per the
+check above.
