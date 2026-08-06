@@ -252,3 +252,135 @@ breaks; the `body` text lives in attributes only, so `describeEvent`'s default b
 back the `query_source` grammar `agentOf` parses, and the documentation's standard-
 attribute table carries neither `agent.name` nor `agent_id`, so `query_source` is indeed
 the only attribution these two events offer.
+
+## Increment 2
+
+Status: **1 finding, correction needed.** The lane model and the flag-removal are
+sound and well covered; nothing pins the landing behaviour itself, so the whole
+timeline can disappear from the page with the suite green.
+
+### Commands run
+
+- `npm --prefix tools/argus-ui test` — `node --test test/*.test.mjs`, 34 cases,
+  0 failed, exit 0. Nothing skipped, nothing excluded. This was the only command
+  on the list, and no other suite was run.
+
+### Criterion 1 — opening a session lands on the timeline, technical views subordinate
+
+Met in the code. `public/app.js` starts with `tab: null` (line 23), resets
+`state.tab = null` in `selectSession` (line 913), and `renderDetail` emits
+`renderTimeline(buildLanes({ session, content: state.content }))` (line 165)
+*above* `renderDetailViews` (line 167) and the `#tab-body` container (line 169),
+so a freshly opened session shows the timeline and no technical view. All six
+previous views stay in the nav (`DETAIL_VIEWS` in `public/timeline.js`), and
+clicking the open one closes it back to the timeline alone (line 973). The
+timeline is never nested inside a view, so the subordination runs the right way.
+`/api/content` is fetched on every refresh (`loadTimeline`, line 824) and its
+failure costs the lanes, not the page.
+
+See Finding 1 for the test gap on this criterion.
+
+### Criterion 2 — one lane for the main session, one per subagent, spanning its lifetime
+
+Met, and covered. `buildLanes` gives the main session its own lane from
+`session.firstSeenMs`/`lastSeenMs`, widened by main records only, and one lane
+per subagent group with `startMs`/`endMs` from that group's first and last
+content record. Records with no usable time are dropped before anything is
+derived, lane order is sorted rather than API-order dependent, and
+`laneGeometry` clamps into `[0, 100]` with a `Math.max(1, span)` guard, so a
+zero-length window paints no `NaN%`. Cases 21, 22, 23, 24, 25, 26, 27, 28 and 29
+would each fail if that broke.
+
+The lane's extent is the first-to-last *content record* of that agent, not a
+span's real start and end; an agent that emitted a single API request paints the
+0.6 % minimum bar rather than its true duration. That is an approximation, not a
+criterion violation — the vertical slice still answers "which agents are
+running" wherever an agent has more than one record.
+
+### Criterion 3 — two concurrent subagents of one type get two lanes
+
+Met, and covered. The lane key is `agent:<spanId>:<agent>`, so two
+`general-purpose` instances on `sp-a` and `sp-b` stay apart, and the `#1`/`#2`
+suffix fires only where labels actually collide. Cases 31, 32, 33 and 34 pin
+both the model and the rendered markup.
+
+### Criterion 4 — the UI advises no flag `argus env` now sets
+
+Met, and covered. `OTEL_LOG_TOOL_DETAILS` is gone from the tasks placeholder and
+`CLAUDE_CODE_ENHANCED_TELEMETRY_BETA` from the traces placeholder, the setup
+paragraph and `index.html`. Case 8 walks every file under `public/` against the
+17 names `otelEnvFor` sets and case 9 keeps `OTEL_RESOURCE_ATTRIBUTES` and
+`CLAUDE_CODE_OTEL_DIAG_STDERR` — which `argus env` does not set — from being
+deleted as collateral. I checked the list in case 8 against
+`tools/argus/src/claude.mjs:310` `otelEnvFor`: every flag it sets is on the list
+except `UROBOROS_OBS_URL`/`UROBOROS_OBS_TOKEN`, and no file under `public/`
+names either of those, so the gap is inert.
+
+### Finding 1 — criterion 1's landing behaviour has no test that fails when it breaks
+
+The only test touching the landing is case 7 in `test/page.test.mjs`, and it
+asserts that `public/app.js` contains an *import* of `./timeline.js` and that
+`index.html` loads `app.js` as a module. Nothing asserts that the page starts on
+the timeline or that the timeline is rendered at all; `app.js` reads `location`
+at module scope, so no test imports it, and its behaviour is unpinned.
+
+Reproduction, verified in a throwaway `git worktree` at HEAD (removed
+afterwards; the checkout was not touched): in `public/app.js` change line 23
+`tab: null,` back to `tab: 'overview',` and delete line 165
+`${renderTimeline(buildLanes({ session, content: state.content }))}` from
+`renderDetail`, leaving the import untouched. The UI then opens every session on
+the Overview view and draws no timeline anywhere — criterion 1 fully undone —
+and `npm --prefix tools/argus-ui test` still reports 34 passed, 0 failed,
+exit 0.
+
+The gap is closable with the technique the file already uses: a source-level
+assertion over `app.js` that the initial state opens no technical view, that
+selecting a session resets to that state, and that `renderDetail` calls
+`renderTimeline` above `renderDetailViews`. Naming the criterion, not the test:
+"opening a session lands on the timeline" must have a case that fails when the
+landing is removed.
+
+### Nothing in the diff that no criterion asked for
+
+`public/format.js` is the eight formatters lifted out of `app.js` unchanged, so
+`timeline.js` can escape without a second copy of `esc` — motivated by criterion
+1's rendering, not new behaviour. The click-to-close on an open view, the CSS
+block for the lanes and the README's new Timeline bullet all serve criteria 1
+and 2. The reworded tasks and traces placeholders are criterion 4's removals.
+No production behaviour beyond the four criteria appears in the diff, and
+nothing from the deliberately excluded increments (activity, context curve,
+scrubbing, live mode, per-lane detail) was built ahead of time.
+
+### Beyond the criteria (blast radius)
+
+- **The record shape the lanes consume matches the API.**
+  `contentMetaOf` (`tools/argus/src/claude.mjs:210`) emits `timeMs`, `spanId`,
+  `agent` and `isSubagent`, which is exactly what `buildLanes` reads, and
+  `/api/content` accepts `limit` up to 2000, the value `loadTimeline` asks for.
+  No mismatch between the fabricated test records and the served ones.
+- **Serving the two new modules works.** `src/server.mjs` maps `.js` to
+  `text/javascript; charset=utf-8` and serves any file under `public/`, so the
+  module graph `index.html → app.js → timeline.js → format.js` resolves with no
+  allowlist to update. The independence test was extended to cover both new
+  files, so the "imports nothing outside the project" rule still holds over them.
+- **`app.js` uses only what it imports.** It imports all eight exports of
+  `format.js` and the three of `timeline.js`; the removed `TABS` constant has no
+  remaining reference, and the periodic repaint at line 1070 is guarded by
+  `state.tab === 'overview'`, which is simply false in the landing state.
+- **Empty `spanId` merges same-type lanes — reported, not raised as a finding.**
+  `contentMetaOf` normalises a missing span id to `''`, and `buildLanes` would
+  then key two concurrent `general-purpose` instances as one
+  `agent::general-purpose` lane spanning both — the merge criterion 3 forbids.
+  Whether records ever arrive without a span id (for example from a block
+  printed with `argus env --traces false`) is CLI behaviour I could not verify
+  here, so this is an observation rather than a finding; the issue's own
+  assumptions allow lanes to show what is attributable.
+- **No stale document found.** `tools/argus/README.md` and `skills/argus/SKILL.md`
+  describe the HTTP API and the signals, not which view a session opens on;
+  `tools/argus-ui/README.md` was updated in this diff. `tools/argus-ui/CLAUDE.md`
+  says "one test file per `src/` module" — the two new files test `public/`
+  modules, which the sentence does not forbid.
+- **A long session truncates the oldest lanes.** `/api/content?limit=2000`
+  keeps the newest records, so a subagent that ran before the cutoff draws no
+  lane at all. The store evicts old content by char budget anyway, so this is
+  increment 1's window, not a regression introduced here.
