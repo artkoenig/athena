@@ -2,7 +2,7 @@
 
 One skill is one directory holding a `SKILL.md`. Discovery finds it by that
 file alone: a directory here without one is in the tree and unreachable from a
-session, which the self-check reports as a defect.
+session, and nothing announces it — the session simply never sees the skill.
 
 A skill only one subagent ever runs does not live here. It belongs to that
 agent, under `agents/<agent>/skills/<skill>/SKILL.md`, and reaches it through

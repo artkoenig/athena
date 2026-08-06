@@ -8,8 +8,8 @@
 just the name: a run reviews and corrects its own work, and what a run learns
 about the workflow is written back into the workflow. It ships as a Claude Code
 plugin and assumes a modern Anthropic agent — at least Opus 5. The rules are one
-page, [`rulebook.md`](rulebook.md), delivered to every session by the plugin's
-SessionStart hook; this one won't repeat it.
+page, [`rulebook.md`](rulebook.md), which the session running the work reads;
+this one won't repeat it.
 
 ## Context is the scarce resource
 
@@ -95,23 +95,23 @@ claude plugin marketplace add artkoenig/uroboros
 claude plugin install uroboros@uroboros
 ```
 
-A session then gets the rulebook of the current `main`, the subagents, the
-skills, a self-check saying what of that is actually reachable, and a `pre-push`
-guard that refuses a direct push to the default branch — unless the project
-manages its own git hooks, which uroboros leaves alone and reports. Updates come
-with the next session, not with a re-installation.
+A session then gets the subagents, the skills and the `uroboros:loop` workflow
+of the current `main`. Updates come with the next session, not with a
+re-installation. The plugin registers no hook and touches nothing in the
+project it is installed in — the rulebook is a page, and the session reads it.
 
 ## What reaches whom
 
 Two things carry uroboros into a session, and only one of them reaches an
-agent. The hook hands the rulebook to the session and stops there: no subagent
-inherits it. An agent is assembled from its own page and the shared brief
+agent. The rulebook is read by the session and stops there: it is not a memory
+filename, so nothing loads it as project memory and no subagent inherits it. An
+agent is assembled from its own page and the shared brief
 [`agent-brief`](skills/agent-brief/), both preloaded at dispatch, both shipped
 with the plugin.
 
 ```mermaid
 flowchart LR
-    HOOK["SessionStart hook"] -->|"rulebook.md, verbatim"| S["The session"]
+    RB["rulebook.md"] -->|"read at the start of the work"| S["The session"]
     S -->|"hands it the issue directory"| WF["uroboros:loop"]
     WF -->|"dispatches"| A["An agent"]
     PAGE["its page in agents/"] -->|"its role"| A
@@ -130,14 +130,14 @@ So the two cases differ in one thing only, and it is not uroboros':
 flowchart TB
     subgraph HERE["in this repository"]
         direction LR
-        H1["rulebook.md"] -->|"hook"| HS["session"]
+        H1["rulebook.md"] -->|"read"| HS["session"]
         H2["page + agent-brief"] --> HA["agent"]
         H3["this checkout's own rules"] -. "on a read of the files they govern" .-> HS
         H3 -. "same, on an agent's own read" .-> HA
     end
     subgraph THERE["in a project that installed uroboros"]
         direction LR
-        T1["rulebook.md"] -->|"hook"| TS["session"]
+        T1["rulebook.md"] -->|"read"| TS["session"]
         T2["page + agent-brief"] --> TA["agent"]
         T3["the project's own CLAUDE.md"] --> TS
         T3 -->|"inherited"| TA
@@ -164,8 +164,8 @@ claude --worktree feature-auth   # its own checkout under .claude/worktrees/
 ```
 
 `worktree.baseRef` is pinned to `"fresh"`, so a new worktree branches from the
-default branch rather than from unpushed work, and the push guard holds inside
-it. Gitignored files a run needs are listed in
+default branch rather than from unpushed work. Gitignored files a run needs are
+listed in
 [`.worktreeinclude`](.worktreeinclude) and copied into every new worktree.
 
 ## tools/
@@ -188,9 +188,8 @@ procedure. It all runs on your own machine — no account, no third-party servic
 
 ## Tests
 
-`bash test.sh` — six suites, one command: the repository's own rules, the plugin
-manifests and the session-start hook, parallel runs in worktrees, and the three
-tools.
+`bash test.sh` — five suites, one command: the repository's own rules, what a
+parallel run in a worktree needs, and the three tools.
 
 ## Licence
 

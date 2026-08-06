@@ -20,9 +20,6 @@ run() {
 run "the repository itself" \
   bash "$root/test-repo.sh"
 
-run "the plugin: manifests, session-start hook, push guard" \
-  bash "$root/test-plugin.sh"
-
 run "parallel runs: worktrees" \
   bash "$root/test-worktree.sh"
 
