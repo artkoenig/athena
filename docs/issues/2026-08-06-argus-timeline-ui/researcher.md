@@ -3577,3 +3577,378 @@ still matches the case at line 349, `independence.test.mjs` already covers
 `public/context.js` and the new function imports nothing, and
 `renderContextPanel`, `contextBlocks`, `renderLanePanel`, `scrubTo`, `refresh`
 and the delegated listeners are untouched.
+
+## Increment 5 — Round 2
+
+The reviewer raised two findings, both of the same kind and both measured: the
+production code still satisfies the criterion, but the wiring between the
+cursor and the panel is checked only by grepping `loadLaneContext` for
+identifiers, and a grep cannot see which value an identifier becomes. Deleting
+the moment from the request (M1) and writing `item: null` instead of the fetched
+record (M2) each leave the suite at 161 pass, exit 0 — with either one in place
+the panel shows the head's context at every cursor position, or no context at
+all.
+
+The fix is not more grepping. The two hops the findings name move into
+`context.js`, where `node --test` can execute them with values: one `async`
+function that builds the request and fetches it through an **injected** api
+function, and one pure function that turns what the page holds into what the
+panel is drawn from. `loadLaneContext` and `renderLanePanel` keep only what
+genuinely needs the page — reading `state`, the staleness guards, the DOM write
+— and the source assertions that remain over them pin exactly one thing each:
+that the page hands its own state to those functions and holds what they
+return.
+
+Nothing else in this section is scope. The reviewer's "beyond the criteria"
+notes (the lane `<button>`, the third argument of `renderTimeline`, the fourth
+module under `public/`, the extra request per refresh) are observations he
+closed himself; no case below may pin behaviour for them. Increment 6 — the
+tools an agent used up to the moment — is not touched.
+
+### The findings, restated as the defects to remove
+
+1. **`app.js:924-929` — "as of that moment" is unpinned.** Nothing asserts that
+   a request carries an `at` parameter at all. With the line
+   `at: resolveCursor(state.cursor, view).timeMs,` deleted, the page asks
+   `GET /api/content/at?session=…&main=1`, the collector defaults the moment to
+   `Date.now()` (`tools/argus/src/server.mjs:279`), and every cursor position
+   shows the head's context. 161 pass.
+2. **`app.js:935` and `app.js:942-956` — "shows that agent's context" is
+   unpinned.** Nothing asserts that the fetched record reaches the panel, on
+   either hop: not from the awaited answer into `state.laneContext`, and not
+   from `state.laneContext` into `renderContextPanel`. With
+   `state.laneContext = { key, item: null };` every lane at every moment renders
+   the empty panel. 161 pass.
+
+### Implementation plan
+
+Two production files change: `tools/argus-ui/public/context.js` gains three
+functions (two exported), and `tools/argus-ui/public/app.js` delegates to them.
+No file in `tools/argus` changes, no markup, no CSS, no documentation: nothing a
+reader of the page can see moves.
+
+**A. `tools/argus-ui/public/context.js` — the data path becomes executable.**
+
+Add a second import under the existing one at line 16:
+
+```js
+import { resolveCursor } from './timeline.js';
+```
+
+`timeline.js` imports only `format.js`, so this adds no cycle, and the
+specifier resolves inside the project, so `independence.test.mjs` stays green.
+
+Extend the module header (lines 1-14) so it still describes the whole module:
+it holds everything the panel behind one lane needs — which record it asks for,
+the one call that goes and gets it through an api function the caller injects,
+and how the answer renders. Keep the "no `document`, no `fetch`, no `location`"
+sentence: it is still true, and it is the reason `node --test` can import this.
+
+Add, after `laneContentQuery` (which stays exactly as it is, export included):
+
+```js
+/**
+ * The whole request behind one lane's context: which session, which moment,
+ * which lane.
+ *
+ * The moment is resolved here and nowhere else, so "the nearest request at or
+ * before the cursor" is one decision in one place: a live cursor asks for the
+ * head of the window, a parked one for its own moment, and neither can ask for
+ * a moment outside the recorded window. A lane the filter cannot identify gets
+ * no request at all — an unfiltered one would answer with the main session's
+ * context under an agent's lane.
+ *
+ * @param {{ session: string|null, key: string|null, view: object|null, cursor: object|null }} input
+ * @returns {{ session: string, at: number }|null} plus exactly one of main/span/agent
+ */
+function laneContentRequest({ session = null, key = null, view = null, cursor = null } = {}) {
+  if (!session || !key) return null;
+  const filter = laneContentQuery((view?.lanes ?? []).find((lane) => lane.key === key));
+  if (!filter) return null;
+  return { session, at: resolveCursor(cursor, view).timeMs, ...filter };
+}
+
+/**
+ * Fetch the record one lane's context is drawn from, through the api function
+ * the caller hands in — this module reaches the network through nothing of its
+ * own.
+ *
+ * The rejection is swallowed here: a failed fetch costs the panel and not the
+ * page that is refreshing it. The record comes back tagged with the lane it was
+ * fetched for, which is what lets the caller drop an answer for a lane the
+ * reader has already left.
+ *
+ * @param {(path: string, params: object) => Promise<{ item?: object|null }>} api
+ * @param {{ session: string|null, key: string|null, view: object|null, cursor: object|null }} input
+ * @returns {Promise<{ key: string|null, item: object|null }>}
+ */
+export async function fetchLaneContext(api, { session = null, key = null, view = null, cursor = null } = {}) {
+  const request = laneContentRequest({ session, key, view, cursor });
+  const answer = request ? await api('/api/content/at', request).catch(() => null) : null;
+  return { key, item: answer?.item ?? null };
+}
+
+/**
+ * What the panel is drawn from, out of what the page holds.
+ *
+ * The held answer belongs to the lane it was fetched for; anything else means a
+ * fetch is still in flight, which is not the same answer as "there is nothing
+ * here". The two keys are the two fields `renderContextPanel` reads, so the
+ * result spreads straight into its input.
+ *
+ * @param {string|null} key the lane the reader has open
+ * @param {{ key: string|null, item: object|null }|null} held
+ * @returns {{ item: object|null, pending: boolean }}
+ */
+export function laneContextInput(key, held) {
+  const fresh = held?.key === key;
+  return { item: fresh ? (held.item ?? null) : null, pending: !fresh };
+}
+```
+
+`laneContentRequest` is **not** exported: every one of its decisions is observed
+through `fetchLaneContext`, and an export nothing outside the module calls is
+one more name for a reader to place.
+
+**B. `tools/argus-ui/public/app.js` — the page hands its state over and holds
+the answer.**
+
+- Line 11 becomes
+  `import { fetchLaneContext, laneContextInput, renderContextPanel } from './context.js';`.
+  `laneContentQuery` leaves this import: the page no longer calls it.
+- `resolveCursor` stays in the `./timeline.js` import — line 1088 still uses it.
+- `loadLaneContext` (lines 915-936) keeps its name, its signature, its doc
+  comment, its early return through `clearLaneContext()` and both staleness
+  guards. Its middle becomes two lines:
+
+```js
+  const held = await fetchLaneContext(api, { session: id, key, view: laneView(), cursor: state.cursor });
+  // The selection can move while this is in flight — a click, a scrub or a
+  // session change. An answer for a lane the reader has left must never be
+  // painted under the lane they are on now.
+  if (state.selectedSessionId !== id || state.selectedLane !== key) return;
+  state.laneContext = held;
+```
+
+  The `const view = laneView();`, `const filter = …`, `const answer = …` lines
+  and the `at:`/`...filter` object all go away with it.
+- `renderLanePanel` (lines 942-956) keeps the container lookup, the `if
+  (!container) return;`, the `key` and `lane` lines. The `const held = …` line
+  and the two-line comment above it go, and the call becomes:
+
+```js
+  container.innerHTML = renderContextPanel({
+    lane,
+    ...laneContextInput(key, state.laneContext),
+    expanded: state.expanded,
+  });
+```
+
+  Delete that comment rather than keep it: its text now sits on
+  `laneContextInput`, and two wordings of one rule disagree after the first
+  edit.
+- `clearLaneContext` (line 905) and `selectSession`'s reset (line 1053) keep
+  their `{ key: null, item: null }` literals untouched.
+
+### Decisions, including the ones rejected
+
+1. **An injected `api` rather than three more pure functions plus three more
+   greps.** The finding is that a grep cannot see a value; the answer is to put
+   the hop where a test can run it. `fetchLaneContext(api, …)` executes the real
+   path — the URL, the parameters, the swallowed rejection, the record that
+   comes back — against a fake function the test writes in four lines. Rejected:
+   a pure `laneContentRequest`/`heldLaneContext` pair left in `app.js`'s hands,
+   which pins the values but leaves "does the request actually go on the wire,
+   with that object" and "is the awaited answer what gets written" as two more
+   source assertions of exactly the kind that let M1 and M2 through.
+2. **The injection does not break the module's contract.** `context.js` still
+   names no `fetch`, no `document`, no `location`; it calls what it is handed.
+   That is what keeps it importable under `node --test` and keeps the project's
+   no-DOM test convention intact. Rejected: importing `app.js` in a test behind
+   a fake `window`/`document` — `app.js:24` reads `location.search` at module
+   top level, so the import throws before any test runs, and building a DOM fake
+   large enough to change that means a dependency, which this project forbids
+   (`tools/argus-ui/CLAUDE.md`, "Zero runtime dependencies").
+3. **The moment is resolved inside `laneContentRequest`, not passed in.** If the
+   caller passed `at`, deleting it at the call site would leave every unit case
+   green and only a grep between the criterion and the head's context — M1 all
+   over again. Resolving it inside means one deepEqual over the request pins the
+   moment by value. The cost is one intra-project import, `context.js` →
+   `timeline.js`; the direction is right (the panel's request is expressed in
+   the timeline's cursor and lanes) and there is no cycle.
+4. **`laneContentQuery` stays exported and unchanged although `app.js` no
+   longer imports it.** Its four cases pin the lane→filter mapping at the
+   finest grain there is — "never the main session's traffic under an agent's
+   lane" — and the export is what lets them. Rejected: unexporting it and
+   deleting those cases (throws away round 1's answer to a closed finding), and
+   inlining it into `laneContentRequest` (one function with two jobs).
+5. **`laneContextInput` returns `{ item, pending }`, the exact two keys
+   `renderContextPanel` reads, so it spreads.** A test then spreads the same
+   result into the same renderer, which is what pins the key *names* — a
+   deepEqual alone would happily accept `{ record, pending }` and a silently
+   empty panel. Rejected: passing the held object straight to
+   `renderContextPanel` and teaching it about `key` (it would then need the
+   selected lane too, and 42 existing cases pass `item`/`pending`).
+6. **Nothing is renamed and nothing else moves.** `loadLaneContext`,
+   `renderLanePanel`, `scheduleLaneContext`, `clearLaneContext`, `laneView` and
+   every listener keep their names and their order, so every increment-5 case in
+   `page.test.mjs` other than the two named below stays as it is.
+
+### Module map
+
+| Path | What it holds | Entry points |
+| --- | --- | --- |
+| `tools/argus-ui/public/context.js` | header 1-14, `import … format.js` 16, `PREVIEW_CHARS` 19, `contextBlocks` 65, `laneContentQuery` 158, `renderContextPanel` 175 | gains `import { resolveCursor } from './timeline.js'`, the private `laneContentRequest`, and the exports `fetchLaneContext` and `laneContextInput` |
+| `tools/argus-ui/public/app.js` | `api()` 64 (drops `null`/`undefined`/`''` params), `laneView` 900, `clearLaneContext` 905, `loadLaneContext` 915-936, `renderLanePanel` 942-956, `scheduleLaneContext` 960, `refresh`'s refetch 1013, `selectSession`'s reset 1053, `resolveCursor` still used at 1088 | line 11 import, the middle of `loadLaneContext`, the `renderContextPanel(` call in `renderLanePanel` |
+| `tools/argus-ui/public/timeline.js` | `buildLanes` 69 (lane = `{ key, kind, agent, spanId, label, startMs, endMs, records }`; view = `{ startMs, endMs, durationMs, lanes }`), `liveCursor` 320, `scrubCursor` 331, `resolveCursor` 346 (live → `endMs`, parked → clamped into the window) — **read only, unchanged** | `resolveCursor` is what `context.js` now imports |
+| `tools/argus-ui/test/context.test.mjs` | 33 cases; factories `requestBody` 10, `item` 36, `lane` 48; the `laneContentQuery` block 430-458; file ends at 459 | gains two factories and the twelve cases below |
+| `tools/argus-ui/test/page.test.mjs` | helpers `functionSource` 20, `detailListener` 29; increment 5's block 346-518; the cases to rewrite at 349 and 409 | two rewrites, two new cases |
+| `tools/argus-ui/test/independence.test.mjs` | the project-wide import rule; already lists `public/context.js`, allows any specifier resolving inside the project — **unchanged** | — |
+| `tools/argus/src/server.mjs` | `/api/content/at`, `atMs: intParam(searchParams, 'at', Date.now())` at 279 — **unchanged, and its suite is not run this round** | — |
+
+### Environment
+
+Node ≥ 20.11, already installed. Zero runtime dependencies, no install step, no
+build step, and **there is no linter and no formatter in this repository** — no
+`.prettierrc`, no `.editorconfig`, no eslint config anywhere.
+
+The one command this round's test plan asks anyone to run, from the repository
+root:
+
+```
+npm --prefix tools/argus-ui test
+```
+
+While working on a single file, `node --test tools/argus-ui/test/context.test.mjs`
+and `node --test tools/argus-ui/test/page.test.mjs` run just that file; neither
+is part of the closed list below.
+
+### Test Plan
+
+Tests are needed: both findings are missing assertions, and both are the reason
+the production change above exists. Everything is `node:test` +
+`node:assert/strict` in `tools/argus-ui/test/`, in the style already in those
+files — one `test('a sentence stating the fact', () => {…})` per fact, factories
+at the top of the file, a message on every non-obvious assert, nothing mocked
+beyond the one four-line api fake below.
+
+This section's list is the whole of what is asked for this round. Earlier
+sections' cases are already in the files and stay as they are except the two
+`page.test.mjs` cases a rewrite below names.
+
+#### New factories in `tools/argus-ui/test/context.test.mjs`
+
+Below the existing `lane` factory (line 48), and used by the cases that follow:
+
+```js
+const agentLane = (over = {}) =>
+  lane({ key: 'agent:sp-b:probe', kind: 'agent', label: 'probe', spanId: 'sp-b', agent: 'probe', ...over });
+
+const view = (over = {}) => ({ startMs: 1000, endMs: 5000, durationMs: 4000, lanes: [lane(), agentLane()], ...over });
+
+/** An api function that records what it was asked for and answers what it was given. */
+const recorder = (answer = { item: item() }) => {
+  const calls = [];
+  return {
+    calls,
+    api: async (path, params) => {
+      calls.push({ path, params });
+      return typeof answer === 'function' ? answer() : answer;
+    },
+  };
+};
+```
+
+The view is a literal rather than `buildLanes(...)` output: the two fields
+`resolveCursor` reads and the four a lane's filter reads are the whole input,
+and spelling them out is what makes each case readable. `buildLanes`' own shape
+is pinned by `timeline.test.mjs`, and the `lane` factory already models it.
+
+#### New cases in `tools/argus-ui/test/context.test.mjs`
+
+Appended after the `laneContentQuery` block, under a comment
+`// fetchLaneContext(api, …) — the request that goes on the wire, and the record
+that comes back.` The file's import at line 4 gains `fetchLaneContext` and
+`laneContextInput`. Every case is `async` where it awaits.
+
+| # | Case | Input / state | Expected |
+| --- | --- | --- | --- |
+| F1 | the request carries the cursor's own moment, for that lane only | `const { api, calls } = recorder();` then `await fetchLaneContext(api, { session: 's1', key: 'main', view: view(), cursor: { live: false, timeMs: 3000 } })` | `calls.length === 1`; `calls[0].path === '/api/content/at'`; `assert.deepEqual(calls[0].params, { session: 's1', at: 3000, main: '1' })` — exactly those three keys, so a request with no `at` (which the collector answers with the head, at every cursor position) fails here |
+| F2 | a live cursor asks for the head of the recorded window | same, `cursor: { live: true, timeMs: null }` | `calls[0].params.at === 5000`, the view's `endMs` |
+| F3 | a moment outside the window is clamped to it, never sent raw | `cursor: { live: false, timeMs: 9_000_000 }`, then a second call with `cursor: { live: false, timeMs: 0 }` | `at === 5000` and `at === 1000` — the moment goes through `resolveCursor`, not straight from `cursor.timeMs` |
+| F4 | an agent lane asks with its own span, at the same moment | `key: 'agent:sp-b:probe'`, `cursor: { live: false, timeMs: 3000 }` | `assert.deepEqual(calls[0].params, { session: 's1', at: 3000, span: 'sp-b' })` — no `main` key, and the moment travels with the filter |
+| F5 | the fetched record comes back under the lane it was fetched for | `const rec = item(); const { api } = recorder({ item: rec });` then `fetchLaneContext(api, { session: 's1', key: 'main', view: view(), cursor: { live: true, timeMs: null } })` | `assert.deepEqual(result, { key: 'main', item: rec })` **and** `assert.equal(result.item, rec, 'the record itself, not a copy and not null')` — this is the case a `{ key, item: null }` write fails |
+| F6 | a lane the filter cannot identify fires no request at all | `view({ lanes: [lane(), lane({ key: 'agent::', kind: 'agent', label: 'subagent', spanId: null, agent: null })] })` with `key: 'agent::'`; then a second call with `key: 'agent:gone:x'`, which no lane in the view carries | `calls.length === 0` both times, and the result is `{ key: <that key>, item: null }` — an unfiltered request would answer with the main session's context under an agent's lane |
+| F7 | with no lane open, or no session, nothing is asked for | `key: null` with a session; then `session: null` with `key: 'main'`; then `fetchLaneContext(api)` with no input object at all | `calls.length === 0` in all three; results `{ key: null, item: null }`, `{ key: 'main', item: null }`, `{ key: null, item: null }` |
+| F8 | a failed fetch costs the panel and not the page | `const api = async () => { throw new Error('offline'); }` | the promise resolves rather than rejects, to `{ key: 'main', item: null }` — use `await fetchLaneContext(...)` directly, so a rejection fails the case as an error |
+| F9 | an answer with no record is held as no record | api resolving `{}`, then `null`, then `{ item: null }` | `item === null` each time, and `key` still the lane's |
+| F10 | the held record for the open lane is what the panel is drawn from | `const rec = item(); laneContextInput('main', { key: 'main', item: rec })` | `assert.deepEqual(out, { item: rec, pending: false })` and `assert.equal(out.item, rec)` |
+| F11 | an answer held for another lane means a fetch in flight, not an empty context | `laneContextInput('agent:sp-b:probe', { key: 'main', item: item() })`; `laneContextInput('main', { key: null, item: null })`; `laneContextInput('main', null)` | `{ item: null, pending: true }` each time — saying "no API request here" while a fetch is in flight is the panel lying |
+| F12 | what the page holds spreads straight into the panel, and the record's own content is what it shows | `const rec = item();` then `renderContextPanel({ lane: lane(), ...laneContextInput('main', { key: 'main', item: rec }), expanded: [] })`, and a second render with the held key `'agent:sp-b:probe'` | the first matches `/data-state="ready"/` and contains `You are a Claude agent.` and `the answer` (the fixture's own system prompt and assistant text); the second matches `/data-state="pending"/`. This is what pins the key *names*: a result carrying the record under any other field renders the pending panel and fails here |
+
+#### Rewritten and new cases in `tools/argus-ui/test/page.test.mjs`
+
+| # | Case | Input / state | Expected |
+| --- | --- | --- | --- |
+| P1 | **replaces** the case at line 349, `'app.js takes the context panel from its module'`, keeping that name | the whole `app.js` source | three assertions of the form `/import\s*\{[^}]*\bNAME\b[^}]*\}\s*from\s*['"]\.\/context\.js['"]/` for `renderContextPanel`, `fetchLaneContext` and `laneContextInput`. The `laneContentQuery` assertion is **deleted**: the page no longer calls it, and the mapping stays pinned by value in `context.test.mjs` |
+| P2 | **replaces** the case at line 409, `'the panel asks the collector for the nearest request at the cursor\'s moment, for that lane only'`, keeping that name | `functionSource(appJs, 'loadLaneContext')`, then the statement slice from `indexOf('fetchLaneContext(')` to the next `';'` | the slice exists, and matches `/\bapi\b/`, `/session:\s*id\b/`, `/\bkey\b/`, `/view:\s*laneView\(\)/` and `/cursor:\s*state\.cursor\b/` — the page's own api, session, lane, lane view and cursor all reach the function whose request F1-F4 pin by value. The old `/\/api\/content\/at/` and `/resolveCursor\(/` assertions are **deleted**: both now live in `context.js` and are pinned by F1 |
+| P3 | **new**, `'the fetched context is what the panel state holds'` | `functionSource(appJs, 'loadLaneContext')` | capture `const name = loadLaneContext.match(/const\s+(\w+)\s*=\s*await\s+fetchLaneContext\(/)`, assert it matched; slice from `indexOf('state.laneContext =')` to the next `';'` and assert it matches `new RegExp('state\\.laneContext\\s*=\\s*' + name[1] + '\\b')`. A literal written there instead — `{ key, item: null }` — shows a different context than the one fetched, and fails. No variable name is pinned: the case reads the name off the await |
+| P4 | **new**, `'the panel is drawn from the answer held for the lane it belongs to'` | `functionSource(appJs, 'renderLanePanel')`, sliced from `indexOf('renderContextPanel(')` to the next `';'` | matches `/\.\.\.laneContextInput\(\s*key\s*,\s*state\.laneContext\s*\)/` and `/expanded:\s*state\.expanded/` — the held answer is the panel's input, so the second hop cannot be cut either |
+
+Both slices in P2-P4 run to the next `;`, so a line-wrapped call passes just as
+a one-line call does; no statement involved contains a `;` of its own.
+
+Every other case in `page.test.mjs` stays exactly as it is, the staleness-guard
+case at line 421 included: `loadLaneContext` still awaits, still guards on
+`state.selectedLane !== key` and `state.selectedSessionId !== id` after that
+await, and still writes `state.laneContext =` after both.
+
+#### What is deliberately left untested, and why
+
+- **That the browser's own `fetch` reaches the collector.** F1-F9 run against an
+  injected api function; the transport itself is `app.js`'s `api()`, unchanged
+  this round, and the route is covered by `tools/argus`' own suite.
+- **`laneContentRequest` directly.** It is not exported; every decision it makes
+  is observed through `fetchLaneContext` in F1-F7, which is the shape the page
+  actually calls.
+- **The click, the drag and the CSS in a real browser.** Unchanged in the code
+  this round.
+- **The reviewer's "beyond the criteria" observations** — the lane `<button>`,
+  `renderTimeline`'s third argument, the extra request per live refresh, the
+  expansion set collapsing when the record changes. None is a finding, and no
+  case may pin behaviour for them.
+- **Everything increment 6 owns** — the tools an agent used up to the moment.
+
+#### What counts as done
+
+```
+npm --prefix tools/argus-ui test
+```
+
+That one command, from the repository root, is the whole list. Only files under
+`tools/argus-ui` change, the run costs seconds and needs no install;
+`tools/argus`' suite and `./test.sh` stay off the list, as in every earlier
+round of this increment.
+
+#### What is already red
+
+I ran nothing this round — not the list, not a baseline. The reviewer's run
+already establishes that `HEAD` is green at 161 cases, and no run of mine would
+add a fact to that.
+
+From reading, exactly two cases are red **during** this round by design, and
+both are rewritten above rather than fixed anywhere else:
+
+- `page.test.mjs:349` goes red the moment `app.js` stops importing
+  `laneContentQuery`; P1 is its replacement.
+- `page.test.mjs:409` goes red the moment the request leaves `loadLaneContext`,
+  because `/api/content/at` and `resolveCursor(` move into `context.js` with it;
+  P2 is its replacement.
+
+Nothing else turns red: `fetchLaneContext` and `laneContextInput` are new
+exports no existing case names, `laneContentQuery`, `contextBlocks`,
+`renderContextPanel` and every fixture in `context.test.mjs` are untouched,
+`independence.test.mjs` already lists `public/context.js` and accepts a
+specifier that resolves inside the project, and `clearLaneContext`,
+`scheduleLaneContext`, `scrubTo`, `refresh`, `selectSession` and the delegated
+listeners keep every line the remaining cases read.
