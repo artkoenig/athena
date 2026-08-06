@@ -647,3 +647,120 @@ None. Nothing was blocked, nothing was ambiguous, and no question is open.
 3. **The test-author's handoff reported no gap in this round's plan**, and I
    found none either — the four cases match the plan's case table one to one,
    including the deliberate one-bucket band in case 75 rather than an equality.
+
+## Increment 4
+
+Built the Increment 4 plan of `researcher.md` — the timeline's time cursor and
+its live mode — in the four files the plan names, and nothing else. No test file
+was opened for editing, no collector file was touched, and no dependency was
+added.
+
+### What I changed
+
+**`tools/argus-ui/public/timeline.js`** — three new exported pure functions next
+to the existing ones, and a second parameter on the renderer:
+
+- `liveCursor()` returns a fresh `{ live: true, timeMs: null }` per call.
+- `scrubCursor(timeMs, window)` returns `{ live: false, timeMs }` with the time
+  clamped into `window.startMs`…`window.endMs`; a non-finite time falls back to
+  `endMs`. It is `live: false` even for a scrub landing exactly on the head.
+- `resolveCursor(cursor, window)` returns `{ live, timeMs, leftPct }` without
+  touching its argument. `cursor?.live !== false` is live, so `null`,
+  `undefined` and `{}` all resolve live; `leftPct` is `100` when the window has
+  zero length, which is what keeps a one-instant session out of a division by
+  zero.
+- `renderTimeline(view, cursor = null)` resolves the cursor exactly once and
+  renders two new blocks from that one result: a `.timeline-scrub` row (the
+  `#timeline-cursor-time` readout carrying `data-time`, the
+  `#timeline-scrub` range whose `min`/`max`/`value` are milliseconds, and the
+  `[data-cursor-live]` button carrying `aria-pressed`), and a
+  `.timeline-lanes` wrapper holding a `.timeline-cursor` overlay of two
+  `[data-cursor-pos]` spans above the unchanged lane rows.
+
+**`tools/argus-ui/public/app.js`** — `resolveCursor`, `scrubCursor` and
+`liveCursor` join the `./timeline.js` import list; `state.cursor: { live: true,
+timeMs: null }` sits next to `toolMarks`; `renderDetail` passes `state.cursor`
+as the renderer's second argument; `selectSession` resets
+`state.cursor = liveCursor()`; new top-level `paintCursor()` and
+`scrubTo(input)` write the position straight into the DOM rather than
+re-rendering; a module-level `scrubbing` flag is set by a `pointerdown`
+listener on `#detail` and cleared by `pointerup`/`pointercancel` on `window`;
+`scheduleRefresh` re-schedules itself instead of refreshing while `scrubbing`;
+the delegated `click` handler gains a `[data-cursor-live]` branch that writes a
+fresh live cursor and re-renders, and the delegated `input` handler gains a
+`#timeline-scrub` branch ahead of its `#event-search` early return.
+
+**`tools/argus-ui/public/styles.css`** — the plan's rules appended to the
+timeline block after `.lane-meta`: `.timeline-scrub`, `.scrub-time`, the range
+input, `.scrub-live` (with its `aria-pressed="true"` state), `.timeline-lanes`,
+`.timeline-cursor`, `.timeline-cursor-line` and `.timeline-ahead`. No new custom
+property and no new colour; the `calc()` insets read the `--label-w` /
+`--meta-w` the responsive block already overrides.
+
+**`tools/argus-ui/README.md`** — the **Timeline** bullet gains the time cursor,
+the live mode, and that scrubbing leaves it and the **Live** control returns to
+it.
+
+### Files changed
+
+- `tools/argus-ui/public/timeline.js`
+- `tools/argus-ui/public/app.js`
+- `tools/argus-ui/public/styles.css`
+- `tools/argus-ui/README.md`
+
+### The tests, run before anything was changed
+
+Both files were red for exactly the reason the test plan and the test-author's
+handoff predicted, and neither is mine to edit:
+
+- `node --test tools/argus-ui/test/timeline.test.mjs` — the file failed to load,
+  exit 1: `SyntaxError: The requested module '../public/timeline.js' does not
+  provide an export named 'liveCursor'`. That one failure stood for all of the
+  file's cases, the 18 new ones included.
+- `node --test tools/argus-ui/test/page.test.mjs` — 20 tests, 12 pass, 8 fail,
+  exit 1. The eight are cases 19–26 of the plan (the state literal's `cursor`,
+  `renderDetail`'s second argument, `selectSession`'s reset, `scrubTo`,
+  `paintCursor`, the live control in `wireEvents`, `scheduleRefresh`'s
+  `scrubbing` guard, and the three cursor imports).
+
+### Commands run after the change
+
+- `node --test tools/argus-ui/test/timeline.test.mjs` — 69 tests, 69 pass,
+  0 fail, exit 0.
+- `node --test tools/argus-ui/test/page.test.mjs` — 20 tests, 20 pass, 0 fail,
+  exit 0.
+- **`npm --prefix tools/argus-ui test`** — the whole list of what counts as
+  done: 103 tests, 103 pass, 0 fail, exit 0. Nothing skipped, nothing excluded.
+
+Not run, deliberately: `npm --prefix tools/argus test` and `./test.sh`. Neither
+is on this increment's list, nothing outside `tools/argus-ui` changed, and the
+closing increment owns the full-suite run. There is no linter and no formatter
+in this repository.
+
+### Problems hit
+
+None, and no question is blocking. Three notes for the reviewer:
+
+1. **The plan's markup is followed to the attribute, because the cases read it
+   by regex.** `id="timeline-cursor-time"` precedes `data-time=`,
+   `data-cursor-pos` precedes its `style=`, and `data-cursor-live` precedes
+   `aria-pressed=`; each element is emitted on one line so the `[^>]*` gaps in
+   `timeline.test.mjs` cannot straddle a `>`. Reordering those attributes is
+   correct code that turns cases 15–18 red, so it needs the test-author, not an
+   edit here.
+2. **The `esc()` around the numeric interpolations is the file's convention, not
+   a safety need** — `active.timeMs`, `window.startMs` and `active.live` are a
+   number and a boolean. I kept `esc()` for consistency with every other
+   interpolation in `renderTimeline`; the plan's own snippet writes the
+   percentages through `.toFixed(3)` and everything else through `esc`, which is
+   what I did.
+3. **`scheduleRefresh` re-schedules with the same delay while a drag is in
+   flight**, exactly as the plan's snippet has it, so a very long drag costs one
+   400 ms timer per 400 ms. That is the plan's accepted consequence ("the page
+   stops refreshing for the drag's duration"), and case 25 pins only that the
+   guard exists — nothing observes the deferral itself.
+
+Outside this increment's scope, noticed and left alone: the drag, the thumb
+alignment and the dimming are untestable in this project (no DOM harness, zero
+dependencies) and are the review's to judge on screen; nothing here anticipates
+increments 5 and 6, and no case pins them.

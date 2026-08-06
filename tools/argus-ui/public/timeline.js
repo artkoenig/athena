@@ -312,13 +312,64 @@ export function mergeToolMarks(marks, items) {
 }
 
 /**
+ * A cursor that follows the newest data. A fresh object every call: a shared
+ * constant would be mutable-by-reference from the page.
+ *
+ * @returns {{ live: boolean, timeMs: null }}
+ */
+export function liveCursor() {
+  return { live: true, timeMs: null };
+}
+
+/**
+ * The cursor a scrub produces: a moment inside the window, and out of live mode.
+ *
+ * Landing exactly on the head is still a scrub. Live is a *following* mode, and
+ * a moment a human parked on the current head must not silently start moving
+ * when the next record arrives; the Live control is the only way back.
+ */
+export function scrubCursor(timeMs, window) {
+  const startMs = window?.startMs ?? 0;
+  const endMs = Math.max(startMs, window?.endMs ?? startMs);
+  return { live: false, timeMs: clamp(Number.isFinite(timeMs) ? timeMs : endMs, startMs, endMs) };
+}
+
+/**
+ * Where the cursor sits in a window, leaving the cursor it was given untouched.
+ *
+ * `live === false` is the only thing that is not live, so `null`, `undefined`
+ * and `{}` all resolve live — which is what keeps `renderTimeline(view)`, the
+ * call shape of increments 2 and 3, working with no cursor at all.
+ *
+ * @returns {{ live: boolean, timeMs: number, leftPct: number }}
+ */
+export function resolveCursor(cursor, window) {
+  const startMs = window?.startMs ?? 0;
+  const endMs = Math.max(startMs, window?.endMs ?? startMs);
+  const live = cursor?.live !== false;
+  const timeMs = live
+    ? endMs
+    : clamp(Number.isFinite(cursor?.timeMs) ? cursor.timeMs : endMs, startMs, endMs);
+  const span = endMs - startMs;
+  // A one-instant session puts the cursor on the head rather than at 0, so both
+  // modes agree there and no division by zero can reach a style attribute.
+  const leftPct = span > 0 ? clamp(((timeMs - startMs) / span) * 100, 0, 100) : 100;
+  return { live, timeMs, leftPct };
+}
+
+/**
  * The timeline markup, from the result of `buildLanes` — or of `buildDensity`,
  * which only ever adds to it. The density is optional on purpose: a lane with
  * none renders as a bare bar rather than not at all.
  *
+ * The cursor is resolved exactly once here, and the thumb, the line and the
+ * readout all read that one result: two call sites computing a position
+ * independently is how a thumb and a line drift apart.
+ *
  * @param {{ startMs: number, endMs: number, lanes: object[] }} view
+ * @param {{ live: boolean, timeMs: number|null }|null} cursor
  */
-export function renderTimeline(view) {
+export function renderTimeline(view, cursor = null) {
   const lanes = view?.lanes ?? [];
   const window = { startMs: view?.startMs ?? 0, endMs: view?.endMs ?? 0 };
   const span = Math.max(0, window.endMs - window.startMs);
@@ -371,11 +422,26 @@ export function renderTimeline(view) {
     })
     .join('');
 
+  // The range's min/max *are* the window in milliseconds and its value is the
+  // cursor's own moment, so no fraction arithmetic sits between the control and
+  // the model — and the page can read the window back off the element.
+  const active = resolveCursor(cursor, window);
+  const left = `left:${active.leftPct.toFixed(3)}%`;
+  const scrub = `<div class="timeline-scrub">
+        <span class="scrub-time" id="timeline-cursor-time" data-time="${esc(active.timeMs)}">${esc(fmtClock(active.timeMs))}</span>
+        <input type="range" id="timeline-scrub" class="scrub-range" min="${esc(window.startMs)}" max="${esc(window.endMs)}" step="1" value="${esc(active.timeMs)}" aria-label="Time cursor">
+        <button type="button" class="ghost-button scrub-live" data-cursor-live aria-pressed="${esc(active.live)}">Live</button>
+      </div>`;
+
   return `<div class="panel timeline-panel">
     <div class="timeline">
       <div class="timeline-legend"><span data-kind="context">context size</span><span data-kind="request">API request</span><span data-kind="tool">tool call</span></div>
+      ${scrub}
       <div class="timeline-axis"><span></span><span class="timeline-ticks">${ticks}</span><span></span></div>
-      ${rows}
+      <div class="timeline-lanes">
+        <div class="timeline-cursor" aria-hidden="true"><span class="timeline-ahead" data-cursor-pos style="${left}"></span><span class="timeline-cursor-line" data-cursor-pos style="${left}"></span></div>
+        ${rows}
+      </div>
     </div>
   </div>`;
 }

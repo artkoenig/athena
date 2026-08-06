@@ -14,6 +14,9 @@ import {
   mergeToolMarks,
   renderTimeline,
   renderDetailViews,
+  resolveCursor,
+  scrubCursor,
+  liveCursor,
   TOOL_EVENT,
 } from './timeline.js';
 
@@ -34,6 +37,9 @@ const state = {
   // the page for two numbers and a span.
   toolMarks: [],
   toolSeq: 0,
+  // A session opens live: the cursor sits on the newest data and moves with it
+  // as more arrives. Scrubbing pins an absolute moment and leaves live mode.
+  cursor: { live: true, timeMs: null },
   trace: null,
   selectedTraceId: null,
   selectedSpanId: null,
@@ -179,6 +185,7 @@ function renderDetail() {
         content: state.content,
         tools: state.toolMarks,
       }),
+      state.cursor,
     )}
 
     ${renderDetailViews({ selected: state.tab, counts })}
@@ -951,6 +958,8 @@ function selectSession(id, { render = true } = {}) {
   state.content = [];
   state.toolMarks = [];
   state.toolSeq = 0;
+  // A new session never inherits a moment pinned in another one.
+  state.cursor = liveCursor();
   location.hash = `#/session/${encodeURIComponent(id)}`;
   if (render) refresh({ sessions: false }).then(renderSessionList);
 }
@@ -971,11 +980,50 @@ function copyFrom(id) {
   });
 }
 
+// True while a pointer is holding the scrub thumb. The pointer is often
+// released outside the slider, so the release is watched on the window.
+let scrubbing = false;
+
+/**
+ * The cursor's position, written straight into the DOM: a full re-render would
+ * replace the slider under the pointer and end the drag. The window is read off
+ * the control itself, and the position is resolved once so the line, the thumb
+ * and the readout cannot disagree.
+ */
+function paintCursor() {
+  const input = document.getElementById('timeline-scrub');
+  if (!input) return;
+  const active = resolveCursor(state.cursor, { startMs: Number(input.min), endMs: Number(input.max) });
+  for (const node of document.querySelectorAll('[data-cursor-pos]')) {
+    node.style.left = `${active.leftPct.toFixed(3)}%`;
+  }
+  input.value = String(active.timeMs);
+  const readout = document.getElementById('timeline-cursor-time');
+  if (readout) {
+    readout.textContent = fmtClock(active.timeMs);
+    readout.dataset.time = String(active.timeMs);
+  }
+  const control = document.querySelector('[data-cursor-live]');
+  if (control) control.setAttribute('aria-pressed', String(active.live));
+}
+
+/** A drag reads its window off the control it came from. */
+function scrubTo(input) {
+  state.cursor = scrubCursor(Number(input.value), { startMs: Number(input.min), endMs: Number(input.max) });
+  paintCursor();
+}
+
 let refreshTimer = null;
 function scheduleRefresh(delay = 400) {
   if (refreshTimer) return;
   refreshTimer = setTimeout(() => {
     refreshTimer = null;
+    // A re-render mid-drag replaces the slider under the pointer and the scrub
+    // dies with it, so a refresh waits for the pointer to be released.
+    if (scrubbing) {
+      scheduleRefresh(delay);
+      return;
+    }
     refresh().catch(() => setLive('offline', 'error'));
   }, delay);
 }
@@ -1004,6 +1052,13 @@ function wireEvents() {
     const copy = event.target.closest('[data-copy]');
     if (copy) {
       copyFrom(copy.dataset.copy);
+      return;
+    }
+    const live = event.target.closest('[data-cursor-live]');
+    if (live) {
+      // Returning to live is a full re-render, which is safe: no drag is in flight.
+      state.cursor = liveCursor();
+      renderDetail();
       return;
     }
     const tab = event.target.closest('[data-tab]');
@@ -1044,8 +1099,23 @@ function wireEvents() {
     }
   });
 
+  // A drag has to be known about before the next scheduled refresh fires.
+  document.getElementById('detail').addEventListener('pointerdown', (event) => {
+    if (event.target.id === 'timeline-scrub') scrubbing = true;
+  });
+  for (const name of ['pointerup', 'pointercancel']) {
+    window.addEventListener(name, () => {
+      scrubbing = false;
+    });
+  }
+
   let searchTimer = null;
   document.getElementById('detail').addEventListener('input', (event) => {
+    // Keyboard scrubbing (arrow keys on a range) arrives here too.
+    if (event.target.id === 'timeline-scrub') {
+      scrubTo(event.target);
+      return;
+    }
     if (event.target.id !== 'event-search') return;
     state.eventFilters.search = event.target.value;
     clearTimeout(searchTimer);

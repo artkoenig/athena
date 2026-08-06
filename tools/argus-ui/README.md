@@ -62,7 +62,9 @@ for an `HttpOnly; SameSite=Strict` cookie and drops it from the address bar.
 - **Timeline** — one lane for the main session and one per subagent, each
   spanning that agent's lifetime, marked where it made an API request or called
   a tool and shaded behind with the size of the context it was carrying; the
-  views below it are reachable from there.
+  views below it are reachable from there. A time cursor can be dragged to any
+  moment of the session; it starts in a live mode that follows the newest data,
+  which scrubbing leaves and the **Live** control returns to.
 - **Overview** — cost, tokens by type including cache hit rate, interactions,
   requests, tool calls, lines of code, commits, active time; tables per model
   and per tool.
