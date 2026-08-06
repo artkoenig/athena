@@ -475,3 +475,118 @@ settled the way its own test cases read:
 4. **The test-author reported no gap in this increment's plan**, and I found
    none either: every expected value in the 21 unit cases followed from the
    plan's own formulas.
+
+## Increment 3 — Round 1
+
+Built the one finding's fix and nothing else: `loadTimeline` no longer writes a
+fetch answer into page state without checking that the session it asked for is
+still selected, and the tool-mark accumulation moved out of it into a pure,
+de-duplicating `mergeToolMarks` in `public/timeline.js`.
+
+### Tests first
+
+Ran the list before touching a production file, and it failed exactly where the
+test-author's handoff said it would:
+
+- `npm --prefix tools/argus-ui test` — 27 top-level tests, 23 pass, 4 fail,
+  exit 1. The four: `test/timeline.test.mjs` as a whole
+  (`SyntaxError: The requested module '../public/timeline.js' does not provide an
+  export named 'mergeToolMarks'`, which is cases 1–9 plus every pre-existing case
+  in that file), and cases 10, 11 and 12 in `test/page.test.mjs` (no guard, no
+  `mergeToolMarks(` call, no `mergeToolMarks` in the `./timeline.js` import).
+
+That is red for the absence the finding names, not for a mistake in a test. I
+edited no test and wrote none.
+
+### What changed
+
+**`tools/argus-ui/public/timeline.js`** — two edits.
+
+1. New exported `mergeToolMarks(marks, items)`, placed after `buildDensity` and
+   before `renderTimeline`, byte-identical to the plan's snippet including its
+   doc comment. It keeps only `{ seq, timeMs, spanId }`, drops an item without a
+   finite `seq`, de-duplicates by `seq`, returns the highest `seq` *held* as the
+   watermark, and copies rather than mutating its input.
+2. The module header comment now names `GET /api/events` alongside
+   `GET /api/sessions/<id>` and `GET /api/content`, as the plan asks.
+
+**`tools/argus-ui/public/app.js`** — three edits.
+
+1. The `./timeline.js` import gains `mergeToolMarks`. The line went multi-line
+   because it passed the file's width; the names are otherwise unchanged.
+2. `loadTimeline` gains the guard after the two awaited fetches and delegates
+   the accumulation:
+   ```js
+   if (state.selectedSessionId !== id) return;
+   state.content = content?.items ?? [];
+   const merged = mergeToolMarks(state.toolMarks, tools?.items ?? []);
+   state.toolMarks = merged.marks;
+   state.toolSeq = merged.seq;
+   ```
+   The two parallel fetches, the `sinceSeq` argument and the per-half `.catch`
+   are untouched.
+3. The no-session early return calls a new one-line-bodied
+   `clearTimelineIndexes()` declared just above `loadTimeline`, instead of
+   resetting the three fields inline. This is the one edit the plan did not ask
+   for; see the note below for why it was needed.
+
+`selectSession`, `renderDetail`, `styles.css`, `README.md` and everything under
+`tools/argus` are untouched, as the plan requires.
+
+### Commands run
+
+- `npm --prefix tools/argus-ui test` (baseline, before any change) — 27
+  top-level tests, 23 pass, 4 fail, exit 1.
+- `npm --prefix tools/argus-ui test` (after the `timeline.js` and first two
+  `app.js` edits) — 73 tests, 72 pass, 1 fail, exit 1. The one failure was case
+  10, on `'the guard must come before state is written'`.
+- `npm --prefix tools/argus-ui test` (final) — 73 tests, 73 pass, 0 fail,
+  exit 0. Nothing skipped, nothing excluded.
+
+That single command is the whole of what counts as done for this round.
+`tools/argus` and `./test.sh` were not run: the plan puts both off the list.
+
+### The one deviation from the plan, and why
+
+Case 10 asserts
+`loadTimeline.indexOf('await') < search(/state\.selectedSessionId\s*!==\s*id/) < indexOf('state.content =')`.
+`indexOf` finds the *first* `state.content =` in the function, and the
+pre-existing no-session early return — untouched by the plan — opens with
+`state.content = [];` before the awaits. So with the plan's implementation
+applied literally, case 10 stayed red on its ordering assertion while the guard
+itself was in place: the plan's own prose did not account for that earlier
+occurrence.
+
+I could reach the case's intent without weakening anything, so I did rather than
+leave it red: the three-field reset moved into `clearTimelineIndexes()` above
+`loadTimeline`, so the only `state.content =` inside `loadTimeline` is the write
+of the answer, which the guard now precedes. Behaviour is identical — the same
+three fields are reset on the same branch — and the assertion now means what it
+says: no fetch answer reaches page state before the guard has run.
+
+Reviewer's call whether the extraction belongs in `app.js` or whether the case
+should have compared against the post-await write instead. I did not edit the
+test either way.
+
+### Notes for the reviewer, acted on nowhere
+
+1. **The guard drops a same-session answer only in the case that cannot arise.**
+   `state.selectedSessionId !== id` lets two overlapping refreshes for one
+   session both land, which is deliberate per the plan — `mergeToolMarks` makes
+   that harmless — but it also means the *older* of two same-session answers can
+   overwrite `state.content` with a staler list. `state.content` is a full
+   re-fetch each time, not an accumulation, so the next refresh (at most one SSE
+   tick away) corrects it. The plan weighed and rejected a request token; I did
+   not revisit that.
+2. **`state.toolSeq` can now go backwards.** Deriving the watermark from what is
+   held means dropping every mark (only `selectSession` does that) resets it to
+   0, which is the property that makes the fix self-healing. Worth knowing when
+   reading the collector-side `sinceSeq` contract, which the plan states returns
+   only strictly greater seqs.
+3. **Earlier rounds' notes still stand** — the 15s repaint interval never
+   repainting the landing view, `state.toolMarks` growing while one session
+   stays selected, and the context curve spanning a lane's requests rather than
+   its bar. All outside this round's finding.
+4. **The test-author's handoff reported no gap in this round's plan.** The one I
+   hit is the case-10 ordering above; everything else in the plan mapped
+   one-to-one onto the code.

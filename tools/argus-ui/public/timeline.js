@@ -7,8 +7,9 @@
  * grouping by name would merge them into a single bar.
  *
  * Everything here is a pure function over the payloads of
- * `GET /api/sessions/<id>` and `GET /api/content` — no `document`, no `fetch`,
- * no `location` — which is what lets `node --test` import it directly.
+ * `GET /api/sessions/<id>`, `GET /api/content` and `GET /api/events` — no
+ * `document`, no `fetch`, no `location` — which is what lets `node --test`
+ * import it directly.
  */
 
 import { esc, fmtClock, fmtDur, fmtNum } from './format.js';
@@ -280,6 +281,34 @@ export function buildDensity(view, { content = [], tools = [] } = {}) {
       };
     }),
   };
+}
+
+/**
+ * Merge a page of tool events into the marks already held.
+ *
+ * The watermark comes back as the highest `seq` *held*, never as the highest
+ * seen: a record that was not kept can then never be skipped as already seen,
+ * which is what turns a stale or duplicated response into a no-op instead of a
+ * permanent hole. Duplicates are dropped by `seq`, and the input array is left
+ * untouched.
+ *
+ * @param {{ seq: number, timeMs: number, spanId: string|null }[]} marks
+ * @param {object[]} items
+ * @returns {{ marks: object[], seq: number }}
+ */
+export function mergeToolMarks(marks, items) {
+  const held = Array.isArray(marks) ? marks : [];
+  const merged = held.slice();
+  const seen = new Set(held.map((mark) => mark?.seq));
+  let seq = 0;
+  for (const mark of held) if (Number.isFinite(mark?.seq) && mark.seq > seq) seq = mark.seq;
+  for (const item of Array.isArray(items) ? items : []) {
+    if (!Number.isFinite(item?.seq) || seen.has(item.seq)) continue;
+    seen.add(item.seq);
+    merged.push({ seq: item.seq, timeMs: item.timeMs, spanId: item.spanId ?? null });
+    if (item.seq > seq) seq = item.seq;
+  }
+  return { marks: merged, seq };
 }
 
 /**

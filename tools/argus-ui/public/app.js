@@ -8,7 +8,14 @@
  */
 
 import { esc, fmtNum, fmtCost, fmtDur, fmtClock, fmtAgo, isLive, shortId } from './format.js';
-import { buildLanes, buildDensity, renderTimeline, renderDetailViews, TOOL_EVENT } from './timeline.js';
+import {
+  buildLanes,
+  buildDensity,
+  mergeToolMarks,
+  renderTimeline,
+  renderDetailViews,
+  TOOL_EVENT,
+} from './timeline.js';
 
 const TOKEN = new URLSearchParams(location.search).get('token');
 
@@ -831,6 +838,13 @@ async function loadSession() {
   }
 }
 
+/** With no session there is nothing to draw, so every index behind the lanes empties together. */
+function clearTimelineIndexes() {
+  state.content = [];
+  state.toolMarks = [];
+  state.toolSeq = 0;
+}
+
 /**
  * The two indexes behind the lanes: the content records for the context curve,
  * and the tool results for the activity marks. A failure here costs the lanes,
@@ -839,9 +853,7 @@ async function loadSession() {
 async function loadTimeline() {
   const id = state.selectedSessionId;
   if (!id) {
-    state.content = [];
-    state.toolMarks = [];
-    state.toolSeq = 0;
+    clearTimelineIndexes();
     return;
   }
   // sinceSeq is why the refresh that fires on every ingest ships nothing it has.
@@ -849,11 +861,15 @@ async function loadTimeline() {
     api('/api/content', { session: id, limit: 2000 }).catch(() => null),
     api('/api/events', { session: id, event: TOOL_EVENT, sinceSeq: state.toolSeq, limit: 2000 }).catch(() => null),
   ]);
+  // A second refresh can start while these are in flight — selectSession calls
+  // refresh() directly. An answer for a session that is no longer selected must
+  // be dropped whole: appending it would put another session's tool calls on
+  // these lanes and push the watermark past this session's own records.
+  if (state.selectedSessionId !== id) return;
   state.content = content?.items ?? [];
-  for (const item of tools?.items ?? []) {
-    state.toolMarks.push({ seq: item.seq, timeMs: item.timeMs, spanId: item.spanId });
-    if (item.seq > state.toolSeq) state.toolSeq = item.seq;
-  }
+  const merged = mergeToolMarks(state.toolMarks, tools?.items ?? []);
+  state.toolMarks = merged.marks;
+  state.toolSeq = merged.seq;
 }
 
 async function loadTabData() {
