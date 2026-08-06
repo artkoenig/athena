@@ -348,16 +348,10 @@ test('releasing the pointer lets refreshes resume', () => {
 
 test('app.js takes the context panel from its module', () => {
   const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
-  assert.match(
-    appJs,
-    /import\s*\{[^}]*\brenderContextPanel\b[^}]*\}\s*from\s*['"]\.\/context\.js['"]/,
-    'app.js must import renderContextPanel from context.js, so the tested function is the one the page runs',
-  );
-  assert.match(
-    appJs,
-    /import\s*\{[^}]*\blaneContentQuery\b[^}]*\}\s*from\s*['"]\.\/context\.js['"]/,
-    'app.js must import laneContentQuery from context.js, so the function the unit cases test is the one the page runs',
-  );
+  for (const name of ['renderContextPanel', 'fetchLaneContext', 'laneContextInput']) {
+    const re = new RegExp(`import\\s*\\{[^}]*\\b${name}\\b[^}]*\\}\\s*from\\s*['"]\\./context\\.js['"]`);
+    assert.match(appJs, re, `app.js must import ${name} from context.js, so the tested function is the one the page runs`);
+  }
 });
 
 test('the context panel has a container of its own, between the timeline and the technical views', () => {
@@ -409,12 +403,32 @@ test('selecting a lane fetches its context', () => {
 test('the panel asks the collector for the nearest request at the cursor\'s moment, for that lane only', () => {
   const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
   const loadLaneContext = functionSource(appJs, 'loadLaneContext');
-  assert.match(loadLaneContext, /\/api\/content\/at/, 'loadLaneContext must fetch the nearest-at-or-before content record');
-  assert.match(loadLaneContext, /resolveCursor\(/, 'the moment fetched must be the cursor\'s own resolved moment');
+  const callIdx = loadLaneContext.indexOf('fetchLaneContext(');
+  assert.ok(callIdx >= 0, 'loadLaneContext must call fetchLaneContext');
+  const endIdx = loadLaneContext.indexOf(';', callIdx);
+  assert.ok(endIdx >= 0, 'the fetchLaneContext( call must end with a statement-terminating ;');
+  const slice = loadLaneContext.slice(callIdx, endIdx);
+  assert.match(slice, /\bapi\b/, 'loadLaneContext must hand its own api function to fetchLaneContext');
+  assert.match(slice, /session:\s*id\b/, 'the page\'s own session id must reach the function whose request is pinned by value');
+  assert.match(slice, /\bkey\b/, 'the selected lane\'s key must reach fetchLaneContext');
+  assert.match(slice, /view:\s*laneView\(\)/, 'the page\'s own lane view must reach fetchLaneContext');
+  assert.match(slice, /cursor:\s*state\.cursor\b/, 'the page\'s own cursor must reach fetchLaneContext');
+});
+
+test('the fetched context is what the panel state holds', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const loadLaneContext = functionSource(appJs, 'loadLaneContext');
+  const nameMatch = loadLaneContext.match(/const\s+(\w+)\s*=\s*await\s+fetchLaneContext\(/);
+  assert.ok(nameMatch, 'loadLaneContext must await fetchLaneContext into a variable it names');
+  const writeIdx = loadLaneContext.indexOf('state.laneContext =');
+  assert.ok(writeIdx >= 0, 'loadLaneContext must still write state.laneContext');
+  const endIdx = loadLaneContext.indexOf(';', writeIdx);
+  assert.ok(endIdx >= 0, 'the state.laneContext = assignment must end with a statement-terminating ;');
+  const slice = loadLaneContext.slice(writeIdx, endIdx);
   assert.match(
-    loadLaneContext,
-    /laneContentQuery\(/,
-    'the lane\'s filter must come from laneContentQuery — the mapping pinned by value in context.test.mjs — not from prose a grep for main/span/agent could satisfy on its own',
+    slice,
+    new RegExp('state\\.laneContext\\s*=\\s*' + nameMatch[1] + '\\b'),
+    'state.laneContext must be written from the value fetchLaneContext returned — a literal written there instead shows a different context than the one fetched',
   );
 });
 
@@ -443,6 +457,22 @@ test('the panel repaints in its own container, never by re-rendering the page', 
     /renderDetail\(/,
     'repainting the panel must never re-render the whole page, or a scrub would replace the slider under the pointer',
   );
+});
+
+test('the panel is drawn from the answer held for the lane it belongs to', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const renderLanePanel = functionSource(appJs, 'renderLanePanel');
+  const callIdx = renderLanePanel.indexOf('renderContextPanel(');
+  assert.ok(callIdx >= 0, 'renderLanePanel must call renderContextPanel');
+  const endIdx = renderLanePanel.indexOf(';', callIdx);
+  assert.ok(endIdx >= 0, 'the renderContextPanel( call must end with a statement-terminating ;');
+  const slice = renderLanePanel.slice(callIdx, endIdx);
+  assert.match(
+    slice,
+    /\.\.\.laneContextInput\(\s*key\s*,\s*state\.laneContext\s*\)/,
+    'the held answer for this lane must reach the panel through laneContextInput',
+  );
+  assert.match(slice, /expanded:\s*state\.expanded/, 'the remembered expansion state must still reach the panel');
 });
 
 test('scrubbing moves the context with the cursor', () => {

@@ -1379,3 +1379,132 @@ rewritten cases' exact regexes left nothing to guess; every case mapped to
 one concrete assertion, and running the files confirmed the plan's own
 predicted failure shapes (module-load error for `context.test.mjs`, two
 named assertion failures for `page.test.mjs`) exactly.
+
+## Increment 5 — Round 2
+
+The reviewer's reproduction spec for this round is the two findings named at
+`researcher.md`'s "The findings, restated as the defects to remove": M1
+(deleting `at: resolveCursor(...).timeMs` from the request leaves every cursor
+position showing the head's context) and M2 (writing `state.laneContext = {
+key, item: null }` leaves every lane's panel empty), both invisible to a suite
+that only greps `loadLaneContext` for identifiers. Wrote exactly the sixteen
+cases the Round 2 test plan names — twelve (F1–F12) plus two new factories in
+`tools/argus-ui/test/context.test.mjs`, and two rewrites plus two new cases
+(P1–P4) in `tools/argus-ui/test/page.test.mjs` — and nothing else. No
+production file was opened: every input, every expected request object, every
+regex and every doc-comment reference came from the plan's own code snippets
+(`laneContentRequest`, `fetchLaneContext`, `laneContextInput`, the exact
+`import`/statement-slice technique for P2–P4).
+
+### `tools/argus-ui/test/context.test.mjs`
+
+- Import line (4) gains `fetchLaneContext` and `laneContextInput` alongside
+  the four names it already imported.
+- Below the existing `lane` factory (48), added `agentLane`, `view` and
+  `recorder` exactly as the plan's snippet has them.
+- Appended, after the `laneContentQuery` block, under the comment
+  `// fetchLaneContext(api, …) — the request that goes on the wire, and the
+  record that comes back.`, the twelve F1–F12 cases below.
+
+| # | Case | Test name | Result |
+| --- | --- | --- | --- |
+| F1 | the request carries the cursor's own moment, for that lane only | `'the request carries the cursor\'s own moment, for that lane only'` | fails: module load error (see below — shared by all twelve) |
+| F2 | a live cursor asks for the head of the recorded window | `'a live cursor asks for the head of the recorded window'` | fails: module load error |
+| F3 | a moment outside the window is clamped to it, never sent raw | `'a moment outside the window is clamped to it, never sent raw'` | fails: module load error |
+| F4 | an agent lane asks with its own span, at the same moment | `'an agent lane asks with its own span, at the same moment'` | fails: module load error |
+| F5 | the fetched record comes back under the lane it was fetched for | `'the fetched record comes back under the lane it was fetched for'` | fails: module load error |
+| F6 | a lane the filter cannot identify fires no request at all | `'a lane the filter cannot identify fires no request at all'` | fails: module load error |
+| F7 | with no lane open, or no session, nothing is asked for | `'with no lane open, or no session, nothing is asked for'` | fails: module load error |
+| F8 | a failed fetch costs the panel and not the page | `'a failed fetch costs the panel and not the page'` | fails: module load error |
+| F9 | an answer with no record is held as no record | `'an answer with no record is held as no record'` | fails: module load error |
+| F10 | the held record for the open lane is what the panel is drawn from | `'the held record for the open lane is what the panel is drawn from'` | fails: module load error |
+| F11 | an answer held for another lane means a fetch in flight, not an empty context | `'an answer held for another lane means a fetch in flight, not an empty context'` | fails: module load error |
+| F12 | what the page holds spreads straight into the panel, and the record's own content is what it shows | `'what the page holds spreads straight into the panel, and the record\'s own content is what it shows'` | fails: module load error |
+
+All twelve share one failure, because importing two names a module does not
+export is a `SyntaxError` at the top of the file, before `node:test` can
+register anything in it — the same shape every earlier round's brand-new
+export has produced:
+
+```
+node --test tools/argus-ui/test/context.test.mjs
+# file:///home/user/uroboros/tools/argus-ui/test/context.test.mjs:9
+#   fetchLaneContext,
+#   ^^^^^^^^^^^^^^^^
+# SyntaxError: The requested module '../public/context.js' does not provide an export named 'fetchLaneContext'
+# tests 1
+# pass 0
+# fail 1
+```
+
+That is the correct failure for this state of the repository — `public/context.js`
+genuinely has no `fetchLaneContext` or `laneContextInput` today, per the plan's
+own module map naming them as new — not a typo on this end.
+
+### `tools/argus-ui/test/page.test.mjs`
+
+Four cases, exactly as the plan's P1–P4 table names them:
+
+| # | Case | Test name | Result |
+| --- | --- | --- | --- |
+| P1 | **replaces** the case at (then) line 349, keeping its name | `'app.js takes the context panel from its module'` | fails: `AssertionError: app.js must import fetchLaneContext from context.js, so the tested function is the one the page runs` |
+| P2 | **replaces** the case at (then) line 409, keeping its name | `'the panel asks the collector for the nearest request at the cursor\'s moment, for that lane only'` | fails: `AssertionError: loadLaneContext must call fetchLaneContext` |
+| P3 | **new** | `'the fetched context is what the panel state holds'` | fails: `AssertionError: loadLaneContext must await fetchLaneContext into a variable it names` |
+| P4 | **new** | `'the panel is drawn from the answer held for the lane it belongs to'` | fails: `AssertionError: the held answer for this lane must reach the panel through laneContextInput` (the quoted `actual` is the current three-line `renderContextPanel({ lane, item: held ? state.laneContext.item : null, pending: !held, expanded: state.expanded })` call, which reads `state.laneContext.item` straight, exactly the hop M2 shows is unpinned) |
+
+P1 and P2 turn red exactly where `researcher.md`'s "What is already red"
+section predicts (P1 the moment `app.js` no longer imports
+`laneContentQuery` under a name the old assertion looked for — here, because
+the rewritten assertion looks for `fetchLaneContext`/`laneContextInput` that
+do not exist yet; P2 because the request has not yet moved into
+`context.js`). P3 and P4 are new and fail on the same absence: `loadLaneContext`
+awaits nothing into a captured name yet, and `renderLanePanel` does not yet
+call `laneContextInput`.
+
+Every other case in `page.test.mjs` — including the staleness-guard case at
+(then) line 421, `'an answer that arrived after the selection moved on is
+dropped'` — was left exactly as it stood; the plan names no other rewrite.
+
+### Commands run
+
+- `node --test tools/argus-ui/test/context.test.mjs` — 1 top-level failure
+  (module load error), 0 pass, 1 fail, exit 1. Covers F1–F12, all twelve red
+  via the one `SyntaxError` quoted above, none registered individually.
+- `node --test tools/argus-ui/test/page.test.mjs` — 41 tests, 37 pass (every
+  case this round did not touch), 4 fail (P1–P4 above), exit 1.
+- `npm --prefix tools/argus-ui test` — 128 tests, 123 pass, 5 fail, exit 1.
+  The five failures are exactly `test/context.test.mjs`'s one whole-file load
+  error (covering F1–F12) plus P1–P4 in `test/page.test.mjs`; every
+  pre-existing case in every other file in the project stays green. Run once,
+  at the end, only to confirm these five are the whole of what this round's
+  edits turn red and nothing else broke — the plan reserves this command for
+  the implementer's own use once the code exists, and I did not run it before
+  writing the sixteen cases above.
+
+### Deliberately not written
+
+Matches the plan's own list exactly, nothing added or dropped:
+
+- That the browser's own `fetch` reaches the collector — F1–F9 run against an
+  injected api function; the transport is `app.js`'s unchanged `api()`, and
+  the route is `tools/argus`'s own suite.
+- `laneContentRequest` directly — not exported; every decision it makes is
+  observed through `fetchLaneContext` in F1–F7.
+- The click, the drag and the CSS in a real browser — unchanged in the code
+  this round.
+- The reviewer's "beyond the criteria" notes (the lane `<button>`,
+  `renderTimeline`'s third argument, the fourth module under `public/`, the
+  extra request per refresh) — closed by the reviewer himself; no case pins
+  behaviour for any of them.
+- Everything increment 6 owns — the tools an agent used up to the moment.
+- `tools/argus/src/server.mjs` and its suite — unchanged this round, and not
+  run.
+
+### Gaps and conflicts found in the plan
+
+None. The plan's `laneContentRequest`/`fetchLaneContext`/`laneContextInput`
+doc comments, the twelve F1–F12 input/output pairs and the exact P1–P4 regex
+and slicing technique left nothing to guess; every case mapped to one
+concrete assertion, and running the files confirmed the plan's own predicted
+failure shapes (module-load error for `context.test.mjs`, four named
+assertion failures for `page.test.mjs`) exactly.

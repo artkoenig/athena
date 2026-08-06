@@ -1,7 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { contextBlocks, renderContextPanel, PREVIEW_CHARS, laneContentQuery } from '../public/context.js';
+import {
+  contextBlocks,
+  renderContextPanel,
+  PREVIEW_CHARS,
+  laneContentQuery,
+  fetchLaneContext,
+  laneContextInput,
+} from '../public/context.js';
 import { esc } from '../public/format.js';
 
 // The three factories every case builds its input from — modelled on the
@@ -46,6 +53,23 @@ const item = (over = {}) => ({
 });
 
 const lane = (over = {}) => ({ key: 'main', kind: 'main', label: 'main session', spanId: null, agent: null, ...over });
+
+const agentLane = (over = {}) =>
+  lane({ key: 'agent:sp-b:probe', kind: 'agent', label: 'probe', spanId: 'sp-b', agent: 'probe', ...over });
+
+const view = (over = {}) => ({ startMs: 1000, endMs: 5000, durationMs: 4000, lanes: [lane(), agentLane()], ...over });
+
+/** An api function that records what it was asked for and answers what it was given. */
+const recorder = (answer = { item: item() }) => {
+  const calls = [];
+  return {
+    calls,
+    api: async (path, params) => {
+      calls.push({ path, params });
+      return typeof answer === 'function' ? answer() : answer;
+    },
+  };
+};
 
 // Criterion — selecting a lane at the chosen time shows that agent's context as a
 // message list, built from contextBlocks(body).
@@ -455,4 +479,169 @@ test('a lane that identifies nothing gets no query at all, so no lane ever shows
   );
   assert.equal(laneContentQuery(null), null);
   assert.equal(laneContentQuery(undefined), null);
+});
+
+// fetchLaneContext(api, …) — the request that goes on the wire, and the record
+// that comes back.
+
+test('the request carries the cursor\'s own moment, for that lane only', async () => {
+  const { api, calls } = recorder();
+  await fetchLaneContext(api, { session: 's1', key: 'main', view: view(), cursor: { live: false, timeMs: 3000 } });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].path, '/api/content/at');
+  assert.deepEqual(
+    calls[0].params,
+    { session: 's1', at: 3000, main: '1' },
+    'exactly those three keys, so a request with no at (which the collector answers with the head, at every cursor position) fails here',
+  );
+});
+
+test('a live cursor asks for the head of the recorded window', async () => {
+  const { api, calls } = recorder();
+  await fetchLaneContext(api, { session: 's1', key: 'main', view: view(), cursor: { live: true, timeMs: null } });
+  assert.equal(calls[0].params.at, 5000, 'the view\'s own endMs');
+});
+
+test('a moment outside the window is clamped to it, never sent raw', async () => {
+  const { api: apiHigh, calls: callsHigh } = recorder();
+  await fetchLaneContext(apiHigh, { session: 's1', key: 'main', view: view(), cursor: { live: false, timeMs: 9_000_000 } });
+  assert.equal(callsHigh[0].params.at, 5000);
+
+  const { api: apiLow, calls: callsLow } = recorder();
+  await fetchLaneContext(apiLow, { session: 's1', key: 'main', view: view(), cursor: { live: false, timeMs: 0 } });
+  assert.equal(callsLow[0].params.at, 1000, 'the moment goes through resolveCursor, not straight from cursor.timeMs');
+});
+
+test('an agent lane asks with its own span, at the same moment', async () => {
+  const { api, calls } = recorder();
+  await fetchLaneContext(api, {
+    session: 's1',
+    key: 'agent:sp-b:probe',
+    view: view(),
+    cursor: { live: false, timeMs: 3000 },
+  });
+  assert.deepEqual(
+    calls[0].params,
+    { session: 's1', at: 3000, span: 'sp-b' },
+    'no main key, and the moment travels with the filter',
+  );
+});
+
+test('the fetched record comes back under the lane it was fetched for', async () => {
+  const rec = item();
+  const { api } = recorder({ item: rec });
+  const result = await fetchLaneContext(api, { session: 's1', key: 'main', view: view(), cursor: { live: true, timeMs: null } });
+  assert.deepEqual(result, { key: 'main', item: rec });
+  assert.equal(result.item, rec, 'the record itself, not a copy and not null');
+});
+
+test('a lane the filter cannot identify fires no request at all', async () => {
+  const noFilterView = view({
+    lanes: [lane(), lane({ key: 'agent::', kind: 'agent', label: 'subagent', spanId: null, agent: null })],
+  });
+
+  const { api: apiEmpty, calls: callsEmpty } = recorder();
+  const emptyResult = await fetchLaneContext(apiEmpty, {
+    session: 's1',
+    key: 'agent::',
+    view: noFilterView,
+    cursor: { live: true, timeMs: null },
+  });
+  assert.equal(callsEmpty.length, 0);
+  assert.deepEqual(emptyResult, { key: 'agent::', item: null });
+
+  const { api: apiGone, calls: callsGone } = recorder();
+  const goneResult = await fetchLaneContext(apiGone, {
+    session: 's1',
+    key: 'agent:gone:x',
+    view: noFilterView,
+    cursor: { live: true, timeMs: null },
+  });
+  assert.equal(
+    callsGone.length,
+    0,
+    'an unfiltered request would answer with the main session\'s context under an agent\'s lane',
+  );
+  assert.deepEqual(goneResult, { key: 'agent:gone:x', item: null });
+});
+
+test('with no lane open, or no session, nothing is asked for', async () => {
+  const { api: apiNoLane, calls: callsNoLane } = recorder();
+  const noLaneResult = await fetchLaneContext(apiNoLane, {
+    session: 's1',
+    key: null,
+    view: view(),
+    cursor: { live: true, timeMs: null },
+  });
+  assert.equal(callsNoLane.length, 0);
+  assert.deepEqual(noLaneResult, { key: null, item: null });
+
+  const { api: apiNoSession, calls: callsNoSession } = recorder();
+  const noSessionResult = await fetchLaneContext(apiNoSession, {
+    session: null,
+    key: 'main',
+    view: view(),
+    cursor: { live: true, timeMs: null },
+  });
+  assert.equal(callsNoSession.length, 0);
+  assert.deepEqual(noSessionResult, { key: 'main', item: null });
+
+  const { api: apiNoInput, calls: callsNoInput } = recorder();
+  const noInputResult = await fetchLaneContext(apiNoInput);
+  assert.equal(callsNoInput.length, 0);
+  assert.deepEqual(noInputResult, { key: null, item: null });
+});
+
+test('a failed fetch costs the panel and not the page', async () => {
+  const api = async () => {
+    throw new Error('offline');
+  };
+  const result = await fetchLaneContext(api, { session: 's1', key: 'main', view: view(), cursor: { live: true, timeMs: null } });
+  assert.deepEqual(result, { key: 'main', item: null });
+});
+
+test('an answer with no record is held as no record', async () => {
+  for (const answer of [{}, null, { item: null }]) {
+    const { api } = recorder(answer);
+    const result = await fetchLaneContext(api, {
+      session: 's1',
+      key: 'main',
+      view: view(),
+      cursor: { live: true, timeMs: null },
+    });
+    assert.equal(result.item, null, `answer ${JSON.stringify(answer)} must be held as no record`);
+    assert.equal(result.key, 'main');
+  }
+});
+
+test('the held record for the open lane is what the panel is drawn from', () => {
+  const rec = item();
+  const out = laneContextInput('main', { key: 'main', item: rec });
+  assert.deepEqual(out, { item: rec, pending: false });
+  assert.equal(out.item, rec);
+});
+
+test('an answer held for another lane means a fetch in flight, not an empty context', () => {
+  assert.deepEqual(
+    laneContextInput('agent:sp-b:probe', { key: 'main', item: item() }),
+    { item: null, pending: true },
+    'saying "no API request here" while a fetch is in flight is the panel lying',
+  );
+  assert.deepEqual(laneContextInput('main', { key: null, item: null }), { item: null, pending: true });
+  assert.deepEqual(laneContextInput('main', null), { item: null, pending: true });
+});
+
+test('what the page holds spreads straight into the panel, and the record\'s own content is what it shows', () => {
+  const rec = item();
+  const readyHtml = renderContextPanel({ lane: lane(), ...laneContextInput('main', { key: 'main', item: rec }), expanded: [] });
+  assert.match(readyHtml, /data-state="ready"/);
+  assert.ok(readyHtml.includes('You are a Claude agent.'), 'the fixture\'s own system prompt must be present');
+  assert.ok(readyHtml.includes('the answer'), 'the fixture\'s own assistant text must be present');
+
+  const pendingHtml = renderContextPanel({
+    lane: lane(),
+    ...laneContextInput('agent:sp-b:probe', { key: 'main', item: rec }),
+    expanded: [],
+  });
+  assert.match(pendingHtml, /data-state="pending"/);
 });
