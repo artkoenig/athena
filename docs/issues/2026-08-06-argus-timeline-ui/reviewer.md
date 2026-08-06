@@ -178,3 +178,252 @@ Traced, and nothing further found:
 - `.slice-context` and `.slice-tools` have no CSS rules of their own; they are
   plain containers inside the styled `.slice` grid. Every other class the
   timeline markup uses has rules in `public/styles.css`.
+
+## Round 1
+
+**Status: 4 findings requiring correction.** The suite is green. The findings
+are in the timeline's live/scrub control (criterion 6), in the absence of any
+check for criteria 3 and 6, and in two claims the new documentation makes.
+
+### Commands run
+
+- `bash test.sh` — all five suites, **exit 0**.
+  - `the repository itself` — PASS, 10 cases.
+  - `parallel runs: worktrees` — PASS, 4 cases.
+  - `tools/argus` — 164 cases, 164 pass, 0 fail, 0 skipped.
+  - `tools/argus-ui` — 14 cases, 0 fail, 0 skipped.
+  - `tools/log-parser` — 23 cases, 0 fail, 0 skipped.
+  - Nothing skipped or excluded, no merge-base run needed (nothing is red).
+
+Round 0's Finding 1 is gone: `tools/argus/test/server.test.mjs:404-421` now
+asserts `events.items[0].attrs.body === bodyText` instead of a substring of the
+serialized item, and an oversized-body case (200 000 characters, `server.test.mjs:423-445`)
+pins the untruncated claim. Both pass.
+
+### Finding 1 — the `Live` control lies after a scrub, and a live refresh tears the scrubber out from under the pointer
+
+Criterion missed: **"The timeline can be scrubbed backward and forward to any
+point of the recorded session, and offers a live mode that follows the newest
+data as it arrives; scrubbing away from the head leaves live mode, and a
+control returns to it."**
+
+One cause: the scrub handler repaints everything about the scrub row *except*
+the control that shows the mode, while the SSE refresh path repaints
+everything including the input being dragged.
+
+Reproduction A — the control claims live mode after live mode was left
+(a session that has stopped emitting, i.e. the ordinary "scrub back through a
+finished run"):
+
+1. Open a finished session in the argus UI. `state.live` is `true`, so
+   `renderTimeline` writes `<button class="scrub-live" data-live aria-pressed="true">Live</button>`
+   (`tools/argus-ui/public/app.js:363`), which `styles.css` paints with the
+   accent border and background (`.scrub-live[aria-pressed="true"]`).
+2. Drag the scrubber. The `input` handler
+   (`tools/argus-ui/public/app.js:1319-1338`) sets `state.live = false` and then
+   updates only `.lane-playhead`, `.scrub-clock` and — debounced — `#slice-panel`
+   via `paintSlice()`. It never touches the button.
+3. No further telemetry arrives, so no `ingest` SSE event fires, so
+   `scheduleRefresh` (`app.js:1225-1231`) never runs and `renderDetail`
+   (`app.js:1174`) is never called again.
+4. Result: live mode is off, and the only control that says so still reads
+   `aria-pressed="true"` and stays visually engaged, indefinitely. The user
+   gets no signal that they left live mode, and the control that returns to it
+   is indistinguishable from the state it would return from.
+
+Reproduction B — the same repaint asymmetry the other way round, on a session
+that *is* emitting:
+
+1. Open a session of a running agent. `argus env` sets
+   `OTEL_LOGS_EXPORT_INTERVAL=1000` and `OTEL_METRIC_EXPORT_INTERVAL=1000`
+   (`tools/argus/src/claude.mjs:322-327`), so the collector emits an `ingest`
+   SSE event roughly once a second.
+2. Press and hold the scrubber thumb and drag.
+3. Each `ingest` calls `scheduleRefresh()` → `refresh()` → `renderDetail()`,
+   which assigns `detail.innerHTML = …` wholesale (`app.js:218`). That destroys
+   and recreates `#timeline-scrub` under the pointer; the element's implicit
+   pointer capture dies with it and the thumb stops following the mouse.
+   `refresh()` restores focus by id (`app.js:1177-1185`), which restores
+   keyboard arrows but cannot restore a mouse drag.
+4. Result: on a live session the drag is interrupted about once a second, which
+   is exactly the situation the criterion pairs scrubbing with. The code's own
+   comment says this must not happen — `app.js:408-410`: "Scrubbing must not
+   replace the range input it is being dragged with, so a scrub never
+   re-renders the whole detail pane." The scrub path honours it; the refresh
+   path does not.
+
+What a correction has to achieve (not how): after a scrub, the `Live` control
+must show that live mode is off, and a refresh arriving while the session is
+being scrubbed must not replace the range input.
+
+### Finding 2 — criteria 3 and 6 have no check that would fail if they broke
+
+Criteria missed as *verifiable* behaviour: **"Opening a session in the argus UI
+lands on the timeline view"** (3) and the whole of criterion 6 (scrub, live,
+leaving and returning). The rendering halves of criteria 5 and 7 are in the
+same position.
+
+The gap, concretely: every behaviour named in those criteria lives in
+`tools/argus-ui/public/app.js`. `tools/argus-ui/test/` holds exactly
+`config.test.mjs`, `server.test.mjs` and `independence.test.mjs`; the only one
+that names `public/app.js` is `independence.test.mjs`, and it names it to check
+that the file imports nothing outside the project — not what it renders. So
+deleting the `renderTimeline()` call from `renderDetail`, or setting
+`state.technicalTab` back to `'overview'`, or dropping `state.live = false`
+from the scrub handler, all leave `bash test.sh` green. Finding 1 is what that
+gap costs: a defect in the one criterion that is pure state transition, shipped
+green.
+
+This is not a request for a particular test style or file layout. Either
+criterion 6's transitions (open → live at head; scrub → live off, `atMs` at the
+scrubbed value; `Live` → live on, `atMs` back at `lastMs`) and criterion 3's
+landing state (`technicalTab === null` on a freshly selected session, timeline
+rendered) get a check that fails when they break — `tools/argus-ui/CLAUDE.md`
+forbids adding a dependency without asking the human, so a DOM library is not
+an option and whatever check is built has to be dependency-free — or the
+impossibility is put to the human as a question and recorded, which is also an
+acceptable resolution of this finding. What is not acceptable is leaving the
+two criteria with neither.
+
+### Finding 3 — the README promises behaviour for recordings without the content flags, and the promise is wrong
+
+Criterion missed: **"Recordings made without the content flags are out of
+contract: no fallback rendering, no compatibility notice is required, and no
+test pins behavior for them"**, with decision 5: "the degradation question was
+dropped rather than decided, so nothing may test or promise behavior for that
+case."
+
+`tools/argus/README.md:529-531` is such a promise:
+
+> **To record structure without content**, do not export the five flags above —
+> set the rest of the block by hand instead of using `argus env`. The timeline
+> then draws lanes and activity, and the context panel stays empty; nothing
+> else changes.
+
+It is prose no criterion asked for, about the one case the issue put out of
+contract. It is also inaccurate on its own terms, which is why it cannot stand
+as a harmless aside:
+
+- Without `OTEL_LOG_TOOL_DETAILS=1` the `tool_result` events carry no
+  `tool_input`, so `toolParametersOf` returns `null`
+  (`tools/argus/src/claude.mjs:83-99`) and the "Tools used up to here" panel —
+  criterion 8's half of the slice — shows tool names with an empty Parameters
+  column. That is not "the context panel stays empty".
+- The implementer's own note at `tools/argus/src/claude.mjs:289-291` says the
+  same flag is what makes `agent.name` arrive under its real value, "without it
+  the CLI redacts a user-defined agent's name to `custom`" — so lane labels
+  change too (`store.mjs` sets `lane.agentName` from `agent.name`).
+
+So "nothing else changes" contradicts the diff's own documentation of the flag.
+
+### Finding 4 — "reopened with `--open` has it back" is not true for the sessions the timeline is for
+
+No criterion covers persistence; this is blast radius of criterion 1 (the
+content flags on by default) landing on a claim this diff introduces.
+
+`tools/argus/README.md:611-615` says the timeline ages out of the raw window
+and then:
+
+> A measurement written with `--persist` and reopened with `--open` has it back.
+
+Reproduction: `argus env` now sets `CLAUDE_CODE_OTEL_CONTENT_MAX_LENGTH=1048576`
+(`claude.mjs:302`), so one `claude_code.api_request_body` record is up to 1 MB
+and `api_response_body` adds its own. `JsonlPersistence` rotates `logs.jsonl`
+at `persistMaxBytes` (default 64 MB, `src/persist.mjs:23`, `#append` at
+`persist.mjs:116-127`), `#rotate` deletes generation 1 before renaming
+(`persist.mjs:82-92`), and `#read` replays only generations 1 and 0
+(`persist.mjs:98-101`). A session past ~128 MB of log JSONL — a few hundred
+model turns, which is what a full uroboros run is — has its earliest bodies
+deleted from disk. Reopening that directory with `--open` replays only the
+tail, and the beginning of the timeline is gone for good.
+
+Note the sizes point the wrong way: the in-memory content budget is 256 MB
+(`config.mjs`, `--max-content-bytes`), the on-disk retention is 64 MB × 2
+generations = 128 MB. The documented remedy holds strictly *less* content than
+the window it is offered as the remedy for. Either the sentence stops promising
+recovery unconditionally, or the disk retention has to cover what memory holds.
+
+### Criteria walked, one by one
+
+- **1 — `argus env` carries the content flags.** Met. `otelEnvFor`
+  (`claude.mjs:283-306`) sets `OTEL_LOG_USER_PROMPTS`, `OTEL_LOG_TOOL_DETAILS`,
+  `OTEL_LOG_TOOL_CONTENT`, `OTEL_LOG_RAW_API_BODIES` and
+  `CLAUDE_CODE_OTEL_CONTENT_MAX_LENGTH` outside the `traces` branch, so
+  `--traces false` keeps them (tested). `config.test.mjs` runs the real binary
+  for `shell` and `json`; `dotenv` and `settings` go through the same `env`
+  object in `renderEnv` (`bin/argus.mjs:81-98`), so no format can lose a key
+  alone. I cannot check the flag *names* against the CLI's documentation from
+  inside the repository; that verification was the researcher's.
+- **2 — collector stores and serves the content.** Met and now tested:
+  `/api/events` returns `attrs.body` byte-for-byte, small and at 200 000
+  characters, and `/api/sessions/:id/{timeline,context}` answer 200 with lanes
+  and parsed blocks and 404 for an unknown session.
+- **3 — opening a session lands on the timeline; technical views subordinate.**
+  Met in the code (`app.js:236-252`, `renderTabBody` returning early on a null
+  `technicalTab`, `selectSession` resetting it, clicking the open tab closing
+  it). Unverifiable by any test — Finding 2.
+- **4 — one lane for main, one per subagent, spanning its lifetime.** Met, and
+  covered store-side: own lane per `query_source`, the `llm_request` bridge from
+  `agent_id`, an orphan `agent_id` given its own lane, a lane bracketing only
+  its own records, single-lane session, unknown session → null.
+- **5 — activity plus a context curve per lane.** Met. The data half is tested
+  (tool/llm activity blocks with kind and label, open span not ending before it
+  starts, the input+cache token sum excluding output, ascending samples,
+  `maxContextTokens`). The drawing half (`laneCurve`, `renderTimeline`) has no
+  test — part of Finding 2's gap.
+- **6 — scrub, live, leaving and returning.** **Not met** — Finding 1, and
+  unverifiable — Finding 2.
+- **7 — the nearest request body at or before the moment, as a structured,
+  collapsed, expandable block list.** Met. `getContextAt` picks the newest body
+  at or before `atMs` within the lane (tested, including the empty slice and
+  per-lane isolation); `context.mjs` produces ordered blocks with sizes (tested:
+  system string and array, tool schemas, tool_use/tool_result, thinking passed
+  through verbatim, image charged its real size but never inlined, truncated
+  body kept as one raw block, `body_ref` reported and never read, empty attrs).
+  The rendering (one line per block, `<pre hidden>` toggled) is in the
+  Finding 2 gap.
+- **8 — tools used up to that moment, with parameters, per lane.** Met and
+  tested: `tool_result` joined to a lane through the tool span's `tool_use_id`,
+  cut at `atMs`, ascending, parameters from `toolParametersOf`; no-span and
+  orphan `tool_use_id` both fall to the main lane.
+- **9 — no fallback, notice or test for flagless recordings.** Held in the code
+  and the tests; broken in the prose — Finding 3.
+- **10 — `./test.sh` green.** Met: exit 0.
+
+### Beyond the criteria — blast radius
+
+- **The interface reaches the new routes unchanged.**
+  `tools/argus-ui/src/server.mjs:52` proxies every path under `/api/` and
+  `/v1/`, so `…/timeline` and `…/context` pass through.
+- **`/api/config` now advertises the content flags**, because it calls the same
+  `otelEnvFor`. Consistent with criterion 1.
+- **Store bookkeeping.** `contentBytes` is added to on ingest and recomputed
+  from scratch on every removal path — count trim, content eviction, session
+  eviction — and reset in `clear()`. I found no path that leaves it stale.
+  `#recountContentBytes` walks the whole log window, but only when something was
+  actually dropped.
+- **Persistence volume.** Finding 4.
+- **`describeEvent` gained a case for the two body events**, so the event tail
+  shows a length rather than a megabyte of JSON. Reasonable, and no other
+  caller of `describeEvent` changes shape.
+- **`scripts/demo-emit.mjs`** now emits subagent-attributed body events, so
+  `npm run demo` still fills the view it is meant to demonstrate. No criterion
+  asked for it; without it the demo session would show an empty central view,
+  so I do not treat it as scope creep.
+- Nothing else found.
+
+### Observations that need no correction
+
+- Expanded context blocks collapse again on the next SSE-driven repaint
+  (`renderDetail` rebuilds the panel). Same root cause as Finding 1's
+  reproduction B; fixing that one likely fixes this. Not counted separately.
+- `tools/argus/README.md:421-424` still attributes prompt and answer flow to
+  `CLAUDE_CODE_ENHANCED_TELEMETRY_BETA`. That wording pre-dates this change.
+- `--max-content-bytes` / `UROBOROS_OBS_MAX_CONTENT_BYTES` is surface no
+  criterion asked for, but it is the memory bound that 1 MB bodies require, and
+  it is documented in the README table and `--help`. Not scope creep.
+- The `compact` "auxiliary" lane kind goes beyond "main plus one per subagent";
+  charging compaction to main would misattribute it, so it serves criterion 4.
+- Two subagents of the same name share one lane. Documented in the README as a
+  limit of what the CLI exports, which is what the issue's assumption section
+  asked for.
