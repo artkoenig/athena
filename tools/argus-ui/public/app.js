@@ -9,6 +9,21 @@
 
 const TOKEN = new URLSearchParams(location.search).get('token');
 
+import {
+  createRefreshGate,
+  fmtClock,
+  freshSessionView,
+  paintScrubRow,
+  pinToTimeline,
+  playheadPercent,
+  refreshHeldBack,
+  resumeLive,
+  scrubGrabbed,
+  scrubReleased,
+  scrubTo,
+  toggleTechnicalTab,
+} from './timeline.js';
+
 const state = {
   sessions: [],
   stats: null,
@@ -17,13 +32,9 @@ const state = {
   session: null,
   // The timeline is the session view. The six technical views below it are
   // subordinate to it and all closed until one is asked for, so opening a
-  // session lands on the session rather than on a table about it.
-  timeline: null,
-  slice: null,
-  selectedLaneId: 'main',
-  atMs: 0,
-  live: true,
-  technicalTab: null,
+  // session lands on the session rather than on a table about it. Those six
+  // fields are the view state, and `timeline.js` owns every transition of them.
+  ...freshSessionView(),
   trace: null,
   selectedTraceId: null,
   selectedSpanId: null,
@@ -71,13 +82,8 @@ function fmtDur(ms) {
   return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, '0')}m`;
 }
 
-function fmtClock(ms) {
-  if (!ms) return '–';
-  const date = new Date(ms);
-  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}:${String(
-    date.getSeconds(),
-  ).padStart(2, '0')}.${String(date.getMilliseconds()).padStart(3, '0')}`;
-}
+// fmtClock lives in ./timeline.js, with the rest of the timeline's logic that
+// can be tested without a DOM.
 
 function fmtAgo(ms) {
   if (!ms) return 'never';
@@ -366,7 +372,10 @@ function renderTimeline() {
         ${rows}
         <div class="lane-playhead-layer" aria-hidden="true">
           <span></span>
-          <span class="lane-playhead-track"><span class="lane-playhead" style="left:${x(state.atMs).toFixed(3)}%"></span></span>
+          <span class="lane-playhead-track"><span class="lane-playhead" style="left:${playheadPercent(
+            timeline,
+            state.atMs,
+          ).toFixed(3)}%"></span></span>
         </div>
       </div>
       ${
@@ -1099,12 +1108,7 @@ async function loadTimeline() {
     state.slice = null;
     return;
   }
-  const lanes = timeline.lanes ?? [];
-  if (!lanes.some((lane) => lane.id === state.selectedLaneId)) state.selectedLaneId = lanes[0]?.id ?? 'main';
-  // In live mode the playhead follows the newest record, so an open session
-  // keeps showing its present rather than freezing where it was first opened.
-  if (state.live || !state.atMs) state.atMs = timeline.lastMs;
-  state.atMs = Math.min(Math.max(state.atMs, timeline.firstMs), timeline.lastMs);
+  pinToTimeline(state, timeline);
   await loadSlice();
 }
 
@@ -1195,12 +1199,7 @@ function selectSession(id, { render = true } = {}) {
   state.metrics = [];
   // A newly opened session opens on its timeline, live, at the main lane —
   // never inheriting the previous session's lane, moment or open sub-view.
-  state.timeline = null;
-  state.slice = null;
-  state.selectedLaneId = 'main';
-  state.atMs = 0;
-  state.live = true;
-  state.technicalTab = null;
+  Object.assign(state, freshSessionView());
   location.hash = `#/session/${encodeURIComponent(id)}`;
   if (render) refresh({ sessions: false }).then(renderSessionList);
 }
@@ -1222,7 +1221,12 @@ function copyFrom(id) {
 }
 
 let refreshTimer = null;
+const refreshGate = createRefreshGate();
 function scheduleRefresh(delay = 400) {
+  // A refresh re-renders the detail pane wholesale, which would replace the
+  // range input under the pointer and kill the drag. The gate remembers the
+  // skipped refresh so the release can run it.
+  if (refreshHeldBack(refreshGate)) return;
   if (refreshTimer) return;
   refreshTimer = setTimeout(() => {
     refreshTimer = null;
@@ -1258,8 +1262,7 @@ function wireEvents() {
     }
     const live = event.target.closest('[data-live]');
     if (live) {
-      state.live = true;
-      state.atMs = state.timeline?.lastMs ?? state.atMs;
+      resumeLive(state);
       loadSlice().then(renderDetail);
       return;
     }
@@ -1279,7 +1282,7 @@ function wireEvents() {
     if (tab) {
       // Clicking the open view closes it again, so the timeline can always be
       // got back to without leaving the session.
-      state.technicalTab = state.technicalTab === tab.dataset.tab ? null : tab.dataset.tab;
+      toggleTechnicalTab(state, tab.dataset.tab);
       loadTabData().then(renderDetail);
       return;
     }
@@ -1319,18 +1322,11 @@ function wireEvents() {
   document.getElementById('detail').addEventListener('input', (event) => {
     if (event.target.id === 'timeline-scrub') {
       // Scrubbing is an explicit "show me back then", so it leaves live mode.
-      state.live = false;
-      state.atMs = Number(event.target.value);
-      // Move the playhead and the clock at once; the slice behind them is a
+      scrubTo(state, event.target.value);
+      // Repaint the whole scrub row at once — playhead, clock and the Live
+      // control, which has to stop claiming live. The slice behind them is a
       // round trip, so it is debounced the way the event search already is.
-      const playhead = document.querySelector('.lane-playhead');
-      const timeline = state.timeline;
-      if (playhead && timeline && timeline.lastMs > timeline.firstMs) {
-        const fraction = (state.atMs - timeline.firstMs) / (timeline.lastMs - timeline.firstMs);
-        playhead.style.left = `${(fraction * 100).toFixed(3)}%`;
-      }
-      const clock = document.querySelector('.scrub-clock');
-      if (clock) clock.textContent = fmtClock(state.atMs);
+      paintScrubRow(document, state);
       clearTimeout(scrubTimer);
       scrubTimer = setTimeout(() => loadSlice().then(paintSlice), 120);
       return;
@@ -1340,6 +1336,23 @@ function wireEvents() {
     clearTimeout(searchTimer);
     searchTimer = setTimeout(() => loadTabData().then(renderTabBody), 250);
   });
+
+  // While the pointer holds the scrubber, refreshes are held back rather than
+  // run: one would replace the range input mid-drag. A timer armed before the
+  // grab is cancelled and counted as held back, so it cannot fire into the drag.
+  document.getElementById('detail').addEventListener('pointerdown', (event) => {
+    if (event.target.id !== 'timeline-scrub') return;
+    scrubGrabbed(refreshGate, { refreshPending: refreshTimer !== null });
+    clearTimeout(refreshTimer);
+    refreshTimer = null;
+  });
+  // On window, and on cancel as well as up: a drag that ends outside the input,
+  // or is cancelled by the browser, must not freeze refreshes for good.
+  const releaseScrub = () => {
+    if (scrubReleased(refreshGate)) scheduleRefresh(0);
+  };
+  window.addEventListener('pointerup', releaseScrub);
+  window.addEventListener('pointercancel', releaseScrub);
 
   let sessionSearchTimer = null;
   document.getElementById('session-search').addEventListener('input', (event) => {

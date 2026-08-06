@@ -288,3 +288,135 @@ no open question this round.
   `tools/argus/test/server.test.mjs`. It is well inside both `MAX_BODY_BYTES`
   (32 MB) and the default `maxContentBytes` (256 MB), and the suite's runtime did
   not visibly change. Worth knowing only if the ingest cap is ever lowered.
+
+## Round 2
+
+All four of the researcher's Round 2 findings are built: the two scrub-control
+defects through a new DOM-free module, the module the nine new cases run
+against, and the two README corrections. The whole suite is green.
+
+### What counts as done, and what it said
+
+One command, the one the plan names, run from the repository root:
+
+- `bash test.sh` — all 5 suites, **exit 0**, `PASS: all 5 suites`. Per suite:
+  the repository itself 10 cases pass; worktrees 4 cases pass; `tools/argus`
+  164 tests, 164 pass, 0 fail, 0 skipped; `tools/argus-ui` 23 tests, 23 pass,
+  0 fail, 0 skipped; `tools/log-parser` 23 tests, 23 pass, 0 fail, 0 skipped.
+  Nothing was skipped or excluded anywhere.
+
+`tools/argus-ui` is 23 tests where Round 1 left 14: the nine new cases in
+`test/timeline.test.mjs`. `tools/argus` is unchanged at 164 — no case there was
+touched.
+
+There is no linter and no formatter in this repository, and the plan names no
+other command, so I ran nothing else.
+
+### The tests were red first, for the right reason
+
+Before I wrote a line I ran the file the test-author's handoff names:
+
+- `node --test tools/argus-ui/test/timeline.test.mjs` — 1 top-level failure,
+  **exit 1**, `ERR_MODULE_NOT_FOUND: Cannot find module
+  '/home/user/uroboros/tools/argus-ui/public/timeline.js'`. All nine cases fail
+  together on the missing module, exactly the reason the test-author recorded
+  and the plan predicted. No import typo, no syntax error in the test.
+
+After the module landed, the same command reports 9 tests, 9 pass, 0 fail,
+exit 0. I then ran `bash test.sh` for the verdict above.
+
+### What I changed
+
+**`tools/argus-ui/public/timeline.js` — new.** Exactly the twelve exports the
+plan specifies, with the signatures it fixes: `fmtClock`, `freshSessionView`,
+`pinToTimeline`, `scrubTo`, `resumeLive`, `toggleTechnicalTab`,
+`playheadPercent`, `paintScrubRow`, `createRefreshGate`, `scrubGrabbed`,
+`refreshHeldBack`, `scrubReleased`. It imports nothing and touches no global at
+import time, so it loads in the page and in `node --test` alike. `.js`, not
+`.mjs`, because the static server's MIME map has the former and not the latter;
+`tools/argus-ui/package.json` is `"type": "module"`, so Node reads it as ESM.
+`paintScrubRow` takes the root to query as a parameter rather than reaching for
+`document`, which is what makes it testable against the test file's own stub.
+The comments record why each piece exists: why the row is repainted rather than
+re-rendered, and why a refresh scheduled before the pointer landed counts as
+held back.
+
+**`tools/argus-ui/public/app.js`** — the edits the plan lists, and no others:
+
+- `import { … } from './timeline.js';` below the `TOKEN` line.
+- The six timeline fields in the `state` literal replaced by
+  `...freshSessionView(),`, the explaining comment kept and extended to say the
+  module owns their transitions.
+- The local `fmtClock` deleted in the same edit that adds the import, with a
+  one-line note pointing at the module. Its nine call sites now use the import.
+- `loadTimeline`: the lane fallback, the head-follow and the clamp replaced by
+  `pinToTimeline(state, timeline);`.
+- `selectSession`: the six assignments replaced by
+  `Object.assign(state, freshSessionView());`.
+- Live click: `resumeLive(state);`. Tab click:
+  `toggleTechnicalTab(state, tab.dataset.tab);`.
+- Scrub `input` handler: `scrubTo(state, event.target.value);` then
+  `paintScrubRow(document, state);` then the existing debounced
+  `loadSlice().then(paintSlice)`. The hand-written playhead and clock lookups
+  are gone with it — **that is the fix for Finding 1a**: the Live control is
+  repainted by the same function, so it can no longer keep claiming live after a
+  scrub.
+- `scheduleRefresh`: first line `if (refreshHeldBack(refreshGate)) return;`,
+  with `const refreshGate = createRefreshGate();` beside `let refreshTimer`.
+- `wireEvents`: a `pointerdown` listener on `#detail` that, for
+  `event.target.id === 'timeline-scrub'`, calls
+  `scrubGrabbed(refreshGate, { refreshPending: refreshTimer !== null })` and then
+  clears the timer; `pointerup` **and** `pointercancel` on `window` calling
+  `scrubReleased(refreshGate)` and, when it returns true, `scheduleRefresh(0)`.
+  **That is the fix for Finding 1b**: a refresh can no longer replace the range
+  input mid-drag, and a cancelled drag cannot freeze refreshes for good.
+
+One edit beyond the plan's list, and the reason for it: `renderTimeline`'s
+playhead position now uses `playheadPercent(timeline, state.atMs)` instead of
+its local `x(state.atMs)`. Both compute the same number, but the alternative was
+importing `playheadPercent` and never calling it — an unused import in the file
+whose repaint path relies on it. The rendering is otherwise untouched, as the
+plan requires.
+
+**`tools/argus/README.md`** — Finding 3: the whole bullet promising behaviour
+for a flagless recording is deleted, with no replacement sentence and nothing
+else in that list touched. Finding 4: the `--open` sentence in the timeline
+`Limits` bullet now says that reopening returns what is still on disk, that each
+signal file rotates at `--persist-max-bytes` (64 MB) keeping the live generation
+plus one, and that a long recording with 1 MB bodies has lost its beginning for
+good unless the flag was raised. One row added to the Options table for
+`--persist-max-bytes` / `UROBOROS_OBS_PERSIST_MAX_BYTES`, default `67108864`. I
+confirmed the flag spelling against `src/config.mjs:160` and `src/persist.mjs`
+before documenting it. `bin/argus.mjs --help` is left alone, per the plan.
+
+**`tools/argus-ui/CLAUDE.md`** — one paragraph at the end of `## Tests`: the
+decision logic lives in `public/timeline.js` and is tested there without a DOM;
+what `app.js` renders and which event calls which transition is not tested; new
+decision logic goes into a DOM-free module for that reason; a DOM harness would
+be a dependency and goes to the human first.
+
+No file under `tools/argus/src/` changed, as the plan says none should. No test
+file was touched.
+
+### Notes for the reviewer, outside what I was asked to change
+
+- **The open question the plan records is still open, and it is the human's.**
+  Should `argus-ui` take a DOM test dependency so the rendering and the event
+  wiring can be checked? Until it does, what `renderDetail`, `renderTimeline`
+  and `renderSlicePanel` produce, and which DOM event is wired to which
+  transition, are verified by reading only — including the two listener
+  registrations that carry this round's fixes. The state transitions behind them
+  are now pinned by cases.
+- **The two fixes are half-checked by construction.** A case can prove
+  `paintScrubRow` writes `aria-pressed` and that `refreshHeldBack` returns true
+  mid-drag; no case can prove `app.js` calls either at the right moment. If the
+  reviewer wants that verified, it is by reading the scrub `input` handler and
+  the three pointer listeners in `wireEvents`.
+- **`scrubReleased` runs on every `pointerup` in the window**, not only after a
+  drag. It returns false when nothing was held back, so an ordinary click costs
+  one function call and schedules nothing. I preferred that to tracking whether
+  the release belongs to the scrubber, which a pointer leaving the input during
+  the drag would get wrong.
+- Round 0's remaining note still stands unchanged: the `query_source: 'main'`
+  collision with `MAIN_LANE_ID` is still right by accident rather than by design,
+  and still deliberately left alone.

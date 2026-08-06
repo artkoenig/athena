@@ -452,6 +452,7 @@ exactly these routes and nothing else.
 | `--max-metrics <n>`     | `UROBOROS_OBS_MAX_METRICS`     | `50000`        | Metric buffer                                    |
 | `--max-sessions <n>`    | `UROBOROS_OBS_MAX_SESSIONS`    | `500`          | Sessions in memory                               |
 | `--max-content-bytes <n>` | `UROBOROS_OBS_MAX_CONTENT_BYTES` | `268435456` | Raw API body text held in the event buffer      |
+| `--persist-max-bytes <n>` | `UROBOROS_OBS_PERSIST_MAX_BYTES` | `67108864`  | Size at which a persisted signal file rotates; one previous generation is kept |
 | `-V, --version`         | –                            | –              | Print the version and exit                       |
 
 Durations accept `ms`, `s`, `m`, `h`, `d` (e.g. `--retention 90m`).
@@ -526,9 +527,6 @@ What that means in practice — decide before pointing a real session at a colle
   accident — but it is not encrypted either.
 - **Extended thinking is redacted by the CLI itself**, whatever is set here. A thinking
   block arrives as a marker and nothing in this tool can recover it.
-- **To record structure without content**, do not export the five flags above — set the
-  rest of the block by hand instead of using `argus env`. The timeline then draws lanes and
-  activity, and the context panel stays empty; nothing else changes.
 - The raised content limit is what makes the bodies usable: at the 60 KB default a real
   agent turn arrives cut in half and is not even valid JSON. The other documented value,
   `OTEL_LOG_RAW_API_BODIES=file:<dir>`, is not used — the bodies would then sit on the
@@ -612,7 +610,10 @@ npm run demo      # emit a synthetic session
   and the context at a moment are computed at query time from the buffered spans and
   events; once those have been evicted by age, by count or by the content budget, the
   session keeps its aggregates and loses its timeline — exactly as it loses its traces.
-  A measurement written with `--persist` and reopened with `--open` has it back.
+  Reopening a measurement with `--open` returns what is still on disk, which is not
+  everything memory held: each signal file rotates at `--persist-max-bytes` (64 MB) and only
+  the live generation plus one previous one is kept, so a long recording — with 1 MB request
+  bodies, a few hundred turns — has lost its beginning for good unless that flag was raised.
 - **Tool calls reach a subagent's lane only when traces are on.** A `claude_code.tool` span
   carries `agent_id` and a `tool_result` event carries neither that nor `query_source`; the
   only record holding both namespaces is the `claude_code.llm_request` span. Without

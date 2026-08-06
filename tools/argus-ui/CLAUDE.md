@@ -39,3 +39,12 @@ outside itself. Every server binds port 0 and asks the OS which port it got — 
 hard-coded port makes the suite fail against whatever else is running. The
 collector is faked with `node:http` in the test file, never imported from its
 project.
+
+The page's decision logic lives in `public/timeline.js` — state transitions,
+playhead geometry, the scrub-row repaint, the refresh gate — and is tested there
+without a DOM, because that module imports nothing and takes the node to paint
+into as a parameter. What `public/app.js` renders, and which DOM event calls
+which transition, is not tested at all. So put new decision logic in a DOM-free
+module rather than in `app.js`, where no case can reach it. Testing the
+rendering itself would need a DOM harness, which is a dependency and therefore
+goes to the human first.
