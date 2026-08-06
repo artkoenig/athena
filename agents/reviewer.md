@@ -101,3 +101,8 @@ Return the number of findings that require a correction alongside the path and
 the sentence. That count is the whole triage: zero means the change is accepted,
 anything else sends your caller into another correction round. Findings you left
 out, or that need no correction, are not in it.
+
+Return the reason for that round too, in one or two sentences: what is wrong and
+which acceptance criterion it misses. The human reads it in the chat and opens
+no file, so it stands on its own — name the thing, not the section it is written
+in — and it is empty when you found nothing.
