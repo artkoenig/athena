@@ -1,1 +1,1 @@
-CLAUDE.md
+rulebook.md

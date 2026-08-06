@@ -29,8 +29,8 @@ plugin_copy() {
   local dest="$1"
   mkdir -p "$dest"
   cp -R "$root/.claude-plugin" "$root/hooks" "$root/.githooks" "$dest/"
-  cp "$root/CLAUDE.md" "$dest/"
-  for optional in skills agents; do
+  cp "$root/rulebook.md" "$dest/"
+  for optional in skills agents workflows; do
     [ -d "$root/$optional" ] && cp -R "$root/$optional" "$dest/"
   done
   return 0
@@ -113,7 +113,7 @@ echo "=== manifests"
 # installation keep its cached copy instead of picking up merged commits.
 node -e '
   const m = require(process.argv[1]);
-  const allowed = new Set(["name","description","author","homepage","repository","license","keywords","skills","agents"]);
+  const allowed = new Set(["name","description","author","homepage","repository","license","keywords","skills","agents","workflows"]);
   const problems = [];
   for (const k of Object.keys(m)) if (!allowed.has(k)) problems.push("unknown field: " + k);
   for (const k of ["name","description","author","repository","license"]) if (!m[k]) problems.push("missing field: " + k);
@@ -160,6 +160,65 @@ node -e '
 ' "$root"
 check $? "plugin.json declares exactly the agent files the tree holds"
 
+# An agent must hold the same context here as in a project that installed the
+# plugin, so exactly two things may reach it from uroboros: its own page and
+# the shared brief. Both travel with the plugin. A CLAUDE.md at the root would
+# not — it would load as this checkout's project memory and be inherited by
+# every subagent dispatched here, and no installing project can reproduce
+# that. Hence rulebook.md, delivered by the SessionStart hook, and hence every
+# agent page naming agent-brief in its skills list.
+node -e '
+  const fs = require("fs"), path = require("path");
+  const root = process.argv[1];
+  const problems = [];
+  if (fs.existsSync(path.join(root, "CLAUDE.md")))
+    problems.push("a CLAUDE.md at the plugin root would be inherited by every subagent in this checkout alone");
+  if (!fs.existsSync(path.join(root, "rulebook.md")))
+    problems.push("no rulebook.md at the plugin root");
+  if (!fs.existsSync(path.join(root, "skills/agent-brief/SKILL.md")))
+    problems.push("no skills/agent-brief/SKILL.md");
+  for (const file of fs.readdirSync(path.join(root, "agents")).filter(f => f.endsWith(".md"))) {
+    const text = fs.readFileSync(path.join(root, "agents", file), "utf8");
+    const fm = text.match(/^---\n([\s\S]*?)\n---\n/);
+    if (!fm) { problems.push(file + ": no frontmatter"); continue; }
+    if (!/^skills:\s*(\n\s*-\s*)?[\s\S]*?\bagent-brief\b/m.test(fm[1]))
+      problems.push(file + ": does not preload agent-brief");
+    if (!/agent-brief/.test(text.slice(fm[0].length).split("\n").slice(0, 6).join("\n")))
+      problems.push(file + ": does not open by reporting a missing shared brief");
+  }
+  if (problems.length) { console.error(problems.join("; ")); process.exit(1); }
+' "$root"
+check $? "the rulebook is rulebook.md, not a CLAUDE.md, and every agent page preloads the shared brief"
+
+# Issue Mode ends by running the loop, so the loop has to exist in the project
+# the session is running in — not only in this checkout. It used to sit in
+# .claude/workflows/, which no installing project has, and step 4 named a file
+# that was not there. As a plugin component it registers as uroboros:<basename>,
+# so the name the rulebook gives the session is only correct while the manifest
+# declares the directory and the file is named after what it registers as.
+node -e '
+  const fs = require("fs"), path = require("path");
+  const root = process.argv[1];
+  const problems = [];
+  const manifest = JSON.parse(fs.readFileSync(path.join(root, ".claude-plugin/plugin.json"), "utf8"));
+  if (!(manifest.workflows || []).includes("./workflows/"))
+    problems.push("plugin.json does not declare ./workflows/, so no workflow ships");
+  const dir = path.join(root, "workflows");
+  const shipped = fs.existsSync(dir) ? fs.readdirSync(dir).filter(f => f.endsWith(".js")) : [];
+  if (!shipped.includes("loop.js")) problems.push("no workflows/loop.js");
+  const rulebook = fs.readFileSync(path.join(root, "rulebook.md"), "utf8");
+  for (const file of shipped) {
+    const name = file.replace(/\.js$/, "");
+    const meta = fs.readFileSync(path.join(dir, file), "utf8").match(/name:\s*["\x27]([^"\x27]+)["\x27]/);
+    if (!meta) problems.push(file + ": no name in meta");
+    else if (meta[1] !== name) problems.push(file + ": registers as uroboros:" + meta[1] + ", not uroboros:" + name);
+  }
+  if (!/uroboros:loop/.test(rulebook)) problems.push("the rulebook does not send the session to uroboros:loop");
+  if (/\.claude\/workflows/.test(rulebook)) problems.push("the rulebook still names .claude/workflows/, which no installing project has");
+  if (problems.length) { console.error(problems.join("; ")); process.exit(1); }
+' "$root"
+check $? "the loop ships with the plugin as uroboros:loop, which is the name the rulebook gives the session"
+
 # the marketplace manifest offers exactly this repository as the
 # uroboros plugin, and pins no version either.
 node -e '
@@ -192,21 +251,21 @@ check $? "claude plugin validate accepts the plugin manifest and its components"
 # the loader ignores (a misspelled `repository`) or one it misses
 # (`description`), or a file that lands in a component directory without
 # being a component — an `agents/CLAUDE.md` registers as an agent with no
-# frontmatter. So the gate is the warning list, not the exit code: two
-# warnings are expected on a defect-free tree, and any third is a defect.
+# frontmatter. So the gate is the warning list, not the exit code: one
+# warning is expected on a defect-free tree, and any second is a defect.
 #
-# The two: the missing version, and the root CLAUDE.md — the rulebook
-# itself, deliberately not loaded by the CLI's own convention and
-# delivered to sessions of installing projects via the hook instead.
+# The one: the missing version. The rulebook draws none, because it is
+# `rulebook.md` rather than a CLAUDE.md the CLI would notice and report as
+# unloaded — it is not a memory filename in any project, and the hook is
+# what delivers it.
 strict_out="$tmp/strict.txt"
 claude plugin validate "$root/.claude-plugin/plugin.json" --strict >"$strict_out" 2>&1
 warnings="$(grep -c '^  > ' "$strict_out")"
 version_warnings="$(grep -c '^  > version: No version specified' "$strict_out")"
-root_md_warnings="$(grep -c '^  > root: CLAUDE.md at the plugin root is not loaded' "$strict_out")"
-if [ "$warnings" = "2" ] && [ "$version_warnings" = "1" ] && [ "$root_md_warnings" = "1" ]; then
-  ok "--strict warns about the missing version and the root CLAUDE.md, and nothing else"
+if [ "$warnings" = "1" ] && [ "$version_warnings" = "1" ]; then
+  ok "--strict warns about the missing version and nothing else"
 else
-  no "--strict warns about more than the missing version and the root CLAUDE.md:"
+  no "--strict warns about more than the missing version:"
   grep '^  > ' "$strict_out" | sed 's/^/       /'
 fi
 
@@ -369,8 +428,8 @@ node -e '
   const out = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
   const rulebook = fs.readFileSync(process.argv[2], "utf8");
   if (!out.hookSpecificOutput.additionalContext.includes(rulebook.trimEnd())) process.exit(1);
-' "$tmp/happy.json" "$root/CLAUDE.md"
-check $? "the whole text of CLAUDE.md arrives verbatim in additionalContext"
+' "$tmp/happy.json" "$root/rulebook.md"
+check $? "the whole text of rulebook.md arrives verbatim in additionalContext"
 
 # hooks.json registers exactly one SessionStart command hook, and it
 # runs the script this suite exercises, from the plugin root.
@@ -392,13 +451,13 @@ echo "=== the plugin self-updates when remote"
 
 # The version the fake update lands on, and the plugin tree it resolves
 # to — a second copy with a marker line in its rulebook, so a test can tell
-# which copy's CLAUDE.md the hook actually delivered.
+# which copy's rulebook.md the hook actually delivered.
 selfupdate="$tmp/self-update"
 old_root="$selfupdate/old-version"
 new_root="$selfupdate/new-version"
 plugin_copy "$old_root"
 plugin_copy "$new_root"
-printf '\ntest-marker: new-version\n' >>"$new_root/CLAUDE.md"
+printf '\ntest-marker: new-version\n' >>"$new_root/rulebook.md"
 selfupdate_project="$tmp/self-update-project"
 project_repo "$selfupdate_project"
 fake_bin="$tmp/fake-bin"
@@ -458,11 +517,12 @@ status="$(hook_status "$tmp/happy.json")"
 real_skills=$(( $(find "$root/skills" -mindepth 2 -maxdepth 2 -name SKILL.md 2>/dev/null | wc -l | tr -d ' ') \
               + $(find "$root/agents" -mindepth 4 -maxdepth 4 -path '*/skills/*' -name SKILL.md 2>/dev/null | wc -l | tr -d ' ') ))
 real_agents=$(find "$root/agents" -mindepth 1 -maxdepth 1 -name '*.md' 2>/dev/null | wc -l | tr -d ' ')
+real_workflows=$(find "$root/workflows" -mindepth 1 -maxdepth 1 -name '*.js' 2>/dev/null | wc -l | tr -d ' ')
 
 # the happy status names the real counts, the delivered rulebook and
 # the set guard, and reports no failure.
 case "$status" in
-  "Uroboros self-check: ${real_skills} skills and ${real_agents} agents reachable; rulebook delivered; push guard set; no problems.")
+  "Uroboros self-check: ${real_skills} skills, ${real_agents} agents and ${real_workflows} workflows reachable; rulebook delivered; push guard set; no problems.")
     ok "the status names the real counts, the rulebook and the guard, with no problems" ;;
   *) no "unexpected happy status: $status" ;;
 esac
@@ -473,12 +533,12 @@ esac
 # has behind it.
 empty_plugin="$tmp/empty-plugin"
 plugin_copy "$empty_plugin"
-rm -rf "$empty_plugin/skills" "$empty_plugin/agents"
+rm -rf "$empty_plugin/skills" "$empty_plugin/agents" "$empty_plugin/workflows"
 empty_project="$tmp/empty-project"
 project_repo "$empty_project"
 status="$(run_hook "$empty_plugin" "$empty_project" >"$tmp/empty.json" && hook_status "$tmp/empty.json")"
 case "$status" in
-  "Uroboros self-check: 0 skills and 0 agents reachable;"*"no problems.") ok "no skills and no agents is reported as zero, not as a failure" ;;
+  "Uroboros self-check: 0 skills, 0 agents and 0 workflows reachable;"*"no problems.") ok "no skills and no agents is reported as zero, not as a failure" ;;
   *) no "an empty shelf was not reported cleanly: $status" ;;
 esac
 
@@ -507,6 +567,19 @@ case "$status" in
   *) no "an unreachable agent went unreported: $status" ;;
 esac
 
+# and the same for a workflow that is not a flat .js file. Issue Mode ends by
+# running one, so a session about to hand a whole run to a workflow has to see
+# that the plugin it is talking to really has it.
+lost_workflow="$tmp/lost-workflow"
+plugin_copy "$lost_workflow"
+mkdir -p "$lost_workflow/workflows/nested"
+status="$(run_hook "$lost_workflow" "$empty_project" >"$tmp/lost-workflow.json" && hook_status "$tmp/lost-workflow.json")"
+case "$status" in
+  *"workflow not reachable: nested"*"FAILED"*) ok "a workflow that is not a flat .js file is named and success withdrawn" ;;
+  *"FAILED"*"workflow not reachable: nested"*) ok "a workflow that is not a flat .js file is named and success withdrawn" ;;
+  *) no "an unreachable workflow went unreported: $status" ;;
+esac
+
 # an agent's own directory, <name>/ beside <name>.md, is not a lost agent:
 # it holds the skills that agent preloads, and those reach a session through
 # plugin.json's skills paths. The skill inside is counted like any other.
@@ -521,7 +594,7 @@ project_repo "$own_project"
 status="$(run_hook "$own_dir" "$own_project" >"$tmp/own-dir.json" && hook_status "$tmp/own-dir.json")"
 case "$status" in
   *"not reachable"*) no "an agent's own directory was mistaken for a lost agent: $status" ;;
-  "Uroboros self-check: $((before_skills + 1)) skills and $((real_agents + 1)) agents reachable; rulebook delivered; push guard set; no problems.")
+  "Uroboros self-check: $((before_skills + 1)) skills, $((real_agents + 1)) agents and ${real_workflows} workflows reachable; rulebook delivered; push guard set; no problems.")
     ok "an agent's own directory carries its skill into the count and is no defect" ;;
   *) no "unexpected status for an agent with its own directory: $status" ;;
 esac
@@ -543,10 +616,10 @@ esac
 # has to say so rather than report success.
 no_rulebook="$tmp/no-rulebook"
 plugin_copy "$no_rulebook"
-rm -f "$no_rulebook/CLAUDE.md"
+rm -f "$no_rulebook/rulebook.md"
 status="$(run_hook "$no_rulebook" "$empty_project" >"$tmp/no-rulebook.json" && hook_status "$tmp/no-rulebook.json")"
 case "$status" in
-  *"rulebook missing"*"FAILED"*) ok "a missing CLAUDE.md is named and success withdrawn" ;;
+  *"rulebook missing"*"FAILED"*) ok "a missing rulebook.md is named and success withdrawn" ;;
   *) no "a missing rulebook went unreported: $status" ;;
 esac
 

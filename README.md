@@ -8,7 +8,8 @@
 just the name: a run reviews and corrects its own work, and what a run learns
 about the workflow is written back into the workflow. It ships as a Claude Code
 plugin and assumes a modern Anthropic agent — at least Opus 5. The rules are one
-page, [`CLAUDE.md`](CLAUDE.md); this one won't repeat it.
+page, [`rulebook.md`](rulebook.md), delivered to every session by the plugin's
+SessionStart hook; this one won't repeat it.
 
 ## Context is the scarce resource
 
@@ -31,7 +32,7 @@ flowchart LR
     CRIT --> ISSUE[("issue.md<br/>the record of the run")]
     ISSUE ==> RES
 
-    subgraph LOOP["uroboros-loop.js — one agent per step, each commits its handoff into the issue directory"]
+    subgraph LOOP["uroboros:loop — one agent per step, each commits its handoff into the issue directory"]
         direction TB
         RES["researcher<br/>writes the implementation plan<br/>and the test plan"]
         TEST["test-author<br/>turns the planned cases<br/>into failing tests"]
@@ -49,8 +50,9 @@ flowchart LR
 The steps are [`researcher`](agents/researcher.md),
 [`test-author`](agents/test-author.md), [`implementer`](agents/implementer.md)
 and [`reviewer`](agents/reviewer.md), run by a script
-([`.claude/workflows/uroboros-loop.js`](.claude/workflows/uroboros-loop.js)) and
-not by an agent, because a subagent cannot start another one. Findings from the
+([`workflows/loop.js`](workflows/loop.js), which the plugin ships as the
+workflow `uroboros:loop`) and not by an agent, because a subagent cannot start
+another one. Findings from the
 review open a correction round; after two the loop stops and hands back.
 
 Whether, what and how to test is decided once, by the researcher — the only
@@ -98,6 +100,62 @@ skills, a self-check saying what of that is actually reachable, and a `pre-push`
 guard that refuses a direct push to the default branch — unless the project
 manages its own git hooks, which uroboros leaves alone and reports. Updates come
 with the next session, not with a re-installation.
+
+## What reaches whom
+
+Two things carry uroboros into a session, and only one of them reaches an
+agent. The hook hands the rulebook to the session and stops there: no subagent
+inherits it. An agent is assembled from its own page and the shared brief
+[`agent-brief`](skills/agent-brief/), both preloaded at dispatch, both shipped
+with the plugin.
+
+```mermaid
+flowchart LR
+    HOOK["SessionStart hook"] -->|"rulebook.md, verbatim"| S["The session"]
+    S -->|"hands it the issue directory"| WF["uroboros:loop"]
+    WF -->|"dispatches"| A["An agent"]
+    PAGE["its page in agents/"] -->|"its role"| A
+    BRIEF["the agent-brief skill"] -->|"preloaded at startup"| A
+    S -. "the rulebook stops here" .-x A
+```
+
+That is why the rulebook is `rulebook.md` and not a `CLAUDE.md`: a `CLAUDE.md`
+here would load as this checkout's project memory and be inherited by every
+agent dispatched in it — which no installing project can reproduce. The same
+agent would then hold a rule here that it lacks everywhere else.
+
+So the two cases differ in one thing only, and it is not uroboros':
+
+```mermaid
+flowchart TB
+    subgraph HERE["in this repository"]
+        direction LR
+        H1["rulebook.md"] -->|"hook"| HS["session"]
+        H2["page + agent-brief"] --> HA["agent"]
+        H3["this checkout's own rules"] -. "on a read of the files they govern" .-> HS
+        H3 -. "same, on an agent's own read" .-> HA
+    end
+    subgraph THERE["in a project that installed uroboros"]
+        direction LR
+        T1["rulebook.md"] -->|"hook"| TS["session"]
+        T2["page + agent-brief"] --> TA["agent"]
+        T3["the project's own CLAUDE.md"] --> TS
+        T3 -->|"inherited"| TA
+    end
+```
+
+An agent's baseline is identical in both: its page and the brief, and nothing
+else uroboros owns. What the host project adds on top is its own memory, and
+that is inherited on purpose — an agent should follow the house rules of the
+project it is working in.
+
+Those rules — the pages under `.claude/rules/` and `skills/CLAUDE.md` — are for
+whoever develops uroboros, and exist in this checkout alone. None of them is in
+a startup context, so no subagent inherits one; each arrives instead on a read
+of the files it governs, and it arrives for a subagent's own reads exactly as
+for the session's. A rule that has to bind an agent *before* it reads anything
+therefore cannot live there. It goes into the shared brief, which travels with
+the plugin.
 
 ## Working in parallel
 

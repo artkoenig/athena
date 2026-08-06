@@ -114,7 +114,7 @@ node -e '
   const fs = require("fs");
   const ctx = JSON.parse(fs.readFileSync(process.argv[1], "utf8")).hookSpecificOutput.additionalContext;
   if (!ctx.includes(fs.readFileSync(process.argv[2], "utf8").trimEnd())) process.exit(1);
-' "$out" "$root/CLAUDE.md"
+' "$out" "$root/rulebook.md"
 check $? "the rulebook reaches a session whose project directory is a worktree"
 
 case "$status" in

@@ -10,7 +10,9 @@ the agent's `skills:` frontmatter, which injects the whole page at startup
 instead of costing a `Skill` call mid-run. Both locations are listed in
 `plugin.json`'s `skills` field — for this marketplace entry a declared path
 replaces the default scan, so `./skills/` has to stay listed alongside.
-This directory is for the skills a session itself reaches.
+This directory is for the skills a session itself reaches, and for the shared
+brief every agent preloads — that one belongs to no single agent, so it cannot
+sit under any of them.
 
 ## What a page has to carry
 
