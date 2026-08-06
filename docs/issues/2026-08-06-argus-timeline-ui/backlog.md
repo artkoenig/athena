@@ -161,13 +161,13 @@ the panel (an empty panel for every lane, or a subagent lane headed as the
 main session, fails nothing), the click's own fetch never has to repaint the
 panel (a session with no further ingest stays on "Reading the context…"
 forever), and the size on a collapsed line is never read (every block can
-report 0). The criterion moves to context-pinning, which carries those three
-gaps as explicit criteria. Details in `reviewer.md` (Increment 5, rounds 0–2)
-and `researcher.md` (Increment 5).
+report 0). The criterion moved to context-pinning, which carried those three
+gaps as explicit criteria and closed all of them. Details in `reviewer.md`
+(Increment 5, rounds 0–2) and `researcher.md` (Increment 5).
 
 ## context-pinning — The lane-at-time context panel is verified end to end
 
-**Status:** todo
+**Status:** done
 
 **Delivers:** Closes the criterion context-inspector left blocked. The
 panel's production behavior already meets it by the reviewer's reading;
@@ -196,6 +196,24 @@ in `reviewer.md` under "Increment 5 — Round 2" (findings 1–3).
   the collapsed one-line preview never reaches the markup (reviewer's
   finding 3, mutations M-D and M-E).
 
+**Outcome:** Accepted on the first review with zero findings — the run's
+first round-zero acceptance. All five mutations increment 5 left alive
+(M-A…M-E) now fail a case, measured one at a time in a sandbox worktree,
+along with seven of eight further variants the reviewer probed along the
+same chain; the suite stands at 181 pass, exit 0
+(`npm --prefix tools/argus-ui test`). The restructure the criteria permitted
+is 37 production lines: the panel's whole input became the pure
+`lanePanelInput` in `context.js`, importable by tests and pinned by value,
+with `renderLanePanel` reduced to one flat call a source assertion can read;
+no rendered byte changed. The repaint hop (M-B) and the page-side call are
+pinned by sharpened source assertions — the measured honest ceiling for
+DOM-only hops in a suite with no DOM and no dependencies. One hop of the
+chain stays unread by the reviewer's own measurement (M-K': a correct render
+whose markup never reaches the container leaves the suite green), recorded
+as an observation, not a finding — the reviewer notes the pin is a one-line
+addition for whoever touches that path next. Details in `researcher.md`
+(Increment 6) and `reviewer.md` (Increment 6).
+
 ## tool-usage — Selecting a lane at a time also shows the tools used up to that moment
 
 **Status:** todo
@@ -203,7 +221,8 @@ in `reviewer.md` under "Increment 5 — Round 2" (findings 1–3).
 **Delivers:** The same lane-at-time selection also answers "which tools, and
 what for": every tool the agent has used up to that moment, with name and
 call parameters. Rides the selection mechanism context-inspector built and
-context-pinning verifies. Closes the run with the full suite green.
+context-pinning verified end to end. Closes the run with the full suite
+green.
 
 **Acceptance criteria:**
 - Selecting a lane at the chosen time also shows the tools that agent has

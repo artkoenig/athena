@@ -352,3 +352,59 @@ Budget: 5 of at most 8 increments spent; two remain planned, so the run
 still fits, with one increment of slack left — enough to split tool-usage
 once if it demands it, and a reason to keep context-pinning as narrow as its
 criteria.
+
+## After increment 6
+
+**Closed.** context-pinning is `done` — the review accepted it on the first
+round with zero findings, the run's first round-zero acceptance. All five
+mutations that blocked context-inspector (M-A…M-E) now fail a case, each
+measured one at a time in a sandbox worktree, and seven of eight further
+variants the reviewer probed along the same chain die too. The suite stands
+at 181 pass, exit 0. The successor cut worked as intended: the issue's
+"lane-at-time selection shows the context as a message list" criterion,
+which context-pinning carried for its blocked parent, is delivered and
+demonstrated, so the criterion map in "The cut" is now fully closed except
+for tool-usage's two lines.
+
+**What the increment settled beyond its criteria.** The block-and-repair arc
+of increments 5 and 6 ends with a measured verification discipline, and that
+is a fact tool-usage's researcher should hold before designing anything:
+every finding across four rounds of review died the same way — the hop
+lifted out of the page module into a pure, importable function and pinned by
+value — while assertions over `app.js` source survived only once sharpened
+to read the exact statement (the researcher's per-hop table in
+`researcher.md`, Increment 6, says which of the two each hop honestly
+takes, and the reviewer's acceptance confirms the split). tool-usage builds
+a second panel on the same selection mechanism and will face the same
+mutation probes; building it value-testable from the start is cheaper than
+repeating the arc. That is history handed on, not an implementation order —
+the researcher owns the design.
+
+**What I deliberately did not change.** tool-usage stands as cut, its two
+criteria untouched; the only edit is one word in its delivers-line
+("verifies" became "verified") so it stops promising work that is now done.
+No re-cut is warranted: nothing increment 6 showed reaches the substance of
+"which tools, and what for" — the data path it rides (tool events fetched
+on demand, attributed by `spanId` per increment 3's measurement) was settled
+two increments ago, and the selection mechanism it renders under is now the
+best-verified surface in the UI.
+
+**What stays out.** One new reviewer observation joins the
+recorded-not-scheduled list: M-K', the last unread hop of the click-to-markup
+chain — a correct render whose markup never reaches the container leaves the
+suite green. It is not scheduled because the accepted increment's criteria
+defined the empty-panel case as mutations M-A and M-C and both now fail; it
+is not forgotten because tool-usage's panel likely renders through the same
+path, which puts that hop inside increment 7's own chain where its reviewer
+will probe it — the reviewer already calls the pin a one-line addition for
+whoever touches it next. Carried forward unchanged, still none violating a
+criterion: the expansion set collapsing when a live refresh lands a newer
+record, the whole body refetched every refresh cycle, the cross-boundary
+parameter names agreeing by reading only, the 2000-record ceilings,
+span-carried tool content unbudgeted, `search=` walking bodies, the 32 MB
+ingest cap, the unused `subagent_completed` end-marker, the mid-drag slider
+replacement, and 1 ms arrow-key steps.
+
+Budget: 6 of at most 8 increments spent; one remains planned, with one
+increment of slack — enough to split tool-usage once if it proves larger
+than it reads, and no reason to spend the slack pre-emptively.
