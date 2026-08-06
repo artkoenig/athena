@@ -1193,3 +1193,189 @@ unambiguous — the `data-truncated="true"` flag, and that the raw block is
 present and still carries its text (`'messages'` as a substring), rather
 than assert an exact escaped string that would pin an escaping choice the
 plan never made.
+
+## Increment 5 — Round 1
+
+The reviewer's reproduction spec for this round is the three findings in
+`researcher.md`'s Round 1 section: `context.js`'s `<pre class="ctx-text">`
+printing `esc(block.preview)` instead of `esc(block.text)`; `app.js`'s lane
+filter collapsed to `{ main: '1' }` for every lane; and `'assistant'` dropped
+from `context.js`'s `ROLE_KINDS` — each proven by a mutation the round-0 suite
+survived. Wrote exactly the Test Plan section's cases and nothing else: the
+fixture change and updated case 1 in `tools/argus-ui/test/context.test.mjs`
+(finding 3), seven new cases R1–R7 in the same file (findings 1 and 3, plus
+`laneContentQuery`'s own unit cases), and the two rewritten cases R8/R9 in
+`tools/argus-ui/test/page.test.mjs` (finding 2). No production file was
+opened: every expected shape — the assistant block's position between
+`thinking` and `tool_use`, the exact `<pre>`-extraction technique, the four
+`laneContentQuery` input/output pairs, the `laneContentQuery(` regex the two
+rewritten page cases now require — came from the plan's own snippets and
+prose.
+
+### Fixture change and updated case (finding 3)
+
+In `context.test.mjs`'s `requestBody` factory, inserted
+`{ type: 'text', text: 'the answer' }` between the assistant message's
+`thinking` part and its `tool_use` part, exactly as the plan's snippet has
+it — no other line of the factory moved, so the one case that names a block
+index (`expanded: ['12:2']`) still points at the `'ping'` block. Updated the
+existing case `'the five kinds the criterion names all reach the list,
+system prompt first'` (was line 51) to the plan's new expected array
+(`[..., 'thinking', 'assistant', 'tool_use', ...]`) and extended its
+assertion message to say the assistant's reply sits between its thinking and
+its tool call, word for word what the plan asks for.
+
+### New cases in `context.test.mjs` (R1–R7)
+
+Added two imports the plan names: `PREVIEW_CHARS` and `laneContentQuery`
+folded into the existing `../public/context.js` import, and a new
+`import { esc } from '../public/format.js';` — the renderer's own escaper, so
+R2 and R3 are not a second hand-rolled implementation of it. Appended all
+seven cases after the file's last round-0 case, under a new
+`// Increment 5 — Round 1` banner:
+
+| # | Case | Test name |
+| --- | --- | --- |
+| R1 | an assistant reply reaches the list, and the panel marks it as the assistant's | `'an assistant reply reaches the list, and the panel marks it as the assistant\'s'` |
+| R2 | an expanded block shows the exact full text, not the one line it collapsed to | `'an expanded block shows the exact full text, not the one line it collapsed to'` |
+| R3 | every block expands to its own text, in the order the list shows them | `'every block expands to its own text, in the order the list shows them'` |
+| R4 | the main lane asks for the main session's own traffic | `'the main lane asks for the main session\'s own traffic'` |
+| R5 | an agent lane asks for its own span, never for the main session | `'an agent lane asks for its own span, never for the main session'` |
+| R6 | an agent lane with no span falls back to its name | `'an agent lane with no span falls back to its name'` |
+| R7 | a lane that identifies nothing gets no query at all | `'a lane that identifies nothing gets no query at all, so no lane ever shows the main session\'s context by accident'` |
+
+R2 and R3 both extract every `<pre class="ctx-text">…</pre>` capture from the
+rendered markup with one `matchAll` and compare it position by position
+against `esc(block.text)` for the corresponding parsed block — byte for
+byte, never a substring check — which is exactly what catches finding 1's
+`esc(block.preview)` swap. R2 guards itself against going vacuous first:
+`assert.ok(resultBlock.text.length > PREVIEW_CHARS, …)` and
+`assert.notEqual(resultBlock.preview, resultBlock.text, …)`, so the case
+cannot pass by accident on a fixture whose preview and text happen to
+coincide. R4–R7 pass the literal lane shapes the plan specifies (`R4` uses
+the file's own `lane()` factory, which is already the main lane; `R5`–`R7`
+spell out `kind`/`spanId`/`agent` inline, as the plan calls for).
+
+### Rewritten cases in `page.test.mjs` (R8, R9)
+
+- **R8** replaces the case at (previously) line 404,
+  `'the panel asks the collector for the nearest request at the cursor\'s
+  moment, for that lane only'`, keeping its name. It still asserts
+  `/\/api\/content\/at/` and `/resolveCursor\(/`, and now asserts
+  `/laneContentQuery\(/` in place of the three deleted bare `\bmain\b` /
+  `\bspan\b` / `\bagent\b` matches — those three could be, and were, satisfied
+  by the surrounding prose comment alone, which is exactly the coverage hole
+  the finding named.
+- **R9** extends the case at (previously) line 349, `'app.js takes the
+  context panel from its module'`: kept its existing `renderContextPanel`
+  import assertion and added a second `assert.match` for a
+  `laneContentQuery` import from `./context.js`, so the function R4–R7 pin by
+  value is the one the page actually imports.
+
+Every other case in both files is unchanged, matching the plan's own
+"Rewritten cases" section, which names only these two for edit.
+
+### Proving the cases fail correctly
+
+Ran the plan's own single-file commands. `context.test.mjs` fails to load as
+a whole — the correct "not implemented yet" shape, since `laneContentQuery`
+is not yet an export of `public/context.js` (confirmed:
+`grep -n '^export const PREVIEW_CHARS\|^export function laneContentQuery'
+tools/argus-ui/public/context.js` finds `PREVIEW_CHARS` at line 18 and no
+`laneContentQuery` at all):
+
+```
+node --test tools/argus-ui/test/context.test.mjs
+# file:///home/user/uroboros/tools/argus-ui/test/context.test.mjs:4
+# import { contextBlocks, renderContextPanel, PREVIEW_CHARS, laneContentQuery } from '../public/context.js';
+#                                                            ^^^^^^^^^^^^^^^^
+# SyntaxError: The requested module '../public/context.js' does not provide an export named 'laneContentQuery'
+# tests 1
+# pass 0
+# fail 1
+```
+
+That single failure stands for every case in the file — all 29 round-0 cases
+plus the fixture-updated case 1 and the seven new R1–R7 — none registered
+individually because the import throws before `node:test` can enumerate the
+file's tests. This is the same shape earlier rounds' new-export failures
+took (increment 4's `liveCursor`, increment 3's `buildDensity`), and it is
+not a defect in the test: the plan names `laneContentQuery` as a new export
+of `context.js`, and it is genuinely absent today.
+
+`page.test.mjs` loads fine (nothing in it depends on a new export) and fails
+on exactly the two rewritten cases, each on its own assertion, never on a
+crash:
+
+```
+node --test tools/argus-ui/test/page.test.mjs
+# tests 39
+# pass 37
+# fail 2
+```
+
+- `'app.js takes the context panel from its module'` (R9): fails on
+  `AssertionError: app.js must import laneContentQuery from context.js, so
+  the function the unit cases test is the one the page runs` — the current
+  import line names only `esc, fmtNum, fmtCost, fmtDur, fmtClock, fmtAgo,
+  isLive, shortId` from `./format.js`; `app.js`'s import from `./context.js`
+  today names only `renderContextPanel`.
+- `'the panel asks the collector for the nearest request at the cursor\'s
+  moment, for that lane only'` (R8): fails on `AssertionError: the lane's
+  filter must come from laneContentQuery — the mapping pinned by value in
+  context.test.mjs — not from prose a grep for main/span/agent could satisfy
+  on its own` — the failure's own `actual:` dump quotes today's
+  `loadLaneContext`, which still builds `filter` with the inline
+  `!lane ? null : lane.kind === 'main' ? { main: '1' } : lane.spanId ? {
+  span: lane.spanId } : { agent: lane.agent }` chain and calls
+  `laneContentQuery` nowhere.
+
+### Commands run
+
+- `node --test tools/argus-ui/test/context.test.mjs` — fails to load, exit 1
+  (quoted above); covers the fixture change, the updated case 1, and R1–R7 —
+  33 cases total in the file, all red as one module-load failure.
+- `node --test tools/argus-ui/test/page.test.mjs` — 39 tests, 37 pass, 2 fail
+  (R8, R9), exit 1, quoted individually above.
+- `npm --prefix tools/argus-ui test` (run once, to confirm nothing else in
+  the package took collateral damage) — 126 tests, 123 pass, 3 fail, exit 1:
+  `not ok 2 - test/context.test.mjs` (the module-load failure),
+  `not ok 31 - app.js takes the context panel from its module`,
+  `not ok 37 - the panel asks the collector for the nearest request at the
+  cursor's moment, for that lane only`. `config.test.mjs`, `server.test.mjs`,
+  `timeline.test.mjs` and `independence.test.mjs` all pass in full — this
+  round touches only `context.test.mjs` and two cases in `page.test.mjs`.
+  This is a confirmation run, not a substitute for the implementer's own.
+
+Not run: `npm --prefix tools/argus test` and `./test.sh` — the plan's own
+"What counts as done" names only `npm --prefix tools/argus-ui test`, and no
+file in `tools/argus` changes this round.
+
+### Deliberately not written
+
+Matches the round's own "deliberately left untested" list exactly, nothing
+added or dropped:
+
+- That `loadLaneContext` actually puts the returned filter on the wire — it
+  spreads `...filter` into an `api()` call behind `fetch`; a fake `window`
+  would be needed, which this project has ruled out. R8 pins that the filter
+  comes from `laneContentQuery`, R4–R7 pin what that function returns, and
+  the route itself is covered by `tools/argus`'s own suite.
+- The reviewer's four "observation, not a finding" entries — the panel's
+  refetch on every live refresh, the expansion set collapsing when the
+  record changes, the wording of the existing case at (then) line 474, and
+  the impossible `"agent:"` record. None is a finding; no case pins
+  behaviour for any of them. The last is closed as a byproduct of R7 rather
+  than by a case naming it as its own subject.
+- Everything increment 6 owns — the tools an agent used up to the moment.
+- CSS, the click and the drag in a browser — unchanged this round, and
+  unchanged in the code.
+
+### Gaps and conflicts found in the plan
+
+None. The plan's fixture snippet, the exact expected block-kind array, the
+`laneContentQuery` doc comment with its four input/output pairs, and the two
+rewritten cases' exact regexes left nothing to guess; every case mapped to
+one concrete assertion, and running the files confirmed the plan's own
+predicted failure shapes (module-load error for `context.test.mjs`, two
+named assertion failures for `page.test.mjs`) exactly.

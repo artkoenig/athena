@@ -353,6 +353,11 @@ test('app.js takes the context panel from its module', () => {
     /import\s*\{[^}]*\brenderContextPanel\b[^}]*\}\s*from\s*['"]\.\/context\.js['"]/,
     'app.js must import renderContextPanel from context.js, so the tested function is the one the page runs',
   );
+  assert.match(
+    appJs,
+    /import\s*\{[^}]*\blaneContentQuery\b[^}]*\}\s*from\s*['"]\.\/context\.js['"]/,
+    'app.js must import laneContentQuery from context.js, so the function the unit cases test is the one the page runs',
+  );
 });
 
 test('the context panel has a container of its own, between the timeline and the technical views', () => {
@@ -406,9 +411,11 @@ test('the panel asks the collector for the nearest request at the cursor\'s mome
   const loadLaneContext = functionSource(appJs, 'loadLaneContext');
   assert.match(loadLaneContext, /\/api\/content\/at/, 'loadLaneContext must fetch the nearest-at-or-before content record');
   assert.match(loadLaneContext, /resolveCursor\(/, 'the moment fetched must be the cursor\'s own resolved moment');
-  assert.match(loadLaneContext, /\bmain\b/, 'the main lane must be filterable');
-  assert.match(loadLaneContext, /\bspan\b/, 'an agent lane must be filterable by its span');
-  assert.match(loadLaneContext, /\bagent\b/, 'an agent lane must be filterable by its name as a fallback');
+  assert.match(
+    loadLaneContext,
+    /laneContentQuery\(/,
+    'the lane\'s filter must come from laneContentQuery — the mapping pinned by value in context.test.mjs — not from prose a grep for main/span/agent could satisfy on its own',
+  );
 });
 
 test('an answer that arrived after the selection moved on is dropped', () => {

@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { contextBlocks, renderContextPanel } from '../public/context.js';
+import { contextBlocks, renderContextPanel, PREVIEW_CHARS, laneContentQuery } from '../public/context.js';
+import { esc } from '../public/format.js';
 
 // The three factories every case builds its input from — modelled on the
 // captured request body (increment 5's finding 3) and nothing else.
@@ -16,6 +17,7 @@ const requestBody = (over = {}) =>
         role: 'assistant',
         content: [
           { type: 'thinking', thinking: 'thought', signature: 'sig' },
+          { type: 'text', text: 'the answer' },
           { type: 'tool_use', id: 'toolu_01', name: 'Write', input: { file_path: '/tmp/notes.txt', content: 'hello' } },
         ],
       },
@@ -52,8 +54,21 @@ test('the five kinds the criterion names all reach the list, system prompt first
   const { blocks } = contextBlocks(requestBody());
   assert.deepEqual(
     blocks.map((b) => b.kind),
-    ['system', 'system', 'user', 'system', 'thinking', 'tool_use', 'tool_result', 'field', 'field', 'field', 'field'],
-    'two system-prompt entries, then the messages in order, then model/tools/max_tokens/stream as fields',
+    [
+      'system',
+      'system',
+      'user',
+      'system',
+      'thinking',
+      'assistant',
+      'tool_use',
+      'tool_result',
+      'field',
+      'field',
+      'field',
+      'field',
+    ],
+    'two system-prompt entries, then the messages in order — the assistant\'s reply sits between its thinking and its tool call — then model/tools/max_tokens/stream as fields',
   );
 });
 
@@ -340,4 +355,104 @@ test('the panel prints no NaN and no undefined', () => {
   });
   assert.ok(!html.includes('NaN'));
   assert.ok(!html.includes('undefined'));
+});
+
+// Increment 5 — Round 1: the reviewer's reproduction spec. Two production
+// mutations survived the round-0 suite untouched — esc(block.preview) in
+// place of esc(block.text) inside <pre class="ctx-text">, and dropping
+// 'assistant' from the role kinds — plus a lane→query mapping that a grep
+// over prose could satisfy without the code calling anything.
+
+test('an assistant reply reaches the list, and the panel marks it as the assistant\'s', () => {
+  const { blocks } = contextBlocks(requestBody());
+  const assistantBlocks = blocks.filter((b) => b.kind === 'assistant');
+  assert.equal(
+    assistantBlocks.length,
+    1,
+    'the criterion names assistant as one of five kinds — exactly one block must carry it',
+  );
+  assert.equal(assistantBlocks[0].text, 'the answer');
+
+  const html = renderContextPanel({ lane: lane(), item: item() });
+  const assistantDetails = [...html.matchAll(/<details class="ctx-block" data-kind="assistant"[\s\S]*?<\/details>/g)];
+  assert.equal(assistantDetails.length, 1, 'exactly one rendered block must be tagged data-kind="assistant"');
+  assert.match(
+    assistantDetails[0][0],
+    /<pre class="ctx-text">[\s\S]*the answer[\s\S]*<\/pre>/,
+    'the assistant block must expand to the assistant\'s own text',
+  );
+});
+
+test('an expanded block shows the exact full text, not the one line it collapsed to', () => {
+  const LONG = '<line of output>\n'.repeat(40);
+  const body = requestBody({
+    messages: [{ role: 'user', content: [{ tool_use_id: 'toolu_01', type: 'tool_result', content: LONG }] }],
+  });
+  const { blocks } = contextBlocks(body);
+  const resultBlock = blocks.find((b) => b.kind === 'tool_result');
+  assert.ok(resultBlock, 'the tool_result content must yield its own block');
+  assert.ok(
+    resultBlock.text.length > PREVIEW_CHARS,
+    'the fixture must be long enough that the preview is a real cut, not the whole text — otherwise this case is vacuous',
+  );
+  assert.notEqual(
+    resultBlock.preview,
+    resultBlock.text,
+    'a preview equal to the text would make this case unable to catch a preview substituted for the text',
+  );
+
+  const html = renderContextPanel({ lane: lane(), item: item({ body }) });
+  const preContents = [...html.matchAll(/<pre class="ctx-text">([\s\S]*?)<\/pre>/g)].map((m) => m[1]);
+  assert.equal(preContents.length, blocks.length, 'one <pre> per parsed block');
+  blocks.forEach((block, i) => {
+    assert.equal(
+      preContents[i],
+      esc(block.text),
+      `block ${i} (${block.kind}) must expand to its own exact text, escaped but never cut or replaced by its preview`,
+    );
+  });
+});
+
+test('every block expands to its own text, in the order the list shows them', () => {
+  const { blocks } = contextBlocks(requestBody());
+  const html = renderContextPanel({ lane: lane(), item: item() });
+  const preContents = [...html.matchAll(/<pre class="ctx-text">([\s\S]*?)<\/pre>/g)].map((m) => m[1]);
+  assert.equal(preContents.length, blocks.length, 'one <pre> per parsed block');
+  blocks.forEach((block, i) => {
+    assert.equal(
+      preContents[i],
+      esc(block.text),
+      `block ${i} (${block.kind}) must expand to its own exact text, in the order contextBlocks returned it`,
+    );
+  });
+});
+
+// laneContentQuery(lane) — the one lane filter that goes on the wire.
+
+test('the main lane asks for the main session\'s own traffic', () => {
+  assert.deepEqual(laneContentQuery(lane()), { main: '1' }, 'exactly one key, main, for the main lane');
+});
+
+test('an agent lane asks for its own span, never for the main session', () => {
+  const result = laneContentQuery({ key: 'agent:sp-a:probe', kind: 'agent', spanId: 'sp-a', agent: 'probe' });
+  assert.deepEqual(
+    result,
+    { span: 'sp-a' },
+    'the span must win over the name, and the object must carry no main key and nothing else',
+  );
+});
+
+test('an agent lane with no span falls back to its name', () => {
+  const result = laneContentQuery({ key: 'agent::probe', kind: 'agent', spanId: null, agent: 'probe' });
+  assert.deepEqual(result, { agent: 'probe' });
+});
+
+test('a lane that identifies nothing gets no query at all, so no lane ever shows the main session\'s context by accident', () => {
+  assert.equal(
+    laneContentQuery({ key: 'agent::', kind: 'agent', spanId: null, agent: null }),
+    null,
+    'an empty filter would send an unfiltered request, which the collector answers with main traffic',
+  );
+  assert.equal(laneContentQuery(null), null);
+  assert.equal(laneContentQuery(undefined), null);
 });
