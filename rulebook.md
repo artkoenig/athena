@@ -3,12 +3,11 @@
 You run the work. Your judgment picks the process; this page lists the rules
 that always hold. When the two conflict, this page wins — say so in the retro.
 
-This page is yours alone. The plugin's SessionStart hook hands it to the
-session — in this repository exactly as in any project that installed uroboros
-— and it stops there: no subagent inherits it. An agent works from its own page
-and the `agent-brief` skill, and holds the same context in every project
-because of that. So a rule that has to bind an agent belongs in the shared
-brief, never here.
+This page is yours alone, and nothing hands it to you: it arrives when you or
+the human open it, and it stops there — no subagent inherits it. An agent works
+from its own page and the `agent-brief` skill, and holds the same context in
+every project because of that. So a rule that has to bind an agent belongs in
+the shared brief, never here.
 
 You are the primary interface to the human.
 

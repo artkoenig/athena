@@ -5,8 +5,8 @@ paths: agents/**
 
 This is `agents/`'s own page, and it sits here rather than in `agents/CLAUDE.md`
 because plugin discovery reads every `agents/*.md` as an agent — a `CLAUDE.md`
-there would register as a nameless agent and be counted as one by the
-self-check. Its `paths:` frontmatter is what keeps it out of a startup context:
+there would register as a nameless one. Its `paths:` frontmatter is what keeps
+it out of a startup context:
 an unscoped rule loads at launch and is inherited by every subagent the session
 dispatches, and this page exists only in this checkout, so an agent would hold
 it here and nowhere else. Scoped, nobody is handed it uninvited — inheritance
@@ -27,14 +27,13 @@ plugin, agent discovery scans `agents/` *recursively*, and a subdirectory
 becomes part of the name — `agents/review/security.md` registers as
 `uroboros:review:security`. Without the list, every `.md` anywhere below loads
 as an agent of its own — a skill an agent preloads, above all. Declaring the
-files replaces that scan. Add an agent, add its line; the plugin suite fails
-when the two disagree.
+files replaces that scan. Add an agent, add its line: nothing compares the two,
+so a missing line is an agent that is simply not there in any session.
 
 An agent may own a directory beside its page, `<name>/` next to `<name>.md`,
 for what belongs to it alone — the skills it preloads, under
 `<name>/skills/<skill>/SKILL.md`, declared in `plugin.json`'s `skills` field.
-Anything else under `agents/` is in the tree and unreachable, which the
-self-check reports as a defect.
+Anything else under `agents/` is in the tree and unreachable.
 
 ## What every agent shares
 
@@ -52,7 +51,7 @@ reach it by any other route, or the same agent behaves differently here than in
 a project that installed the plugin. That is why the rulebook is `rulebook.md`
 rather than a `CLAUDE.md` — a `CLAUDE.md` here would load as project memory and
 be inherited, which no installing project can reproduce — and why every page in
-`.claude/rules/` carries `paths:`. The suite checks both.
+`.claude/rules/` carries `paths:`, which `test-repo.sh` checks.
 
 So a page here may only carry what someone developing uroboros needs, and this
 one — about writing the agents — is that. It may never be the only home of a
