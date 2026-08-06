@@ -70,6 +70,34 @@ function logsPayloadJson(sessionId) {
   });
 }
 
+function bodyEventPayload(sessionId, bodyText, timeNano = T0) {
+  return JSON.stringify({
+    resourceLogs: [
+      {
+        resource: { attributes: [{ key: 'session.id', value: { stringValue: sessionId } }] },
+        scopeLogs: [
+          {
+            logRecords: [
+              {
+                timeUnixNano: String(timeNano),
+                severityNumber: 9,
+                eventName: 'claude_code.api_request_body',
+                attributes: [
+                  { key: 'session.id', value: { stringValue: sessionId } },
+                  { key: 'query_source', value: { stringValue: 'repl_main_thread' } },
+                  { key: 'model', value: { stringValue: 'claude-opus-5' } },
+                  { key: 'body', value: { stringValue: bodyText } },
+                  { key: 'body_length', value: { intValue: String(bodyText.length) } },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+}
+
 async function withServer(options, run) {
   const store = new TelemetryStore();
   const server = createServer({ store, endpoint: 'http://test', log: () => {}, ...options });
@@ -370,6 +398,73 @@ test('DELETE /api/data resets the store', async () => {
     assert.equal(store.sessions.size, 1);
     assert.equal((await fetch(`${base}/api/data`, { method: 'DELETE' })).status, 200);
     assert.equal(store.sessions.size, 0);
+  });
+});
+
+test('a claude_code.api_request_body record is exposed over /api/events with its body attribute intact', async () => {
+  await withServer({}, async ({ base }) => {
+    const bodyText = JSON.stringify({ system: 'hi', messages: [] });
+    const ingest = await fetch(`${base}/v1/logs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: bodyEventPayload('s-body', bodyText),
+    });
+    assert.equal(ingest.status, 200);
+
+    const events = await (await fetch(`${base}/api/events?event=claude_code.api_request_body`)).json();
+    assert.equal(events.items.length, 1);
+    assert.ok(
+      JSON.stringify(events.items[0]).includes(bodyText),
+      'the body attribute must survive the round trip, untruncated — content is exposed like any other signal',
+    );
+  });
+});
+
+test('the timeline route answers with lanes after ingest, and 404 for an unknown session', async () => {
+  await withServer({}, async ({ base }) => {
+    const ingest = await fetch(`${base}/v1/logs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: bodyEventPayload('s-timeline', JSON.stringify({ system: 'hi', messages: [] })),
+    });
+    assert.equal(ingest.status, 200);
+
+    const timeline = await fetch(`${base}/api/sessions/s-timeline/timeline`);
+    assert.equal(timeline.status, 200);
+    const body = await timeline.json();
+    assert.ok(Array.isArray(body.lanes));
+    assert.ok(body.lanes.length >= 1);
+
+    const missing = await fetch(`${base}/api/sessions/nope/timeline`);
+    assert.equal(missing.status, 404);
+    assert.deepEqual(await missing.json(), { error: 'unknown session' });
+  });
+});
+
+test('the context route answers parsed blocks, 404 for an unknown session, and null context for an empty slice', async () => {
+  await withServer({}, async ({ base }) => {
+    const bodyText = JSON.stringify({ system: 'hi', messages: [] });
+    const ingest = await fetch(`${base}/v1/logs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: bodyEventPayload('s-context', bodyText),
+    });
+    assert.equal(ingest.status, 200);
+
+    const atLatest = Number(T0 / 1000000n) + 60_000;
+    const withContext = await fetch(`${base}/api/sessions/s-context/context?lane=main&at=${atLatest}`);
+    assert.equal(withContext.status, 200);
+    const withContextBody = await withContext.json();
+    assert.ok(Array.isArray(withContextBody.context.blocks));
+
+    const before = Number(T0 / 1000000n) - 60_000;
+    const empty = await fetch(`${base}/api/sessions/s-context/context?lane=main&at=${before}`);
+    assert.equal(empty.status, 200);
+    const emptyBody = await empty.json();
+    assert.equal(emptyBody.context, null);
+
+    const missing = await fetch(`${base}/api/sessions/nope/context?lane=main&at=${atLatest}`);
+    assert.equal(missing.status, 404);
   });
 });
 

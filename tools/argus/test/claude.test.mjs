@@ -47,3 +47,24 @@ test('the env block carries the collector address under its own stable name', ()
   assert.equal(gated.UROBOROS_OBS_TOKEN, 'secret');
   assert.equal(gated.OTEL_EXPORTER_OTLP_HEADERS, 'Authorization=Bearer secret');
 });
+
+test('the env block turns on the content flags: prompts, tool details, tool content, raw bodies, and a raised content limit', () => {
+  const env = otelEnvFor('http://localhost:4318');
+  assert.equal(env.OTEL_LOG_USER_PROMPTS, '1');
+  assert.equal(env.OTEL_LOG_TOOL_DETAILS, '1');
+  assert.equal(env.OTEL_LOG_TOOL_CONTENT, '1');
+  assert.equal(env.OTEL_LOG_RAW_API_BODIES, '1');
+  assert.ok(
+    Number(env.CLAUDE_CODE_OTEL_CONTENT_MAX_LENGTH) > 61440,
+    'the default 61440-unit truncation cuts a real request body in half; the exact ceiling is the implementer\'s to pick',
+  );
+});
+
+test('the content flags survive with traces off, because they gate log content and not spans', () => {
+  const env = otelEnvFor('http://localhost:4318', { traces: false });
+  assert.equal(env.OTEL_LOG_USER_PROMPTS, '1');
+  assert.equal(env.OTEL_LOG_TOOL_DETAILS, '1');
+  assert.equal(env.OTEL_LOG_TOOL_CONTENT, '1');
+  assert.equal(env.OTEL_LOG_RAW_API_BODIES, '1');
+  assert.ok(Number(env.CLAUDE_CODE_OTEL_CONTENT_MAX_LENGTH) > 61440);
+});

@@ -150,6 +150,39 @@ test('--persist and --open together are refused, naming what each does', async (
   assert.match(said, /--open/);
 });
 
+test('argus env prints the content flags in both the shell and the json format', async () => {
+  const { execFile } = await import('node:child_process');
+  const { promisify } = await import('node:util');
+  const bin = new URL('../bin/argus.mjs', import.meta.url).pathname;
+
+  const { stdout: shellOut } = await promisify(execFile)(process.execPath, [bin, 'env', '--format', 'shell']);
+  assert.match(shellOut, /export OTEL_LOG_RAW_API_BODIES="1"/);
+
+  const { stdout: jsonOut } = await promisify(execFile)(process.execPath, [bin, 'env', '--format', 'json']);
+  const parsed = JSON.parse(jsonOut);
+  for (const key of [
+    'OTEL_LOG_USER_PROMPTS',
+    'OTEL_LOG_TOOL_DETAILS',
+    'OTEL_LOG_TOOL_CONTENT',
+    'OTEL_LOG_RAW_API_BODIES',
+    'CLAUDE_CODE_OTEL_CONTENT_MAX_LENGTH',
+  ]) {
+    assert.ok(key in parsed, `${key} must be present in the json format`);
+  }
+  assert.equal(parsed.OTEL_LOG_RAW_API_BODIES, '1');
+});
+
+test('the content budget is read from --max-content-bytes and UROBOROS_OBS_MAX_CONTENT_BYTES, with the flag winning', () => {
+  const fromEnv = resolveConfig({}, { UROBOROS_OBS_MAX_CONTENT_BYTES: '1000' });
+  assert.equal(fromEnv.maxContentBytes, 1000);
+
+  const { flags } = parseArgs(['--max-content-bytes', '2000']);
+  const fromFlags = resolveConfig(flags, { UROBOROS_OBS_MAX_CONTENT_BYTES: '1000' });
+  assert.equal(fromFlags.maxContentBytes, 2000, 'the flag wins over the environment');
+
+  assert.equal(resolveConfig({}, {}).maxContentBytes, 268_435_456, 'the documented 256 MB default');
+});
+
 test('parseDuration accepts the documented units', () => {
   assert.equal(parseDuration('90m'), 90 * 60_000);
   assert.equal(parseDuration('24h'), 86_400_000);
