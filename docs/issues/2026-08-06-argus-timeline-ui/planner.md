@@ -229,3 +229,56 @@ with that increment as its reason.
 
 Budget: 3 of at most 8 increments spent; three remain planned, so the run
 still fits with room to split twice if a detail panel demands it.
+
+## After increment 4
+
+**Closed.** scrub-live is `done` — the review accepted it on round 1 after
+one correction round whose whole content was test cases (the slider's input
+routing and the drag registration were correct but unpinned: the reviewer
+demonstrated in a sandbox that deleting either wire left the suite green;
+no production file changed in the correction).
+
+**What the increment delivered to the two panels.** "The chosen time" —
+the precondition both remaining increments select at — now exists as page
+state: `state.cursor` (`{live, timeMs}`), resolved through a pure
+`resolveCursor` in `timeline.js` that live-follows the head or pins an
+absolute clamped moment. Two facts land in the backlog's outcome because
+the panel increments consume them: the cursor overlay carries
+`pointer-events: none`, so the lane clicks the selection mechanism needs
+cannot be swallowed by it (a hazard that would otherwise have surfaced as
+a round-zero finding in increment 5); and one resolution per render is the
+established discipline, so "as of the chosen moment" has a single source of
+truth for a panel to read. Facts for the researchers, not criteria.
+
+**One sentence added to context-inspector, no criterion changed.** Its
+delivers-line now says explicitly that it builds the lane-at-time selection
+mechanism and that tool-usage rides it. That was always the intent of the
+order (the heavy half first), but with scrub-live done the seam between the
+panels is now exactly "who builds the selection" — writing it down stops
+increment 6's researcher from re-deciding it or building a second one. The
+criteria of both increments stand exactly as cut: nothing increment 4
+showed reaches their substance, and the review confirmed the diff touched
+nothing belonging to the context or tool views.
+
+**What I deliberately did not change.** The context-inspector / tool-usage
+seam holds — the two panels still ride different data paths (the stored
+request body the content index points at, versus the tool events fetched
+on demand), so each remains a reviewable diff of its own, and their order
+still puts the heavy half first while budget remains to split it if it
+proves too large.
+
+**What stays out.** Two new reviewer observations join the recorded-not-
+scheduled list, because neither violates a criterion and neither has a
+demonstrated failure: a `refresh()` already in flight when a drag starts
+can still replace the slider mid-drag (the scrubbed value survives and a
+second grab continues — browser-only, unreproducible in the harness), and
+arrow-key scrubbing moves 1 ms per press (`step="1"` is what makes every
+millisecond addressable; `Home`/`End`/`PageUp`/`PageDown` and the drag
+reach any point). The earlier notes stand unchanged: the 2000-record
+ceilings, span-carried tool content unbudgeted, `search=` walking bodies,
+the 32 MB ingest cap, and the unused `subagent_completed` end-marker. If a
+later increment trips over any of these, it enters the backlog then, with
+that increment as its reason.
+
+Budget: 4 of at most 8 increments spent; two remain planned, so the run
+still fits with room to split twice if a detail panel demands it.

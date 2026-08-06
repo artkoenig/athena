@@ -104,7 +104,7 @@ stay server-side, retrievable on demand. Details in `researcher.md`
 
 ## scrub-live — The timeline scrubs, and a live mode follows the head
 
-**Status:** todo
+**Status:** done
 
 **Delivers:** A time cursor the human can drag to any point of the recorded
 session, and a live mode in which the timeline follows the newest data as it
@@ -116,6 +116,23 @@ arrives.
   arrives; scrubbing away from the head leaves live mode, and a control
   returns to it.
 
+**Outcome:** Accepted on round 1 after one correction round (a test-coverage
+gap: the slider's input routing and the drag registration were unpinned —
+deleting either wire left the suite green; closed with test cases only, no
+production change). "The chosen time" now exists as page state: the cursor
+is `state.cursor` (`{live, timeMs}`), a live cursor resolves to the window's
+current head on every render, a scrubbed one pins an absolute moment
+clamped into the session window, any scrub leaves live mode (head included),
+and the Live control is the only way back. `resolveCursor` is a pure
+function in `timeline.js`, importable by tests, and one resolution per
+render keeps thumb, cursor line and readout in agreement. The cursor
+overlay carries `pointer-events: none`, so it cannot swallow the lane
+clicks the next increments add. Reviewer observations recorded, not
+scheduled: a `refresh()` already in flight when a drag starts can still
+replace the slider mid-drag (the scrubbed value survives), and arrow-key
+scrubbing moves 1 ms per press. Details in `researcher.md` (Increment 4)
+and `reviewer.md`.
+
 ## context-inspector — Selecting a lane at a time shows that agent's context as a message list
 
 **Status:** todo
@@ -123,7 +140,8 @@ arrives.
 **Delivers:** Selecting a lane at the chosen time opens that agent's (or the
 main session's) context as of that moment, rendered as a structured,
 expandable message list built from the nearest API request body at or before
-that time.
+that time. This is the increment that builds the lane-at-time selection
+mechanism; tool-usage rides it.
 
 **Acceptance criteria:**
 - Selecting a lane at the chosen time shows that agent's (or the main
