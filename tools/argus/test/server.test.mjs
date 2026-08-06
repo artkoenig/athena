@@ -70,6 +70,24 @@ function logsPayloadJson(sessionId) {
   });
 }
 
+const RESOURCE = { resource: { 'service.name': 'agent' } };
+
+// A record shape ready for TelemetryStore#ingest directly, bypassing the OTLP
+// wire format — the agents routes are read paths, not ingest paths.
+function logRecord(sessionId, eventName, attributes = {}, timeMs = Date.now()) {
+  return {
+    ...RESOURCE,
+    eventName,
+    severity: 'INFO',
+    timeMs,
+    observedMs: timeMs,
+    body: null,
+    traceId: '',
+    spanId: '',
+    attrs: { 'session.id': sessionId, ...attributes },
+  };
+}
+
 async function withServer(options, run) {
   const store = new TelemetryStore();
   const server = createServer({ store, endpoint: 'http://test', log: () => {}, ...options });
@@ -370,6 +388,83 @@ test('DELETE /api/data resets the store', async () => {
     assert.equal(store.sessions.size, 1);
     assert.equal((await fetch(`${base}/api/data`, { method: 'DELETE' })).status, 200);
     assert.equal(store.sessions.size, 0);
+  });
+});
+
+test('the agents route serves the per-agent aggregation of one session', async () => {
+  await withServer({}, async ({ base, store }) => {
+    store.ingest('logs', [
+      logRecord('s-agents', 'claude_code.api_request', { model: 'claude-opus-5', input_tokens: 100 }),
+      logRecord('s-agents', 'claude_code.api_request', {
+        model: 'claude-opus-5',
+        input_tokens: 50,
+        'agent.name': 'Explore',
+        query_source: 'agent:builtin:Explore',
+      }),
+    ]);
+    const response = await fetch(`${base}/api/sessions/s-agents/agents`);
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(body.agents.length, 2);
+    assert.ok(body.capture);
+  });
+});
+
+test('the agents route answers 404 for a session it does not know', async () => {
+  await withServer({}, async ({ base }) => {
+    const response = await fetch(`${base}/api/sessions/nope/agents`);
+    assert.equal(response.status, 404);
+    assert.deepEqual(await response.json(), { error: 'unknown session' });
+  });
+});
+
+test("the content route serves one agent's records in order and 404s an unknown agent", async () => {
+  await withServer({}, async ({ base, store }) => {
+    store.ingest('logs', [logRecord('s-content', 'claude_code.user_prompt', { prompt: 'hi' })]);
+
+    const ok = await fetch(`${base}/api/sessions/s-content/agents/main/content?limit=10`);
+    assert.equal(ok.status, 200);
+    const body = await ok.json();
+    assert.ok(Array.isArray(body.items));
+    assert.equal(body.items.length, 1);
+
+    const missing = await fetch(`${base}/api/sessions/s-content/agents/Nope/content`);
+    assert.equal(missing.status, 404);
+  });
+});
+
+test('the body route serves one payload and marks a truncated one', async () => {
+  await withServer({}, async ({ base, store }) => {
+    const cut = '{"system":[{"type":"text","text":"this got cut off half way thro';
+    store.ingest('logs', [
+      logRecord('s-body', 'claude_code.api_request_body', {
+        model: 'claude-opus-5',
+        body: cut,
+        body_length: 110141,
+        body_truncated: true,
+      }),
+    ]);
+    const agentsBody = await (await fetch(`${base}/api/sessions/s-body/agents`)).json();
+    const main = agentsBody.agents.find((agent) => agent.key === 'main');
+    const seq = main.bodies[0].seq;
+
+    const response = await fetch(`${base}/api/sessions/s-body/agents/main/body/${seq}`);
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(body.truncated, true);
+    assert.equal(body.bodyLength, 110141);
+    assert.equal(body.parsed, null);
+
+    const unknown = await fetch(`${base}/api/sessions/s-body/agents/main/body/999999`);
+    assert.equal(unknown.status, 404);
+  });
+});
+
+test('the config route names the per-agent bound', async () => {
+  await withServer({}, async ({ base, store }) => {
+    const config = await (await fetch(`${base}/api/config`)).json();
+    assert.equal(store.options.maxAgentCalls, 100, 'the store defaults to a per-agent bound of 100 calls');
+    assert.equal(config.limits.agentCalls, store.options.maxAgentCalls);
   });
 });
 

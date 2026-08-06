@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { otelEnvFor, sessionNameOf } from '../src/claude.mjs';
+import { otelEnvFor, sessionNameOf, agentRefOf, EVENT } from '../src/claude.mjs';
 
 test('a session name is read from the resource, and from metric attributes', () => {
   assert.equal(sessionNameOf({ resource: { 'session.name': 'uroboros-refactor' } }), 'uroboros-refactor');
@@ -46,4 +46,68 @@ test('the env block carries the collector address under its own stable name', ()
   assert.equal(gated.UROBOROS_OBS_URL, 'https://collector.example');
   assert.equal(gated.UROBOROS_OBS_TOKEN, 'secret');
   assert.equal(gated.OTEL_EXPORTER_OTLP_HEADERS, 'Authorization=Bearer secret');
+});
+
+test('a record with no attribution attributes belongs to the main session', () => {
+  for (const attrs of [{}, { query_source: 'sdk' }, { query_source: 'main' }]) {
+    const ref = agentRefOf(attrs);
+    assert.equal(ref.key, 'main');
+    assert.equal(ref.kind, 'main');
+    assert.equal(ref.name, null);
+  }
+});
+
+test('agent.name names the subagent a record belongs to', () => {
+  const ref = agentRefOf({ 'agent.name': 'Explore', query_source: 'agent:builtin:Explore' });
+  assert.equal(ref.key, 'Explore');
+  assert.equal(ref.name, 'Explore');
+  assert.equal(ref.kind, 'subagent');
+});
+
+test('query_source alone names a subagent', () => {
+  const builtin = agentRefOf({ query_source: 'agent:builtin:Explore' });
+  assert.equal(builtin.key, 'Explore');
+  assert.equal(builtin.name, 'Explore');
+
+  const plugin = agentRefOf({ query_source: 'agent:plugin:acme:Digger' });
+  assert.equal(plugin.key, 'Digger');
+  assert.equal(plugin.name, 'Digger');
+});
+
+test('a bare subagent source becomes one unnamed bucket', () => {
+  const ref = agentRefOf({ query_source: 'subagent' });
+  assert.equal(ref.key, 'subagent');
+  assert.equal(ref.name, null);
+  assert.equal(ref.kind, 'subagent');
+});
+
+test('auxiliary and compact are their own kind, not the main session', () => {
+  const auxiliary = agentRefOf({ query_source: 'auxiliary' });
+  assert.equal(auxiliary.key, 'auxiliary');
+  assert.equal(auxiliary.kind, 'system');
+
+  const compact = agentRefOf({ query_source: 'compact' });
+  assert.equal(compact.key, 'compact');
+  assert.equal(compact.kind, 'system');
+});
+
+test('an agent_id with no name keys the agent by its id and keeps the id', () => {
+  const bare = agentRefOf({ agent_id: 'a10f6aaeff1f24fa1' });
+  assert.equal(bare.key, 'id:a10f6aaeff1f24fa1');
+  assert.equal(bare.name, null);
+  assert.equal(bare.agentId, 'a10f6aaeff1f24fa1');
+
+  const named = agentRefOf({ 'agent.name': 'Explore', agent_id: 'a10f6aaeff1f24fa1' });
+  assert.equal(named.key, 'Explore');
+  assert.equal(named.agentId, 'a10f6aaeff1f24fa1');
+});
+
+test('empty attribute values do not name an agent', () => {
+  const ref = agentRefOf({ 'agent.name': '', query_source: '' });
+  assert.equal(ref.key, 'main');
+  assert.equal(ref.kind, 'main');
+});
+
+test('the subagent completion event is known by name', () => {
+  assert.equal(EVENT.subagentCompleted, 'claude_code.subagent_completed');
 });
