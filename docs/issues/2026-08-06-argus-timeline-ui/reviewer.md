@@ -427,3 +427,201 @@ recovery unconditionally, or the disk retention has to cover what memory holds.
 - Two subagents of the same name share one lane. Documented in the README as a
   limit of what the CLI exports, which is what the issue's assumption section
   asked for.
+
+## Round 2
+
+**Status: accepted, 0 findings requiring correction.** The suite is green, every
+acceptance criterion is met by the diff, and the two criteria that had no check
+at all now have one. One residual defect is recorded below as an observation
+with its reproduction; it is intermittent, self-recovering and leaves no wrong
+state behind, so it does not warrant another round on its own.
+
+### Commands run
+
+- `bash test.sh` — all five suites, **exit 0**.
+  - `the repository itself` — PASS, 10 cases.
+  - `parallel runs: worktrees` — PASS, 4 cases.
+  - `tools/argus` — 164 tests, 164 pass, 0 fail, 0 skipped.
+  - `tools/argus-ui` — 23 tests, 23 pass, 0 fail, 0 skipped (14 before this
+    change; the 9 new ones are `test/timeline.test.mjs`).
+  - `tools/log-parser` — 23 tests, 23 pass, 0 fail, 0 skipped.
+  - Nothing skipped or excluded. No merge-base run needed: nothing is red.
+
+### What the earlier rounds' findings look like in the diff now
+
+Judged against the diff, not against anyone's report.
+
+- **The `Live` control after a scrub.** `paintScrubRow`
+  (`tools/argus-ui/public/timeline.js:104-112`) owns playhead, clock *and*
+  `.scrub-live` together, and the scrub handler calls it
+  (`tools/argus-ui/public/app.js:1322-1329`). A scrub on a finished session now
+  sets `aria-pressed="false"`, which `styles.css:652` paints as disengaged.
+  Covered by `timeline.test.mjs:117-139`.
+- **A refresh replacing the range input mid-drag.** `pointerdown` on
+  `#timeline-scrub` closes the gate (`app.js:1338-1344`), `scheduleRefresh`
+  consults it (`app.js:1223`), and `pointerup`/`pointercancel` on `window`
+  reopen it and run the refresh that was held back (`app.js:1347-1352`). A timer
+  armed before the grab is cancelled and counted as missed. Covered by
+  `timeline.test.mjs:175-200`. See the observation below for the case the gate
+  still does not see.
+- **The "record structure without content" paragraph** is gone from
+  `tools/argus/README.md`; nothing in the repository now promises behaviour for
+  a recording made without the flags (`grep` for it and for the old wording
+  returns nothing outside `docs/issues/`).
+- **"Reopened with `--open` has it back"** is gone. `tools/argus/README.md:606-616`
+  now says the opposite and quantifies it: rotation at `--persist-max-bytes`
+  (64 MB) with one previous generation kept, so "a long recording — with 1 MB
+  request bodies, a few hundred turns — has lost its beginning for good unless
+  that flag was raised". `--persist-max-bytes` is in the options table
+  (`README.md:455`), and it resolves from flag and environment
+  (`src/config.mjs:160`), so the remedy the sentence names exists.
+
+### Criteria walked, one by one
+
+- **1 — `argus env` (both formats) carries the content flags.** Met.
+  `otelEnvFor` (`tools/argus/src/claude.mjs:283-306`) sets
+  `OTEL_LOG_USER_PROMPTS`, `OTEL_LOG_TOOL_DETAILS`, `OTEL_LOG_TOOL_CONTENT`,
+  `OTEL_LOG_RAW_API_BODIES` and `CLAUDE_CODE_OTEL_CONTENT_MAX_LENGTH` outside
+  the `traces` branch. `config.test.mjs:153-172` runs the real binary for
+  `shell` and `json`; `dotenv` and `settings` render the same `env` object
+  (`bin/argus.mjs:81-98`), so no format can lose a key alone. `claude.test.mjs:51-70`
+  pins the flags with traces on and off. The flag *names* cannot be checked
+  against the CLI's documentation from inside this repository; that verification
+  was the researcher's and I take it as given.
+- **2 — the collector stores and serves the content over the JSON API.** Met.
+  `/api/events` returns `attrs.body` byte-for-byte, small and at 200 000
+  characters (`server.test.mjs:404-447`); `/api/sessions/:id/timeline` and
+  `/api/sessions/:id/context` answer 200 with lanes and parsed blocks and 404
+  for an unknown session (`server.test.mjs:449-496`). The interface proxies
+  everything under `/api/` (`tools/argus-ui/src/server.mjs:52`), so both routes
+  are reachable from the page.
+- **3 — opening a session lands on the timeline; technical views subordinate.**
+  Met. `renderDetail` emits `renderTimeline()` above a "Technical views" nav
+  (`app.js:242-252`), `renderTabBody` returns early with an empty body when
+  `state.technicalTab` is null (`app.js:262-268`), `selectSession` resets the
+  view (`app.js:1200`), and clicking the open tab closes it (`app.js:1279-1284`).
+  The landing state itself is now pinned by `timeline.test.mjs:29-45`
+  (`freshSessionView` has `technicalTab: null`, and a tab toggles shut).
+- **4 — one lane for main, one per subagent, spanning its lifetime.** Met.
+  `getTimeline` (`store.mjs:915-1020`) always creates the main lane, derives
+  agent lanes from `query_source` and from `agent_id` through the `llm_request`
+  bridge, and brackets each lane by its own records. Covered by
+  `store.test.mjs:473-528` including an orphan `agent_id`, an auxiliary
+  `compact` lane, a single-lane session and an unknown session.
+- **5 — activity and a context curve per lane.** Met. Data half tested
+  (`store.test.mjs:529-573`): the sample is `input + cache_read + cache_creation`
+  with output excluded, ascending, and an open span does not end before it
+  starts. Drawing half is `laneCurve`/`renderTimeline` (`app.js:296-390`), which
+  no test reaches — see "the tests against the intent".
+- **6 — scrub, live, leaving and returning.** Met. `scrubTo` clears `live` and
+  numbers the range input's string value, `resumeLive` re-enters live at
+  `lastMs`, `pinToTimeline` follows the head while live and clamps a scrubbed
+  moment into a window that has aged out (`timeline.js:43-68`). All four
+  transitions are covered (`timeline.test.mjs:47-139`), including the
+  single-instant timeline where there is no axis to position a playhead on.
+- **7 — the nearest request body at or before the moment, as a structured,
+  collapsed, expandable list.** Met. `getContextAt` (`store.mjs:1026-1058`)
+  takes the newest `api_request_body` at or before `atMs` within the lane;
+  `context.mjs` produces ordered blocks with sizes. Tested for a full body, a
+  system array, tool schemas, thinking passed through verbatim, an image charged
+  its real size but never inlined, a truncated body kept as one raw block, a
+  `body_ref` reported and never read, and empty attrs
+  (`context.test.mjs:6-131`), plus per-lane isolation and the empty slice
+  (`store.test.mjs:574-608`). The one-line-per-block rendering with `<pre hidden>`
+  (`app.js:392-417`) is untested rendering.
+- **8 — tools used up to that moment, with parameters, per lane.** Met and
+  tested: `tool_result` joined to a lane through the tool span's `tool_use_id`,
+  cut at `atMs`, ascending, parameters from `toolParametersOf`; a no-span
+  session and an orphan `tool_use_id` both fall to the main lane
+  (`store.test.mjs:609-663`).
+- **9 — no fallback, notice or test for flagless recordings.** Met in code,
+  tests and prose. The only remaining mention of running without a flag is
+  `README.md:616-621`, which describes what the *CLI* fails to attribute without
+  `CLAUDE_CODE_ENHANCED_TELEMETRY_BETA` — a limit of the data source, not a
+  compatibility promise for old recordings, and `argus env` sets that flag.
+- **10 — `./test.sh` green.** Met: exit 0.
+
+### The tests against the intent
+
+The suite now has a check for every criterion whose behaviour is not pure
+rendering.
+
+- Criteria 1, 2, 4, 5 (data), 7 (data) and 8 fail loudly if the behaviour
+  breaks: the flags, the two routes, lane resolution, the token sum, the
+  at-or-before pick and the tool cut are all asserted on values, not on shapes.
+- Criteria 3 and 6 — the gap the earlier round named — are now reachable through
+  `public/timeline.js`, which imports nothing and takes the node to paint into
+  as a parameter, so `node --test` drives it with three plain objects behind a
+  `querySelector` (`timeline.test.mjs:19-27`). Deleting `state.live = false`
+  from `scrubTo`, dropping `.scrub-live` from `paintScrubRow`, returning
+  `technicalTab: 'overview'` from `freshSessionView`, or making a second click
+  on an open tab a no-op each turn a case red. The edges are there too: a lane
+  that no longer exists, `lanes` missing entirely, a moment that aged out below
+  `firstMs`, a moment past `lastMs`, `atMs: 0` meaning "never chosen", a
+  single-instant timeline, and `resumeLive` with no timeline to jump to.
+- What remains untested is rendering: that `renderDetail` actually calls
+  `renderTimeline()`, that a lane row draws its curve and blocks, that a context
+  block expands. Verifying those needs a DOM harness, which is a dependency, and
+  both project pages say a dependency goes to the human first. The limit is
+  written down where the next author will hit it
+  (`tools/argus-ui/CLAUDE.md:43-50`: put new decision logic in a DOM-free module,
+  because `app.js` is where no case can reach it). That is the recorded
+  resolution the criterion allows, and I accept it.
+- The DOM-free module carries a cost worth naming: nothing checks the *wiring*,
+  so a `renderTimeline()` call deleted from `renderDetail`, or a
+  `scrubTo(state, …)` call removed from the `input` handler, still leaves the
+  suite green. The transitions are pinned; their invocation is not.
+
+### Beyond the criteria — blast radius
+
+- **`state.tab` is gone entirely.** No reference to it survives anywhere in
+  `public/app.js` (grep: no hits), so the rename to `state.technicalTab` left no
+  half-updated caller. The 15-second repaint interval reads the new name
+  (`app.js:1411`).
+- **`public/app.js` gained an ESM import.** `public/index.html:75` already loads
+  it as `<script type="module" src="/app.js">` and is unchanged by this diff, so
+  `import … from './timeline.js'` resolves; the interface's static handler
+  serves any file under `public/` and maps `.js` to `text/javascript`
+  (`tools/argus-ui/src/server.mjs:92-103`). The import is relative, so
+  `test/independence.test.mjs` — which walks every `.js`/`.mjs` in the project —
+  still passes the project-isolation rule, and it now scans `timeline.js` too.
+- **The content budget reaches the store.** `bin/argus.mjs:427` constructs
+  `new TelemetryStore(config)` with the whole config object, so
+  `maxContentBytes` is not an inert flag; `store.test.mjs:664-681` proves
+  eviction drops the oldest bodies while aggregates survive.
+- **Documents this change could have made stale.** `tools/argus/README.md` and
+  `skills/argus/SKILL.md` both stopped saying that content is excluded, and both
+  now point at "Sensitive data". The root `README.md:177` describes argus as
+  "traces, tokens, cost, tool calls, errors" — an incomplete list now, but not a
+  false claim and not something a criterion asked for.
+- **Nothing else found.** No other caller of `describeEvent`, `otelEnvFor` or
+  the store's query methods changes shape.
+
+### Observations that need no correction
+
+- **A refresh already in flight when the pointer grabs the scrubber still kills
+  the drag.** The gate is consulted in `scheduleRefresh` (`app.js:1223`) and, at
+  `pointerdown`, only for a timer that has not fired yet
+  (`refreshPending: refreshTimer !== null`, `app.js:1341`). Once the timer has
+  fired, `refreshTimer` is null and the running `refresh()` is invisible to the
+  gate, so its terminal `renderDetail()` (`app.js:1178`) replaces
+  `detail.innerHTML` and destroys `#timeline-scrub` under the pointer.
+  Reproduction: open a live session (SSE `ingest` roughly once a second, so
+  `refresh()` runs about once a second and takes as long as four sequential API
+  round trips plus a timeline and context query on a large session), and press
+  the scrubber thumb during one of those flights — the thumb stops following the
+  mouse. The same holds for the `loadSlice().then(renderDetail)` continuations
+  started by a lane or `Live` click (`app.js:1266`, `app.js:1272`) if the
+  scrubber is grabbed before they resolve. Why this is not a finding requiring a
+  round: the window is a fraction of each second rather than the whole drag, the
+  gate is not left stuck (the `window` `pointerup` handler still fires and
+  releases it), and the state after the interruption is correct — the rebuilt row
+  shows the scrubbed moment and `aria-pressed="false"`, so nothing lies. The user
+  re-grabs and continues. Criterion 6 is met; this is polish on top of it.
+- **Expanded context blocks collapse on the next refresh**, because
+  `renderDetail` rebuilds the panel. Same family as the observation above, and
+  the same judgement: the exact text is one click away again.
+- **`bin/argus.mjs`'s `--help` lists `--max-content-bytes` but not
+  `--persist-max-bytes`**, which the README table now documents. The omission
+  pre-dates this change (`--persist-max-bytes` is not new here); this diff makes
+  the flag more relevant, it does not make it wrong.
