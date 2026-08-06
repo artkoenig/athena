@@ -40,7 +40,7 @@ only by span. The findings are in `researcher.md` (Increment 1) and
 
 ## timeline-landing — The timeline is the central session view, with one lane per agent
 
-**Status:** todo
+**Status:** done
 
 **Delivers:** Opening a session in the argus UI lands on a timeline view that
 draws one lane for the main session and one per subagent, each lane spanning
@@ -63,12 +63,17 @@ flag that `argus env` now sets, a falsehood content-pipeline introduced.
   flag `argus env` now sets by default) — that advice became false when the
   flags became the default.
 
-**Open question this increment must answer** (a finding for the increments
-after it): what marks a lane's start and end in the data the collector
-serves. Content-pipeline measured a `claude_code.subagent_completed` event as
-the natural end marker for a subagent, but the collector does not know that
-event today; whether lane lifetimes come from it or from the records already
-served is the researcher's call, reported as a finding.
+**Outcome:** Accepted on round 1 after one correction round (a test-coverage
+gap on the landing behavior, closed with test cases only, no production
+change). The open question this increment carried — what marks a lane's
+start and end — is answered: a lane is a span, bounded by the first and last
+content record carrying that `spanId`, read off the content index the
+collector already serves; the main lane spans the session's own
+`firstSeenMs`…`lastSeenMs`. The `claude_code.subagent_completed` end-marker
+stays unmeasured (log record or span event — unknown) and unscheduled: no
+open criterion needs an exact lane end, and any later increment that wants
+one must measure that first. Details in `researcher.md` (Increment 2) and
+`reviewer.md`.
 
 ## lane-density — Activity and context growth are visible on the lanes themselves
 

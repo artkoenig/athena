@@ -115,3 +115,50 @@ the backlog then, with that increment as its reason.
 
 Budget: 1 of at most 8 increments spent; five remain planned, so the run fits
 with room to split once more if a lane increment demands it.
+
+## After increment 2
+
+**Closed.** timeline-landing is `done` — the review accepted it on round 1
+with zero findings, after one correction round whose whole content was test
+cases (the landing behavior was correct but unpinned; no production file
+changed in the correction).
+
+**The open question it carried is answered.** The backlog asked this
+increment what marks a lane's start and end. The answer, now recorded in the
+increment's outcome: a lane is a span, bounded by the first and last content
+record carrying that `spanId`, all read off the content index the collector
+already serves in one request; the main lane is the exception and spans the
+session's own `firstSeenMs`…`lastSeenMs`. The `claude_code.subagent_completed`
+candidate stays deliberately unmeasured — whether it arrives as a log record
+or a span event is unknown, settling it costs a live capture, and no open
+criterion needs an exact lane end. If a later increment wants one, measuring
+that event comes first; until then it is a note, not work.
+
+**What I deliberately did not change.** All four open increments stand as
+cut, in their order, with their criteria untouched. Nothing the increment
+showed reaches their seams: lane-density's data question ("what is context
+size computed from") was already answered after increment 1 (per-request
+`bodyLength` on the content index); scrub-live still precedes the two detail
+panels because "the chosen time" is what they select at; and the
+context-inspector / tool-usage split still separates the heavy half (parsing
+a body into a message list) from the light one. The increment also handed the
+later ones quiet good news rather than new constraints: the lane derivation
+and markup live as pure functions in a module `node --test` can import, so
+the density, cursor and selection work has a tested surface to build on
+instead of unpinnable page wiring — a fact for their researchers, not a
+reason to re-cut.
+
+**What stays out.** The reviewer's residual observations are recorded, not
+scheduled, because none violates a criterion and none has a demonstrated
+failure: the 2000-record content window truncating the oldest lanes of an
+over-long session (increment 1's retention window, not a regression), the
+empty-`spanId` merge (out of contract — `argus env` sets the trace flags, so
+every content record carries a span), and the unpinned `case null` in the
+tab-body switch (below the finding bar by the reviewer's own account). The
+increment-1 blast-radius notes (span-carried tool content unbudgeted,
+`search=` walking bodies, the 32 MB ingest cap) likewise stay out, unchanged.
+If a later increment trips over any of these, it enters the backlog then,
+with that increment as its reason.
+
+Budget: 2 of at most 8 increments spent; four remain planned, so the run
+still fits with room to split twice if the detail-panel increments demand it.
