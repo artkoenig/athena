@@ -923,3 +923,187 @@ the project — which the plan does not do. No existing case asserts anything ab
 `state.tab`, the tab strip, or the text of any placeholder, so the four advisory
 edits and the new landing view collide with nothing already in the suite.
 
+## Increment 2 — Round 1
+
+The reviewer filed one finding, and it is a coverage gap, not a behaviour bug:
+criterion 1's landing behaviour is correct in `public/app.js` but nothing in the
+suite fails when it is removed. **This round changes no production file.** The
+whole correction is three new cases in `tools/argus-ui/test/page.test.mjs`,
+plus the helper they need.
+
+I ran no command this round. Reading `public/app.js`, `public/timeline.js` and
+`test/page.test.mjs` answered every question the finding raises; a run would
+have bought no fact I could not state from the source.
+
+### What the finding asks for, and what already holds
+
+The reviewer's reproduction is two edits to `public/app.js`: put `tab: 'overview'`
+back into the state literal (line 23) and delete the
+`${renderTimeline(buildLanes({ session, content: state.content }))}` line from
+`renderDetail` (line 165). Both are green today. So the three facts a case has to
+pin are exactly:
+
+1. The initial state opens no technical view — `tab: null` in the `const state = {`
+   literal, and no string default.
+2. `selectSession` returns to that state — `state.tab = null` in its body, so a
+   second session opens on the timeline whatever view the first one was left on.
+3. `renderDetail` renders the timeline *above* the technical views — `renderTimeline(`
+   appears in its body before `renderDetailViews(`, which appears before the
+   `id="tab-body"` container.
+
+All three are true in the current `public/app.js` (lines 23, 913, 165/167/169).
+Nothing has to move for the cases to pass.
+
+### Implementation plan
+
+**Production: nothing.** No file under `tools/argus-ui/public/`, `src/` or `bin/`
+changes, and neither does `tools/argus`. If the suite is green after the new
+cases land, this increment is done.
+
+Two things the reviewer raised that are deliberately not acted on, so nobody
+picks them up as work:
+
+- **The empty-`spanId` merge** the reviewer recorded under "beyond the criteria".
+  It is an observation, not a finding; `argus env` sets the trace flags, so under
+  contract every content record carries a span. No code and no test changes for it.
+- **`renderTimeline`'s prose signature**, which the test-author flagged as loose.
+  The shipped `renderTimeline(view)` takes the flat result of `buildLanes` and the
+  call site composes them directly, which is what the earlier plan's own wiring
+  line and cases assumed. The prose was imprecise; the code is right. No change.
+
+### Technique, and what I rejected
+
+**Chosen: source-level assertions over `public/app.js`, scoped to one function
+body at a time.** `app.js` reads `location` at module scope, so no test can import
+it, and `test/page.test.mjs` already answers exactly this class of question by
+reading the file (its existing three cases do nothing else). Scoping each
+assertion to a sliced function body is what keeps it from matching a coincidence
+elsewhere in a 1074-line file.
+
+Rejected:
+
+- **A DOM harness (jsdom or similar).** A dependency, and `tools/argus-ui/CLAUDE.md`
+  makes zero dependencies the project's first rule. Adding one is a decision for
+  the human, not for a correction round.
+- **Refactoring `renderDetail`'s composition into a pure `renderSessionView` in
+  `timeline.js` so the ordering could be unit-tested.** It would move the ordering
+  under test, but it would leave facts 1 and 2 (the state literal, `selectSession`)
+  still only checkable at source level, so it buys one of three facts at the price
+  of reshaping working production code in a correction round.
+- **A whole-file regex for `tab: null`.** `state.tab = null` occurs in
+  `selectSession` too; an unscoped match would pass with the state literal broken.
+  Hence the slicing helper.
+- **Asserting the exact argument of `renderTimeline(...)`.** Pinning the string
+  `state.content` would break on a rename that keeps the behaviour. The order of
+  the three calls is the criterion; the argument is not.
+
+### Module map
+
+| Path | What it holds | Entry points |
+| --- | --- | --- |
+| `tools/argus-ui/test/page.test.mjs` | **Edited.** Source-level cases over `public/`: the existing import/module case, the flag-absence case and its guard | new `functionSource` helper plus cases 1–3 below |
+| `tools/argus-ui/public/app.js` | **Read only, not edited.** The page: state literal at lines 15–34 (`tab: null` at 23), `renderDetail` at 130–172 (`renderTimeline` 165, `renderDetailViews` 167, `<div id="tab-body">` 169), `selectSession` at 904–917 (`state.tab = null` at 913) | none — no change |
+| `tools/argus-ui/public/timeline.js` | **Read only, not edited.** `MIN_LANE_WIDTH_PCT`, `DETAIL_VIEWS`, `buildLanes`, `laneGeometry`, `renderTimeline(view)`, `renderDetailViews({ selected, counts })` | none — no change |
+
+Facts about `page.test.mjs`'s existing shape, so the new cases sit inside it
+rather than beside it: it imports `node:test`, `node:assert/strict`, `node:fs`,
+`node:path` and `fileURLToPath`; `const PUBLIC = fileURLToPath(new URL('../public/', import.meta.url));`
+is the only module-level constant besides `FLAGS_ARGUS_ENV_NOW_SETS`; a `walk(dir, found = [])`
+helper sits under a JSDoc one-liner; banner comments (`// Criterion 1 — …`)
+separate the criteria; every test name is a full lowercase sentence and every
+assertion carries a message stating the fact.
+
+### Environment
+
+- Node v22.22.2 at `/opt/node22/bin/node`, on the `PATH`; the package requires ≥ 20.11.
+- `tools/argus-ui` has zero runtime and zero dev dependencies. `npm install` is not
+  needed and must not become needed.
+- Whole package, from the repository root: `npm --prefix tools/argus-ui test`
+  (`node --test "test/*.test.mjs"`).
+- The single file, from the repository root: `node --test tools/argus-ui/test/page.test.mjs`.
+- There is no linter and no formatter in this repository — nothing to run, nothing
+  to configure.
+- `./test.sh` runs every suite in the repository and is **not** on this round's
+  list: no production file changes here, and the closing increment owns the
+  full-suite run.
+
+### Test Plan
+
+Tests are needed: the finding is precisely that a criterion has no case behind it.
+Framework: `node:test` with `node:assert/strict`, source level, all three cases in
+the existing `tools/argus-ui/test/page.test.mjs`, under its `// Criterion 1` banner
+and after the existing import/module case. Nothing from the earlier sections'
+test plans is asked for again here; those cases stay in the tree untouched, and
+no case in `timeline.test.mjs`, `independence.test.mjs`, `server.test.mjs` or
+`config.test.mjs` changes.
+
+**The helper**, added next to `walk` in the same file:
+
+```js
+/** The source of one top-level function declaration, up to the next one. */
+function functionSource(source, name) {
+  const start = source.indexOf(`function ${name}(`);
+  assert.ok(start >= 0, `app.js must still declare ${name}()`);
+  const body = source.slice(start + 1);
+  const next = body.search(/\nfunction \w+\(/);
+  return next === -1 ? body : body.slice(0, next);
+}
+```
+
+It works because `renderDetail` is followed by `function renderTabBody(` and
+`selectSession` by `function copyFrom(`, both plain top-level declarations at
+column 0, and neither body nests a declaration at column 0.
+
+#### Criterion 1 — opening a session lands on the timeline, the technical views stay subordinate
+
+| # | Case | Input / state | Expected | Level |
+| --- | --- | --- | --- | --- |
+| 1 | the page loads with no technical view open | the `const state = {` … `\n};` slice of `public/app.js` | matches `/\btab:\s*null\b/`, and does **not** match `/\btab:\s*['"]/` — a string default would open a view on load | source |
+| 2 | selecting a session returns to the timeline | `functionSource(appJs, 'selectSession')` | matches `/state\.tab\s*=\s*null/`, message: every session opens on its timeline, whatever view the previous one was on | source |
+| 3 | the timeline is rendered above the technical views | `functionSource(appJs, 'renderDetail')` | `indexOf('renderTimeline(') >= 0`, `indexOf('renderDetailViews(') >= 0`, and `renderTimeline(` < `renderDetailViews(` < `id="tab-body"`, each index asserted `>= 0` first so a missing call fails on its own message rather than on an index comparison | source |
+
+Case 1 takes the state slice as `appJs.slice(appJs.indexOf('const state = {'), …)` up to the
+first `'\n};'` after it, with an `assert.ok` that both anchors were found.
+
+Together the three fail under either half of the reviewer's reproduction: putting
+`tab: 'overview'` back turns case 1 red on both of its assertions, and deleting the
+`renderTimeline(...)` line from `renderDetail` turns case 3 red on its first
+assertion.
+
+**These three cases pass against the current `public/app.js`.** That is expected
+and is not a defect to fix: the finding was a missing guard, not broken behaviour.
+The test-author writes them, runs the file, and reports them as passing on write,
+naming per case which of the reviewer's two mutations turns it red — a reading,
+not a run. No production edit is asked for, and the implementer's work this round
+is to confirm the command below is green and change nothing.
+
+#### Deliberately untested, and why
+
+- **That the lanes are visually above the nav on screen.** Pixels are not a thing
+  `node --test` can see; the call order in `renderDetail` is the checkable fact.
+- **The argument passed to `renderTimeline`.** See the rejected list above.
+- **`renderTabBody`'s `case null:` branch.** It writes the empty string; case 3
+  already pins that the container sits below the nav, and pinning the switch as
+  source text would break on any restructuring that keeps the behaviour.
+- **Everything the other three criteria cover.** They are met and covered per the
+  reviewer; their cases stay as written and are re-run by the command below.
+- **`tools/argus` and the collector.** Untouched this round.
+
+#### What counts as done
+
+```
+npm --prefix tools/argus-ui test
+```
+
+That one command, from the repository root, is the whole list. It runs the three
+new cases with the rest of `page.test.mjs` and the other four files, costs
+seconds, and needs no install. `tools/argus` and `./test.sh` are off the list on
+purpose: no production file changes in this round.
+
+#### What is already red
+
+I did not run the list, not once and not as a baseline. From reading: the suite
+was 34 cases, 0 failed at the reviewer's run, and nothing has changed since, so
+the three new cases are the only ones whose first result is unknown — and from the
+source they will pass, because the behaviour they pin is already there.
+
