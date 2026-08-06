@@ -57,3 +57,19 @@ If they are away: a material question — user-visible behaviour, a public contr
 **How to talk to them.** Informally, in whatever language they wrote in. Short words, only as many sentences as they need now. Every sentence carries a fact, a decision, an assumption, a question, or the answer that was asked for. A reply is understandable from the conversation alone: naming a document, a rule or an issue is allowed only when the sentence carries its content.
 
 **What gets written is English.** Everything that lands in the repository is English, whatever language the request came in: the issue file and every handoff under `docs/issues/`, code comments, commit messages, and these rulebook texts. Only the conversation follows the human.
+
+## Changing uroboros itself
+
+A change to this repository's agents or skills — `agents/*.md`, an agent's own
+`agents/<name>/skills/`, or `skills/` — ends with the plugin cache for uroboros
+deleted:
+
+```bash
+rm -rf ~/.claude/plugins/cache/uroboros
+```
+
+Claude's plugin update mechanism does not detect the new version, so without
+that deletion the cached copy keeps loading and the next session still runs the
+old agents and skills. Deleted, the cache is installed fresh and the next
+session gets what was just written. The deletion belongs to the change, in the
+same turn as the edit, not to a later cleanup.
