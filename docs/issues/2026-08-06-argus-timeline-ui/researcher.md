@@ -2486,3 +2486,260 @@ live), the lane rows' markup is unchanged inside its new wrapper, the new class
 names contain neither `lane-curve` nor `lane-mark`, `independence.test.mjs` gets
 no new file to guard, and `page.test.mjs`'s flag-absence case is untouched by
 anything written here.
+
+## Increment 4 — Round 1
+
+The reviewer raised exactly one finding against increment 4, and it is a
+coverage hole, not a behaviour defect: the scrub works, and nothing in the suite
+notices when it stops working. This round adds three source-level cases to
+`tools/argus-ui/test/page.test.mjs` and changes no production file.
+
+### The finding, restated as the defect to remove
+
+`tools/argus-ui/public/app.js` wires the slider in two places, and both are
+unpinned:
+
+1. The delegated `input` listener on `#detail` (`app.js:1113–1118`) routes the
+   slider's `input` event to `scrubTo`. Delete those four lines and the suite is
+   103/103 green while dragging or arrow-keying the slider changes nothing.
+2. The delegated `pointerdown` listener on `#detail` (`app.js:1103–1105`) sets
+   the module-level `scrubbing` flag. Delete it and the suite is green again,
+   while the `scrubbing` guard inside `scheduleRefresh` — which
+   `test/page.test.mjs:290` does pin — becomes dead code and a refresh mid-drag
+   replaces the slider under the pointer.
+
+The existing case at `test/page.test.mjs:260` ('a drag moves the cursor without
+re-rendering the page under the pointer') reads `scrubTo`'s own body and passes
+with `scrubTo` never called by anything. The return-to-live half of the
+criterion is pinned at the page level (`test/page.test.mjs:279`); the scrub half
+has no equivalent. That asymmetry is the whole of what this round closes.
+
+The reviewer's second item — the in-flight `refresh()` that can still replace the
+slider mid-drag — is recorded there as an observation and not a finding. **No
+action, no test, no code change for it.** Do not widen the guard.
+
+### Implementation plan
+
+**No production file changes in this round.** `public/app.js`,
+`public/timeline.js`, `public/styles.css`, `public/index.html` and
+`tools/argus-ui/README.md` all stay exactly as they are; the wiring the finding
+names is already correct, and the three new cases are written to pass against it
+the moment they exist. Their worth is the mutation they catch, which the
+reviewer already measured in a sandbox.
+
+One file is edited: `tools/argus-ui/test/page.test.mjs`. It gains one helper and
+three cases, described in the Test Plan below.
+
+If a new case comes out red, the cause is that the helper's anchor string does
+not match `app.js` character for character. Then fix the anchor to the real
+source text; never weaken or delete an assertion, and never edit `app.js` to
+suit a test.
+
+### Decisions, and what I rejected
+
+- **Source-level assertions over `wireEvents`, not a DOM harness.** This project
+  has zero runtime and zero dev dependencies and that is its first rule
+  (`tools/argus-ui/CLAUDE.md`), so jsdom or happy-dom is not on the table for a
+  coverage gap. Every existing case in `page.test.mjs` reads `public/*.js` as
+  text; the new ones do the same and are therefore judged by the same standard
+  the reviewer already applied to the file.
+- **A per-listener slice, not a `wireEvents`-wide regex.** Asserting only that
+  `wireEvents` contains `scrubTo(` somewhere would pass if the call were moved
+  into the wrong listener — into the `change` handler, say, where a range input
+  fires only on release. Slicing the one delegated listener and asserting inside
+  it pins the wire, not the token.
+- **Rejected: a hand-rolled fake `document` that records listeners and lets the
+  test dispatch a synthetic `input` event.** It would need `wireEvents` exported
+  and `app.js` importable under Node — `app.js` runs `boot()` at load and
+  touches `document`, `EventSource` and `location`, so importing it means faking
+  four browser globals. That is a refactor of production code to serve a test,
+  in an increment whose behaviour the reviewer already accepts as correct.
+- **Rejected: asserting the listener's `type` string only** (that a
+  `'pointerdown'` listener exists at all). It passes on an empty handler. The
+  cases assert what the handler does with `timeline-scrub`.
+- **Ordering is asserted where order is load-bearing.** Inside the `input`
+  listener the `timeline-scrub` branch must come before the
+  `event.target.id !== 'event-search'` early return, or the slider's events die
+  at that return. An index comparison pins it, the way case 20 in the previous
+  section already compares `renderTimeline(` against `state.cursor`.
+
+### Module map
+
+| Path | What it holds | Entry points |
+| --- | --- | --- |
+| `tools/argus-ui/test/page.test.mjs` | Source-level cases over `public/`; 303 lines today, banner comments per criterion | existing helpers `walk()`, `functionSource(source, name)`; **new** helper `detailListener(source, type)`; three new cases appended at the end |
+| `tools/argus-ui/public/app.js` | The page: state, fetching, rendering, wiring | **read only this round.** `wireEvents` at line 1045; the `#detail` `pointerdown` listener at 1103–1105; the `window` `pointerup`/`pointercancel` loop at 1106–1110; the `#detail` `input` listener at 1113–1123; `let scrubbing = false` at 985; `scrubTo` at 1011 |
+
+Facts about the two files this plan rests on, so nobody has to go and read for
+them:
+
+- `functionSource(source, name)` (`page.test.mjs:19–26`) finds
+  `` `function ${name}(` ``, asserts it was found, and returns the slice up to the
+  next top-level `function` declaration. It already returns the whole of
+  `wireEvents`, both listeners included.
+- Every delegated listener in `wireEvents` is registered with the literal text
+  `document.getElementById('detail').addEventListener('<type>', (event) => {`,
+  one per type, and the four types are `click` (1051), `change` (1091),
+  `pointerdown` (1103) and `input` (1113). No other call in `app.js` matches that
+  prefix for those types, so each anchor is unique.
+- The registration that follows the `pointerdown` one is
+  `window.addEventListener(name, () => {` inside a
+  `for (const name of ['pointerup', 'pointercancel'])` loop; the one that follows
+  the `input` one is
+  `document.getElementById('session-search').addEventListener('input', …)`. Both
+  contain the substring `.addEventListener(`, which is what bounds each slice.
+- The pointer-release handlers sit on `window`, outside any `#detail` slice, so
+  the case that pins them reads the whole of `wireEvents` instead.
+- The current text of the two wires, verbatim:
+
+  ```js
+  document.getElementById('detail').addEventListener('pointerdown', (event) => {
+    if (event.target.id === 'timeline-scrub') scrubbing = true;
+  });
+  ```
+
+  ```js
+  document.getElementById('detail').addEventListener('input', (event) => {
+    // Keyboard scrubbing (arrow keys on a range) arrives here too.
+    if (event.target.id === 'timeline-scrub') {
+      scrubTo(event.target);
+      return;
+    }
+    if (event.target.id !== 'event-search') return;
+  ```
+
+- `page.test.mjs` banner comments read
+  `// Criterion 5, round 1 — a refresh answer for another session never reaches these lanes.`
+  (line 182) and `// Criterion 6 — the timeline scrubs, and a live mode follows the head.`
+  (line 219). The last case in the file ends at line 303.
+
+### Environment
+
+- Node v22.22.2 at `/opt/node22/bin/node`, on the `PATH`; the package requires
+  ≥ 20.11.
+- `tools/argus-ui` has **zero runtime and zero dev dependencies**. `npm install`
+  is not needed, has never run, and must not become needed.
+- Whole package, from the repository root: `npm --prefix tools/argus-ui test`
+  (which is `node --test "test/*.test.mjs"`).
+- The one edited file alone, from the repository root:
+  `node --test tools/argus-ui/test/page.test.mjs`. The file resolves `public/`
+  through `import.meta.url`, so it does not care what the working directory is.
+- **There is no linter and no formatter in this repository** — nothing to run,
+  nothing to configure.
+- `./test.sh` and `tools/argus`' own suite are **not** on this round's list:
+  nothing outside `tools/argus-ui/test/page.test.mjs` changes, and the closing
+  increment owns the full-suite run.
+
+### Test Plan
+
+Tests are needed: the finding is precisely a missing test. Framework:
+`node:test` with `node:assert/strict`, the only thing this project uses.
+
+**Conventions of the file the cases land in** (`tools/argus-ui/test/page.test.mjs`):
+every case is a `test('…', () => { … })` whose name is a full lowercase sentence
+stating the fact it pins; each case re-reads the source itself with
+`fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8')` — there is no shared
+fixture and no `before` hook; slices are taken with the file's own helpers rather
+than with inline `indexOf` where a helper fits; every assertion carries a message
+saying what the fact is, in the same voice ('a full re-render would replace the
+slider under the pointer and end the drag'); nothing is mocked, because nothing
+is executed; and the cases are grouped under `// Criterion N — …` banner
+comments in file order. Follow all of that.
+
+**Nothing is red before this change**, and nothing is expected to be red after
+it. These three cases pass against `app.js` as it stands — that is the intended
+outcome, because the defect is the absence of the case and not the behaviour.
+The proof that each case earns its place is the deletion it would catch, named
+per case below; do not perform those deletions, and do not touch `app.js`.
+
+#### The new helper
+
+Add it directly after `functionSource` (`page.test.mjs:26`), in the same style —
+a doc comment of one line, an `assert.ok` on the anchor, a slice to the next
+registration:
+
+```js
+/** The body of one delegated listener on #detail, up to the next addEventListener. */
+function detailListener(source, type) {
+  const anchor = `document.getElementById('detail').addEventListener('${type}'`;
+  const start = source.indexOf(anchor);
+  assert.ok(start >= 0, `app.js must still delegate ${type} on #detail`);
+  const rest = source.slice(start + anchor.length);
+  const next = rest.indexOf('.addEventListener(');
+  return next === -1 ? rest : rest.slice(0, next);
+}
+```
+
+#### The cases
+
+All three are appended at the end of the file, under one new banner in the
+file's established form:
+
+```js
+// Criterion 6, round 1 — the scrub control is wired to the scrub, and a drag is registered.
+```
+
+| # | Case name | Input / state | Expected | Catches the deletion of |
+| --- | --- | --- | --- | --- |
+| 1 | `the scrub control's input reaches the scrub` | `detailListener(appJs, 'input')` | matches `/timeline-scrub/` and `/scrubTo\(/`; and `slice.indexOf('timeline-scrub') < slice.indexOf('event-search')`, asserted with `assert.ok` | `app.js:1113–1118`, the four-line branch; also a move of that branch below the `event-search` early return |
+| 2 | `a drag is registered before the next refresh can fire` | `detailListener(appJs, 'pointerdown')` | matches `/timeline-scrub/` and `/scrubbing\s*=\s*true/`; and `slice.indexOf('timeline-scrub') < slice.search(/scrubbing\s*=\s*true/)` | `app.js:1103–1105`, the whole listener; also setting the flag for any pointer press rather than for the slider's |
+| 3 | `releasing the pointer lets refreshes resume` | `functionSource(appJs, 'wireEvents')` | matches `/pointerup/`, `/pointercancel/` and `/scrubbing\s*=\s*false/` | `app.js:1106–1110`, whose loss leaves `scrubbing` true forever after the first drag and freezes every later refresh |
+
+Assertion messages, to be used as written:
+
+1. `'the slider must route its input event to the scrub, or dragging it does nothing'`,
+   `'a drag must call scrubTo with the control it came from'`, and
+   `'the slider branch must come before the event-search early return, which would otherwise swallow it'`.
+2. `'a pointer press must be recognised as a drag on the scrub control specifically'`,
+   `'a drag must set the scrubbing flag scheduleRefresh checks'`, and
+   `'the flag must be set for the slider, not for every press in the detail pane'`.
+3. `'a drag must end on pointerup'`, `'a cancelled drag must end too, or refreshes stop forever'`,
+   and `'releasing the pointer must clear the scrubbing flag'`.
+
+Each case reads the source itself, exactly as the neighbouring cases do:
+
+```js
+const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+```
+
+Command that runs just this file, from the repository root:
+
+```
+node --test tools/argus-ui/test/page.test.mjs
+```
+
+#### Deliberately untested, and why
+
+- **The drag as a browser performs it** — real `pointerdown`/`input` events,
+  thumb pixels, whether the cursor line lands under the thumb. No DOM harness
+  exists and none may be added; the project's first rule is zero dependencies.
+  Cases 1–3 pin the wires, and the review judges the rest.
+- **That `scheduleRefresh` actually defers and then resumes.** Timing behind a
+  `setTimeout` with no seam; the existing case at `page.test.mjs:290` pins that
+  the guard is read, and case 3 now pins that the flag it reads is cleared.
+- **The in-flight `refresh()` that can still land mid-drag.** The reviewer
+  recorded it as an observation, not a finding; nothing here may pin behaviour
+  for it.
+- **Everything increments 1–3 and 5–6 own.** No case written this round may
+  touch lane derivation, density, the context message list or the tool list.
+- **`tools/argus`.** Not touched.
+
+#### What counts as done
+
+```
+npm --prefix tools/argus-ui test
+```
+
+That one command, from the repository root, is the whole list. It runs the three
+new cases together with every existing case in the package, costs seconds, and
+needs no install. Nothing else is to be run: `tools/argus`' suite and `./test.sh`
+are off the list on purpose, since the only file that changes is a test file
+inside `tools/argus-ui`.
+
+#### What is already red
+
+I did not run the list, not once and not as a baseline; the first run belongs to
+whoever runs it downstream. From reading: nothing is red before this change. The
+suite stands at 103 passing cases and grows to 106; no existing case is edited,
+no existing case reads the helper being added, and no production file changes,
+so no existing case can change its result.
