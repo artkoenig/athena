@@ -1,8 +1,3 @@
----
-paths:
-  - "docs/**"
----
-
 # Markdown under `docs/`
 
 These files are the whole brief an agent works from, and every word in them is

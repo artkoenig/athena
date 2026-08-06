@@ -1,15 +1,13 @@
----
-paths:
-  - "agents/**"
----
-
 # The subagents
 
 This is `agents/`'s own page, and it sits here rather than in `agents/CLAUDE.md`
 because plugin discovery reads every `agents/*.md` as an agent — a `CLAUDE.md`
 there would register as a nameless agent and be counted as one by the
-self-check. Path-scoped like this, it loads when a session reads a file under
-`agents/`, which is what a per-directory `CLAUDE.md` would have done.
+self-check. It carries no `paths:` frontmatter, so it loads at launch and is
+inherited by every subagent the session dispatches. Scope it to a path and it
+would load only when a session reads a file under `agents/` — which a subagent
+never inherits, because inheritance passes on what the session loaded at launch
+and a path-scoped rule is by definition not that.
 
 One agent is one flat `<name>.md` in that directory, and every one of them is
 listed in `plugin.json`'s `agents` field. That list is not decoration: for a
