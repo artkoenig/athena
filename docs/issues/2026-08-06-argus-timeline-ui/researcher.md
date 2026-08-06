@@ -4900,3 +4900,268 @@ they are expected: `timeline.test.mjs:575` and `:653` (the two `deepEqual`s over
 the old three-field mark shape) and `context.test.mjs`'s import of
 `PREVIEW_CHARS`, which will be an undefined binding until the import line moves.
 T6, T7 and C1 above are their fixes.
+
+## Increment 7 — Round 1
+
+The reviewer raised one finding and it is a test defect, not a behaviour defect:
+the tool list itself was accepted (per lane, per moment, name and parameters),
+`bash test.sh` was green, and nothing in `public/` is wrong. Increment 7's
+production change turned `renderLanePanel`'s single call into a concatenation of
+two, and one increment-6 pin reads that statement by slicing to the first `;` —
+so the slice now swallows the second call's arguments and the pin passes on
+them. The whole correction is one helper and two edited cases in
+`tools/argus-ui/test/page.test.mjs`. No file under `public/` changes.
+
+### The finding, restated as the defect to remove
+
+`page.test.mjs:479-501`, "the panel is drawn from the lane the reader selected
+and the answer held for it", builds its slice as
+
+```js
+const callIdx = renderLanePanel.indexOf('renderContextPanel(');
+const endIdx = renderLanePanel.indexOf(';', callIdx);
+const slice = renderLanePanel.slice(callIdx, endIdx);
+```
+
+Against today's `renderLanePanel` (`tools/argus-ui/public/app.js:936-953`) the
+first `;` after `renderContextPanel(` is the terminator of the whole
+`container.innerHTML = renderContextPanel(…) + renderToolPanel(…);` assignment,
+so the slice contains the `laneToolInput({…})` arguments as well as the
+`lanePanelInput({…})` ones. Both argument lists carry `key: state.selectedLane`
+and `expanded: state.expanded`, so those two assertions are satisfied by the
+tool panel alone and say nothing about the context panel. The reviewer proved it
+in a throwaway worktree: increment 6's mutation M-A2 — delete
+`key: state.selectedLane,` from the `lanePanelInput({…})` call at `app.js:942` —
+was 180 pass / 1 fail / exit 1 when increment 6 was accepted and is now 205 pass
+/ 0 fail / exit 0, as is the variant `key: null`.
+
+What has to hold again, and is the bar for this round: with the **context**
+panel's input wired to anything other than `state.selectedLane`, or its
+`expanded` wired to anything other than `state.expanded`, the `tools/argus-ui`
+suite is red — while the tool panel's own arguments sit untouched. The `held:`
+and `lanePanelInput(` assertions in that case never lost their power and stay
+as they are.
+
+### Implementation plan
+
+One edit, in one file: `tools/argus-ui/test/page.test.mjs`.
+
+1. **Add a parser helper next to `functionSource` (line 20) and
+   `detailListener` (line 29)**, in their style — a short doc comment, an
+   `assert.ok` on the anchor it needs, plain string scanning, no dependency:
+
+   ```js
+   /** The argument text of one call, from its `(` to the parenthesis that closes it. */
+   function callArguments(source, name) {
+     const open = source.indexOf(`${name}(`);
+     assert.ok(open >= 0, `the source must still call ${name}()`);
+     let depth = 0;
+     for (let i = open + name.length; i < source.length; i += 1) {
+       if (source[i] === '(') depth += 1;
+       else if (source[i] === ')') {
+         depth -= 1;
+         if (depth === 0) return source.slice(open + name.length + 1, i);
+       }
+     }
+     return assert.fail(`the ${name}( call must be closed by a matching )`);
+   }
+   ```
+
+   It returns the text *between* the call's own parentheses, so a sibling call
+   in the same statement — before it or after it — is outside the slice
+   whatever punctuation separates them. Neither argument list contains a string
+   literal or a comment holding an unbalanced parenthesis, so counting `(` and
+   `)` is enough and a tokenizer is not.
+
+2. **Rewrite the slice of the increment-6 case** (`page.test.mjs:479-501`) to
+   `const slice = callArguments(renderLanePanel, 'renderContextPanel');`,
+   dropping the two now-dead lines (`const callIdx = …indexOf('renderContextPanel(')`
+   with its `assert.ok`, and `const endIdx = …indexOf(';', callIdx)` with its
+   `assert.ok`). Keep all five existing assertions and their existing failure
+   messages verbatim, and keep the `const view = laneView();` assertion, which
+   matches against the whole function and not the slice. Add one assertion:
+   the slice must not contain `laneToolInput(`, so a future third panel in the
+   same statement cannot re-blunt the case the way the second one did.
+
+3. **Rewrite the slice of the increment-7 case** (`page.test.mjs:601-615`) the
+   same way, to `callArguments(renderLanePanel, 'renderToolPanel')`, with the
+   mirror-image extra assertion that its slice does not contain
+   `lanePanelInput(`. This case discriminates correctly today only because
+   `renderToolPanel(` happens to be the last call before the `;`; it is the
+   same latent defect and it costs three lines to remove while the helper is
+   being added.
+
+Nothing else in the suite is affected. The three other `indexOf(';', …)` slices
+(`page.test.mjs:408`, `:425`, `:442`) sit in `wireEvents`' click listener and in
+`loadLaneContext`, where each anchored call is its own statement and increment 7
+changed nothing.
+
+### Decisions, including the ones rejected
+
+- **Fix the test's parser, not the production statement.** Splitting
+  `renderLanePanel` into `const context = …; const tools = …;` would restore the
+  `;` slice, but it would break the increment-7 case that pins
+  `container.innerHTML = renderContextPanel(` (`page.test.mjs:586-599`, the
+  "computed and then thrown away" pin), trade one test problem for another, and
+  change working code to suit a crude parser. Rejected.
+- **A balanced-paren scan, not a regex over the argument list.** A regex like
+  `/renderContextPanel\(\s*lanePanelInput\(\{([^}]*)\}/` would work on today's
+  formatting and break on the next reflow; the scan is indifferent to line
+  breaks and to what the arguments look like inside.
+- **Leave the whole-function `state.expanded` assertion at
+  `page.test.mjs:545-550` alone.** It matches `renderLanePanel` entire, so the
+  tool panel's `expanded:` satisfies it too — but the mutation it exists for
+  (dropping `expanded: state.expanded` from `lanePanelInput`) is caught by the
+  repaired case in step 2, and editing a second case buys no discrimination the
+  suite does not then have. Recorded so its looseness reads as known, not
+  missed.
+- **Do not chmod `test.sh`.** `git ls-tree main test.sh` is `100644` here as in
+  `main`, so `./test.sh` exits 126 on the mode, unchanged by this issue and
+  owned by no increment in it. Changing a file mode nothing in this increment
+  touches is scope this increment was not given; the runnable spelling
+  `bash test.sh` is what the closed list below uses, exactly as the reviewer ran
+  it in every round.
+- **No new production behaviour, and no new production test.** The reviewer's
+  two recorded observations — parameters capped at `TOOL_PARAM_CHARS` (2000),
+  and tool calls older than the 2000-event poll window never being fetched —
+  are explicitly recorded as observations and not findings, the second one being
+  increment 4's poll. Neither is in scope this round.
+
+### Module map
+
+| Path | What it holds | Entry points |
+| --- | --- | --- |
+| `tools/argus-ui/test/page.test.mjs` (616 lines) | helpers `functionSource` 20, `detailListener` 29; the increment-6 lane-panel cases 467-573 (the defective one at 479-501, the loose `state.expanded` one at 536-551); the increment-7 cases 575-615 (the `innerHTML` pin 586-599, the tool-input case 601-615) | the new `callArguments` helper, and the slice lines of the two cases named above — nothing else in the file changes |
+| `tools/argus-ui/public/app.js` (1285 lines) | `renderLanePanel` at 936-953: `container.innerHTML = renderContextPanel(lanePanelInput({ view, key: state.selectedLane, held: state.laneContext, expanded: state.expanded })) + renderToolPanel(laneToolInput({ view, key: state.selectedLane, calls: state.toolMarks, cursor: state.cursor, expanded: state.expanded }));` | **read only, unchanged** — it is the text the two cases parse |
+| `tools/argus-ui/public/context.js` | `lanePanelInput` 242, `renderContextPanel` 256 | untouched |
+| `tools/argus-ui/public/tools.js` | `laneToolInput`, `renderToolPanel` | untouched |
+
+### Environment
+
+Node ≥ 20.11 (v22.22.2 is installed). Zero runtime dependencies, no install
+step, no build step, **no linter and no formatter in this repository** (no
+eslint config, no `.prettierrc`, no `.editorconfig`). Nothing to start: both
+cases are source reads — no collector, no DOM, no network, no fixture files.
+
+The two commands the closed list asks for, both from the repository root:
+
+```
+node --test tools/argus-ui/test/page.test.mjs
+bash test.sh
+```
+
+The first runs only the edited file (the file resolves `public/` from
+`import.meta.url`, so it runs the same from anywhere), a second or two. The
+second runs five suites — `test-repo.sh`, `test-worktree.sh`, `tools/argus`,
+`tools/argus-ui`, `tools/log-parser` — and is the issue's closing criterion; a
+couple of minutes, no network, no arguments. `test.sh` is mode `100644` in the
+tree and in `main`, so the criterion's spelling `./test.sh` exits 126 on
+permissions alone; `bash test.sh` is the same script and is the spelling to run.
+`npm --prefix tools/argus-ui test` runs the seven UI test files and is what
+`bash test.sh` invokes for this project; it is not in the closed list because
+the full run already covers it.
+
+### Test Plan
+
+Tests are needed: the correction *is* a test, and the finding is that a pin
+stopped discriminating. No production code changes this round, so there is no
+new behaviour to cover — the work is to make two existing cases assert what
+their names have always claimed.
+
+#### What, per finding
+
+**Finding 1 — the increment-6 pin on the context panel's input.** One case,
+rewritten in place, keeping its name
+(`'the panel is drawn from the lane the reader selected and the answer held for it'`).
+
+| # | Input (the slice) | Expected |
+| --- | --- | --- |
+| F1-a | `callArguments(functionSource(app.js, 'renderLanePanel'), 'renderContextPanel')` at `HEAD` | contains `lanePanelInput(`, `view,`, `key: state.selectedLane`, `held: state.laneContext`, `expanded: state.expanded` — the five assertions already in the case, with their messages unchanged — so the case is green as the code stands |
+| F1-b | the same slice, mutation M-A2: `key: state.selectedLane,` deleted from the `lanePanelInput({…})` call at `app.js:942` | `/key:\s*state\.selectedLane\b/` finds nothing in the slice → red. This is the mutation the reviewer showed green; it is the reason the round exists |
+| F1-c | the same slice, hop `key: state.selectedLane` → `key: null` in that same call | red, same assertion |
+| F1-d | the same slice, hop `expanded: state.expanded` → `expanded: {}` in that same call | red on `/expanded:\s*state\.expanded\b/` |
+| F1-e | the same slice, with the *tool* panel's `key:` or `expanded:` mutated instead | the case stays **green** — its slice must not reach the neighbouring call. Expressed as a standing assertion, `assert.doesNotMatch(slice, /laneToolInput\(/, …)`, rather than as a mutation anyone runs |
+
+**The mirror case — the increment-7 tool-input pin.** The same rewrite, keeping
+its name (`'the tool list is drawn for the selected lane, at the cursor\'s moment, from the calls the page holds'`).
+
+| # | Input (the slice) | Expected |
+| --- | --- | --- |
+| F1-f | `callArguments(…, 'renderToolPanel')` at `HEAD` | contains `laneToolInput(`, `view,`, `key: state.selectedLane`, `calls: state.toolMarks`, `cursor: state.cursor`, `expanded: state.expanded` — the six assertions already there, messages unchanged — green |
+| F1-g | the same slice, `key: state.selectedLane,` deleted from the `laneToolInput({…})` call at `app.js:947` | red (it already was; the rewrite must not lose this) |
+| F1-h | the same slice, plus `assert.doesNotMatch(slice, /lanePanelInput\(/, …)` | green at `HEAD`, and red if the helper ever hands back more than this call's own arguments |
+
+**Edges of the helper**, covered by the two cases themselves rather than by
+cases of their own: a call whose arguments span several lines (both do), a
+nested call inside the arguments (both have exactly one, `lanePanelInput(` /
+`laneToolInput(` — the depth counter is what makes the scan stop at the outer
+`)` and not the inner one), and an anchor that is missing or unclosed (the
+helper's own `assert.ok` / `assert.fail`, which turn a renamed or malformed call
+into a named failure instead of a confusing one).
+
+**Left untested, deliberately.** `callArguments` gets no test file of its own:
+it is a test helper, its two call sites exercise it on the only two calls in the
+repository it is pointed at, and a suite that tests its own helpers grows a
+second suite to maintain. The looseness of `page.test.mjs:545-550` is left as
+it is, for the reason in the decisions above. Nothing under `public/` is
+re-tested: no production file changes, and the 205 cases that exist already
+cover the tool list per the reviewer's own reading.
+
+#### How
+
+- **Level:** source-reading unit cases, the level increments 6 and 7 established
+  for the page wiring — `app.js` touches `document` at import time and there is
+  no DOM in the suite, so what the page hands each panel is verified by parsing
+  `app.js` rather than by rendering it.
+- **File:** `tools/argus-ui/test/page.test.mjs`, both cases edited in place. No
+  new file.
+- **Framework:** `node:test` with `node:assert/strict`, both already imported at
+  the top of the file. Zero dependencies, no runner config.
+- **Conventions of that file, to follow:** a flat `test('lowercase sentence
+  naming the behaviour', () => {…})` with no `describe` and no hooks; each case
+  re-reads its own source with
+  `fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8')` (there is no shared
+  fixture and none is to be introduced); slices are taken with the file's own
+  helpers `functionSource` / `detailListener`, each of which asserts its anchor
+  before slicing — `callArguments` joins them and belongs directly after
+  `detailListener` at line 36, above the first `//` section comment; every
+  `assert.match` carries a message saying what breaks in the product if the
+  assertion fails ("without it the panel paints empty for every lane"), not what
+  the regex is; the existing messages are kept verbatim, and the two new
+  `doesNotMatch` messages are written in the same voice — for example "the
+  context panel's arguments must be read on their own, or a sibling panel's
+  `key:` silently satisfies this case".
+- **Nothing is faked and nothing is stubbed:** the input is the real
+  `public/app.js` on disk.
+- **Command that runs just this file:**
+  `node --test tools/argus-ui/test/page.test.mjs`.
+
+#### What counts as done
+
+Two commands, from the repository root, and nothing else:
+
+```
+node --test tools/argus-ui/test/page.test.mjs
+bash test.sh
+```
+
+The first points straight at the edited file: it must report the same case count
+as before plus nothing (the two cases are rewritten, not added), 0 fail, exit 0.
+The second is the issue's closing criterion — `PASS: all 5 suites`, exit 0 —
+and covers the whole `tools/argus-ui` suite along the way, which is why
+`npm --prefix tools/argus-ui test` is not on the list. No linter exists, and no
+other package is touched.
+
+#### What is already red
+
+Nothing. The working tree is clean at `7686727`, and the reviewer's own run of
+this round's starting point was 205 pass / 0 fail / exit 0 for the UI suite and
+`PASS: all 5 suites` / exit 0 for `bash test.sh`. **I ran neither command, not
+even as a baseline** — reading the source settles what they will say, and the
+first run belongs to whoever runs it downstream.
+
+The correction is expected to be green the moment it lands: the production code
+already passes `key: state.selectedLane` and `expanded: state.expanded` to
+`lanePanelInput`, so the repaired case asserts what is true. If it comes out red
+at `HEAD`, the fault is in the helper's scan and not in `app.js` — fix the
+helper, and do not weaken the assertion or touch `public/`.
