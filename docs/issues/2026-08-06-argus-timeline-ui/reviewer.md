@@ -516,3 +516,186 @@ hunks in the diff are increment 1's accepted baseline.
   (`tab: null`) and the timeline's presence are both pinned, and the project
   forbids runtime dependencies, so a DOM-level test is not available; I raise
   this as an observation rather than a correction.
+
+## Increment 3
+
+**Status: 1 finding requires a correction.** The lanes do carry activity marks
+and a context area, and the pure functions behind them are pinned case by case.
+The gap is in the wiring: `loadTimeline` writes the tool marks it fetched into
+shared page state after an `await` without checking that the session it fetched
+them for is still the selected one, and the watermark it raises never recovers,
+so a lane can end up showing another session's tool calls and none of its own.
+
+### Commands run
+
+- `npm --prefix tools/argus-ui test` — 61 cases, 61 pass, 0 fail, 0 skipped,
+  exit 0. Nothing was excluded. This is the only command my prompt lists and the
+  only one I ran; `tools/argus`' own suite and `./test.sh` were not run, by that
+  list.
+
+### Criterion — each lane shows its activity over time (tool calls, API requests) and, behind it, the context size over time
+
+Met in the drawing, with the wiring defect below.
+
+- **Activity, both kinds.** `buildDensity`
+  (`tools/argus-ui/public/timeline.js:238`) splits every lane's records into
+  `{kind:'request'}` from `claude_code.api_request_body` content records and
+  `{kind:'tool'}` from the fetched `claude_code.tool_result` events, and
+  `activityMarks` (`:202`) buckets them into at most `ACTIVITY_BUCKETS` (120)
+  marks per lane, keeping a `count` per bucket so no record is lost.
+  `renderTimeline` (`:317`) paints one `<span class="lane-mark"
+  data-kind="request|tool">` per bucket, absolutely positioned in the same
+  `.lane-track` the lane bar sits in, with `--teal` and `--warn` backgrounds and
+  a legend above the lanes. Attribution: a request goes to the lane produced by
+  the same `laneKeyOf` rule the lanes were built with; a tool result goes to the
+  lane whose `spanId` it carries, and to `main` when no lane owns that span.
+- **Context size, as an area behind the bar.** `contextPoints` (`:161`) maps
+  each request's `bodyLength` to a point in a 0…100 box scaled by the session's
+  peak (`maxBodyLength`), not the lane's, so a subagent's hill reads smaller
+  than the main session's mountain — which is what makes "where consumption
+  grows" comparable across lanes. `areaPolygon` (`:180`) closes it on the
+  baseline, and `renderTimeline` emits the `<svg class="lane-curve">` *before*
+  the `<span class="lane-bar">` in the row, with `.lane-curve { inset: 0 }` and
+  the bar moved to `bottom: 0; height: 5px` (`styles.css`), so the area is
+  behind the bar rather than instead of it.
+- **Without opening any detail.** The whole thing is composed in `renderDetail`
+  (`app.js:170`) as `renderTimeline(buildDensity(buildLanes(...)))`, above the
+  technical-views nav, and the landing state (`tab: null`) opens no view. Peak
+  context and the two counts are additionally readable per lane from
+  `data-peak` / `data-requests` / `data-tools` and the `lane-meta` title.
+- **Divide-by-zero and overflow.** A zero-length window, a lane of one instant,
+  a session where every `body_length` is 0, and a mark past the window end all
+  stay finite and inside 0…100 (`clamp`, `Math.max(1, span)`), and no `style`
+  attribute can carry `NaN`.
+
+### Finding 1 — a lane can show another session's tool calls and permanently lose its own
+
+`tools/argus-ui/public/app.js:839–857`. `loadTimeline` captures `const id =
+state.selectedSessionId`, awaits two fetches, and then unconditionally pushes
+the returned tool events into `state.toolMarks` and raises `state.toolSeq`:
+
+```js
+  state.content = content?.items ?? [];
+  for (const item of tools?.items ?? []) {
+    state.toolMarks.push({ seq: item.seq, timeMs: item.timeMs, spanId: item.spanId });
+    if (item.seq > state.toolSeq) state.toolSeq = item.seq;
+  }
+```
+
+There is no re-check that `state.selectedSessionId === id` after the await, and
+no de-duplication by `seq`. Two `refresh()` calls can be in flight at once:
+`scheduleRefresh` guards only a pending timer (`app.js:958`), while
+`selectSession` calls `refresh()` directly (`app.js:939`).
+
+Reproduction (state, steps, wrong result):
+
+- State: a collector holding a live session A (its `tool_result` logs have the
+  highest `seq` in the store, because `seq` is a single global counter in
+  `tools/argus/src/store.mjs:270`) and a finished older session B whose
+  `tool_result` logs all have a lower `seq`.
+- Steps: open the UI on A. An `ingest` SSE event fires `scheduleRefresh`, and
+  400 ms later `refresh()` reaches `loadTimeline` and issues
+  `/api/events?session=A&event=claude_code.tool_result&sinceSeq=<A's watermark>`.
+  Before that request resolves, click B in the session list. `selectSession`
+  sets `selectedSessionId = B`, clears `toolMarks` and sets `toolSeq = 0`, and
+  starts a second `refresh()`.
+- Wrong result: A's in-flight response lands afterwards and pushes A's tool
+  marks into the array that now belongs to B, and sets `state.toolSeq` to A's
+  highest `seq`. B's lanes then paint A's tool marks (on whichever lane owns
+  those spans — normally `main`, since A's spans are not B's lanes), and every
+  later fetch for B asks `sinceSeq=<A's max seq>`, which `queryEvents` answers
+  by breaking out of its newest-first walk at the first `log.seq <= sinceSeq`
+  (`tools/argus/src/store.mjs:911`). B's own tool events, all below that
+  watermark, are therefore never returned again: B's lanes show zero tool-call
+  marks for the rest of the page's life, until B is deselected and reselected.
+- Expected: B's lanes show B's tool calls and nothing of A's.
+- Second, milder wrong result from the same missing guard: two overlapping
+  refreshes for *one* session both read the same `state.toolSeq` and both push
+  the same events, so a bucket's `count` — the number in the mark's tooltip,
+  "N tool calls" — is inflated to twice what happened.
+
+Criterion violated: "Each lane shows its activity over time (tool calls, API
+requests)". A lane that shows a different session's tool calls, and none of its
+own, does not.
+
+Note for whoever fixes it: increment 2 already had the stale-write race on
+`state.content`, but a wholesale overwrite self-corrects on the next refresh.
+What increment 3 adds is accumulating state plus a monotonic watermark, and
+neither recovers. The fix belongs in `loadTimeline` (drop the result when the
+selection moved on, and/or ignore an item whose `seq` is already held); the
+existing source-level cases in `test/page.test.mjs` are the natural place to pin
+it.
+
+### The tests against the intent
+
+No gap I can name beyond finding 1.
+
+- Both halves of the criterion have cases that fail if the behaviour breaks:
+  activity marks (one bucket carries its count; a request and a tool call at
+  one moment stay two marks; 500 records stay under 120 marks and lose none; a
+  mark never leaves the track), the context area (scaled session-wide, exact at
+  round numbers, zero-length window, all-zero sizes, single point still a
+  four-vertex plateau, empty means no polygon), and the composition (the curve
+  precedes the bar inside the same lane row; both `data-kind="request"` and
+  `data-kind="tool"` appear on the agent lane; a bare lane renders neither).
+- Attribution edges are covered where they matter: requests land on the lane
+  that made them, a tool call lands on the lane whose span it carries, a tool
+  call on an unowned span falls to `main`, and two concurrent same-type agents
+  keep their own tool calls rather than merging. A response body contributes
+  neither a context point nor an activity mark.
+- The wiring the pure functions depend on is pinned at source level in
+  `test/page.test.mjs`: `loadTimeline` fetches `/api/events` scoped to
+  `TOOL_EVENT` with `sinceSeq`, `selectSession` clears both `toolMarks` and
+  `toolSeq`, and `renderDetail` composes `renderTimeline(buildDensity(...))`.
+  These are string assertions over `app.js`, which is what this project can do
+  without a DOM or a dependency; they pin that the calls exist, not that the
+  state stays consistent across two in-flight refreshes — which is exactly the
+  hole finding 1 fell through.
+- Increment 2's call shape is pinned as still working (`renderTimeline` from a
+  bare `buildLanes` view), so the density staying optional is not a claim only
+  the comment makes.
+
+### Nothing in the diff that no criterion asked for
+
+Increment 3 touches five files (`git diff 20334e6 49daa02`), handoffs aside:
+`timeline.js` (the new exports and the richer row markup), `app.js` (the tool
+fetch and the composition), `styles.css` (lane track height, curve, marks,
+legend, `--meta-w`), `README.md`, and the two test files. The README bullet
+gains one clause describing exactly what the lanes now draw — documentation of
+this criterion, not new prose beside it. The legend and the `lane-meta` numbers
+are not literally named by the criterion but serve it directly: they are what
+makes a coloured mark and a shaded area readable as "API request", "tool call"
+and "context size" without a detail view. I raise neither as a finding.
+
+### Beyond the criteria (blast radius)
+
+- **The API the page now calls exists and carries what it reads.**
+  `/api/events` accepts `session`, `event`, `sinceSeq` and a `limit` capped at
+  2000 (`tools/argus/src/server.mjs:219–226`), and its items spread the stored
+  log record, which carries `seq`, `timeMs` and `spanId`
+  (`tools/argus/src/otlp/decode.mjs:227`) — the three fields `loadTimeline`
+  keeps. `argus-ui`'s server forwards any `/api/` path with its query string
+  untouched (`src/server.mjs:52`), so no parameter is dropped in the middle.
+  No collector change was needed and none was made.
+- **The project rules still hold.** `timeline.js` imports only `./format.js`,
+  touches no `document`/`fetch`/`location`, and the independence test covers
+  both new public modules. No runtime dependency was added.
+- **Whether a subagent's tool calls actually reach its lane is not verifiable
+  here — observation, not a finding.** The attribution rests on a subagent's
+  `api_request_body` record and its `tool_result` events carrying the *same*
+  `spanId`. Nothing in this checkout records real telemetry, so I can neither
+  confirm nor refute it; if they differ, every tool mark silently lands on the
+  main lane and the suite stays green, since `buildDensity`'s fallback is
+  exactly that. Stated so the risk is on the record, not as a finding: I have no
+  reproduction.
+- **`/api/content?limit=2000` still truncates the oldest records**, so in a very
+  long session the curve and the lanes start at the cutoff. Unchanged from
+  increment 1's retention window, not introduced here.
+- **No document made stale.** `tools/argus/README.md` and both `CLAUDE.md` files
+  describe the collector, its API and the split between the two projects; none
+  of them describes what a lane draws. `tools/argus-ui/README.md` was updated in
+  this diff.
+- **Residual, below the finding bar:** `areaPolygon` widens a single-point
+  plateau to `MIN_CURVE_WIDTH_PCT` but clips at 100, so a lone request at
+  x = 99.9 draws a 0.1-wide sliver instead of 0.6. Visual only, at the extreme
+  right edge, and the clamp is deliberate; not worth a round.
