@@ -153,6 +153,10 @@ export function resolveConfig(flags = {}, env = process.env) {
     maxLogs: parseCount(flags['max-logs'] ?? env.UROBOROS_OBS_MAX_LOGS, 50_000),
     maxMetricPoints: parseCount(flags['max-metrics'] ?? env.UROBOROS_OBS_MAX_METRICS, 50_000),
     maxSessions: parseCount(flags['max-sessions'] ?? env.UROBOROS_OBS_MAX_SESSIONS, 500),
+    // The raw API bodies the timeline is built from are up to 1 MB each, so the
+    // record count alone stops bounding memory. This is the second bound: total
+    // body text held in the log window.
+    maxContentBytes: parseCount(flags['max-content-bytes'] ?? env.UROBOROS_OBS_MAX_CONTENT_BYTES, 268_435_456),
     persistMaxBytes: parseCount(flags['persist-max-bytes'] ?? env.UROBOROS_OBS_PERSIST_MAX_BYTES, 64 * 1024 * 1024),
     traces: flags.traces === 'false' ? false : true,
   };

@@ -49,6 +49,37 @@ export const EVENT = {
 /** Tool names whose call parameters describe todo/task state (see todo-tracking docs). */
 export const TASK_TOOL_NAMES = new Set(['TodoWrite', 'TaskCreate', 'TaskUpdate']);
 
+/* ------------------------------- lanes -------------------------------- */
+
+/** The lane every record without an agent of its own belongs to. */
+export const MAIN_LANE_ID = 'main';
+
+/**
+ * `query_source` values that are neither the main thread nor a subagent: work
+ * the CLI does on the session's behalf. They get their own lane so the context
+ * a compaction pass burns is visible instead of being charged to the main one.
+ */
+export const AUXILIARY_QUERY_SOURCES = new Set(['compact']);
+
+/**
+ * Which timeline lane a `query_source` belongs to.
+ *
+ * On **events and the `claude_code.llm_request` span** `query_source` is the
+ * subsystem's name — `repl_main_thread`, `compact`, or a subagent's name. On
+ * **metrics** the same attribute key carries a category instead (`main` /
+ * `subagent` / `auxiliary`), so metric points must never be fed in here.
+ *
+ * A name is not an instance id, so two subagents of the same type running at
+ * once share one lane. That is accepted: it is the only attribution
+ * `api_request_body` events carry at all.
+ */
+export function laneOfQuerySource(value) {
+  const name = typeof value === 'string' ? value.trim() : '';
+  if (!name || name === 'repl_main_thread') return { id: MAIN_LANE_ID, kind: 'main' };
+  if (AUXILIARY_QUERY_SOURCES.has(name)) return { id: name, kind: 'auxiliary' };
+  return { id: name, kind: 'agent' };
+}
+
 /**
  * The tool_result event carries the call's parameters as a JSON string, only
  * present when `OTEL_LOG_TOOL_DETAILS=1` is set. The attribute has been named
@@ -219,6 +250,14 @@ export function describeEvent(log) {
       return `${a.model ?? 'model'} ${a.status_code ?? ''} ${a.error ?? 'error'}`.trim();
     case EVENT.apiRefusal:
       return `${a.model ?? 'model'} refused${a.category ? ` (${a.category})` : ''}`;
+    case EVENT.apiRequestBody:
+    case EVENT.apiResponseBody: {
+      // `body_length` is the untruncated length (UTF-16 code units in inline
+      // mode), so it stays right even when `body` itself arrived cut short.
+      const length = num(a.body_length, typeof a.body === 'string' ? a.body.length : 0);
+      const tail = bool(a.body_truncated) ? ' · truncated' : '';
+      return `${a.model ?? 'model'} · ${length} chars${tail}`;
+    }
     case EVENT.mcpServerConnection:
       return `${a.server_name ?? 'mcp server'} ${a.status ?? ''} via ${a.transport_type ?? '?'}`;
     case EVENT.permissionModeChanged:
@@ -244,6 +283,27 @@ export function otelEnvFor(endpoint, { traces = true, token = null, fastFlush = 
     OTEL_LOGS_EXPORTER: 'otlp',
     OTEL_EXPORTER_OTLP_PROTOCOL: 'http/protobuf',
     OTEL_EXPORTER_OTLP_ENDPOINT: endpoint,
+    // Content. These gate what log *records* carry, not whether spans exist, so
+    // they sit outside the `traces` branch below and are on whatever else is.
+    OTEL_LOG_USER_PROMPTS: '1',
+    // Also makes `agent.name` arrive under its real value: without it the CLI
+    // redacts a user-defined agent's name to "custom".
+    OTEL_LOG_TOOL_DETAILS: '1',
+    OTEL_LOG_TOOL_CONTENT: '1',
+    // `1` emits claude_code.api_request_body / api_response_body with the
+    // Messages API body inline. `file:<dir>` is the other documented value; it
+    // is not used, because the bodies would then live on the agent's disk and a
+    // collector on another host would only get a path it cannot read.
+    OTEL_LOG_RAW_API_BODIES: '1',
+    // Content-bearing attributes are truncated at 61440 UTF-16 units (60 KB) by
+    // default — roughly 15k tokens of context JSON, so a real agent turn arrives
+    // cut in half and is not valid JSON. 1 MB is about 260k tokens of JSON,
+    // which covers a full context window. Needs Claude Code >= 2.1.214; an older
+    // CLI ignores an unknown variable, so setting it costs nothing there.
+    CLAUDE_CODE_OTEL_CONTENT_MAX_LENGTH: '1048576',
+    // Deliberately absent: OTEL_LOG_ASSISTANT_RESPONSES. Unset, it follows
+    // OTEL_LOG_USER_PROMPTS, so naming it here would add a line that changes
+    // nothing. This is not an omission to fix.
   };
   if (traces) {
     // Spans are the beta signal and need their own opt-in flag.

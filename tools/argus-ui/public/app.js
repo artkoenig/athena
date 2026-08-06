@@ -15,7 +15,15 @@ const state = {
   config: null,
   selectedSessionId: null,
   session: null,
-  tab: 'overview',
+  // The timeline is the session view. The six technical views below it are
+  // subordinate to it and all closed until one is asked for, so opening a
+  // session lands on the session rather than on a table about it.
+  timeline: null,
+  slice: null,
+  selectedLaneId: 'main',
+  atMs: 0,
+  live: true,
+  technicalTab: null,
   trace: null,
   selectedTraceId: null,
   selectedSpanId: null,
@@ -225,10 +233,13 @@ function renderDetail() {
       </div>
     </div>
 
+    ${renderTimeline()}
+
+    <h2 class="section-heading">Technical views</h2>
     <nav class="tabs" role="tablist">
       ${TABS.map(
         (tab) => `<button type="button" class="tab" role="tab" data-tab="${tab.id}"
-          aria-selected="${state.tab === tab.id}">${tab.label}${
+          aria-selected="${state.technicalTab === tab.id}">${tab.label}${
             counts[tab.id] !== undefined ? `<span class="count">${fmtNum(counts[tab.id])}</span>` : ''
           }</button>`,
       ).join('')}
@@ -242,7 +253,13 @@ function renderDetail() {
 function renderTabBody() {
   const body = document.getElementById('tab-body');
   if (!body) return;
-  switch (state.tab) {
+  // Nothing open is the resting state: the timeline above is the session view,
+  // and a technical view stays shut until it is asked for.
+  if (!state.technicalTab) {
+    body.innerHTML = '';
+    return;
+  }
+  switch (state.technicalTab) {
     case 'todos':
       body.innerHTML = renderTodosTab();
       break;
@@ -261,6 +278,183 @@ function renderTabBody() {
     default:
       body.innerHTML = renderOverviewTab();
   }
+}
+
+/* ------------------------------- timeline ------------------------------- */
+
+/**
+ * The context curve for one lane, as a filled area closed to the baseline.
+ *
+ * `maxTokens` is the maximum over *all* lanes, not this one, so a subagent's
+ * curve is read against the same scale as the main thread's and the lanes stay
+ * comparable at a glance.
+ */
+function laneCurve(lane, x, maxTokens) {
+  if (!lane.context.length) return '';
+  const y = (tokens) => (100 - (tokens / maxTokens) * 100).toFixed(2);
+  const points = lane.context.map((sample) => `${x(sample.atMs).toFixed(2)},${y(sample.tokens)}`);
+  const first = x(lane.context[0].atMs).toFixed(2);
+  const last = x(lane.context[lane.context.length - 1].atMs).toFixed(2);
+  return `<svg class="lane-curve" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+      <polygon points="${first},100 ${points.join(' ')} ${last},100"></polygon>
+    </svg>`;
+}
+
+function laneMeta(lane) {
+  const parts = [lane.kind];
+  if (lane.agentName && lane.agentName !== lane.id) parts.push(lane.agentName);
+  parts.push(`${fmtNum(lane.requests)} req`);
+  parts.push(`${fmtNum(lane.toolCalls)} tools`);
+  if (lane.maxContextTokens) parts.push(`peak ${fmtNum(lane.maxContextTokens)} tok`);
+  return parts.join(' · ');
+}
+
+function renderTimeline() {
+  const timeline = state.timeline;
+  if (!timeline) {
+    return '<div class="placeholder">No timeline for this session — its raw records are gone or never arrived.</div>';
+  }
+  const lanes = timeline.lanes ?? [];
+  const total = timeline.lastMs - timeline.firstMs;
+  if (!(total > 0)) {
+    // Everything landed in the same millisecond; there is no axis to scale by,
+    // and dividing by it would be a division by zero rather than a drawing.
+    return `<section class="timeline">
+      <div class="placeholder">This session covers a single instant so far — nothing to scrub through yet.</div>
+    </section>
+    <div id="slice-panel">${renderSlicePanel()}</div>`;
+  }
+
+  const x = (ms) => ((Math.min(Math.max(ms, timeline.firstMs), timeline.lastMs) - timeline.firstMs) / total) * 100;
+  const maxTokens = Math.max(1, ...lanes.map((lane) => lane.maxContextTokens || 0));
+
+  const rows = lanes
+    .map((lane) => {
+      const blocks = lane.activity
+        .map((block) => {
+          const left = x(block.startMs);
+          // The same minimum width the waterfall uses: a call shorter than the
+          // pixel it would occupy still has to be visible.
+          const width = Math.max(x(block.endMs) - left, 0.4);
+          return `<span class="lane-block" data-kind="${esc(block.kind)}"
+            title="${esc(block.label)} · ${esc(fmtDur(block.endMs - block.startMs))}"
+            style="left:${left.toFixed(3)}%;width:${width.toFixed(3)}%"></span>`;
+        })
+        .join('');
+      return `<button type="button" class="lane-row" data-lane="${esc(lane.id)}"
+          aria-current="${lane.id === state.selectedLaneId}">
+        <span class="lane-label">
+          <span class="name">${esc(lane.label)}</span>
+          <span class="meta">${esc(laneMeta(lane))}</span>
+        </span>
+        <span class="lane-track" data-kind="${esc(lane.kind)}">
+          ${laneCurve(lane, x, maxTokens)}
+          ${blocks}
+        </span>
+      </button>`;
+    })
+    .join('');
+
+  return `<section class="timeline">
+      <div class="timeline-scrub">
+        <input type="range" id="timeline-scrub" min="${timeline.firstMs}" max="${timeline.lastMs}" step="1"
+          value="${state.atMs}" aria-label="Point in time" />
+        <span class="scrub-clock">${esc(fmtClock(state.atMs))}</span>
+        <button type="button" class="scrub-live" data-live aria-pressed="${state.live}">Live</button>
+      </div>
+      <div class="timeline-rows">
+        ${rows}
+        <div class="lane-playhead-layer" aria-hidden="true">
+          <span></span>
+          <span class="lane-playhead-track"><span class="lane-playhead" style="left:${x(state.atMs).toFixed(3)}%"></span></span>
+        </div>
+      </div>
+      ${
+        timeline.spansSeen
+          ? ''
+          : '<p class="muted">No spans were recorded for this session, so the activity rows are empty. Tool and model calls need CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1 — which <code>argus env</code> sets.</p>'
+      }
+    </section>
+    <div id="slice-panel">${renderSlicePanel()}</div>`;
+}
+
+/** One line per context block, expandable to the exact text it carried. */
+function renderContextBlocks(context) {
+  if (!context) return '<div class="placeholder">No context recorded at this point.</div>';
+  if (!context.blocks.length) {
+    return context.bodyRef
+      ? `<div class="placeholder">The body was written to a file on the agent's machine: <code>${esc(
+          context.bodyRef,
+        )}</code>. This collector never reads it — it may not be the same machine.</div>`
+      : '<div class="placeholder">This request carried no readable body.</div>';
+  }
+  const rows = context.blocks
+    .map(
+      (block) => `<div class="ctx-block">
+        <button type="button" class="ctx-row" data-block="${block.index}">
+          <span class="ctx-role" data-role="${esc(block.role)}">${esc(block.role)}</span>
+          <span class="ctx-type">${esc(block.type)}</span>
+          <span class="ctx-name">${esc(block.name ?? block.toolUseId ?? '')}</span>
+          <span class="ctx-chars">${esc(fmtNum(block.chars))}</span>
+        </button>
+        <pre class="ctx-text" data-block-text="${block.index}" hidden>${esc(block.text)}</pre>
+      </div>`,
+    )
+    .join('');
+  return `<div class="ctx-list">${rows}</div>`;
+}
+
+/**
+ * Repaint the selection panel alone. Scrubbing must not replace the range input
+ * it is being dragged with, so a scrub never re-renders the whole detail pane.
+ */
+function paintSlice() {
+  const node = document.getElementById('slice-panel');
+  if (node) node.innerHTML = renderSlicePanel();
+}
+
+function renderSlicePanel() {
+  const slice = state.slice;
+  const lane = state.timeline?.lanes?.find((item) => item.id === state.selectedLaneId);
+  if (!slice) return '<div class="placeholder">Select a lane to see what it was holding.</div>';
+  const context = slice.context;
+  const heading = lane ? lane.label : slice.laneId;
+  const tools = slice.tools.length
+    ? slice.tools
+        .map(
+          (tool) => `<tr>
+            <td class="event-time">${esc(fmtClock(tool.atMs))}</td>
+            <td class="event-name">${esc(tool.name)}</td>
+            <td>${tool.success ? '' : '<span class="chip" data-tone="error">failed</span> '}${esc(
+              tool.parameters ? JSON.stringify(tool.parameters) : '',
+            )}</td>
+          </tr>`,
+        )
+        .join('')
+    : '<tr><td colspan="3"><div class="placeholder">No tool calls in this lane up to this point.</div></td></tr>';
+
+  return `<div class="slice">
+      <div class="slice-context">
+        <h3>${esc(heading)} — context at ${esc(fmtClock(slice.atMs))}</h3>
+        ${
+          context
+            ? `<div class="slice-meta">${esc(context.model ?? 'model')} · ${esc(
+                fmtNum(context.totalChars),
+              )} chars in ${esc(fmtNum(context.blocks.length))} blocks · sent ${esc(fmtClock(context.atMs))}${
+                context.truncated ? ' · <span class="chip" data-tone="error">truncated</span>' : ''
+              }</div>`
+            : ''
+        }
+        ${renderContextBlocks(context)}
+      </div>
+      <div class="slice-tools">
+        <h3>Tools used up to here</h3>
+        <div class="panel"><div class="table-scroll"><table>
+          <thead><tr><th>Time</th><th>Tool</th><th>Parameters</th></tr></thead>
+          <tbody>${tools}</tbody>
+        </table></div></div>
+      </div>
+    </div>`;
 }
 
 /* ------------------------------- overview ------------------------------- */
@@ -887,9 +1081,48 @@ async function loadSession() {
   }
 }
 
+/**
+ * The timeline and the slice it is pointed at. Both are built at read time from
+ * the collector's raw windows, so this is a plain fetch and nothing is cached.
+ */
+async function loadTimeline() {
+  if (!state.selectedSessionId) {
+    state.timeline = null;
+    state.slice = null;
+    return;
+  }
+  state.timeline = await api(
+    `/api/sessions/${encodeURIComponent(state.selectedSessionId)}/timeline`,
+  ).catch(() => null);
+  const timeline = state.timeline;
+  if (!timeline) {
+    state.slice = null;
+    return;
+  }
+  const lanes = timeline.lanes ?? [];
+  if (!lanes.some((lane) => lane.id === state.selectedLaneId)) state.selectedLaneId = lanes[0]?.id ?? 'main';
+  // In live mode the playhead follows the newest record, so an open session
+  // keeps showing its present rather than freezing where it was first opened.
+  if (state.live || !state.atMs) state.atMs = timeline.lastMs;
+  state.atMs = Math.min(Math.max(state.atMs, timeline.firstMs), timeline.lastMs);
+  await loadSlice();
+}
+
+async function loadSlice() {
+  if (!state.selectedSessionId || !state.timeline) {
+    state.slice = null;
+    return;
+  }
+  state.slice = await api(`/api/sessions/${encodeURIComponent(state.selectedSessionId)}/context`, {
+    lane: state.selectedLaneId,
+    at: Math.round(state.atMs),
+  }).catch(() => null);
+}
+
 async function loadTabData() {
   if (!state.session) return;
-  if (state.tab === 'traces') {
+  await loadTimeline();
+  if (state.technicalTab === 'traces') {
     const traces = state.session.traces ?? [];
     if (!traces.some((trace) => trace.traceId === state.selectedTraceId)) {
       state.selectedTraceId = traces[0]?.traceId ?? null;
@@ -898,7 +1131,7 @@ async function loadTabData() {
     state.trace = state.selectedTraceId
       ? await api(`/api/traces/${encodeURIComponent(state.selectedTraceId)}`).catch(() => null)
       : null;
-  } else if (state.tab === 'events') {
+  } else if (state.technicalTab === 'events') {
     const [events, facets] = await Promise.all([
       api('/api/events', {
         session: state.selectedSessionId,
@@ -911,7 +1144,7 @@ async function loadTabData() {
     ]);
     state.events = events.items;
     state.facets = facets;
-  } else if (state.tab === 'metrics') {
+  } else if (state.technicalTab === 'metrics') {
     const metrics = await api('/api/metrics', { session: state.selectedSessionId, limit: 2000 });
     state.metrics = metrics.items;
   }
@@ -960,6 +1193,14 @@ function selectSession(id, { render = true } = {}) {
   state.trace = null;
   state.events = [];
   state.metrics = [];
+  // A newly opened session opens on its timeline, live, at the main lane —
+  // never inheriting the previous session's lane, moment or open sub-view.
+  state.timeline = null;
+  state.slice = null;
+  state.selectedLaneId = 'main';
+  state.atMs = 0;
+  state.live = true;
+  state.technicalTab = null;
   location.hash = `#/session/${encodeURIComponent(id)}`;
   if (render) refresh({ sessions: false }).then(renderSessionList);
 }
@@ -1015,9 +1256,30 @@ function wireEvents() {
       copyFrom(copy.dataset.copy);
       return;
     }
+    const live = event.target.closest('[data-live]');
+    if (live) {
+      state.live = true;
+      state.atMs = state.timeline?.lastMs ?? state.atMs;
+      loadSlice().then(renderDetail);
+      return;
+    }
+    const lane = event.target.closest('[data-lane]');
+    if (lane) {
+      state.selectedLaneId = lane.dataset.lane;
+      loadSlice().then(renderDetail);
+      return;
+    }
+    const block = event.target.closest('[data-block]');
+    if (block) {
+      const text = document.querySelector(`[data-block-text="${block.dataset.block}"]`);
+      if (text) text.hidden = !text.hidden;
+      return;
+    }
     const tab = event.target.closest('[data-tab]');
     if (tab) {
-      state.tab = tab.dataset.tab;
+      // Clicking the open view closes it again, so the timeline can always be
+      // got back to without leaving the session.
+      state.technicalTab = state.technicalTab === tab.dataset.tab ? null : tab.dataset.tab;
       loadTabData().then(renderDetail);
       return;
     }
@@ -1053,7 +1315,26 @@ function wireEvents() {
   });
 
   let searchTimer = null;
+  let scrubTimer = null;
   document.getElementById('detail').addEventListener('input', (event) => {
+    if (event.target.id === 'timeline-scrub') {
+      // Scrubbing is an explicit "show me back then", so it leaves live mode.
+      state.live = false;
+      state.atMs = Number(event.target.value);
+      // Move the playhead and the clock at once; the slice behind them is a
+      // round trip, so it is debounced the way the event search already is.
+      const playhead = document.querySelector('.lane-playhead');
+      const timeline = state.timeline;
+      if (playhead && timeline && timeline.lastMs > timeline.firstMs) {
+        const fraction = (state.atMs - timeline.firstMs) / (timeline.lastMs - timeline.firstMs);
+        playhead.style.left = `${(fraction * 100).toFixed(3)}%`;
+      }
+      const clock = document.querySelector('.scrub-clock');
+      if (clock) clock.textContent = fmtClock(state.atMs);
+      clearTimeout(scrubTimer);
+      scrubTimer = setTimeout(() => loadSlice().then(paintSlice), 120);
+      return;
+    }
     if (event.target.id !== 'event-search') return;
     state.eventFilters.search = event.target.value;
     clearTimeout(searchTimer);
@@ -1114,7 +1395,7 @@ async function boot() {
   // Sessions age out of "live" and relative timestamps drift; repaint slowly.
   setInterval(() => {
     renderSessionList();
-    if (state.session && state.tab === 'overview') renderTabBody();
+    if (state.session && state.technicalTab === 'overview') renderTabBody();
   }, 15_000);
 }
 

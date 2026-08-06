@@ -64,6 +64,7 @@ Options
       --max-logs <n>            Event buffer size                    (default 50000)
       --max-metrics <n>         Metric point buffer size             (default 50000)
       --max-sessions <n>        Sessions kept in memory              (default 500)
+      --max-content-bytes <n>   Raw API body text kept in memory   (default 256MB)
       --traces false            Leave traces out of the printed env block
       --format <fmt>            Output format for "env": shell (default), json,
                                 dotenv, settings (.claude/settings.local.json)
@@ -73,7 +74,8 @@ Options
 Environment
   UROBOROS_OBS_PORT, UROBOROS_OBS_HOST, UROBOROS_OBS_TOKEN, UROBOROS_OBS_PUBLIC_URL,
   UROBOROS_OBS_PERSIST, UROBOROS_OBS_RETENTION, UROBOROS_OBS_MAX_SPANS,
-  UROBOROS_OBS_MAX_LOGS, UROBOROS_OBS_MAX_METRICS, UROBOROS_OBS_MAX_SESSIONS
+  UROBOROS_OBS_MAX_LOGS, UROBOROS_OBS_MAX_METRICS, UROBOROS_OBS_MAX_SESSIONS,
+  UROBOROS_OBS_MAX_CONTENT_BYTES
 `.trim();
 
 function renderEnv(env, format) {

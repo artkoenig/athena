@@ -208,6 +208,25 @@ export function createServer({ store, token = null, endpoint = '', persist = nul
       else sendJson(res, 200, session);
       return true;
     }
+    const timelineMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/timeline$/);
+    if (timelineMatch) {
+      const timeline = store.getTimeline(decodeURIComponent(timelineMatch[1]));
+      if (!timeline) sendJson(res, 404, { error: 'unknown session' });
+      else sendJson(res, 200, timeline);
+      return true;
+    }
+    const contextMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/context$/);
+    if (contextMatch) {
+      // The lane id travels as a query parameter, not a path segment: it is a
+      // free-form string (a subagent's own name) and not an opaque id.
+      const slice = store.getContextAt(decodeURIComponent(contextMatch[1]), {
+        laneId: searchParams.get('lane') ?? 'main',
+        atMs: intParam(searchParams, 'at', Date.now()),
+      });
+      if (!slice) sendJson(res, 404, { error: 'unknown session' });
+      else sendJson(res, 200, slice);
+      return true;
+    }
     const traceMatch = pathname.match(/^\/api\/traces\/([^/]+)$/);
     if (traceMatch) {
       const trace = store.getTrace(decodeURIComponent(traceMatch[1]));

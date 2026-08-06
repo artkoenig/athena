@@ -28,6 +28,7 @@ const LIVE = Boolean(flags.live);
 
 const MODELS = ['claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'];
 const TOOLS = ['Read', 'Bash', 'Edit', 'Grep', 'Glob', 'WebFetch'];
+const SUBAGENTS = ['researcher', 'test-author', 'implementer'];
 const PROMPTS = [
   'Add OpenTelemetry export to the worker service',
   'Why is the nightly job flaking?',
@@ -90,6 +91,38 @@ function span({ traceId, spanId, parentSpanId, name, startMs, durationMs, attrib
   };
 }
 
+/**
+ * A small synthetic Anthropic Messages API request body, the shape
+ * `claude_code.api_request_body` carries when OTEL_LOG_RAW_API_BODIES=1: the
+ * system prompt, the tool definitions, and every prior turn including tool
+ * results. Real ones run to hundreds of kilobytes; this one is a few, which is
+ * enough to exercise the timeline's context view end to end.
+ */
+function messagesBody(prompt, toolName, toolUseId) {
+  return JSON.stringify({
+    system: 'You are a careful engineering assistant working inside a git repository.',
+    tools: TOOLS.map((name) => ({
+      name,
+      description: `${name} — a synthetic tool definition, standing in for the real schema`,
+      input_schema: { type: 'object', properties: { file_path: { type: 'string' } }, required: ['file_path'] },
+    })),
+    messages: [
+      { role: 'user', content: prompt },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'Let me look at the repository before changing anything.' },
+          { type: 'tool_use', id: toolUseId, name: toolName, input: { file_path: 'src/index.mjs' } },
+        ],
+      },
+      {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: toolUseId, content: 'export function main() {}\n'.repeat(40) }],
+      },
+    ],
+  });
+}
+
 /** One agent turn: prompt -> model call -> tools -> model call -> response. */
 function buildTurn(sessionId, sequence, startMs) {
   const traceId = hexId(16);
@@ -123,6 +156,16 @@ function buildTurn(sessionId, sequence, startMs) {
 
   record('claude_code.user_prompt', { prompt, prompt_length: prompt.length });
 
+  /** The raw request body event, attributable by `query_source` and nothing else. */
+  const recordBody = (bodyModel, querySource, timeMs, toolName, toolUseId) => {
+    const body = messagesBody(prompt, toolName, toolUseId);
+    record(
+      'claude_code.api_request_body',
+      { model: bodyModel, query_source: querySource, body, body_length: body.length },
+      timeMs,
+    );
+  };
+
   const children = [];
   const toolCount = randInt(1, 3);
   let tokensIn = 0;
@@ -145,6 +188,7 @@ function buildTurn(sessionId, sequence, startMs) {
     const callCost = input * 3e-6 + output * 1.5e-5 + cached * 3e-7;
     cost += callCost;
     const failed = Math.random() < 0.06;
+    recordBody(model, 'repl_main_thread', cursor, pick(TOOLS), `toolu_${hexId(6)}`);
     children.push(
       span({
         traceId,
@@ -192,12 +236,113 @@ function buildTurn(sessionId, sequence, startMs) {
           cache_read_tokens: cached,
           cache_creation_tokens: created,
           cost_usd_micros: Math.round(callCost * 1e6),
-          query_source: 'main',
+          // On an *event* this attribute is the subsystem's name, not the
+          // metric-side category ('main'/'subagent'/'auxiliary'). The metrics
+          // below still carry the category, which is why the two differ.
+          query_source: 'repl_main_thread',
         },
         cursor + duration,
       );
     }
     cursor += duration;
+  };
+
+  /**
+   * A subagent stretch: its own `agent_id` on the spans, its own `query_source`
+   * on the events. Only the llm_request span carries both, and that bridge is
+   * what makes the tool span below — which has no `query_source` at all —
+   * attributable to the subagent's lane instead of the main one.
+   */
+  const emitSubagent = () => {
+    const agentName = pick(SUBAGENTS);
+    const agentId = hexId(8);
+    const duration = rand(900, 5000);
+    const input = randInt(3000, 20_000);
+    const output = randInt(100, 1200);
+    const cached = randInt(5000, 60_000);
+    const callCost = input * 3e-6 + output * 1.5e-5 + cached * 3e-7;
+    tokensIn += input;
+    tokensOut += output;
+    cacheRead += cached;
+    cost += callCost;
+    const toolName = pick(TOOLS);
+    const toolUseId = `toolu_${hexId(6)}`;
+    const llmSpanId = hexId(8);
+
+    recordBody(model, agentName, cursor, toolName, toolUseId);
+    children.push(
+      span({
+        traceId,
+        spanId: llmSpanId,
+        parentSpanId: interactionId,
+        name: 'claude_code.llm_request',
+        startMs: cursor,
+        durationMs: duration,
+        attributes: {
+          'session.id': sessionId,
+          'span.type': 'claude_code.llm_request',
+          model,
+          query_source: agentName,
+          agent_id: agentId,
+          parent_agent_id: 'main',
+          duration_ms: Math.round(duration),
+          input_tokens: input,
+          output_tokens: output,
+          cache_read_tokens: cached,
+          success: true,
+        },
+      }),
+    );
+    record(
+      'claude_code.api_request',
+      {
+        model,
+        'agent.name': agentName,
+        query_source: agentName,
+        duration_ms: Math.round(duration),
+        input_tokens: input,
+        output_tokens: output,
+        cache_read_tokens: cached,
+        cache_creation_tokens: 0,
+        cost_usd_micros: Math.round(callCost * 1e6),
+      },
+      cursor + duration,
+    );
+    cursor += duration;
+
+    const execution = rand(50, 1800);
+    children.push(
+      span({
+        traceId,
+        spanId: hexId(8),
+        parentSpanId: llmSpanId,
+        name: 'claude_code.tool',
+        startMs: cursor,
+        durationMs: execution,
+        attributes: {
+          'session.id': sessionId,
+          'span.type': 'claude_code.tool',
+          tool_name: toolName,
+          tool_use_id: toolUseId,
+          agent_id: agentId,
+          parent_agent_id: 'main',
+          duration_ms: Math.round(execution),
+        },
+      }),
+    );
+    record(
+      'claude_code.tool_result',
+      {
+        tool_name: toolName,
+        tool_use_id: toolUseId,
+        success: true,
+        duration_ms: Math.round(execution),
+        tool_result_size_bytes: randInt(200, 50_000),
+        tool_input: JSON.stringify({ file_path: 'src/index.mjs' }),
+      },
+      cursor + execution,
+    );
+    cursor += execution;
   };
 
   emitLlmCall();
@@ -280,12 +425,15 @@ function buildTurn(sessionId, sequence, startMs) {
         duration_ms: Math.round(execution),
         error_type: failed ? 'ENOENT' : undefined,
         tool_result_size_bytes: randInt(120, 90_000),
+        tool_input: JSON.stringify({ file_path: 'src/index.mjs' }),
       },
       cursor + blocked + execution,
       failed ? 17 : 9,
     );
     cursor += blocked + execution;
   }
+
+  if (Math.random() < 0.6) emitSubagent();
 
   emitLlmCall();
   record('claude_code.assistant_response', { model, response_length: randInt(200, 4000) }, cursor);

@@ -1,6 +1,7 @@
 # argus-ui
 
-The web interface for an [argus](../argus/) collector: sessions, tokens, cost,
+The web interface for an [argus](../argus/) collector: a timeline of every agent
+in a session and the context each one was holding, over sessions, tokens, cost,
 traces, events and metrics, updating live over Server-Sent Events.
 
 Two processes, deliberately. The collector receives OpenTelemetry, aggregates
@@ -59,6 +60,24 @@ for an `HttpOnly; SameSite=Strict` cookie and drops it from the address bar.
 ## What it shows
 
 - **Sessions** — every session by last activity, with cost, tokens and errors.
+
+Opening a session opens its **timeline**, which is the session view — one lane
+for the main thread, one per subagent, one per auxiliary subsystem such as
+compaction. Each lane draws its context size over the run as a filled curve, and
+its model and tool calls as blocks over it. A scrubber picks a moment; `Live`
+follows the newest record instead. Selecting a lane shows what that agent was
+holding at that moment: the exact request that was sent, one line per block —
+system prompt, tool definitions, every turn, every tool result — with its size,
+expandable to the text itself, and the tool calls it had made by then. Extended
+thinking arrives redacted by the CLI and is shown as it arrived.
+
+The lanes and the context need the content flags, which `argus env` sets; see
+[Sensitive data](../argus/README.md#sensitive-data) for what that puts in the
+measurement.
+
+The six views below the timeline are the technical ones, all closed until one is
+asked for, and clicking the open one closes it again:
+
 - **Overview** — cost, tokens by type including cache hit rate, interactions,
   requests, tool calls, lines of code, commits, active time; tables per model
   and per tool.

@@ -74,6 +74,11 @@ export OTEL_METRICS_EXPORTER="otlp"
 export OTEL_LOGS_EXPORTER="otlp"
 export OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"
 export OTEL_EXPORTER_OTLP_ENDPOINT="http://127.0.0.1:4318"
+export OTEL_LOG_USER_PROMPTS="1"                 # prompts, responses, tool arguments and
+export OTEL_LOG_TOOL_DETAILS="1"                 # results, and the raw Messages API bodies:
+export OTEL_LOG_TOOL_CONTENT="1"                 # the conversation itself, which the
+export OTEL_LOG_RAW_API_BODIES="1"               # timeline is built from — see Sensitive data
+export CLAUDE_CODE_OTEL_CONTENT_MAX_LENGTH="1048576"  # the 60 KB default truncates every real turn
 export CLAUDE_CODE_ENHANCED_TELEMETRY_BETA="1"   # required for spans (beta)
 export OTEL_TRACES_EXPORTER="otlp"
 export OTEL_METRIC_EXPORT_INTERVAL="1000"        # the 60s default is too sluggish for short runs
@@ -446,6 +451,7 @@ exactly these routes and nothing else.
 | `--max-logs <n>`        | `UROBOROS_OBS_MAX_LOGS`        | `50000`        | Event buffer                                     |
 | `--max-metrics <n>`     | `UROBOROS_OBS_MAX_METRICS`     | `50000`        | Metric buffer                                    |
 | `--max-sessions <n>`    | `UROBOROS_OBS_MAX_SESSIONS`    | `500`          | Sessions in memory                               |
+| `--max-content-bytes <n>` | `UROBOROS_OBS_MAX_CONTENT_BYTES` | `268435456` | Raw API body text held in the event buffer      |
 | `-V, --version`         | –                            | –              | Print the version and exit                       |
 
 Durations accept `ms`, `s`, `m`, `h`, `d` (e.g. `--retention 90m`).
@@ -503,11 +509,31 @@ argus start --open .uroboros-telemetry/2026-08-03T14-22-05
 ## Sensitive data
 
 By default Claude Code exports structure only: durations, model names, tool names, token
-counts. Prompts, tool arguments and API bodies arrive only with
-`OTEL_LOG_USER_PROMPTS=1`, `OTEL_LOG_TOOL_DETAILS=1`, `OTEL_LOG_TOOL_CONTENT=1` and
-`OTEL_LOG_RAW_API_BODIES`. `argus env` deliberately does **not** set these. Anyone
-who switches them on should know that prompt and file contents then live in the
-collector's memory and — with `--persist` — on disk.
+counts. **`argus env` switches the content flags on**: `OTEL_LOG_USER_PROMPTS=1`,
+`OTEL_LOG_TOOL_DETAILS=1`, `OTEL_LOG_TOOL_CONTENT=1`, `OTEL_LOG_RAW_API_BODIES=1` and
+`CLAUDE_CODE_OTEL_CONTENT_MAX_LENGTH=1048576`. It has to: the timeline is a view of the
+conversation, and without those flags there is no conversation to show.
+
+What that means in practice — decide before pointing a real session at a collector:
+
+- **The whole conversation is in the measurement.** `claude_code.api_request_body` carries
+  the complete Messages API request: system prompt, tool definitions, every prior turn, and
+  every tool result, which includes the contents of every file that was read. Prompts and
+  tool arguments arrive as their own events.
+- **It lives in memory and, with `--persist` (the default), on disk.** The measurement
+  directory is as sensitive as the repository it was recorded in. It is written under
+  `.uroboros-telemetry/`, which carries a `.gitignore` of `*`, so it is not committed by
+  accident — but it is not encrypted either.
+- **Extended thinking is redacted by the CLI itself**, whatever is set here. A thinking
+  block arrives as a marker and nothing in this tool can recover it.
+- **To record structure without content**, do not export the five flags above — set the
+  rest of the block by hand instead of using `argus env`. The timeline then draws lanes and
+  activity, and the context panel stays empty; nothing else changes.
+- The raised content limit is what makes the bodies usable: at the 60 KB default a real
+  agent turn arrives cut in half and is not even valid JSON. The other documented value,
+  `OTEL_LOG_RAW_API_BODIES=file:<dir>`, is not used — the bodies would then sit on the
+  agent's disk and a collector on another host would only receive a path it cannot read.
+  If a recording made that way arrives anyway, the path is reported and never opened.
 
 `user.email`, `user.account_uuid` and `organization.id` are standard attributes and appear
 in the interface under "Attributes".
@@ -520,8 +546,9 @@ src/config.mjs           defaults < environment < flags
 src/otlp/protobuf.mjs    schema-driven protobuf reader/writer (wire format)
 src/otlp/schema.mjs      field descriptors for opentelemetry-proto v1
 src/otlp/decode.mjs      OTLP (protobuf & JSON) → flat records
-src/claude.mjs           Claude Code domain knowledge: metric, event and span names
-src/store.mjs            in-memory store, session aggregation, trace tree, queries
+src/claude.mjs           Claude Code domain knowledge: metric, event and span names, lanes
+src/context.mjs          a raw Messages API request body → the blocks that fill a context
+src/store.mjs            in-memory store, session aggregation, trace tree, timeline, queries
 src/persist.mjs          JSONL append, replay, one directory per measurement
 src/background.mjs       start in the background, end with the session
 src/server.mjs           OTLP ingest, JSON API, SSE
@@ -538,6 +565,8 @@ and new Claude Code attributes.
 | `POST /v1/{traces,metrics,logs}` | OTLP ingest (`http/protobuf`, `http/json`, gzip)   |
 | `GET /api/sessions`      | Session list (`search`, `limit`, `offset`)                 |
 | `GET /api/sessions/:id`  | Session aggregates including traces                        |
+| `GET /api/sessions/:id/timeline` | Lanes (main, subagents, auxiliary) with activity and context curve |
+| `GET /api/sessions/:id/context`  | One lane's context and tool calls at a moment (`lane`, `at`) |
 | `GET /api/traces/:id`    | Spans of a trace, flat with `depth` in render order        |
 | `GET /api/events`        | Events (`session`, `event`, `trace`, `search`, `errors`)   |
 | `GET /api/metrics`       | Metric points (`session`, `name`)                          |
@@ -579,6 +608,19 @@ npm run demo      # emit a synthetic session
   completed task does not disappear from the table, it only gets the status
   `deleted`/`completed`. There is deliberately no aggregate counter here (unlike traces,
   events and metrics), because it could only grow monotonically.
+- **The timeline is built from the raw window, so it ages out with it.** Lanes, activity
+  and the context at a moment are computed at query time from the buffered spans and
+  events; once those have been evicted by age, by count or by the content budget, the
+  session keeps its aggregates and loses its timeline — exactly as it loses its traces.
+  A measurement written with `--persist` and reopened with `--open` has it back.
+- **Tool calls reach a subagent's lane only when traces are on.** A `claude_code.tool` span
+  carries `agent_id` and a `tool_result` event carries neither that nor `query_source`; the
+  only record holding both namespaces is the `claude_code.llm_request` span. Without
+  `CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1` there is no span, so every tool call is shown in
+  the main lane. `argus env` sets the flag, so this only affects a session wired by hand.
+- **Two subagents of the same kind running at once share one lane.** Request bodies are
+  attributable by `query_source`, which is a name and not an instance id. Splitting them is
+  not possible from what the CLI exports.
 - The store lives in the process. For long-term retention or alerting, the telemetry
   belongs in a real backend (Honeycomb, Grafana, Datadog, Langfuse) — both work in
   parallel, `OTEL_EXPORTER_OTLP_*` variables can point each signal at a different

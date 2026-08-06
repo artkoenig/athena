@@ -18,23 +18,30 @@
 import {
   EVENT,
   ERROR_EVENTS,
+  MAIN_LANE_ID,
   METRIC,
   SPAN,
   TASK_TOOL_NAMES,
   TOKEN_TYPES,
   EMPTY_TOKENS,
   bool,
+  laneOfQuerySource,
   num,
   serviceNameOf,
   sessionIdOf,
   sessionNameOf,
   toolParametersOf,
 } from './claude.mjs';
+import { parseRequestBody } from './context.mjs';
 
 /** Bound on how many stray TaskCreate calls a session keeps (see #applyTodo). */
 const MAX_UNLINKED_CREATES = 200;
 /** Bound on the per-task status history kept for the Tasks tab. */
 const MAX_TASK_HISTORY = 50;
+/** Bound on activity blocks and context samples returned per timeline lane. */
+const MAX_LANE_POINTS = 2000;
+/** Bound on tool calls returned by one getContextAt slice. */
+const DEFAULT_TOOL_LIMIT = 200;
 
 const DEFAULTS = {
   maxSpans: 50_000,
@@ -42,7 +49,18 @@ const DEFAULTS = {
   maxMetricPoints: 50_000,
   maxSessions: 500,
   retentionMs: 24 * 60 * 60 * 1000,
+  // Raw API bodies are up to 1 MB each (CLAUDE_CODE_OTEL_CONTENT_MAX_LENGTH),
+  // and 50 000 log records at that size is a 50 GB worst case — so the count
+  // window alone is not a memory bound any more. 256 MB of body text is the
+  // second bound, applied on top of it.
+  maxContentBytes: 268_435_456,
 };
+
+/** Bytes of body text one record holds, for the content budget. */
+function contentBytesOf(log) {
+  const body = log?.attrs?.body;
+  return typeof body === 'string' ? Buffer.byteLength(body) : 0;
+}
 
 /**
  * Custom attributes from OTEL_RESOURCE_ATTRIBUTES that the UI reads by name.
@@ -167,6 +185,32 @@ function nameOf(session) {
   return sessionNameOf(session) ?? null;
 }
 
+/**
+ * Which lane a span belongs to. `agent_id` is the better identity — per
+ * instance rather than per name — but it only ever appears on spans, so it is
+ * resolved through the llm_request bridge. An `agent_id` that never appeared on
+ * one gets a lane of its own: the gap is shown, not folded into the main lane
+ * where it would silently misattribute someone else's work.
+ */
+function laneOfSpan(span, byAgentId) {
+  const agentId = span.attrs?.agent_id;
+  if (!agentId) return { id: MAIN_LANE_ID, kind: 'main' };
+  const known = byAgentId.get(agentId);
+  if (known) return known;
+  return { id: `agent:${agentId}`, kind: 'agent', label: `agent ${String(agentId).slice(0, 8)}` };
+}
+
+/**
+ * Which lane a log record belongs to. `tool_result` events carry no attribution
+ * at all beyond `tool_use_id`, so they are joined through the tool span that
+ * shares it; everything else goes by `query_source`.
+ */
+function laneOfLog(log, byToolUseId) {
+  const toolUseId = log.attrs?.tool_use_id;
+  if (toolUseId && byToolUseId.has(toolUseId)) return byToolUseId.get(toolUseId);
+  return laneOfQuerySource(log.attrs?.query_source);
+}
+
 /** Stable identity for one metric time series (metric name + attribute set). */
 function seriesKey(point) {
   const attrs = Object.entries(point.attrs ?? {})
@@ -190,6 +234,10 @@ export class TelemetryStore {
     this.seq = 0;
     this.startedAt = Date.now();
     this.received = { traces: 0, metrics: 0, logs: 0 };
+    // Running total of body text held in `this.logs`. Added to on ingest and
+    // recomputed from scratch after any removal — one place that has to be
+    // right rather than five.
+    this.contentBytes = 0;
   }
 
   /** Drop everything but keep subscribers attached. */
@@ -201,6 +249,7 @@ export class TelemetryStore {
     this.sessions.clear();
     this.traces.clear();
     this.received = { traces: 0, metrics: 0, logs: 0 };
+    this.contentBytes = 0;
   }
 
   /* ------------------------------ pub/sub ------------------------------ */
@@ -443,6 +492,7 @@ export class TelemetryStore {
   #applyLog(session, log) {
     session.counts.logs++;
     this.logs.push(log);
+    this.contentBytes += contentBytesOf(log);
     const attrs = log.attrs ?? {};
     log.isError = ERROR_EVENTS.has(log.eventName) || log.severity === 'ERROR' || log.severity === 'FATAL';
 
@@ -662,7 +712,35 @@ export class TelemetryStore {
     this.#trim('spans', this.options.maxSpans, cutoff, (span) => span.startMs);
     this.#trim('logs', this.options.maxLogs, cutoff, (log) => log.timeMs);
     this.#trim('metricPoints', this.options.maxMetricPoints, cutoff, (point) => point.timeMs);
+    this.#evictContent();
     this.#evictSessions(cutoff);
+  }
+
+  /**
+   * The second bound on the log window: total body text, not record count.
+   * Oldest records go first, exactly as the count bound drops them, so a
+   * session whose bodies have been evicted loses its timeline the same way it
+   * loses its traces — the timeline is built from the raw windows and nothing
+   * else.
+   */
+  #evictContent() {
+    const max = this.options.maxContentBytes;
+    if (!(max > 0) || this.contentBytes <= max) return;
+    let total = this.contentBytes;
+    let drop = 0;
+    while (drop < this.logs.length && total > max) {
+      total -= contentBytesOf(this.logs[drop]);
+      drop++;
+    }
+    if (drop <= 0) return;
+    this.logs.splice(0, drop);
+    this.#recountContentBytes();
+  }
+
+  #recountContentBytes() {
+    let total = 0;
+    for (const log of this.logs) total += contentBytesOf(log);
+    this.contentBytes = total;
   }
 
   #trim(field, max, cutoff, timeOf) {
@@ -673,6 +751,7 @@ export class TelemetryStore {
     if (drop <= 0) return;
     const removed = list.splice(0, drop);
     if (field === 'spans') this.#unindexSpans(removed);
+    else if (field === 'logs') this.#recountContentBytes();
   }
 
   #unindexSpans(removed) {
@@ -721,6 +800,7 @@ export class TelemetryStore {
     this.spans = this.spans.filter((span) => span.sessionId !== id);
     this.logs = this.logs.filter((log) => log.sessionId !== id);
     this.metricPoints = this.metricPoints.filter((point) => point.sessionId !== id);
+    this.#recountContentBytes();
   }
 
   /* -------------------------------- queries ---------------------------- */
@@ -811,6 +891,188 @@ export class TelemetryStore {
       orphanCount: missingParents,
       spans: flat,
     };
+  }
+
+  /* -------------------------------- timeline --------------------------- */
+
+  /**
+   * Resolve the two id namespaces a session's records are attributed in.
+   *
+   * Spans carry `agent_id`; events carry `query_source`. They name the same
+   * agent and never each other, and the only record that carries both is the
+   * `claude_code.llm_request` span — that bridge is what makes a tool span
+   * (which has no `query_source`) and a tool_result event (which has neither)
+   * attributable to a subagent lane at all. Without traces there is no bridge,
+   * and every tool call falls to the main lane; that is the documented
+   * consequence of running without CLAUDE_CODE_ENHANCED_TELEMETRY_BETA.
+   */
+  #resolveLanes(spans) {
+    const byAgentId = new Map();
+    for (const span of spans) {
+      if (span.name !== SPAN.llmRequest) continue;
+      const agentId = span.attrs?.agent_id;
+      if (!agentId || byAgentId.has(agentId)) continue;
+      byAgentId.set(agentId, laneOfQuerySource(span.attrs?.query_source));
+    }
+    const byToolUseId = new Map();
+    for (const span of spans) {
+      if (span.name !== SPAN.tool) continue;
+      const toolUseId = span.attrs?.tool_use_id;
+      if (!toolUseId) continue;
+      byToolUseId.set(toolUseId, laneOfSpan(span, byAgentId));
+    }
+    return { byAgentId, byToolUseId };
+  }
+
+  /**
+   * Lanes for one session: one for the main thread, one per subagent, one per
+   * auxiliary subsystem, each with its activity blocks and its context curve.
+   *
+   * Everything is built at read time from the raw span and log windows, so
+   * nothing new is indexed on the ingest path and the order the two pipelines
+   * arrive in is irrelevant. The consequence is the same one traces already
+   * have: a session whose raw records have been evicted has no timeline any
+   * more, only its aggregates.
+   */
+  getTimeline(sessionId) {
+    const session = this.sessions.get(sessionId);
+    if (!session) return null;
+    const spans = this.spans.filter((span) => span.sessionId === sessionId);
+    const logs = this.logs.filter((log) => log.sessionId === sessionId);
+    const { byAgentId, byToolUseId } = this.#resolveLanes(spans);
+
+    const lanes = new Map();
+    const laneFor = (ref) => {
+      let lane = lanes.get(ref.id);
+      if (!lane) {
+        lane = {
+          id: ref.id,
+          label: ref.label ?? (ref.kind === 'main' ? 'main session' : ref.id),
+          kind: ref.kind,
+          agentName: null,
+          firstMs: 0,
+          lastMs: 0,
+          requests: 0,
+          toolCalls: 0,
+          maxContextTokens: 0,
+          activity: [],
+          context: [],
+        };
+        lanes.set(ref.id, lane);
+      }
+      return lane;
+    };
+    // The main lane is always drawn, even when every record belongs to a
+    // subagent: a session always had a main thread, and an empty row says so.
+    laneFor({ id: MAIN_LANE_ID, kind: 'main' });
+
+    const touch = (lane, startMs, endMs) => {
+      if (!(startMs > 0)) return;
+      lane.firstMs = lane.firstMs ? Math.min(lane.firstMs, startMs) : startMs;
+      lane.lastMs = Math.max(lane.lastMs, endMs || startMs);
+    };
+
+    for (const span of spans) {
+      const lane = laneFor(laneOfSpan(span, byAgentId));
+      const startMs = span.startMs;
+      // An open span has no end yet; it must not be drawn ending before it began.
+      const endMs = span.endMs || span.startMs;
+      touch(lane, startMs, endMs);
+      if (span.name === SPAN.tool) {
+        lane.toolCalls++;
+        lane.activity.push({ startMs, endMs, kind: 'tool', label: String(span.attrs?.tool_name ?? 'tool') });
+      } else if (span.name === SPAN.llmRequest) {
+        lane.activity.push({ startMs, endMs, kind: 'llm', label: String(span.attrs?.model ?? 'model') });
+      }
+    }
+
+    for (const log of logs) {
+      const attrs = log.attrs ?? {};
+      const lane = laneFor(laneOfLog(log, byToolUseId));
+      touch(lane, log.timeMs, log.timeMs);
+      if (log.eventName === EVENT.apiRequest) {
+        lane.requests++;
+        // `agent.name` rides on api_request events and nowhere else useful here;
+        // it is the CLI's own label for the agent, which query_source is not.
+        if (!lane.agentName && attrs['agent.name']) lane.agentName = String(attrs['agent.name']);
+        // Context is what was sent, so output tokens are deliberately excluded:
+        // they are generation, not context.
+        lane.context.push({
+          atMs: log.timeMs,
+          tokens:
+            num(attrs.input_tokens) + num(attrs.cache_read_tokens) + num(attrs.cache_creation_tokens),
+        });
+      } else if (log.eventName === EVENT.toolResult && !byToolUseId.has(attrs.tool_use_id)) {
+        // Only the ones no tool span already counted, so a joined call is not
+        // counted twice.
+        lane.toolCalls++;
+      }
+    }
+
+    for (const lane of lanes.values()) {
+      lane.activity.sort((a, b) => a.startMs - b.startMs);
+      lane.context.sort((a, b) => a.atMs - b.atMs);
+      // The caps exist only so a lane cannot be unbounded; a real session is far
+      // below them. The newest entries are the ones kept.
+      if (lane.activity.length > MAX_LANE_POINTS) lane.activity = lane.activity.slice(-MAX_LANE_POINTS);
+      if (lane.context.length > MAX_LANE_POINTS) lane.context = lane.context.slice(-MAX_LANE_POINTS);
+      lane.maxContextTokens = lane.context.reduce((max, sample) => Math.max(max, sample.tokens), 0);
+      if (!lane.firstMs) {
+        lane.firstMs = session.firstSeenMs;
+        lane.lastMs = session.firstSeenMs;
+      }
+    }
+
+    const ordered = [...lanes.values()].sort((a, b) => {
+      if (a.id === MAIN_LANE_ID) return -1;
+      if (b.id === MAIN_LANE_ID) return 1;
+      return a.firstMs - b.firstMs;
+    });
+
+    return {
+      sessionId,
+      firstMs: session.firstSeenMs,
+      lastMs: session.lastSeenMs,
+      laneCount: ordered.length,
+      // False means no span ever arrived, which is why activity rows are empty
+      // — the interface says so rather than showing an unexplained blank.
+      spansSeen: spans.length > 0,
+      lanes: ordered,
+    };
+  }
+
+  /**
+   * What one lane's context looked like at a chosen moment, and which tools it
+   * had called by then.
+   */
+  getContextAt(sessionId, { laneId = MAIN_LANE_ID, atMs = Date.now(), toolLimit = DEFAULT_TOOL_LIMIT } = {}) {
+    if (!this.sessions.has(sessionId)) return null;
+    const spans = this.spans.filter((span) => span.sessionId === sessionId);
+    const { byToolUseId } = this.#resolveLanes(spans);
+
+    let context = null;
+    const tools = [];
+    for (const log of this.logs) {
+      if (log.sessionId !== sessionId || log.timeMs > atMs) continue;
+      if (laneOfLog(log, byToolUseId).id !== laneId) continue;
+      const attrs = log.attrs ?? {};
+      if (log.eventName === EVENT.apiRequestBody) {
+        // The newest body at or before the moment asked for; a lane with none
+        // yields null, which is an empty slice and not an error.
+        if (!context || log.timeMs >= context.atMs) context = { atMs: log.timeMs, ...parseRequestBody(attrs) };
+      } else if (log.eventName === EVENT.toolResult) {
+        tools.push({
+          atMs: log.timeMs,
+          name: String(attrs.tool_name ?? 'tool'),
+          toolUseId: attrs.tool_use_id ?? null,
+          success: bool(attrs.success),
+          durationMs: num(attrs.duration_ms),
+          parameters: toolParametersOf(attrs),
+        });
+      }
+    }
+    tools.sort((a, b) => a.atMs - b.atMs);
+    return { laneId, atMs, context, tools: tools.slice(-toolLimit) };
   }
 
   queryEvents({

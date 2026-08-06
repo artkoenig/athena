@@ -97,6 +97,11 @@ new session doing the same work.
 ## What this is not
 
 Not a profiler and not a tracer of your own code: it sees what Claude Code
-exports over OpenTelemetry — model requests, tokens, cost, tool calls, errors —
-and nothing else. Not a monitor either: it is started on demand, and dies with
-the session that started it.
+exports over OpenTelemetry and nothing else. That is more than numbers, though —
+`argus env` turns the content flags on, so the measurement holds the
+conversation itself: prompts, tool arguments and results, and the full Messages
+API request behind every turn, which includes the contents of every file that
+was read. It is as sensitive as the repository it was recorded in; see
+"Sensitive data" in `tools/argus/README.md` before pointing a real session at a
+collector. Not a monitor either: it is started on demand, and dies with the
+session that started it.
