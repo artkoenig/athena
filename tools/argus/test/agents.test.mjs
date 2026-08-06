@@ -533,3 +533,148 @@ test("an agent's wall time covers its own records only", () => {
   const explore = store.getSessionAgents(SESSION).agents.find((agent) => agent.key === 'Explore');
   assert.equal(explore.durationMs, 200);
 });
+
+test('a failed tool call counts against the agent that made it (span first)', () => {
+  const store = new TelemetryStore();
+  store.ingest('traces', [
+    span(
+      'claude_code.tool',
+      { tool_name: 'Bash', tool_use_id: 'tu-1', agent_id: 'a1', query_source: 'agent:builtin:Explore' },
+      { spanId: 'tool-1' },
+    ),
+    span(
+      'claude_code.tool.execution',
+      { success: 'false', agent_id: 'a1', query_source: 'agent:builtin:Explore' },
+      { spanId: 'exec-1', parentSpanId: 'tool-1' },
+    ),
+  ]);
+  store.ingest('logs', [
+    log('claude_code.tool_result', { tool_name: 'Bash', tool_use_id: 'tu-1', success: 'false', error_type: 'ENOENT' }),
+  ]);
+  const { agents } = store.getSessionAgents(SESSION);
+  const explore = agents.find((agent) => agent.key === 'Explore');
+  const bash = explore.tools.find((tool) => tool.name === 'Bash');
+  assert.equal(bash.calls, 1);
+  assert.equal(bash.failures, 1);
+  assert.equal(explore.counts.toolFailures, 1);
+  const session = store.getSession(SESSION);
+  assert.equal(session.tools.find((tool) => tool.name === 'Bash').failures, 1);
+  const main = agents.find((agent) => agent.key === 'main');
+  assert.equal(main.tools.length, 0);
+});
+
+test('the order the two signals arrive in does not matter', () => {
+  const store = new TelemetryStore();
+  store.ingest('logs', [
+    log('claude_code.tool_result', { tool_name: 'Bash', tool_use_id: 'tu-1', success: 'false', error_type: 'ENOENT' }),
+  ]);
+  store.ingest('traces', [
+    span(
+      'claude_code.tool',
+      { tool_name: 'Bash', tool_use_id: 'tu-1', agent_id: 'a1', query_source: 'agent:builtin:Explore' },
+      { spanId: 'tool-1' },
+    ),
+    span(
+      'claude_code.tool.execution',
+      { success: 'false', agent_id: 'a1', query_source: 'agent:builtin:Explore' },
+      { spanId: 'exec-1', parentSpanId: 'tool-1' },
+    ),
+  ]);
+  const { agents } = store.getSessionAgents(SESSION);
+  const explore = agents.find((agent) => agent.key === 'Explore');
+  const bash = explore.tools.find((tool) => tool.name === 'Bash');
+  assert.equal(bash.calls, 1);
+  assert.equal(bash.failures, 1);
+});
+
+test('a successful tool call adds no failure, and its result tokens reach the agent', () => {
+  const store = new TelemetryStore();
+  store.ingest('traces', [
+    span(
+      'claude_code.tool',
+      { tool_name: 'Bash', tool_use_id: 'tu-2', agent_id: 'a1', query_source: 'agent:builtin:Explore' },
+      { spanId: 'tool-2' },
+    ),
+  ]);
+  store.ingest('logs', [
+    log('claude_code.tool_result', {
+      tool_name: 'Bash',
+      tool_use_id: 'tu-2',
+      success: 'true',
+      tool_result_size_bytes: 400,
+    }),
+  ]);
+  const { agents } = store.getSessionAgents(SESSION);
+  const explore = agents.find((agent) => agent.key === 'Explore');
+  const bash = explore.tools.find((tool) => tool.name === 'Bash');
+  assert.equal(bash.calls, 1);
+  assert.equal(bash.failures, 0);
+  assert.equal(bash.resultTokens, 100);
+  assert.equal(bash.resultTokensEstimated, 100);
+  const sessionBash = store.getSession(SESSION).tools.find((tool) => tool.name === 'Bash');
+  assert.equal(sessionBash.resultTokens, 100);
+  assert.equal(sessionBash.resultTokensEstimated, 100);
+});
+
+test('a real result_tokens attribute is not re-estimated on the agent either', () => {
+  const store = new TelemetryStore();
+  store.ingest('traces', [
+    span(
+      'claude_code.tool',
+      { tool_name: 'Bash', tool_use_id: 'tu-3', result_tokens: 42, agent_id: 'a1', query_source: 'agent:builtin:Explore' },
+      { spanId: 'tool-3' },
+    ),
+  ]);
+  store.ingest('logs', [
+    log('claude_code.tool_result', {
+      tool_name: 'Bash',
+      tool_use_id: 'tu-3',
+      success: 'false',
+      tool_result_size_bytes: 999_999,
+    }),
+  ]);
+  const { agents } = store.getSessionAgents(SESSION);
+  const explore = agents.find((agent) => agent.key === 'Explore');
+  const bash = explore.tools.find((tool) => tool.name === 'Bash');
+  assert.equal(bash.resultTokens, 42);
+  assert.equal(bash.resultTokensEstimated, 0);
+  assert.equal(bash.failures, 1);
+});
+
+test('a failed tool call with no span reaches no agent', () => {
+  const store = new TelemetryStore();
+  store.ingest('logs', [
+    log('claude_code.tool_result', { tool_name: 'Bash', tool_use_id: 'tu-9', success: 'false' }),
+  ]);
+  const session = store.getSession(SESSION);
+  assert.equal(session.tools.find((tool) => tool.name === 'Bash').failures, 1);
+  const { agents } = store.getSessionAgents(SESSION);
+  for (const agent of agents) {
+    assert.equal(agent.tools.length, 0);
+  }
+});
+
+test('a failure joins the named bucket after the id-only bucket was folded into it', () => {
+  const store = new TelemetryStore();
+  store.ingest('traces', [
+    span('claude_code.tool', { tool_name: 'Bash', tool_use_id: 'tu-7', agent_id: 'a7' }, { spanId: 'tool-7' }),
+  ]);
+  store.ingest('logs', [
+    log('claude_code.api_request', {
+      model: 'claude-opus-5',
+      input_tokens: 10,
+      'agent.name': 'Explore',
+      query_source: 'agent:builtin:Explore',
+      agent_id: 'a7',
+    }),
+  ]);
+  store.ingest('logs', [
+    log('claude_code.tool_result', { tool_name: 'Bash', tool_use_id: 'tu-7', success: 'false' }),
+  ]);
+  const { agents } = store.getSessionAgents(SESSION);
+  assert.equal(agents.some((agent) => agent.key.startsWith('id:')), false);
+  const explore = agents.find((agent) => agent.key === 'Explore');
+  const bash = explore.tools.find((tool) => tool.name === 'Bash');
+  assert.equal(bash.calls, 1);
+  assert.equal(bash.failures, 1);
+});
