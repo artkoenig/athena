@@ -234,3 +234,154 @@ attributes (`attrs.body`) is answered by this round's plan itself, in "What
 is wrong, and what the fix is": `/api/events` spreads the stored record, so
 `attrs` reaches the client verbatim. No open question remains from this
 round.
+
+## Round 2
+
+Correction round for the reviewer's Round 1 findings (`reviewer.md`, Round 1).
+This round's test plan is Finding 2's answer: nine cases against a new
+DOM-free module, `tools/argus-ui/public/timeline.js`, which does not exist yet
+— the implementer's round writes it. Findings 3 and 4 are prose-only README
+corrections and get no test, per the plan. Nothing from Round 0's or Round 1's
+test plan was touched.
+
+### What I wrote
+
+One new file, `tools/argus-ui/test/timeline.test.mjs`, importing
+`../public/timeline.js`, run with
+`node --test tools/argus-ui/test/timeline.test.mjs`. Nine `test()` cases, one
+per numbered item in this round's plan, each named for the behaviour the
+plan's own bolded lead-in or narrative names:
+
+1. **Case 1 (criterion 3's landing state)** →
+   `a freshly opened session lands on its timeline, live, with no technical view open`.
+   Asserts `freshSessionView()` deep-equals
+   `{ timeline: null, slice: null, selectedLaneId: 'main', atMs: 0, live: true, technicalTab: null }`.
+2. **Case 2** →
+   `a technical view opens, closes on a second click, and gives way to another`.
+   `toggleTechnicalTab` from `null` → `'events'` → `null` → `'traces'`.
+3. **Case 3** →
+   `a live view follows the head, and picks a lane that exists`. `pinToTimeline`
+   against `{ firstMs: 1000, lastMs: 3000, lanes: [{ id: 'main' }, { id: 'sub' }] }`:
+   default selection `'main'` at `atMs: 3000`; `'sub'` stays `'sub'`; `'gone'`
+   falls to the first lane's id (`'main'` in this fixture); `lanes: []` and
+   `lanes` omitted entirely both fall to the literal `'main'`, no throw.
+4. **Case 4** →
+   `a scrubbed moment survives the next timeline, clamped into the recorded range`.
+   `live: false, atMs: 2000` (inside `[1000, 3000]`) stays 2000; `atMs: 10`
+   clamps to 1000; `atMs: 9999` clamps to 3000; `atMs: 0` (never scrubbed)
+   jumps to `lastMs`.
+5. **Case 5** → `scrubbing leaves live mode`. `scrubTo(view, '2500')` on a live
+   view sets `live: false`, `atMs: 2500` as a number, not the string a range
+   input hands over.
+6. **Case 6** →
+   `the Live control returns to live mode at the newest record`. `resumeLive`
+   on `{ live: false, atMs: 2000, timeline: {...lastMs: 3000} }` sets
+   `live: true, atMs: 3000`; with `timeline: null` sets `live: true` and
+   leaves `atMs` unchanged.
+7. **Case 7 (Finding 1a)** → `after a scrub the row says live mode was left`.
+   `scrubTo` then `paintScrubRow` against the plan's stub root: `.scrub-live`
+   `aria-pressed` `'false'`, `.scrub-clock` textContent `fmtClock(2000)`,
+   `.lane-playhead` `style.left` `'50.000%'`; then `resumeLive` and repaint:
+   `'true'`, `'100.000%'`, `fmtClock(3000)`.
+8. **Case 8** → `a session with no axis has no playhead to move`.
+   `playheadPercent(null, 5)` and `playheadPercent({firstMs:7,lastMs:7}, 7)`
+   both `null`; `playheadPercent({firstMs:1000,lastMs:3000}, 0)` is `0`,
+   `(…, 9999)` is `100`; `paintScrubRow` with a single-instant timeline leaves
+   `.lane-playhead` `style.left` at its initial `''` while still writing the
+   clock and `aria-pressed`.
+9. **Case 9 (Finding 1b)** →
+   `a refresh landing mid-drag is held back until the scrubber is let go`.
+   `refreshHeldBack` false before any drag; true twice running after
+   `scrubGrabbed`; `scrubReleased` reports `true` once (one was missed) then
+   `false` on a second release; a drag with nothing held back reports `false`
+   on release; a refresh already pending when the pointer lands
+   (`scrubGrabbed(gate, { refreshPending: true })`) reports `true` on release.
+
+I used the plan's own hand-written fake, `scrubRow()` — three nodes behind
+`querySelector` for `.lane-playhead`, `.scrub-clock`, `.scrub-live` — verbatim,
+for cases 7 and 8; the other seven cases need no fake, matching the plan's own
+note ("Cases 7 and 8 use it; the other seven need nothing").
+
+Cases 3, 4, 6, 8 and 9 each pin several related assertions listed under one
+bolded lead-in in the plan (e.g. case 3's "With … With … With … Edge … Edge"
+is one continuous narration, not the two-assertions-in-one-bullet pattern
+Round 1 called out for splitting) — I kept each as a single `test()`, one per
+plan item number, rather than fragmenting further; the plan's own numbering
+(1 through 9) is what I used as the case boundary.
+
+### Command run to prove every case red
+
+```
+node --test tools/argus-ui/test/timeline.test.mjs
+```
+
+```
+TAP version 13
+# node:internal/modules/esm/resolve:275
+#     throw new ERR_MODULE_NOT_FOUND(
+Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/home/user/uroboros/tools/argus-ui/public/timeline.js' imported from /home/user/uroboros/tools/argus-ui/test/timeline.test.mjs
+...
+not ok 1 - tools/argus-ui/test/timeline.test.mjs
+1..1
+# tests 1
+# pass 0
+# fail 1
+```
+
+Exit 1. All nine cases fail together for the same, correct cause: the module
+under test, `tools/argus-ui/public/timeline.js`, does not exist yet — exactly
+the outcome the plan predicted ("written first, the cases below fail because
+`public/timeline.js` does not exist yet"), the same shape Round 0's
+`context.test.mjs` had before `context.mjs` existed. No pre-existing case
+anywhere in `tools/argus-ui` or `tools/argus` was touched or run beyond this
+one new file, per my brief (single-file runs only).
+
+### What I did not write, and why
+
+- **The markup `renderDetail`/`renderTimeline`/`renderSlicePanel` produce, and
+  which DOM event is wired to which transition** — Finding 2's stated residue;
+  needs a DOM harness, which is a dependency and the human's call, left open
+  in the plan as a recorded question.
+- **Findings 3 and 4** (the two README corrections) — prose, no case asked
+  for, per the plan's own "Findings 3 and 4 are prose and get no test —
+  nothing a tool can check, and pinning a README sentence would break on a
+  better one."
+- **Everything Round 0 and Round 1 already cover** — the plan states plainly
+  that no case from either earlier round is asked for again, and I touched no
+  file besides the one new one.
+- **Recordings without the content flags** — decision 5 forbids pinning them;
+  restated by this round's plan and still true.
+- I did not run `bash test.sh` or any other full-suite command — that stays
+  reserved for whoever runs it downstream, and my brief is single-file runs
+  only.
+
+### Decisions I made where the plan left small things open
+
+- **Test count and boundaries.** The plan numbers nine cases with narrative
+  sub-parts under several of them (cases 3, 4, 6, 8, 9); I wrote exactly nine
+  `test()` calls, one per numbered case, since the plan's own "What" section
+  presents each number as one behaviour with edges, not as several
+  independently-billed assertions (contrast Round 1's case 11/24, which the
+  researcher explicitly called "two assertions" and asked to be split).
+- **Assertion messages.** The plan gives the expected values and the fixture
+  shapes but not literal message strings; I wrote messages in the file's
+  existing voice (`config.test.mjs`'s "the interface must not fight the
+  collector for 4318" is the model the plan names), stating what the
+  assertion pins and, where relevant, which finding it guards.
+- **`toggleTechnicalTab`'s return value.** The plan's signature comment gives
+  only the mutation (`view.technicalTab = …`), no return value; I asserted on
+  the mutated `view.technicalTab` only, not on any return.
+- **Fixture reuse across the sub-parts of one case.** Where a case's plan text
+  builds several small views from the same base (e.g. case 4's four `atMs`
+  variants against one `timeline` shape), I built a fresh `{ ...freshSessionView(), ... }`
+  object per variant rather than mutating and reusing one, so an assertion
+  failure in one variant cannot leave a later variant's starting state
+  ambiguous.
+
+### No questions this round
+
+The plan's own open question (Finding 2: should `argus-ui` take a DOM test
+dependency) is addressed to the human, not to me, and I have nothing to add to
+it — the module and the nine cases match the plan's exported API and test list
+exactly, with no case too vague to pin and no case whose expectation
+contradicts the criterion it claims to cover.
