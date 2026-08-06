@@ -590,3 +590,60 @@ test either way.
 4. **The test-author's handoff reported no gap in this round's plan.** The one I
    hit is the case-10 ordering above; everything else in the plan mapped
    one-to-one onto the code.
+
+## Increment 3 — Round 2
+
+**No file changed.** The plan for this round is explicit that the production
+code is correct and that the finding is a missing constraint: it names
+`tools/argus-ui/test/timeline.test.mjs` as the only file edited, the four new
+cases as the whole of the work, and `public/timeline.js`, `public/app.js`,
+`public/styles.css`, `test/page.test.mjs`, both READMEs and everything under
+`tools/argus` as untouched. The test-author had already landed those four cases
+(commit `50abda0`). So my work this round was to run the list and fix only what
+it reported, and it reported nothing.
+
+### What I ran
+
+- `npm --prefix tools/argus-ui test` — 77 cases, 77 pass, 0 fail, 0 skipped,
+  exit 0. That is the whole of "what counts as done" for this round.
+
+The four cases this round adds are numbers 74–77 in that run, all green:
+
+| # | Test name | Result |
+| --- | --- | --- |
+| 74 | `a mark sits at the fraction of the track its moment sits at in the window` | pass |
+| 75 | `a later moment always sits strictly right of an earlier one` | pass |
+| 76 | `the rendered marks carry the positions their moments earned` | pass |
+| 77 | `a mark keeps following its moment when the window does not start at zero` | pass |
+
+The 73 cases the earlier rounds left green are still green; the count rose from
+73 to 77 by exactly these four, and none of the pre-existing cases changed
+result.
+
+This is the outcome the plan predicted ("they are expected to pass on the first
+run — `activityMarks` already computes what they assert"). No case came out red,
+so the plan's fallback instruction — compare a red case against the verified
+numbers before touching production code — never applied.
+
+Not run, deliberately: `tools/argus`' own suite and `./test.sh`. The plan puts
+both off this round's list, and nothing outside `tools/argus-ui/test` changed.
+
+### Problems hit
+
+None. Nothing was blocked, nothing was ambiguous, and no question is open.
+
+### Notes for the reviewer, acted on nowhere
+
+1. **This round produced no code diff, by design.** The only commit that carries
+   it is the test-author's, plus this handoff. A reviewer expecting an
+   implementation diff should read that as the plan being satisfied, not as work
+   skipped: the plan's own "Implementation plan" section says "this round adds
+   cases and changes no production file".
+2. **Earlier rounds' notes still stand** and none of them is this round's
+   finding: the 15s repaint interval never repainting the landing view,
+   `state.toolMarks` growing while one session stays selected, the context curve
+   spanning a lane's requests rather than its bar, and the two same-session
+   overlapping-answer properties recorded in Round 1. All outside this round.
+3. **The test-author's handoff reported no gap in this round's plan**, and I
+   found none either — the four cases match the plan's case table one to one,
+   including the deliberate one-bucket band in case 75 rather than an equality.
