@@ -13,6 +13,10 @@ This page is scoped to a path on purpose, and so is every other page in
 session dispatches, and these pages exist only in this checkout — an agent would
 hold such a rule here and not in a project that installed uroboros, and behave
 differently in the two. Scoped, a page reaches whoever opens the files it
-governs and nobody else. So nothing in `.claude/rules/` may carry a rule an
-agent needs while it works: that belongs in the shared brief, which ships with
-the plugin.
+governs, session and subagent alike, and nobody else.
+
+That is why nothing here may carry a rule an agent needs *before* it reads
+anything: a scoped page arrives only once the reader is already in these files.
+Such a rule belongs in the shared brief, which ships with the plugin and is
+injected at startup. The writing rules this page points at live there for
+exactly that reason.

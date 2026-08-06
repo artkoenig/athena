@@ -6,13 +6,20 @@ paths: agents/**
 This is `agents/`'s own page, and it sits here rather than in `agents/CLAUDE.md`
 because plugin discovery reads every `agents/*.md` as an agent — a `CLAUDE.md`
 there would register as a nameless agent and be counted as one by the
-self-check. Its `paths:` frontmatter is what keeps it out of a subagent's
-context: an unscoped rule loads at launch and is inherited by every subagent the
-session dispatches, and this page exists only in this checkout, so an agent
-would hold it here and nowhere else. Scoped, it loads when a session opens a
-file under `agents/` — which no subagent inherits, because inheritance passes on
-what the session loaded at launch and a path-scoped rule is by definition not
-that.
+self-check. Its `paths:` frontmatter is what keeps it out of a startup context:
+an unscoped rule loads at launch and is inherited by every subagent the session
+dispatches, and this page exists only in this checkout, so an agent would hold
+it here and nowhere else. Scoped, nobody is handed it uninvited — inheritance
+passes on what the session loaded at launch, and a path-scoped rule is by
+definition not that.
+
+It still reaches whoever actually works here. A reader that opens a file under
+`agents/` loads this page for itself, and a subagent does so on its own reads,
+not only the session — measured with a probe agent that read
+`agents/test-author.md` and held this page afterwards. So scoping costs an agent
+nothing it needs; it only stops the page from arriving where it is irrelevant.
+What an agent needs before it reads anything is a different matter, and that
+belongs in the shared brief.
 
 One agent is one flat `<name>.md` in that directory, and every one of them is
 listed in `plugin.json`'s `agents` field. That list is not decoration: for a

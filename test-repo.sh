@@ -63,9 +63,8 @@ echo "=== no repository-local rule reaches an agent"
 # exists in this checkout and nowhere else. An unscoped page loads at launch
 # and is inherited by every subagent the session dispatches, which would give
 # an agent working here rules it never holds in a project that installed
-# uroboros. `paths:` frontmatter is what stops that: the page then loads only
-# when a session opens a file it governs, and inheritance passes on the launch
-# context alone.
+# uroboros. `paths:` frontmatter is what stops that: inheritance passes on the
+# launch context alone, and a scoped page is not in it.
 rules_unscoped=""
 for page in "$root"/.claude/rules/*.md; do
   [ -e "$page" ] || continue
@@ -77,6 +76,50 @@ if [ -z "$rules_unscoped" ]; then
   ok "every page in .claude/rules/ is path-scoped, so no subagent inherits one"
 else
   no "unscoped rule pages would reach every subagent in this checkout alone:$rules_unscoped"
+fi
+
+# Scoping is only half the bargain. The page still has to reach whoever opens
+# the files it governs — a reader loads it on its own reads, subagents
+# included — and a pattern that matches nothing loads for nobody while looking
+# deliberate. `agent/**` for `agents/` would read as scoping and be a deleted
+# rule. So every pattern has to name files that exist.
+scope_tmp="$(mktemp -d)"
+cat >"$scope_tmp/scope.js" <<'JS'
+const fs = require("fs"), path = require("path");
+const root = process.argv[2];
+const tracked = fs.readFileSync(process.argv[3], "utf8").split("\n").filter(Boolean);
+const dir = path.join(root, ".claude/rules");
+const unquote = (s) => s.trim().replace(/^["']|["']$/g, "");
+const problems = [];
+for (const page of fs.readdirSync(dir).filter((f) => f.endsWith(".md"))) {
+  const fm = (fs.readFileSync(path.join(dir, page), "utf8").match(/^---\n([\s\S]*?)\n---/) || [])[1] || "";
+  const lines = fm.split("\n");
+  const at = lines.findIndex((l) => /^paths:/.test(l));
+  if (at < 0) { problems.push(page + ": no paths:"); continue; }
+  const patterns = [];
+  const inline = unquote(lines[at].replace(/^paths:/, ""));
+  if (inline) patterns.push(inline);
+  for (let i = at + 1; i < lines.length && /^\s*-\s/.test(lines[i]); i++) {
+    patterns.push(unquote(lines[i].replace(/^\s*-\s*/, "")));
+  }
+  if (!patterns.length) { problems.push(page + ": paths: is empty"); continue; }
+  for (const p of patterns) {
+    const rx = new RegExp("^" + p
+      .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+      .replace(/\*+/g, (m) => (m.length > 1 ? ".*" : "[^/]*")) + "$");
+    if (!tracked.some((f) => rx.test(f))) problems.push(page + ": " + p + " matches no tracked file");
+  }
+}
+if (problems.length) { console.error(problems.join("; ")); process.exit(1); }
+JS
+git -C "$root" ls-files >"$scope_tmp/tracked.txt"
+node "$scope_tmp/scope.js" "$root" "$scope_tmp/tracked.txt"
+scope_status=$?
+rm -rf "$scope_tmp"
+if [ "$scope_status" -eq 0 ]; then
+  ok "every paths: pattern in .claude/rules/ matches files that exist"
+else
+  no "a paths: pattern matches nothing, so its page loads for nobody"
 fi
 
 echo
