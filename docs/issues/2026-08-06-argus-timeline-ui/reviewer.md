@@ -1878,3 +1878,162 @@ increment (the per-lane tool list) was built ahead of time.
   `main`/`span`/`agent` agreeing with the collector's route is something I
   verified by reading both sides, not something either suite checks. They agree
   today; a rename on the collector side would be caught by neither suite.
+
+## Increment 6
+
+**Status: 0 findings. The increment is accepted.** All five mutations increment 5
+— round 2 left alive (M-A, M-B, M-C, M-D, M-E) now fail a case, measured one at a
+time in a throwaway worktree, and the restructure that made two of them
+catchable changes no behaviour I can find. The suite is green.
+
+### Commands run
+
+- `npm --prefix tools/argus-ui test` — `node --test "test/*.test.mjs"`, 181
+  cases, 181 pass, 0 fail, 0 cancelled, 0 skipped, 0 todo, exit 0. Nothing was
+  excluded. This is the only command my prompt lists; `tools/argus`' suite and
+  `./test.sh` were not run, by that list. Nothing was red, so no run at the
+  merge base was needed.
+- The same command sixteen more times in a `git worktree` on a temporary path
+  outside the checkout — one unmutated baseline and fifteen single mutations —
+  because this increment's criteria are stated as mutations that must go red,
+  and measuring them is the only way to check them. The worktree was removed
+  afterwards; `git worktree list` names only the checkout and `git status
+  --porcelain` is empty. The checkout under review was never modified, and no
+  test was written to produce any of this.
+
+### The three hops, measured
+
+The three findings named by my prompt are the ones increment 5 — round 2 left
+open. Each mutation is restated against the code as it stands now (the `lane,`
+argument M-A deleted no longer exists: the panel's input is built by
+`lanePanelInput` in `tools/argus-ui/public/context.js:242-245`).
+
+| Sandbox run | Result |
+| --- | --- |
+| Unmutated copy of `HEAD` | 181 pass, exit 0 |
+| M-A — `lanePanelInput`'s lookup becomes `const lane = null;` (the panel paints empty for every lane) | **179 pass, 2 fail, exit 1** |
+| M-A2 — `key: state.selectedLane,` deleted from the `lanePanelInput({…})` call in `renderLanePanel` (`app.js:938-944`) — same empty panel, one hop earlier | **180 pass, 1 fail, exit 1** |
+| M-C — the lookup finds by `entry.kind === 'main'` instead of `entry.key === key` (a subagent under the main session's heading) | **178 pass, 3 fail, exit 1** |
+| M-B — `loadLaneContext().then(renderLanePanel);` in the `[data-lane]` click branch becomes `loadLaneContext();` | **180 pass, 1 fail, exit 1** |
+| M-D — the size span becomes `<span class="ctx-size" data-chars="0">0</span>` | **180 pass, 1 fail, exit 1** |
+| M-D2 — the head's `data-chars="${esc(chars)}"` becomes `data-chars="0"` | **180 pass, 1 fail, exit 1** |
+| M-D3 — the head's readable `${fmtNum(chars)} chars` becomes `0 chars` | **180 pass, 1 fail, exit 1** |
+| M-E — the preview span becomes `<span class="ctx-preview"></span>` | **180 pass, 1 fail, exit 1** |
+
+Eight more mutations along the same chain, to check the new cases are not
+pinned to the exact five shapes I was told about:
+
+| Sandbox run | Result |
+| --- | --- |
+| M-F — every collapsed line prints the *first* block's size | **180 pass, 1 fail, exit 1** |
+| M-L — the collapsed line prints the block's label where its size belongs | **180 pass, 1 fail, exit 1** |
+| M-G — `view: laneView(),` deleted from the `lanePanelInput({…})` call | **180 pass, 1 fail, exit 1** |
+| M-H — `held: state.laneContext,` deleted from the same call | **180 pass, 1 fail, exit 1** |
+| M-I — `lanePanelInput` returns `expanded: []` instead of what it was given | **180 pass, 1 fail, exit 1** |
+| M-J — `lanePanelInput` returns `item: null, pending: true` always | **179 pass, 2 fail, exit 1** |
+| M-K' — `renderLanePanel` computes the markup and then assigns `container.innerHTML = ''` | 181 pass, exit 0 — observation below, not a finding |
+
+### Criterion 1 — the panel itself, carried over from context-inspector
+
+Met, and unchanged by this increment. `renderContextPanel`
+(`tools/argus-ui/public/context.js:256-308`) still renders the head plus one
+`<details>` per block; `contextBlocks` still emits system prompt, user,
+assistant, thinking, tool call, tool result and every remaining top-level field
+in order; each block is collapsed to `label + preview + size` and expands to
+`esc(block.text)` whole. I diffed `889759f..HEAD` over `public/`: the only
+production change is the new `lanePanelInput` and `renderLanePanel` calling it,
+and the lookup it moved is character-for-character the one that was inline
+(`key ? lanes.find((entry) => entry.key === key) ?? null : null`), with
+`view?.lanes ?? []` added so a view without lanes resolves to no lane instead of
+throwing. No rendering path, no wire request and no state field changed.
+
+### Criterion 2 — the panel is drawn from the lane the reader selected
+
+Met. The lookup is now a pure function, so both mutations die at value level:
+`context.test.mjs:667-691` pins `lanePanelInput`'s whole result by value *and*
+the lane by identity (`out.lane === v.lanes[1]` for `agent:sp-b:probe`), and
+`context.test.mjs:710-737` renders the subagent lane and requires
+`data-context-lane="agent:sp-b:probe"`, the label `probe`, the record's own
+content, and the absence of `main session` anywhere in the markup. The empty
+case is pinned too (`context.test.mjs:692-708`): an unknown key, a null key and
+no argument at all each resolve to `lane: null`, and `renderContextPanel` of
+that is `''`. The app-side hop is pinned in `page.test.mjs:479-496`, which now
+requires `view: laneView()`, `key: state.selectedLane`, `held:
+state.laneContext` and `expanded: state.expanded` in the call — M-A2, M-G and
+M-H each fail it.
+
+### Criterion 3 — selecting a lane repaints the panel when its own fetch resolves
+
+Met. `page.test.mjs:403-418` slices the `[data-lane]` branch of the delegated
+click listener from `loadLaneContext(` to the statement's `;` and requires
+`.then(renderLanePanel` (or a `() => renderLanePanel(` wrapper) inside it. M-B
+fails exactly this case. The case is source-level, which is what this project
+can do without a DOM or a dependency, and it is ingest-independent by
+construction: it reads the branch, not a session, so it covers the finished
+session the finding named as well as a live one.
+
+### Criterion 4 — the sizes and the one line reach the markup
+
+Met, and not only for the shapes I was told about.
+`context.test.mjs:743-762` splits the panel into one chunk per `<details
+class="ctx-block">`, checks the fixture carries blocks of more than one distinct
+size (so a single size printed for all of them cannot pass), and for every block
+asserts the `data-chars` number *and* the visible text equal that block's own
+`chars`/`fmtNum(chars)` — M-D, M-F and M-L all die there. The head's total is
+pinned to the body's own length by value in `context.test.mjs:306-320`
+(`data-chars="<body.length>"` plus `fmtNum(body.length) + ' chars'` in the
+readable line), killing M-D2 and M-D3. `context.test.mjs:764-779` pins each
+collapsed line to `esc(block.preview)`, with two guards against a vacuous pass:
+no preview may be empty, and at least one must end in the ellipsis of a real
+cut. M-E dies there. The chain is anchored, not circular: `block.chars ===
+block.text.length` and the preview rules are pinned separately at parser level
+(`context.test.mjs:103-111` and the `PREVIEW_CHARS` cases).
+
+### Nothing in the diff that no criterion asked for
+
+Increment 6's production diff is 17 lines of `app.js` and 20 of `context.js`,
+both of them the restructure the criteria explicitly permit; the rest is
+`context.test.mjs` (+124) and `page.test.mjs` (+30). No new view, flag, route,
+style or README sentence, and nothing from the deliberately excluded increment
+(the per-lane tool list). The earlier increments' code in the diff is unchanged
+by this increment, and increment 5's open findings are the four criteria above,
+so I raise nothing of either again.
+
+### Beyond the criteria (blast radius)
+
+Nothing found that breaks.
+
+- **No dangling import.** `app.js` swapped `laneContextInput` for
+  `lanePanelInput` in its import list and has no remaining reference to the old
+  name (`git grep laneContextInput -- tools/` finds it only in `context.js`,
+  where `lanePanelInput` calls it, and in `context.test.mjs`). `laneContextInput`
+  stays exported and reachable, so its increment-5 cases still cover live code.
+- **Callers of what changed.** `lanePanelInput` is called from `renderLanePanel`
+  and from the tests, nowhere else; `renderContextPanel`'s signature is
+  untouched, so every increment-5 case that spreads `laneContextInput` into it
+  still exercises the same renderer the page runs.
+- **Project rules hold.** `context.js` still imports only `./format.js` and
+  `./timeline.js` and touches no `document`/`fetch`/`location`, so
+  `independence.test.mjs` and the zero-dependency, no-build rules are as they
+  were. No test file was added.
+- **No document made stale.** The restructure is internal; `tools/argus-ui/README.md`
+  describes the panel's behaviour, which did not change, and no other document
+  names `laneContextInput` or the panel's internals.
+- **The collector is untouched by this increment**, so no route, store or API
+  shape moved under anyone.
+- **Observation, not a finding — one hop of the click-to-markup chain is still
+  unread: the markup reaching the container.** M-K': keep the
+  `renderContextPanel(lanePanelInput({…}))` call exactly as it is but assign its
+  result to a local and set `container.innerHTML = ''` instead. Every lane then
+  paints an empty panel, and the suite reports 181 pass, exit 0 —
+  `page.test.mjs:467-477` reads only that `renderLanePanel` mentions
+  `lane-panel` and `renderContextPanel(`, and the new case reads only the call's
+  arguments. I record it rather than raise it because my criteria define the
+  empty-panel case as mutations M-A and M-C, and both now fail; pinning
+  `container.innerHTML = renderContextPanel(` as one expression is a one-line
+  addition for whoever takes the next increment.
+- **Observation, not a finding — the two remarks from increment 5 — round 2
+  still stand**, untouched by this increment: a live refresh that lands on a
+  newer record collapses every expanded block (the expansion key carries the
+  record's `seq`), and the whole body is refetched on every refresh cycle even
+  when the cursor is parked.
