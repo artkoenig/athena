@@ -1627,3 +1627,195 @@ Only the five cases tied to finding 1's restructuring (C1, C2, C3, P1, P2)
 are red right now; the implementer closes those, and the other four stay
 green through the change since the plan explicitly asks for no production
 edit on their account.
+
+## Increment 7
+
+The plan's cases (T1–T9, U1–U6, R1–R8, P1–P4, I1, C1) are written exactly as it
+states them, in the five files it names, one edit per file. No production
+code was opened; every expected value below is the plan's own literal or a
+value computed by the plan's own factories, not something read off an
+implementation.
+
+### `tools/argus-ui/test/timeline.test.mjs`
+
+| # | Case name | Status |
+| --- | --- | --- |
+| import | gains `toolCallOf`, `TOOL_PARAM_CHARS`, `spanLaneKeys`, `laneByKey` from `../public/timeline.js`, and a new `import { previewOf } from '../public/format.js'` | edited |
+| factory | `toolEvent` added beside `toolMark` | edited |
+| T1 | `a tool call keeps the tool's name and the parameters it was called with` | new |
+| T2 | `the pre-2.1 attribute name is read when the current one is absent` | new |
+| T3 | `parameters that are not JSON are kept as they arrived, not dropped` | new |
+| T4 | `a call with no parameters and no name is still a row` | new |
+| T5 | `a call whose parameters are a whole file keeps a bounded amount of them, and says how much there was` | new |
+| T8 | `each agent lane's span names that lane, and nothing else does` | new |
+| T9 | `a key names its lane, and a key no lane carries names none` | new |
+| T7 | `merging into an empty index keeps every call, with the name and parameters a panel draws` | replaces the case that sat at line 575 (`merging into an empty index keeps every item, and only the three fields a mark needs`), same spot in the file |
+| T6 | `a missing spanId becomes null rather than undefined` | rewritten in place at its original location (was line 653); same name, same point, `deepEqual` now against the seven-field `toolCallOf` shape |
+
+The seven cases the plan named to leave untouched (`an event already held is
+not counted twice`, `merging the same response twice changes nothing the
+second time`, `the watermark is what is held, never what was seen`, `an item
+with no usable seq is dropped rather than held un-deduplicable`, `merging does
+not mutate the index it was given`, `out-of-order items still leave the
+highest seq as the watermark`, `the merged index is what the density reads`)
+are untouched — no diff touches their bodies.
+
+`node --test tools/argus-ui/test/timeline.test.mjs`, exit 1, the whole file
+fails to load before any of its ~70 cases run:
+
+```
+# file:///home/user/uroboros/tools/argus-ui/test/timeline.test.mjs:21
+#   TOOL_PARAM_CHARS,
+#   ^^^^^^^^^^^^^^^^
+# SyntaxError: The requested module '../public/timeline.js' does not provide an export named 'TOOL_PARAM_CHARS'
+```
+
+That is T1–T9's, T6's and T7's failure at once: `timeline.js` carries none of
+`toolCallOf`, `TOOL_PARAM_CHARS`, `spanLaneKeys` or `laneByKey` yet, so the
+static import that names them cannot resolve and Node reports one module-load
+failure rather than one per `test(...)`. Once the module exports them, each
+case runs and asserts on its own.
+
+### `tools/argus-ui/test/tools.test.mjs` (new file)
+
+| # | Case name | Status |
+| --- | --- | --- |
+| U1 | `an agent lane lists its own calls, and the main lane the rest` | new |
+| U2 | `only the calls made at or before the moment are listed` | new |
+| U3 | `a live cursor lists everything recorded, a parked one does not` | new |
+| U4 | `the newest call is the first row` | new |
+| U5 | `no lane selected leaves nothing to list, and nothing to draw` | new |
+| U6 | `the index the page holds is not reordered under it` | new |
+| R1 | `every row names its own tool` | new |
+| R2 | `every row carries that call's own parameters, in full where they fit` | new |
+| R3 | `every collapsed row shows that call's own size and its own one line` | new |
+| R4 | `a call whose parameters were cut says how much is missing, and still reports the whole size` | new |
+| R5 | `the panel names the lane it was drawn for, and how many calls up to when` | new |
+| R6 | `a lane that had used no tool by that moment says so rather than vanishing` | new |
+| R7 | `an expanded row stays open across a repaint, and its key cannot collide with a context block's` | new |
+| R8 | `a parameter that looks like markup is shown, not run` | new |
+
+The file opens with the plan's own factories (`lane`, `agentLane`, `view`,
+`call`, `rowChunks`), verbatim, plus the `previewOf` import the plan's factory
+block names even though no case in the plan's table exercises it directly —
+kept as given rather than trimmed.
+
+`node --test tools/argus-ui/test/tools.test.mjs`, exit 1, the whole file
+fails to load — the module it imports does not exist yet:
+
+```
+# node:internal/modules/esm/resolve:275
+#     throw new ERR_MODULE_NOT_FOUND(
+#           ^
+# Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/home/user/uroboros/tools/argus-ui/public/tools.js' imported from /home/user/uroboros/tools/argus-ui/test/tools.test.mjs
+```
+
+That is every one of U1–U6 and R1–R8's failure: `public/tools.js` is the
+module the implementation plan adds, and none of it exists yet.
+
+### `tools/argus-ui/test/page.test.mjs`
+
+| # | Case name | Status |
+| --- | --- | --- |
+| P1 | `app.js takes the tool panel from its module` | new, appended after `the page opens with no lane selected` |
+| P2 | `the markup the panels render is what reaches the container` | new |
+| P3 | `the tool list is drawn for the selected lane, at the cursor's moment, from the calls the page holds` | new |
+| P4 | `the panel is drawn from the lane the reader selected and the answer held for it` | two of its assertions rewritten in place (the `view:\s*laneView\(\)` match on the `renderContextPanel(...)` slice is replaced by a match on the whole `renderLanePanel` source for `const view = laneView();` plus a match on the slice for `\bview,`); every other assertion in that case is untouched |
+
+`node --test tools/argus-ui/test/page.test.mjs`, exit 1, 4 of its (now 45)
+cases fail, the rest — including the two the plan says must keep passing,
+`renderLanePanel writes into lane-panel...` and `state.expanded reaches the
+panel` — still pass:
+
+```
+not ok - the panel is drawn from the lane the reader selected and the answer held for it
+  error: 'the page must build its lane view once and hand the same one to both panels'
+  actual (renderLanePanel's current body):
+    container.innerHTML = renderContextPanel(
+      lanePanelInput({
+        view: laneView(),
+        key: state.selectedLane,
+        ...
+
+not ok - app.js takes the tool panel from its module
+  error: 'app.js must import renderToolPanel from tools.js, so the tested function is the one the page runs'
+
+not ok - the markup the panels render is what reaches the container
+  error: 'the tool list must be part of that same assignment, so no repaint can paint one panel without the other'
+
+not ok - the tool list is drawn for the selected lane, at the cursor's moment, from the calls the page holds
+  error: 'renderLanePanel must call renderToolPanel'
+```
+
+P4 fails because `app.js` still builds `view: laneView()` inline inside the
+`lanePanelInput({...})` call rather than as a `const view = laneView();`
+statement the tool panel can also read — exactly the shape the plan's
+`renderLanePanel` body (section E) replaces it with. P1–P3 fail because
+`app.js` imports nothing from `./tools.js` and `renderLanePanel` calls no
+`renderToolPanel` at all yet.
+
+### `tools/argus-ui/test/context.test.mjs`
+
+`PREVIEW_CHARS` moves from the `../public/context.js` import list to the
+`../public/format.js` one; no case body changes.
+
+`node --test tools/argus-ui/test/context.test.mjs`, exit 1, the whole file
+fails to load:
+
+```
+# file:///home/user/uroboros/tools/argus-ui/test/context.test.mjs:12
+# import { esc, fmtNum, PREVIEW_CHARS } from '../public/format.js';
+#                       ^^^^^^^^^^^^^
+# SyntaxError: The requested module '../public/format.js' does not provide an export named 'PREVIEW_CHARS'
+```
+
+`format.js` does not export `PREVIEW_CHARS` yet — it still lives on
+`context.js`, which the moved import line no longer asks. This is the
+expected transitional failure the plan names in "What is already red" (T6, T7
+and this import move are the three things it predicts go red on the
+production change and are fixed by the same commit that moves the constant).
+
+### `tools/argus-ui/test/independence.test.mjs`
+
+`'public/tools.js'` added to both the must-exist list (lines 21-35) and the
+must-be-scanned list (53-61); no case body changes.
+
+`node --test tools/argus-ui/test/independence.test.mjs`, exit 1, both of its
+cases fail:
+
+```
+not ok - the interface is a project of its own, with everything a project needs
+  error: 'tools/argus-ui/public/tools.js is missing'
+
+not ok - nothing in the interface reaches outside the interface
+  error: 'the scan does not cover public/tools.js — it is not there to check'
+```
+
+Both fail because `tools/argus-ui/public/tools.js` does not exist yet.
+
+### Full-package run
+
+`npm --prefix tools/argus-ui test`, exit 1: 62 tests, 53 pass, 9 fail. The 9
+are exactly the whole-file loads of `timeline.test.mjs`, `tools.test.mjs` and
+`context.test.mjs` (one failure each, since Node reports a module-load error
+as a single top-level failure) plus the 2 `independence.test.mjs` cases and
+the 4 `page.test.mjs` cases quoted above. Every other case in the suite,
+including the server-proxy tests in `page.test.mjs` and every untouched case
+this increment's plan says must keep passing, passes.
+
+`./test.sh` was not run: it is the implementer's closing criterion, not
+mine, and running it now would only reproduce the same nine failures inside
+`tools/argus-ui`'s share of the five suites it runs — nothing this run needs
+that the per-file commands above did not already show.
+
+### Gaps and conflicts found in the plan
+
+None. The plan gave exact case names, exact input/expected pairs, exact
+factory code and exact file/line targets for every case; nothing in it was
+too vague to pin down and nothing it asked for conflicted with the criterion
+it cites. `tools.test.mjs`'s cases are worded to match the plan's table
+descriptions rather than copied verbatim (the plan gives input/expected
+prose, not literal test bodies, for that file), but every fact each row
+names is asserted, and no case, kind, or piece of the "what is deliberately
+left untested" list was added or dropped.
+

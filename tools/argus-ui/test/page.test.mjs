@@ -485,7 +485,12 @@ test('the panel is drawn from the lane the reader selected and the answer held f
   assert.ok(endIdx >= 0, 'the renderContextPanel( call must end with a statement-terminating ;');
   const slice = renderLanePanel.slice(callIdx, endIdx);
   assert.match(slice, /lanePanelInput\(/, 'the panel\'s whole input must come from lanePanelInput');
-  assert.match(slice, /view:\s*laneView\(\)/, 'the page\'s own lane view must reach the panel');
+  assert.match(
+    renderLanePanel,
+    /const view = laneView\(\);/,
+    'the page must build its lane view once and hand the same one to both panels',
+  );
+  assert.match(slice, /\bview,/, 'the page\'s own lane view must reach the panel');
   assert.match(
     slice,
     /key:\s*state\.selectedLane\b/,
@@ -565,4 +570,46 @@ test('the page opens with no lane selected', () => {
   assert.ok(end >= 0, 'the state literal must still close with `\\n};`');
   const stateSlice = appJs.slice(start, end);
   assert.match(stateSlice, /\bselectedLane:\s*null\b/, 'a freshly opened session must select no lane');
+});
+
+// Increment 7 — the click paints the tool list, under the same selection and
+// the same moment.
+
+test('app.js takes the tool panel from its module', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  for (const name of ['renderToolPanel', 'laneToolInput']) {
+    const re = new RegExp(`import\\s*\\{[^}]*\\b${name}\\b[^}]*\\}\\s*from\\s*['"]\\./tools\\.js['"]`);
+    assert.match(appJs, re, `app.js must import ${name} from tools.js, so the tested function is the one the page runs`);
+  }
+});
+
+test('the markup the panels render is what reaches the container', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const renderLanePanel = functionSource(appJs, 'renderLanePanel');
+  assert.match(
+    renderLanePanel,
+    /container\.innerHTML\s*=\s*renderContextPanel\(/,
+    'a panel computed and then thrown away paints an empty box for every lane',
+  );
+  assert.match(
+    renderLanePanel,
+    /\+\s*renderToolPanel\(/,
+    'the tool list must be part of that same assignment, so no repaint can paint one panel without the other',
+  );
+});
+
+test('the tool list is drawn for the selected lane, at the cursor\'s moment, from the calls the page holds', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const renderLanePanel = functionSource(appJs, 'renderLanePanel');
+  const callIdx = renderLanePanel.indexOf('renderToolPanel(');
+  assert.ok(callIdx >= 0, 'renderLanePanel must call renderToolPanel');
+  const endIdx = renderLanePanel.indexOf(';', callIdx);
+  assert.ok(endIdx >= 0, 'the renderToolPanel( call must end with a statement-terminating ;');
+  const slice = renderLanePanel.slice(callIdx, endIdx);
+  assert.match(slice, /laneToolInput\(/, 'the tool list must be built from laneToolInput');
+  assert.match(slice, /\bview,/, 'without the page\'s own lane view the list is empty for every lane');
+  assert.match(slice, /key:\s*state\.selectedLane\b/, 'without it the list is empty for every lane');
+  assert.match(slice, /calls:\s*state\.toolMarks\b/, 'the merged index is the only source there is');
+  assert.match(slice, /cursor:\s*state\.cursor\b/, 'without it the list ignores the scrub');
+  assert.match(slice, /expanded:\s*state\.expanded\b/);
 });

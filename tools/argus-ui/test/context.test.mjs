@@ -4,13 +4,12 @@ import assert from 'node:assert/strict';
 import {
   contextBlocks,
   renderContextPanel,
-  PREVIEW_CHARS,
   laneContentQuery,
   fetchLaneContext,
   laneContextInput,
   lanePanelInput,
 } from '../public/context.js';
-import { esc, fmtNum } from '../public/format.js';
+import { esc, fmtNum, PREVIEW_CHARS } from '../public/format.js';
 
 // The three factories every case builds its input from — modelled on the
 // captured request body (increment 5's finding 3) and nothing else.

@@ -30,6 +30,7 @@ test('the interface is a project of its own, with everything a project needs', (
     'public/timeline.js',
     'public/format.js',
     'public/context.js',
+    'public/tools.js',
     'public/styles.css',
     'test',
   ]) {
@@ -58,6 +59,7 @@ test('nothing in the interface reaches outside the interface', () => {
     'public/timeline.js',
     'public/format.js',
     'public/context.js',
+    'public/tools.js',
   ]) {
     assert.ok(covered.includes(owned), `the scan does not cover ${owned} — it is not there to check`);
   }

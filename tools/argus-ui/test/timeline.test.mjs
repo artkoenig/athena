@@ -17,7 +17,12 @@ import {
   liveCursor,
   scrubCursor,
   resolveCursor,
+  toolCallOf,
+  TOOL_PARAM_CHARS,
+  spanLaneKeys,
+  laneByKey,
 } from '../public/timeline.js';
+import { previewOf } from '../public/format.js';
 
 // The two shapes every case builds its input from — nothing else.
 const session = (over = {}) => ({ id: 's1', name: null, firstSeenMs: 1000, lastSeenMs: 5000, ...over });
@@ -71,6 +76,21 @@ function threeRecordContent() {
 
 // A tool-result mark on one span — reused by the density cases.
 const toolMark = (over = {}) => ({ seq: 1, timeMs: 2000, spanId: 'sp-a', ...over });
+
+/** A tool-result event as /api/events serves it. */
+const toolEvent = (over = {}) => ({
+  seq: 5,
+  timeMs: 2200,
+  spanId: 'sp-a',
+  eventName: 'claude_code.tool_result',
+  attrs: {
+    tool_name: 'Bash',
+    tool_use_id: 'toolu_01',
+    success: 'true',
+    tool_input: JSON.stringify({ command: 'echo hi', description: 'say hi' }),
+  },
+  ...over,
+});
 
 // Criterion 1 — opening a session lands on the timeline, the technical views stay
 // reachable and subordinate.
@@ -570,20 +590,121 @@ test('the timeline still renders from a bare buildLanes view, with no density at
   assert.doesNotMatch(html, /NaN/);
 });
 
+// Increment 7 — selecting a lane also shows the tools it has used up to that
+// moment, with name and parameters. toolCallOf turns a tool-result event into
+// the row a panel draws, and mergeToolMarks keeps that row instead of the
+// three-field mark it used to.
+
+test('a tool call keeps the tool\'s name and the parameters it was called with', () => {
+  const out = toolCallOf(toolEvent());
+  const text = JSON.stringify({ command: 'echo hi', description: 'say hi' }, null, 2);
+  assert.deepEqual(out, {
+    seq: 5,
+    timeMs: 2200,
+    spanId: 'sp-a',
+    name: 'Bash',
+    chars: text.length,
+    preview: previewOf(text),
+    text,
+    truncated: false,
+  });
+  assert.ok(out.text.includes('echo hi'), 'the command the call was made with is what answers "what for"');
+});
+
+test('the pre-2.1 attribute name is read when the current one is absent', () => {
+  const out = toolCallOf(
+    toolEvent({ attrs: { tool_name: 'Read', tool_parameters: JSON.stringify({ file_path: '/tmp/a.txt' }) } }),
+  );
+  assert.equal(out.name, 'Read');
+  assert.ok(out.text.includes('/tmp/a.txt'));
+
+  const both = toolCallOf(
+    toolEvent({
+      attrs: { tool_name: 'Read', tool_input: '{"file_path":"/new"}', tool_parameters: '{"file_path":"/old"}' },
+    }),
+  );
+  assert.ok(both.text.includes('/new'), 'the current attribute name must win over the pre-2.1 one');
+  assert.ok(!both.text.includes('/old'));
+});
+
+test('parameters that are not JSON are kept as they arrived, not dropped', () => {
+  const out = toolCallOf(toolEvent({ attrs: { tool_name: 'Bash', tool_input: 'not json {' } }));
+  assert.equal(out.text, 'not json {');
+  assert.equal(out.chars, 10);
+  assert.equal(out.truncated, false);
+});
+
+test('a call with no parameters and no name is still a row', () => {
+  const expected = {
+    seq: 1,
+    timeMs: 1000,
+    spanId: 'sp-a',
+    name: 'tool',
+    chars: 0,
+    preview: '',
+    text: '',
+    truncated: false,
+  };
+  assert.deepEqual(toolCallOf({ seq: 1, timeMs: 1000, spanId: 'sp-a' }), expected);
+  assert.deepEqual(toolCallOf({ seq: 1, timeMs: 1000, spanId: 'sp-a', attrs: { tool_name: '' } }), expected);
+});
+
+test('a call whose parameters are a whole file keeps a bounded amount of them, and says how much there was', () => {
+  const big = 'x'.repeat(50_000);
+  const out = toolCallOf(
+    toolEvent({ attrs: { tool_name: 'Write', tool_input: JSON.stringify({ file_path: '/tmp/big', content: big }) } }),
+  );
+  assert.equal(out.text.length, TOOL_PARAM_CHARS, 'the page may not hold a file per tool call');
+  assert.ok(out.chars > TOOL_PARAM_CHARS);
+  assert.equal(out.truncated, true);
+  assert.ok(
+    out.text.startsWith('{\n  "file_path": "/tmp/big"'),
+    'what is kept is the beginning, where the parameters that name the call are',
+  );
+  assert.ok(out.preview.length <= 121, 'the collapsed line stays one line');
+  assert.ok(out.preview.endsWith('…'));
+});
+
+// Increment 7 — a call lands on the lane that made it, and on no other.
+
+test('each agent lane\'s span names that lane, and nothing else does', () => {
+  const view = buildLanes({ session: session(), content: threeRecordContent() });
+  const map = spanLaneKeys(view.lanes);
+  assert.equal(map.size, 1, 'the main lane owns no span — a tool call reaches it by not matching any agent');
+  assert.equal(map.get('sp-a'), 'agent:sp-a:code-reviewer');
+  assert.equal(map.get(undefined), undefined);
+
+  const dup = spanLaneKeys([
+    { kind: 'agent', spanId: 's', key: 'a' },
+    { kind: 'agent', spanId: 's', key: 'b' },
+  ]);
+  assert.equal(dup.get('s'), 'a', 'two agent lanes on one span keep the first');
+
+  const noSpan = spanLaneKeys([{ kind: 'agent', spanId: null, key: 'x' }]);
+  assert.equal(noSpan.size, 0, 'an agent lane with no span is skipped');
+
+  assert.deepEqual([...spanLaneKeys(undefined).entries()], []);
+});
+
+test('a key names its lane, and a key no lane carries names none', () => {
+  const view = buildLanes({ session: session(), content: threeRecordContent() });
+  assert.equal(laneByKey(view, 'agent:sp-a:code-reviewer'), view.lanes[1]);
+  assert.equal(laneByKey(view, 'main'), view.lanes[0]);
+  assert.equal(laneByKey(view, 'agent:gone:x'), null);
+  assert.equal(laneByKey(view, null), null);
+  assert.equal(laneByKey(null, 'main'), null);
+  assert.equal(laneByKey({}, 'main'), null);
+});
+
 // Criterion 5, round 1 — the tool-mark index survives an overlapping refresh.
 
-test('merging into an empty index keeps every item, and only the three fields a mark needs', () => {
-  const result = mergeToolMarks(
-    [],
-    [
-      { seq: 4, timeMs: 2000, spanId: 'sp-a', attrs: { tool_input: 'x'.repeat(100) } },
-      { seq: 7, timeMs: 3000, spanId: 'sp-b' },
-    ],
+test('merging into an empty index keeps every call, with the name and parameters a panel draws', () => {
+  const result = mergeToolMarks([], [toolEvent({ seq: 4, timeMs: 2000 }), { seq: 7, timeMs: 3000, spanId: 'sp-b' }]);
+  assert.deepEqual(
+    result.marks,
+    [toolCallOf(toolEvent({ seq: 4, timeMs: 2000 })), toolCallOf({ seq: 7, timeMs: 3000, spanId: 'sp-b' })],
+    'the merge must project every call through toolCallOf and hold nothing else',
   );
-  assert.deepEqual(result.marks, [
-    { seq: 4, timeMs: 2000, spanId: 'sp-a' },
-    { seq: 7, timeMs: 3000, spanId: 'sp-b' },
-  ]);
   assert.equal(result.seq, 7);
 });
 
@@ -652,7 +773,9 @@ test('out-of-order items still leave the highest seq as the watermark', () => {
 
 test('a missing spanId becomes null rather than undefined', () => {
   const result = mergeToolMarks([], [{ seq: 3, timeMs: 2000 }]);
-  assert.deepEqual(result.marks, [{ seq: 3, timeMs: 2000, spanId: null }]);
+  assert.deepEqual(result.marks, [
+    { seq: 3, timeMs: 2000, spanId: null, name: 'tool', chars: 0, preview: '', text: '', truncated: false },
+  ]);
 });
 
 test('the merged index is what the density reads', () => {
