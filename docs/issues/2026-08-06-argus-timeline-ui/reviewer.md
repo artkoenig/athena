@@ -2037,3 +2037,156 @@ Nothing found that breaks.
   newer record collapses every expanded block (the expansion key carries the
   record's `seq`), and the whole body is refetched on every refresh cycle even
   when the cursor is parked.
+
+## Increment 7
+
+**Status: 1 finding. The increment needs a correction round.** The tool list
+itself meets its criterion — per lane, per moment, with the tool's name and the
+call's parameters, and the suite is green — but the way it was hung under the
+context panel disarmed the pin increment 6 was accepted for: mutation M-A2,
+which was red then, is green now, so the context panel can be wired to no lane
+at all and nothing in the suite says so.
+
+### Commands run
+
+- `npm --prefix tools/argus-ui test` — `node --test "test/*.test.mjs"`, 205
+  cases, 205 pass, 0 fail, 0 cancelled, 0 skipped, 0 todo, exit 0. Nothing
+  excluded.
+- `./test.sh` — refused with `Permission denied`, exit 126: the file is mode
+  `100644` in the tree and in `main` (`git ls-tree main test.sh`), so it is not
+  executable and this is not something this change did. Re-run as `bash
+  test.sh`: 5 suites — the repository itself (14 cases), parallel runs:
+  worktrees (4 cases), `tools/argus` (`node --test`, all pass), `tools/argus-ui`
+  (205 pass), the transcript parsers (23 pass) — `PASS: all 5 suites`, exit 0.
+  Nothing was skipped or excluded.
+- Two extra runs of the first command in `git worktree` sandboxes on temporary
+  paths outside the checkout, one mutation each, to reduce the finding below to
+  a fact. Both worktrees were removed; `git worktree list` names only the
+  checkout and `git status --porcelain` is empty. The checkout under review was
+  never modified and no test was written for any of this.
+
+### Criterion 1 — the selected lane's tools up to that moment, with name and parameters
+
+Met, in the parts I can verify by reading and by the cases that exist.
+
+- **Shown under the same click.** `renderLanePanel`
+  (`tools/argus-ui/public/app.js:936-953`) assigns
+  `renderContextPanel(…) + renderToolPanel(…)` into `#lane-panel` in one
+  statement, so a lane click, a scrub settling
+  (`scrubTo` → `scheduleLaneContext` → `renderLanePanel`), a return to live and
+  a live refresh all repaint both panels together.
+- **Per agent.** `laneToolInput` (`tools/argus-ui/public/tools.js:31-46`) keeps
+  a call whose `spanId` maps to the selected agent lane, and everything else
+  falls to `main` — the same `spanLaneKeys` map `buildDensity` counts the lane
+  badge with, so the badge and the rows below it cannot disagree.
+- **Per time.** The moment is `resolveCursor(cursor, view).timeMs`, the same
+  resolution the context fetch uses, and the filter is `timeMs <= atMs`, so a
+  parked cursor lists only what had happened by then and a live cursor lists
+  everything.
+- **Name and parameters.** `toolCallOf` (`tools/argus-ui/public/timeline.js:315-352`)
+  reads `attrs.tool_name` and `attrs.tool_input ?? attrs.tool_parameters` off
+  the `claude_code.tool_result` event — the attribute names the collector itself
+  documents and reads (`tools/argus/src/claude.mjs:52-68`), carried through
+  `/api/events` untouched because `claude_code.tool_result` is not in
+  `CONTENT_EVENTS` (`tools/argus/src/server.mjs:240-244`). Each row prints the
+  tool name in `.ctx-label`, a one-line preview, the full character count, and
+  expands to the pretty-printed parameters.
+- **Escaped.** Every interpolation in `renderToolPanel` goes through `esc`, and
+  `tools.test.mjs:301-311` pins that a `<script>` in a parameter is shown, not
+  run.
+
+### Criterion 2 — `./test.sh` is green
+
+Met: `bash test.sh`, 5 suites, `PASS: all 5 suites`, exit 0. The `./test.sh`
+spelling fails only on the file's non-executable mode, which is the same in
+`main`.
+
+### The tests against the intent
+
+The criterion's four questions each have a case that goes red if the behaviour
+breaks: attribution (`tools.test.mjs:28-49`, a subagent's list showing main
+traffic and the main list showing the subagent's are both asserted against),
+the moment including its boundary (`:51-100`, at 2500 in and 1499 out, live vs
+parked), the name per row (`:149-169`, with a fixture of three different tools
+so one name printed for all of them fails), the parameters per row (`:171-189`,
+with the cross-check that the Bash row does not carry the Read row's path),
+size and preview per row (`:191-218`), the cut parameters (`:220-242`), the
+empty lane (`:269-280`) and the expansion key that may not collide with a
+context block's (`:282-299`). The page wiring is pinned by source reading in
+`page.test.mjs:577-615`, the level increment 6 established. I found no part of
+the criterion that a mutation could break silently — except the one below,
+which is about the *neighbouring* panel.
+
+### Finding 1 — increment 7 disarmed the increment-6 pin on the context panel's input
+
+`page.test.mjs:479-501` ("the panel is drawn from the lane the reader selected
+and the answer held for it") builds its slice as
+`renderLanePanel.slice(indexOf('renderContextPanel('), indexOf(';', callIdx))`.
+Until this increment the statement was a single call, so that slice was the
+`lanePanelInput({…})` argument list. Increment 7 made the statement
+`renderContextPanel(…) + renderToolPanel(…);`, so the first `;` now closes the
+whole concatenation and the slice swallows the `laneToolInput({…})` arguments
+too. The assertions `/key:\s*state\.selectedLane\b/` and
+`/expanded:\s*state\.expanded\b/` are therefore satisfied by the tool panel's
+arguments alone, and no longer say anything about the context panel's.
+
+Reproduction, run twice in a throwaway worktree at `HEAD`, both times with the
+whole `tools/argus-ui` suite:
+
+- Delete `key: state.selectedLane,` from the `lanePanelInput({…})` call in
+  `renderLanePanel` (`tools/argus-ui/public/app.js:942`) — increment 6's
+  mutation M-A2 verbatim, recorded in the `## Increment 6` section above as
+  **180 pass, 1 fail, exit 1**. It now reports **205 pass, 0 fail, exit 0**.
+- The same hop spelled `key: null` — **205 pass, 0 fail, exit 0**.
+
+In that state every lane click paints a context panel with no lane in it: the
+criterion "Selecting a lane at the chosen time shows that agent's context as of
+that moment" is dead and the suite is silent. That criterion is increment 6's,
+not increment 7's, which is why this is one finding and not a rejection of the
+tool list — but the regression was caused by this diff, in a test file this diff
+edited, so it is increment 7's to repair. What has to hold again: with the
+context panel's input wired to anything other than `state.selectedLane`, the
+suite is red. The `held:` and `lanePanelInput(` assertions in that case still
+discriminate; only `key:` and `expanded:` lost their power.
+
+### Beyond the criteria (blast radius)
+
+Nothing else found that breaks.
+
+- **The moved preview helper leaves nothing dangling.** `PREVIEW_CHARS` and
+  `previewOf` moved from `context.js` to `format.js`; the only importer of the
+  old export was `context.test.mjs`, which was updated, and no `.js`, `.mjs` or
+  `.md` outside the issue directory names them anywhere else.
+- **The two extracted lookups behave as before.** `laneByKey` reproduces the
+  `find(lane => lane.key === key)` both call sites had, with `key` falsy meaning
+  no lane, and `spanLaneKeys` is the map `buildDensity` built inline; the density
+  cases still pass, so the lane badges are unchanged.
+- **The fatter `toolMarks` break no consumer.** `mergeToolMarks` now stores
+  `toolCallOf(item)` instead of three fields, and the only other reader is
+  `buildDensity`, which uses `seq`, `timeMs` and `spanId` — all still present.
+  The per-call `text` is capped at `TOOL_PARAM_CHARS` (2000), so the index stays
+  bounded.
+- **No `data-lane` in the new markup**, so the `[data-lane]` click branch in
+  `wireEvents` cannot fire inside the tool panel; the expansion keys are
+  namespaced `tool:<seq>` against the context blocks' `<seq>:<index>`, and both
+  are asserted.
+- **Project rules hold.** `public/tools.js` imports only `./format.js` and
+  `./timeline.js`, touches no `document`, `fetch` or `location`, and is listed in
+  both scans of `independence.test.mjs`. No dependency, no build step.
+- **Documents.** `tools/argus-ui/README.md` gained the sentence describing the
+  new list; no other document describes the lane panel, and the collector is
+  untouched by this increment.
+- **Observation, not a finding — the parameters are capped at 2000 characters.**
+  A `Write` call carrying a 50 000-character file shows its first 2000 and then
+  `… 48 0xx more characters, not kept in the page`; the full text is nowhere in
+  the UI. My criterion asks for "the call's parameters" and not, as increment
+  6's does for context blocks, for "the exact full text", the cut is declared
+  rather than silent, and the JSON keys that answer "what for" come first, so I
+  record it rather than raise it.
+- **Observation, not a finding — a session with more than 2000 tool results
+  loses its oldest ones.** `/api/events` is polled with `limit: 2000` and
+  `store.queryEvents` walks newest-first, while `mergeToolMarks` advances the
+  watermark to the newest seq it kept, so calls older than the first page are
+  never fetched and never appear under any lane. This is the increment-4 poll
+  that already fed the activity marks; increment 7 changed neither the limit nor
+  the watermark rule, so it is not this increment's to fix.
