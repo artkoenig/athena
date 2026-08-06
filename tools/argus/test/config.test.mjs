@@ -67,6 +67,31 @@ test('a PaaS can hand over the port and the public URL without extra config', ()
   assert.equal(fromFlags.publicUrl, 'https://flag.example');
 });
 
+test('a platform-assigned port is bound on every interface, not on loopback', () => {
+  // Taking PORT and then binding loopback is the deploy that fails while
+  // looking healthy: the platform scans the public interface, finds nothing and
+  // times out, and the collector's own log says it is listening, because it is.
+  const paas = resolveConfig({}, { PORT: '10000' });
+  assert.equal(paas.host, '0.0.0.0');
+
+  // Pinning the port does not undo the platform: PORT is what says where this
+  // process is running, whichever port ends up in use.
+  const pinned = resolveConfig({}, { PORT: '10000', UROBOROS_OBS_PORT: '4318' });
+  assert.equal(pinned.host, '0.0.0.0');
+
+  // An explicit bind address is still the one that was asked for, either way it
+  // was given.
+  assert.equal(resolveConfig({}, { PORT: '10000', UROBOROS_OBS_HOST: '127.0.0.1' }).host, '127.0.0.1');
+  const { flags } = parseArgs(['--host', '::1']);
+  assert.equal(resolveConfig(flags, { PORT: '10000' }).host, '::1');
+
+  // Off a platform nothing changes: an untokened collector stays off the LAN
+  // until someone puts it there. An empty PORT is not a platform announcing
+  // itself.
+  assert.equal(resolveConfig({}, {}).host, '127.0.0.1');
+  assert.equal(resolveConfig({}, { PORT: '' }).host, '127.0.0.1');
+});
+
 test('the settings format nests the env block the way Claude Code expects', async () => {
   const { execFile } = await import('node:child_process');
   const { promisify } = await import('node:util');

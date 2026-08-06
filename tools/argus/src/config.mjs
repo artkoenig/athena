@@ -85,6 +85,13 @@ const asBoolean = (value) => value === true || value === 'true' || value === '1'
 
 const asDir = (value) => (typeof value === 'string' && value !== '' ? path.resolve(value) : null);
 
+/**
+ * Bare PORT is a platform saying "I assigned this one and I route to it" —
+ * Render, Railway, Fly and Heroku all announce themselves that way, and nothing
+ * else sets it by accident.
+ */
+const onPlatform = (env) => env.PORT !== undefined && env.PORT !== '';
+
 export function resolveConfig(flags = {}, env = process.env) {
   // One writes a new measurement, the other replays an old one; together they
   // say nothing, and guessing which was meant is how a measurement gets written
@@ -116,7 +123,17 @@ export function resolveConfig(flags = {}, env = process.env) {
     // Where a background start listens for the "I am up" line. Set by that
     // start on the child it spawns, never by a person.
     readyFd: flags['ready-fd'] === undefined ? null : parseCount(flags['ready-fd'], 0) || null,
-    host: flags.host ?? env.UROBOROS_OBS_HOST ?? '127.0.0.1',
+    // Loopback is the right default on a machine someone is sitting at: a
+    // collector without a token accepts telemetry from anyone who reaches it,
+    // so it is not put on the LAN unless that was asked for.
+    //
+    // A platform that assigns the port routes to the container's public
+    // interface, so there a loopback bind is never what was meant — the port
+    // scan finds nothing, the deploy times out, and the log says the collector
+    // came up fine, because it did. The same variable that gives us the port
+    // tells us which of the two situations this is, so the default follows it
+    // instead of making every deployment remember a second variable.
+    host: flags.host ?? env.UROBOROS_OBS_HOST ?? (onPlatform(env) ? '0.0.0.0' : '127.0.0.1'),
     // Bare PORT is how every PaaS assigns one — Render, Railway, Fly, Heroku all
     // inject it and route to whatever binds it. It ranks below the namespaced
     // variable so a deliberate UROBOROS_OBS_PORT still wins on a host that sets it.
