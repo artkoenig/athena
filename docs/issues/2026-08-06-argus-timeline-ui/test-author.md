@@ -897,3 +897,120 @@ elements out of the markup, since the two elements (`.timeline-ahead` and
 to `class` — was decided the small way the brief allows: a `[^>]*` gap
 regardless of attribute order, matching the pattern the file's own existing
 cases already use for `data-lane`/`data-kind` attributes.
+
+## Increment 4 — Round 1
+
+The reviewer's reproduction spec for this round is a coverage hole in
+`tools/argus-ui/public/app.js`'s two delegated listeners for the scrub
+control: the `input` listener that routes `#timeline-scrub`'s events to
+`scrubTo`, and the `pointerdown`/`pointerup`/`pointercancel` trio that sets
+and clears the `scrubbing` flag `scheduleRefresh` checks. Wrote exactly the
+three cases the Round 1 test plan of `researcher.md` names for that spec,
+plus the `detailListener(source, type)` helper it specifies, both appended to
+the end of the existing `tools/argus-ui/test/page.test.mjs`, under a new
+`// Criterion 6, round 1 — the scrub control is wired to the scrub, and a
+drag is registered.` banner — nothing else. No production file was opened to
+author them: the anchor strings, the helper's slicing technique and the three
+cases' exact regexes came entirely from the plan's own snippets and its
+verbatim quotes of the current `app.js` text. I did read `app.js` lines
+1095–1124 to confirm the plan's verbatim quotes matched what is actually in
+the file at those lines before trusting them (they did, character for
+character), since that check is reading the plan's own claim against itself,
+not researching an implementation to write a test against.
+
+### The three cases
+
+| # | Case | Test name | Expected | Catches the deletion of |
+| --- | --- | --- | --- | --- |
+| 1 | the scrub control's input reaches the scrub | `'the scrub control's input reaches the scrub'` | `detailListener(appJs, 'input')` matches `/timeline-scrub/` and `/scrubTo\(/`, and the `timeline-scrub` occurrence indexes before the `event-search` one | the four-line `timeline-scrub` branch in the `#detail` `input` listener, or a move of that branch below the `event-search` early return |
+| 2 | a drag is registered before the next refresh can fire | `'a drag is registered before the next refresh can fire'` | `detailListener(appJs, 'pointerdown')` matches `/timeline-scrub/` and `/scrubbing\s*=\s*true/`, `timeline-scrub` indexing before `scrubbing = true` | the whole `#detail` `pointerdown` listener, or setting the flag for any pointer press rather than for the slider's |
+| 3 | releasing the pointer lets refreshes resume | `'releasing the pointer lets refreshes resume'` | `functionSource(appJs, 'wireEvents')` matches `/pointerup/`, `/pointercancel/` and `/scrubbing\s*=\s*false/` | the `window` `pointerup`/`pointercancel` loop, whose loss leaves `scrubbing` true forever after the first drag |
+
+### Proving the cases are not vacuous
+
+The plan states, and I confirmed, that this round's finding is a missing
+case against already-correct code: `app.js` already wires both listeners
+exactly as the plan quotes them (checked by `grep -n "timeline-scrub\|scrubTo\|scrubbing" tools/argus-ui/public/app.js`
+before writing anything, to be sure the plan's line numbers and quoted text
+were not stale). So "confirm each fails because the behaviour is missing"
+does not apply the usual way here — there is no missing behaviour to be red
+about, and the plan says as much in its own "What is already red" section.
+What I proved instead, exactly as increment 3's Round 2 did for the same
+situation, is that the three cases actually catch the reviewer's named
+regressions:
+
+- Ran `node --test tools/argus-ui/test/page.test.mjs` against the file as
+  written: **23 tests, 23 pass, 0 fail, exit 0** (the file's 20 pre-existing
+  cases plus these three).
+- Applied the plan's own first named deletion to a temporary in-place edit of
+  `tools/argus-ui/public/app.js` — removed the four-line `timeline-scrub`
+  branch from the `#detail` `input` listener (`app.js:1113–1118` in the
+  plan's numbering) — reran the file: **23 tests, 22 pass, 1 fail**, and the
+  one failure is case 1 (`'the scrub control's input reaches the scrub'`).
+  Reverted the edit immediately after (confirmed with `git diff --stat` on
+  `app.js`: no output, tree clean).
+- Applied the plan's second named deletion — removed the whole `pointerdown`
+  listener together with the `pointerup`/`pointercancel` loop that follows it
+  (`app.js:1103–1110`, the block the plan quotes as one unit) — reran the
+  file: **23 tests, 21 pass, 2 fail**, and the two failures are cases 2 and 3
+  (`'a drag is registered before the next refresh can fire'` and
+  `'releasing the pointer lets refreshes resume'`), which fail together
+  because the plan's own reproduction deletes both listeners as one block.
+  Reverted the edit immediately after, confirmed clean the same way.
+- Restored file confirmed byte-identical to the version I authored the tests
+  against: `git diff --stat -- tools/argus-ui/public/app.js
+  tools/argus-ui/test/page.test.mjs` shows only `test/page.test.mjs` changed.
+
+Production code was touched twice during this proof, each time reverted
+before moving on and confirmed clean by `git diff`, exactly as increment 3's
+Round 2 precedent: never to author or pass a test, only to verify the cases
+are sensitive to the exact regressions the reviewer named.
+
+### Commands run
+
+- `node --test tools/argus-ui/test/page.test.mjs` (unmutated) — 23 tests, 23
+  pass, 0 fail, exit 0.
+- `node --test tools/argus-ui/test/page.test.mjs` against a temporary,
+  reverted deletion of the `input` listener's `timeline-scrub` branch — 23
+  tests, 22 pass, 1 fail (case 1), exit 1.
+- `node --test tools/argus-ui/test/page.test.mjs` against a temporary,
+  reverted deletion of the `pointerdown` listener plus the
+  `pointerup`/`pointercancel` loop — 23 tests, 21 pass, 2 fail (cases 2, 3),
+  exit 1.
+- `npm --prefix tools/argus-ui test` (unmutated, run once at the end to
+  confirm the whole package) — 106 tests, 106 pass, 0 fail, exit 0. This is
+  the plan's own "What counts as done" command; running it once here is
+  reporting the outcome the plan asks for, not a substitute for the
+  implementer's own run.
+- `git diff --stat -- tools/argus-ui/public/app.js
+  tools/argus-ui/test/page.test.mjs` (after all mutations were reverted) —
+  shows only `tools/argus-ui/test/page.test.mjs` changed; `app.js` carries no
+  diff.
+
+### Deliberately not written
+
+Matches the round's own list exactly, nothing added or dropped:
+
+- The drag as a browser performs it — real `pointerdown`/`input` events,
+  thumb pixels, whether the cursor line lands under the thumb. No DOM
+  harness exists and none may be added; the project's first rule is zero
+  dependencies. The three cases pin the wires; the rest is for review.
+- That `scheduleRefresh` actually defers and then resumes — timing behind a
+  `setTimeout` with no seam; the existing case at `page.test.mjs:290`
+  (`'a refresh never yanks the slider out from under a drag'`) already pins
+  that the guard is read, and case 3 now pins that the flag it reads is
+  cleared.
+- The in-flight `refresh()` that can still land mid-drag — the reviewer
+  recorded it as an observation, not a finding; no case pins behaviour for
+  it.
+- Everything increments 1–3 and 5–6 own — no case this round touches lane
+  derivation, density, the context message list or the tool list.
+- `tools/argus` — not touched.
+
+### Gaps and conflicts found in the plan
+
+None. The plan's helper snippet, the two verbatim quotes of the current
+`app.js` wiring, the exact regexes and the exact assertion messages left
+nothing to guess; every case mapped to one concrete assertion, and the
+verbatim quotes matched the actual file character for character when
+checked.

@@ -25,6 +25,16 @@ function functionSource(source, name) {
   return next === -1 ? body : body.slice(0, next);
 }
 
+/** The body of one delegated listener on #detail, up to the next addEventListener. */
+function detailListener(source, type) {
+  const anchor = `document.getElementById('detail').addEventListener('${type}'`;
+  const start = source.indexOf(anchor);
+  assert.ok(start >= 0, `app.js must still delegate ${type} on #detail`);
+  const rest = source.slice(start + anchor.length);
+  const next = rest.indexOf('.addEventListener(');
+  return next === -1 ? rest : rest.slice(0, next);
+}
+
 // Criterion 1 — opening a session lands on the timeline, the technical views stay
 // reachable and subordinate.
 
@@ -299,4 +309,36 @@ test('app.js takes the cursor functions from the timeline module', () => {
     const re = new RegExp(`import\\s*\\{[^}]*\\b${name}\\b[^}]*\\}\\s*from\\s*['"]\\./timeline\\.js['"]`);
     assert.match(appJs, re, `app.js must import ${name} from timeline.js, so the tested function is the one the page runs`);
   }
+});
+
+// Criterion 6, round 1 — the scrub control is wired to the scrub, and a drag is registered.
+
+test('the scrub control\'s input reaches the scrub', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const slice = detailListener(appJs, 'input');
+  assert.match(slice, /timeline-scrub/, 'the slider must route its input event to the scrub, or dragging it does nothing');
+  assert.match(slice, /scrubTo\(/, 'a drag must call scrubTo with the control it came from');
+  assert.ok(
+    slice.indexOf('timeline-scrub') < slice.indexOf('event-search'),
+    'the slider branch must come before the event-search early return, which would otherwise swallow it',
+  );
+});
+
+test('a drag is registered before the next refresh can fire', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const slice = detailListener(appJs, 'pointerdown');
+  assert.match(slice, /timeline-scrub/, 'a pointer press must be recognised as a drag on the scrub control specifically');
+  assert.match(slice, /scrubbing\s*=\s*true/, 'a drag must set the scrubbing flag scheduleRefresh checks');
+  assert.ok(
+    slice.indexOf('timeline-scrub') < slice.search(/scrubbing\s*=\s*true/),
+    'the flag must be set for the slider, not for every press in the detail pane',
+  );
+});
+
+test('releasing the pointer lets refreshes resume', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const wireEvents = functionSource(appJs, 'wireEvents');
+  assert.match(wireEvents, /pointerup/, 'a drag must end on pointerup');
+  assert.match(wireEvents, /pointercancel/, 'a cancelled drag must end too, or refreshes stop forever');
+  assert.match(wireEvents, /scrubbing\s*=\s*false/, 'releasing the pointer must clear the scrubbing flag');
 });
