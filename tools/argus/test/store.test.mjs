@@ -51,6 +51,12 @@ const bodyLog = (attributes = {}, timeMs = Date.now()) =>
     timeMs,
   );
 
+// A response body as measured: same shape as a request body, plus request_id.
+const responseBodyLog = (attributes = {}, timeMs = Date.now()) => ({
+  ...bodyLog({ request_id: 'req_011Cdm', ...attributes }, timeMs),
+  eventName: 'claude_code.api_response_body',
+});
+
 // Spans carry absolute wall-clock timestamps; anything older than the retention
 // window is evicted on ingest, so fixtures have to sit near "now".
 const NOW = Date.now();
@@ -596,4 +602,34 @@ test('dropping the oldest session under maxSessions removes its content records 
   store.ingest('logs', [bodyLog({ 'session.id': 'sess-b', 'prompt.id': 'p-b' }, t + 1000)]);
   assert.equal(store.listContent({ sessionId: 'sess-a' }).length, 0);
   assert.equal(store.listContent({ sessionId: 'sess-b' }).length, 1);
+});
+
+test('an api_response_body record is indexed alongside a request body, and the eventName filter discriminates between them', () => {
+  const store = new TelemetryStore();
+  store.ingest('logs', [bodyLog(), responseBodyLog({ 'prompt.id': 'p-resp' })]);
+
+  const responses = store.listContent({ sessionId: SESSION, eventName: 'claude_code.api_response_body' });
+  assert.equal(responses.length, 1);
+  assert.equal(responses[0].eventName, 'claude_code.api_response_body');
+  assert.equal(responses[0].requestId, 'req_011Cdm');
+  assert.ok(!('body' in responses[0]), 'listContent must never carry the full body for a response record either');
+
+  const requests = store.listContent({ sessionId: SESSION, eventName: 'claude_code.api_request_body' });
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].eventName, 'claude_code.api_request_body');
+});
+
+test('contentAt with an eventName filter returns the matching body, and the default filter still means api_request_body', () => {
+  const store = new TelemetryStore();
+  const t = Date.now();
+  store.ingest('logs', [
+    bodyLog({ body: 'request text' }, t),
+    responseBodyLog({ body: 'response text' }, t + 10),
+  ]);
+
+  const response = store.contentAt({ sessionId: SESSION, atMs: t + 100, eventName: 'claude_code.api_response_body' });
+  assert.equal(response.body, 'response text');
+
+  const request = store.contentAt({ sessionId: SESSION, atMs: t + 100 });
+  assert.equal(request.body, 'request text', 'the newer response record must not bleed into the documented default filter');
 });

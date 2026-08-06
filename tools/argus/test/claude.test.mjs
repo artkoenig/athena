@@ -84,3 +84,21 @@ test('describeEvent on an api_request_body record never lets the body text leak 
   assert.ok(!summary.includes(secret), 'the summary must never include the body text');
   assert.match(summary, new RegExp(String(body.length)), 'the summary has to name the size instead of the text');
 });
+
+test('describeEvent on an api_response_body record never lets the body text leak into the summary either', () => {
+  const secret = 'BEGIN-RESPONSE-SECRET-DO-NOT-LEAK-73';
+  const body = `{"content":[{"type":"text","text":"${secret}"}]}`;
+  const summary = describeEvent({
+    eventName: 'claude_code.api_response_body',
+    attrs: {
+      model: 'claude-sonnet-5',
+      query_source: 'sdk',
+      request_id: 'req_011Cdm',
+      body,
+      body_length: String(body.length),
+      body_truncated: 'false',
+    },
+  });
+  assert.ok(!summary.includes(secret), 'the summary must never include the body text');
+  assert.match(summary, new RegExp(String(body.length)), 'the summary has to name the size instead of the text');
+});

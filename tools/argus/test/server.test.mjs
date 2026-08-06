@@ -72,6 +72,19 @@ function logsPayloadJson(sessionId) {
 
 function contentLogsPayloadJson(sessionId, overrides = {}) {
   const body = overrides.body ?? '{"messages":[{"role":"user","content":"hello"}]}';
+  const attributes = [
+    { key: 'session.id', value: { stringValue: sessionId } },
+    { key: 'model', value: { stringValue: 'claude-sonnet-5' } },
+    { key: 'query_source', value: { stringValue: 'sdk' } },
+    { key: 'prompt.id', value: { stringValue: 'prompt-1' } },
+    { key: 'event.sequence', value: { stringValue: '5' } },
+    { key: 'body', value: { stringValue: body } },
+    { key: 'body_length', value: { stringValue: String(body.length) } },
+    { key: 'body_truncated', value: { stringValue: 'false' } },
+  ];
+  if (overrides.requestId) {
+    attributes.push({ key: 'request_id', value: { stringValue: overrides.requestId } });
+  }
   return JSON.stringify({
     resourceLogs: [
       {
@@ -82,17 +95,8 @@ function contentLogsPayloadJson(sessionId, overrides = {}) {
               {
                 timeUnixNano: String(overrides.timeUnixNano ?? T0),
                 severityNumber: 9,
-                eventName: 'claude_code.api_request_body',
-                attributes: [
-                  { key: 'session.id', value: { stringValue: sessionId } },
-                  { key: 'model', value: { stringValue: 'claude-sonnet-5' } },
-                  { key: 'query_source', value: { stringValue: 'sdk' } },
-                  { key: 'prompt.id', value: { stringValue: 'prompt-1' } },
-                  { key: 'event.sequence', value: { stringValue: '5' } },
-                  { key: 'body', value: { stringValue: body } },
-                  { key: 'body_length', value: { stringValue: String(body.length) } },
-                  { key: 'body_truncated', value: { stringValue: 'false' } },
-                ],
+                eventName: overrides.eventName ?? 'claude_code.api_request_body',
+                attributes,
               },
             ],
           },
@@ -505,5 +509,62 @@ test('the SSE stream announces ingest', async () => {
     }
     assert.match(frame, /"sessionIds":\["s-sse"\]/);
     controller.abort();
+  });
+});
+
+test('an api_response_body log is served by GET /api/content and GET /api/content/at when filtered by event, and the default event still means api_request_body', async () => {
+  await withServer({}, async ({ base }) => {
+    const responseText = '{"content":[{"type":"text","text":"response body text"}]}';
+    await fetch(`${base}/v1/logs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: contentLogsPayloadJson('s-response', {
+        eventName: 'claude_code.api_response_body',
+        body: responseText,
+        requestId: 'req_011Cdm',
+      }),
+    });
+
+    const listed = await (
+      await fetch(`${base}/api/content?session=s-response&event=claude_code.api_response_body`)
+    ).json();
+    assert.equal(listed.items.length, 1);
+    assert.equal(listed.items[0].eventName, 'claude_code.api_response_body');
+    assert.ok(!('body' in listed.items[0]), 'the index route must never carry the body for a response record either');
+
+    const atMs = Number(T0 / 1000000n);
+    const withEvent = await (
+      await fetch(`${base}/api/content/at?session=s-response&at=${atMs}&event=claude_code.api_response_body`)
+    ).json();
+    assert.equal(withEvent.item.body, responseText);
+
+    const withoutEvent = await (await fetch(`${base}/api/content/at?session=s-response&at=${atMs}`)).json();
+    assert.equal(
+      withoutEvent.item,
+      null,
+      'without an event filter the route defaults to api_request_body, and this session holds no request body',
+    );
+  });
+});
+
+test('an api_response_body log does not ship its body through the polled event tail either', async () => {
+  await withServer({}, async ({ base }) => {
+    const responseText = '{"content":[{"type":"text","text":"response body text"}]}';
+    await fetch(`${base}/v1/logs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: contentLogsPayloadJson('s-response-tail', {
+        eventName: 'claude_code.api_response_body',
+        body: responseText,
+        requestId: 'req_011Cdm',
+      }),
+    });
+
+    const events = await (await fetch(`${base}/api/events?session=s-response-tail`)).json();
+    assert.equal(events.items.length, 1);
+    const item = events.items[0];
+    assert.ok(!item.attrs || !('body' in item.attrs), 'the event tail must not ship a response body any more than a request body');
+    assert.ok(item.content, 'the event tail must carry the content metadata for a response record too');
+    assert.equal(item.content.bodyChars, responseText.length);
   });
 });
