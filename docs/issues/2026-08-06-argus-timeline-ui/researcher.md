@@ -3294,3 +3294,286 @@ because of it:
   `context.js` included; it names none of those flags.
 - `independence.test.mjs` walks the whole project, so `context.js` is scanned for
   outside imports from the moment it exists; it imports only `./format.js`.
+
+## Increment 5 — Round 1
+
+The reviewer raised three findings, all of the same kind: the production code
+satisfies the criterion, but three clauses of it are unpinned, each proven by a
+measured mutation that the suite survived. Two of them are fixed by tests alone.
+The third cannot be pinned by a test while the mapping it needs to check is
+buried inside an `async` function that fetches — so one small production change
+lifts that mapping into a pure function, and the test then reads it directly.
+
+Nothing else in this section is scope. The reviewer's four "observation, not a
+finding" entries are deliberately left alone: the panel's refetch on every live
+refresh, the expansion set collapsing when the record changes, the wording of
+the existing case at `page.test.mjs:474`, and the impossible `"agent:"` record.
+The last of these is closed as a byproduct of the fix below, and that is
+recorded as a decision rather than smuggled in.
+
+### The findings, restated as the defects to remove
+
+1. **`context.js:199` — "expandable to the exact full text" is unpinned.**
+   Replacing `esc(block.text)` with `esc(block.preview)` inside
+   `<pre class="ctx-text">` leaves the suite at 154 pass. The rendering cases
+   count `<pre class="ctx-text">` tags; none reads what is between the tags.
+2. **`app.js:927-933` — "that agent's (or the main session's) context" is
+   unpinned.** Collapsing the whole lane filter to `{ main: '1' }` leaves the
+   suite at 154 pass, because the only case over it (`page.test.mjs:404`) greps
+   `loadLaneContext`'s source for the words `main`, `span` and `agent`, and the
+   three-line comment above the filter contains all three on its own.
+3. **`context.js:21` — the `assistant` kind is unpinned.** Removing
+   `'assistant'` from `ROLE_KINDS` leaves the suite at 154 pass: every assistant
+   message in every fixture carries only `thinking` and `tool_use` parts, whose
+   kinds ignore the role, so no assertion ever observes an assistant text block.
+
+### Implementation plan
+
+Two production files change, `tools/argus-ui/public/context.js` and
+`tools/argus-ui/public/app.js`, both for finding 2 only. Findings 1 and 3 need
+no production change at all — the code already does the right thing and the
+tests below are what stop it from silently stopping.
+
+**A. `tools/argus-ui/public/context.js` — the lane→query mapping becomes a pure,
+exported function.**
+
+Add, next to `contextBlocks` and above `renderContextPanel`:
+
+```js
+/**
+ * The one lane filter that goes on the wire for a lane's context.
+ *
+ * Main traffic for the main lane; an agent lane's own span — the only thing
+ * that tells two concurrent agents of one type apart — and its name only when
+ * it carries no span at all. A lane that offers neither gets no query rather
+ * than an empty one: an unfiltered request would answer with the main
+ * session's context under an agent's lane, which is the one thing this
+ * mapping exists to prevent.
+ *
+ * @param {{ kind: string, spanId: string|null, agent: string|null }|null|undefined} lane
+ * @returns {{ main: string }|{ span: string }|{ agent: string }|null}
+ */
+export function laneContentQuery(lane) {
+  if (!lane) return null;
+  if (lane.kind === 'main') return { main: '1' };
+  if (lane.spanId) return { span: lane.spanId };
+  if (lane.agent) return { agent: lane.agent };
+  return null;
+}
+```
+
+Extend the module header's first sentence so it still describes the whole
+module: it holds pure functions over `GET /api/content/at` — which record a lane
+asks for, how its body parses into blocks, and how those blocks render.
+
+**B. `tools/argus-ui/public/app.js` — `loadLaneContext` delegates to it.**
+
+- Line 11 becomes
+  `import { laneContentQuery, renderContextPanel } from './context.js';`.
+- Inside `loadLaneContext`, the six-line `const filter = !lane ? … : …` chain
+  (lines 927-933) becomes
+  `const filter = laneContentQuery(view.lanes.find((entry) => entry.key === key));`,
+  and the `const lane = …` line above it goes away with it — `lane` has no other
+  reader in that function. Everything else in `loadLaneContext` stays byte for
+  byte: the id/key capture, `resolveCursor(state.cursor, view).timeMs`, the
+  `.catch(() => null)`, the two staleness guards, the `state.laneContext` write.
+- **Delete the three-line comment at lines 924-926 rather than keep it**: its
+  text is the prose that made the old grep-based case pass by itself, and the
+  same explanation now sits on `laneContentQuery`. Put nothing in its place that
+  names `laneContentQuery` inside a comment — a comment naming the function
+  would satisfy the new source assertion without the code calling anything.
+
+That is the whole production change. `filter` keeps its meaning (an object or
+`null`), the `filter ? await api(…) : null` expression is untouched, and a
+`null` filter still lands the panel in its `empty` state instead of firing an
+unfiltered request.
+
+### Decisions, including the ones rejected
+
+1. **`laneContentQuery` lives in `context.js`, not in `timeline.js`.** It is
+   part of the panel's data path — which record this lane's context comes from —
+   and `context.js` is already the module that owns `GET /api/content/at`.
+   `timeline.js` builds the lane objects it consumes, but its header promises
+   lanes, density and cursor drawing; an API query builder there widens a module
+   that three increments already depend on. The test file follows the module,
+   which keeps `test/context.test.mjs` as the single home of this increment's
+   unit cases. Rejected: `timeline.js` (wrong concern), and a new third module
+   for one four-line function (a file per function is not this project's grain).
+2. **A pure function rather than a stronger source grep.** The reviewer's
+   mutation shows why a grep cannot do this job: the words it looks for live in
+   prose as easily as in code, and no regex over `loadLaneContext` can tell that
+   an `agent` lane produces `span=sp-a` rather than `main=1`. Only a function
+   that takes a lane and returns a query can be asked that question. Rejected:
+   asserting the filter's exact source text (pins formatting, not behaviour) and
+   a fake `window.fetch` harness around `loadLaneContext` (a DOM fake for one
+   mapping, against the project's zero-dependency rule and its no-DOM test
+   convention).
+3. **The function is total: a lane with neither span nor agent gets `null`.**
+   The reviewer recorded that case as an observation because the collector
+   cannot currently produce such a record. A pure function still has to answer
+   for every input it can be handed, and the honest answer is "no query" — the
+   alternative, `{ agent: null }`, is dropped by `api()` and turns into an
+   unfiltered request that answers with the main session's traffic under an
+   agent's lane. One line, one test case, and the observation closes with it.
+   Rejected: throwing (the panel would go down with it) and reproducing the old
+   `{ agent: lane.agent }` unconditionally (keeps a known trap alive on purpose).
+4. **Findings 1 and 3 get tests only.** The renderer already prints
+   `esc(block.text)` and `ROLE_KINDS` already holds `'assistant'`. Changing
+   working code to make it look tested is how a correction round adds risk;
+   what was missing is the assertion, and that is all that is added.
+5. **The assistant text part goes into the shared `requestBody` factory, not
+   into a fixture of its own.** Every real assistant turn carries text, so a
+   factory whose assistant message has only `thinking` and `tool_use` is the
+   unrealistic one — the reviewer found the gap precisely because the fixture
+   does not look like a captured body. Inserting the text part **between**
+   `thinking` and `tool_use` keeps every existing block index stable, so the one
+   case that names an index (`expanded: ['12:2']`) needs no edit. Rejected: a
+   second factory (two bodies drift apart) and appending the text part after
+   `tool_use` (shifts an index for nothing).
+
+### Module map
+
+| Path | What it holds | Entry points |
+| --- | --- | --- |
+| `tools/argus-ui/public/context.js` | the context panel, pure: block parsing at `contextBlocks` (line 64), rendering at `renderContextPanel` (line 153), `ROLE_KINDS` at line 21, `PREVIEW_CHARS` exported at line 18, the `<pre class="ctx-text">` at line 199 | gains `laneContentQuery(lane)` |
+| `tools/argus-ui/public/app.js` | the page; `loadLaneContext` at lines 915-946, its import of `context.js` at line 11 | `loadLaneContext` keeps its name, signature and every other line |
+| `tools/argus-ui/public/format.js` | `esc` (line 9), `fmtNum`, `fmtClock`, `shortId` | `esc` is what the new renderer case compares against |
+| `tools/argus-ui/public/timeline.js` | `buildLanes` builds each lane as `{ key, kind: 'main'\|'agent', agent, spanId, label, … }` (lines 85-106) — **read only, unchanged** | — |
+| `tools/argus-ui/test/context.test.mjs` | 29 cases; three factories at the top (`requestBody`, `item`, `lane`); the kind-sequence case at line 51 | the factory at line 9 gains one content part |
+| `tools/argus-ui/test/page.test.mjs` | source-level page cases; helpers `functionSource` (line 20) and `detailListener` (line 29); increment 5's block starts at line 346 | the import case at line 349 and the query case at line 404 are rewritten |
+| `tools/argus-ui/test/timeline.test.mjs` | lane-row cases — **unchanged this round** | — |
+| `tools/argus-ui/test/independence.test.mjs` | the project-wide import rule; already lists `public/context.js` — **unchanged this round** | — |
+
+No file in `tools/argus` changes, and no documentation changes: `README.md`'s
+Timeline bullet already describes exactly the behaviour these tests pin, and no
+behaviour visible to a reader of the page moves.
+
+### Environment
+
+Node ≥ 20.11, already installed. Zero runtime dependencies, no install step, no
+build step, and **there is no linter and no formatter in this repository**.
+
+The one command this round's test plan asks anyone to run, from the repository
+root:
+
+```
+npm --prefix tools/argus-ui test
+```
+
+While working on a single file, `node --test tools/argus-ui/test/context.test.mjs`
+and `node --test tools/argus-ui/test/page.test.mjs` run just that file; neither
+is part of the closed list below.
+
+### Test Plan
+
+Tests are needed: all three findings are missing assertions, and finding 2's
+assertion is the reason the production change exists. Everything is `node:test`
++ `node:assert/strict` in `tools/argus-ui/test/`, in the style already in those
+files — one `test('a sentence stating the fact', () => {…})` per fact, factories
+at the top, a message on every non-obvious assert, nothing mocked.
+
+This section's list is the whole of what is asked for this round. Earlier
+sections' cases are already in the files and stay as they are except where a
+case below names an edit to one.
+
+#### Fixture change in `tools/argus-ui/test/context.test.mjs` (finding 3)
+
+In the `requestBody` factory (line 9), the `role: 'assistant'` message's
+`content` array gains one part **between** the `thinking` part and the
+`tool_use` part:
+
+```js
+{ type: 'text', text: 'the answer' },
+```
+
+Nothing else in the factory moves. The existing case
+**'the five kinds the criterion names all reach the list, system prompt first'**
+(line 51) then needs its expected array updated to
+
+```js
+['system', 'system', 'user', 'system', 'thinking', 'assistant', 'tool_use', 'tool_result', 'field', 'field', 'field', 'field']
+```
+
+and its assertion message extended to say the assistant's reply sits between its
+thinking and its tool call. No other existing case in the file is touched: the
+cases that override `messages` bring their own, and the only case naming a block
+index (`expanded: ['12:2']`) still points at the `'ping'` block.
+
+#### New cases in `tools/argus-ui/test/context.test.mjs`
+
+The file gains two imports: `PREVIEW_CHARS` and `laneContentQuery` from
+`../public/context.js` (added to the existing import), and
+`import { esc } from '../public/format.js';` — the renderer's own escaper, so
+the expected text is not a second hand-rolled implementation of it.
+
+| # | Case | Input / state | Expected |
+| --- | --- | --- | --- |
+| R1 | an assistant reply reaches the list, and the panel marks it as the assistant's | `contextBlocks(requestBody())`, then `renderContextPanel({ lane: lane(), item: item() })` | exactly one block has `kind === 'assistant'`; its `text === 'the answer'`; the markup contains exactly one `<details class="ctx-block" data-kind="assistant"`, and the `<pre class="ctx-text">` inside that block holds `the answer` — the criterion names `assistant` as one of five kinds, and neither dropping the role from `ROLE_KINDS` nor dropping `case 'text'` for it may pass |
+| R2 | an expanded block shows the exact full text, not the one line it collapsed to | a body from `requestBody({ messages: [{ role: 'user', content: [{ tool_use_id: 'toolu_01', type: 'tool_result', content: LONG }] }] })` where ``const LONG = '<line of output>\n'.repeat(40)``, rendered with `renderContextPanel({ lane: lane(), item: item({ body }) })` | collect `[...html.matchAll(/<pre class="ctx-text">([\s\S]*?)<\/pre>/g)]`; assert one per block of `contextBlocks(body)`, and for every index `i` the captured group equals `esc(blocks[i].text)` — byte for byte, not a substring test. Guard the case against going vacuous: assert first that the tool-result block's `text.length > PREVIEW_CHARS` and that its `preview !== its text`. `LONG` carries newlines and `<`/`>` so a preview substitution (whitespace collapsed, cut, ellipsis) and an unescaped print both fail here |
+| R3 | every block expands to its own text, in the order the list shows them | `renderContextPanel({ lane: lane(), item: item() })` with the default factory | the same `<pre>` extraction, compared position by position against `esc(block.text)` for all twelve blocks — this is R2's rule applied to every kind at once, so a renderer that prints the right text for one kind and the label for another is caught |
+| R4 | the main lane asks for the main session's own traffic | `laneContentQuery({ key: 'main', kind: 'main', spanId: null, agent: null })` | `assert.deepEqual(…, { main: '1' })` — exactly that one key |
+| R5 | an agent lane asks for its own span, never for the main session | `laneContentQuery({ key: 'agent:sp-a:probe', kind: 'agent', spanId: 'sp-a', agent: 'probe' })` | `assert.deepEqual(…, { span: 'sp-a' })` — the span wins over the name, and the object carries no `main` key and nothing else, so an unfiltered or main-filtered query fails the case |
+| R6 | an agent lane with no span falls back to its name | `laneContentQuery({ key: 'agent::probe', kind: 'agent', spanId: null, agent: 'probe' })` | `assert.deepEqual(…, { agent: 'probe' })` |
+| R7 | a lane that identifies nothing gets no query at all, so no lane ever shows the main session's context by accident | `laneContentQuery({ key: 'agent::', kind: 'agent', spanId: null, agent: null })`, `laneContentQuery(null)`, `laneContentQuery(undefined)` | `null` for each — an empty filter would send an unfiltered request, which the collector answers with main traffic |
+
+`lane()` in R4 is the file's own factory (`lane()` already is the main lane);
+R5-R7 pass literals, since a lane's `kind`/`spanId`/`agent` triple is the whole
+input and spelling it out is what makes the case readable.
+
+#### Rewritten cases in `tools/argus-ui/test/page.test.mjs`
+
+| # | Case | Input / state | Expected |
+| --- | --- | --- | --- |
+| R8 | **replaces** the case at line 404, `'the panel asks the collector for the nearest request at the cursor's moment, for that lane only'`, keeping that name | `functionSource(appJs, 'loadLaneContext')` | matches `/\/api\/content\/at/` and `/resolveCursor\(/` as before, and now matches `/laneContentQuery\(/` — the lane's filter must come from the function R4-R7 test. The three bare `\bmain\b` / `\bspan\b` / `\bagent\b` assertions are **deleted**: prose satisfied them, and the mapping they claimed to check is now pinned by value in `context.test.mjs` |
+| R9 | **extends** the case at line 349, `'app.js takes the context panel from its module'` | the whole `app.js` source | keeps the `renderContextPanel` assertion and adds `assert.match(appJs, /import\s*\{[^}]*\blaneContentQuery\b[^}]*\}\s*from\s*['"]\.\/context\.js['"]/, …)`, so the function the unit cases test is the one the page runs |
+
+Every other case in `page.test.mjs` stays exactly as it is, the staleness-guard
+case at line 414 included — the guards, the `await` and the
+`state.laneContext =` write all keep their relative order under this change.
+
+#### What is deliberately left untested, and why
+
+- **That `loadLaneContext` actually puts the returned filter on the wire.** It
+  spreads `...filter` into an `api()` call behind `fetch`; pinning the spread
+  would mean a fake `window`, which this project has ruled out. R8 pins that the
+  filter comes from `laneContentQuery`, R4-R7 pin what that function returns,
+  and the route itself is covered by `tools/argus`' own suite.
+- **The reviewer's four observations.** None is a finding; no case here may pin
+  behaviour for the refetch cadence, for what happens to expanded blocks when
+  the record changes, or for the wording of an existing case name.
+- **Everything increment 6 owns** — the tools an agent used up to the moment.
+- **CSS, the click and the drag in a browser.** Unchanged this round, and
+  unchanged in the code.
+
+#### What counts as done
+
+```
+npm --prefix tools/argus-ui test
+```
+
+That one command, from the repository root, is the whole list. Only files under
+`tools/argus-ui` change, the run costs seconds and needs no install; `tools/argus`'
+suite and `./test.sh` stay off the list, as in the earlier rounds.
+
+#### What is already red
+
+I ran nothing this round — not the list, not a baseline. The reviewer's four
+sandbox runs already establish that `HEAD` is green at 154 cases, and no run of
+mine would add a fact to that.
+
+From reading, two cases are red **during** this round by design, and both are
+fixed by the edits named above rather than by anything else:
+
+- `context.test.mjs`'s kind-sequence case (line 51) goes red the moment the
+  factory gains the assistant text part, and green again with its expected array
+  updated. Both edits belong to the same change.
+- `page.test.mjs:404` goes red the moment the filter chain leaves
+  `loadLaneContext`, because `\bmain\b`, `\bspan\b` and `\bagent\b` disappear
+  from that function together with its comment. R8 is its replacement.
+
+Nothing else turns red: `laneContentQuery` is a new export that no existing case
+names, the import line stays a single `import { … } from './context.js'` and so
+still matches the case at line 349, `independence.test.mjs` already covers
+`public/context.js` and the new function imports nothing, and
+`renderContextPanel`, `contextBlocks`, `renderLanePanel`, `scrubTo`, `refresh`
+and the delegated listeners are untouched.
