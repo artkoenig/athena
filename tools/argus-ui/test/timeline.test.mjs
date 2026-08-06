@@ -663,3 +663,87 @@ test('the merged index is what the density reads', () => {
   const toolMarksOnLane = agent.activity.filter((mark) => mark.kind === 'tool');
   assert.equal(toolMarksOnLane.length, 1);
 });
+
+// Criterion 5, round 2 — a mark sits where its moment sits, not merely somewhere on the track.
+
+test('a mark sits at the fraction of the track its moment sits at in the window', () => {
+  const window = { startMs: 1000, endMs: 5000 };
+  const marks = activityMarks(
+    [
+      { timeMs: 1000, kind: 'request' },
+      { timeMs: 2000, kind: 'request' },
+      { timeMs: 3000, kind: 'request' },
+      { timeMs: 4000, kind: 'request' },
+    ],
+    window,
+  );
+  assert.deepEqual(
+    marks.map((mark) => mark.leftPct),
+    [0, 25, 50, 75],
+    'each mark must sit at the exact quarter of the window its moment falls on, not merely somewhere on the track',
+  );
+});
+
+test('a later moment always sits strictly right of an earlier one', () => {
+  const window = { startMs: 1000, endMs: 5000 };
+  const times = [1000, 1500, 2200, 3000, 3700, 4900];
+  const marks = activityMarks(
+    times.map((timeMs) => ({ timeMs, kind: 'tool' })),
+    window,
+  );
+  assert.equal(marks.length, times.length, 'six distinct moments must not collapse into fewer marks');
+  for (let i = 0; i + 1 < marks.length; i++) {
+    assert.ok(
+      marks[i + 1].leftPct > marks[i].leftPct,
+      'a later moment must sit strictly to the right of an earlier one, never at the same spot or to its left',
+    );
+  }
+  const bucketWidthPct = 100 / ACTIVITY_BUCKETS;
+  marks.forEach((mark, i) => {
+    const ideal = ((times[i] - window.startMs) / (window.endMs - window.startMs)) * 100;
+    const diff = ideal - mark.leftPct;
+    assert.ok(diff >= 0, `the mark for ${times[i]} must never sit to the right of the moment it represents`);
+    assert.ok(
+      diff <= bucketWidthPct + 1e-6,
+      `the mark for ${times[i]} must sit at most one bucket width left of its ideal position`,
+    );
+  });
+});
+
+test('the rendered marks carry the positions their moments earned', () => {
+  const content = [record({ seq: 1, timeMs: 2000, bodyLength: 10 }), record({ seq: 2, timeMs: 4000, bodyLength: 20 })];
+  const view = buildDensity(buildLanes({ session: session(), content }), {
+    content,
+    tools: [toolMark({ seq: 9, timeMs: 3000, spanId: null })],
+  });
+  const html = renderTimeline(view);
+  const marks = [
+    ...html.matchAll(/<span class="lane-mark" data-kind="([a-z]+)"[\s\S]*?style="left:([0-9.]+)%"/g),
+  ].map((match) => [match[1], match[2]]);
+  assert.deepEqual(
+    marks,
+    [
+      ['request', '25.000'],
+      ['tool', '50.000'],
+      ['request', '75.000'],
+    ],
+    'each mark in the rendered markup must sit at the position its own moment earned, in document order',
+  );
+  assert.doesNotMatch(html, /NaN/);
+});
+
+test('a mark keeps following its moment when the window does not start at zero', () => {
+  const window = { startMs: 1_700_000_000_000, endMs: 1_700_000_008_000 };
+  const marks = activityMarks(
+    [
+      { timeMs: 1_700_000_000_000, kind: 'request' },
+      { timeMs: 1_700_000_002_000, kind: 'request' },
+    ],
+    window,
+  );
+  assert.deepEqual(
+    marks.map((mark) => mark.leftPct),
+    [0, 25],
+    'a mark\'s position is measured from the window start, not from the epoch',
+  );
+});

@@ -671,3 +671,112 @@ snippets for `loadTimeline` were concrete enough that every case in the test
 plan mapped to one exact assertion with no guessed expectation, and the
 "helper change first" instruction named its own regex verbatim, so no
 reading choice was needed there either.
+
+## Increment 3 — Round 2
+
+The reviewer's reproduction spec for this round is the finding at
+`tools/argus-ui/public/timeline.js:203–225`, `activityMarks`: nothing in the
+suite constrains a mark's `leftPct` to the actual fraction of the window its
+`timeMs` falls on, so replacing the bucket computation with the constant `0`
+— every mark painting at the left edge regardless of when it happened — still
+leaves `npm --prefix tools/argus-ui test` green at 73/73. Wrote exactly the
+four cases the Round 2 test plan of `researcher.md` names for that spec, and
+nothing else, all appended to `tools/argus-ui/test/timeline.test.mjs` under a
+new `// Criterion 5, round 2 — a mark sits where its moment sits, not merely
+somewhere on the track.` banner, after the file's last existing case (`the
+merged index is what the density reads`). No production file was opened —
+every input and expected value came from the plan's own "Numbers I verified"
+section; I did not re-derive or second-guess any of them. No import-list or
+fixture change was needed: the file already imports `activityMarks`,
+`ACTIVITY_BUCKETS`, `buildLanes`, `buildDensity`, `renderTimeline` and the
+`session`/`record`/`toolMark` factories the four cases use.
+
+| # | Case | Test name | Expected |
+| --- | --- | --- | --- |
+| 1 | a mark sits at the fraction of the track its moment sits at in the window | `'a mark sits at the fraction of the track its moment sits at in the window'` | four marks over `{startMs:1000,endMs:5000}` at `timeMs` 1000/2000/3000/4000 have `leftPct` exactly `[0, 25, 50, 75]` |
+| 2 | a later moment always sits strictly right of an earlier one | `'a later moment always sits strictly right of an earlier one'` | six `'tool'` items at 1000/1500/2200/3000/3700/4900 come back as six marks, each strictly increasing in `leftPct`, and each within one bucket width (`100/ACTIVITY_BUCKETS`) of its ideal fraction, never past it |
+| 3 | the rendered marks carry the positions their moments earned | `'the rendered marks carry the positions their moments earned'` | `renderTimeline` of a two-request-plus-one-tool-mark view produces, in document order, `[['request','25.000'],['tool','50.000'],['request','75.000']]` read off `style="left:…%"`, and no `NaN` anywhere in the markup |
+| 4 | a mark keeps following its moment when the window does not start at zero | `'a mark keeps following its moment when the window does not start at zero'` | two epoch-scale (`~1.7e12`) `timeMs` values 0 ms and 2000 ms into an 8000 ms window yield `leftPct` exactly `[0, 25]` |
+
+### Proving the cases exercise the finding, without touching production code
+
+Running the real suite shows all four passing on the first try, exactly as
+the plan predicts (its own "What is already red" section: "they are expected
+to pass on the first run — `activityMarks` already computes what they
+assert"). This round's finding was a missing constraint, not a defect, so
+"confirm each fails because the behaviour is missing" does not apply the
+usual way — there is no missing behaviour to be red about. What I could and
+did prove instead is that the four cases actually discriminate the
+regression the reviewer named, by reproducing it *outside* the tracked
+repository (production code is off limits to me, even temporarily): I copied
+`tools/argus-ui/public/timeline.js`, `public/format.js` and this round's
+`test/timeline.test.mjs` into a scratch directory, applied the reviewer's
+own mutation to the copy (`const bucket = clamp(Math.floor(...), 0,
+ACTIVITY_BUCKETS - 1);` → `const bucket = 0;`, verbatim as the finding
+describes it), and ran `node --test test/timeline.test.mjs` there. Result:
+51 tests, 47 pass, 4 fail — exactly the four new cases and no others:
+
+```
+not ok 48 - a mark sits at the fraction of the track its moment sits at in the window
+not ok 49 - a later moment always sits strictly right of an earlier one
+not ok 50 - the rendered marks carry the positions their moments earned
+not ok 51 - a mark keeps following its moment when the window does not start at zero
+```
+
+Case 50's failure detail against the mutated copy, showing the exact
+regression the finding names (every mark collapsing to the left edge):
+
+```
+each mark in the rendered markup must sit at the position its own moment earned, in document order
++ actual - expected
+  [
+    [ 'request', + '0.000' - '25.000' ],
+    [ 'tool',    + '0.000' - '50.000' ],
+-   [ 'request', '75.000' ]
+  ]
+```
+
+The scratch copy was then deleted; nothing under `tools/argus-ui` was ever
+edited except the one test file this round names.
+
+### Commands run
+
+- `node --test tools/argus-ui/test/timeline.test.mjs` (real, unmutated repo
+  copy) — 51 tests, 51 pass, 0 fail, exit 0. The four new cases pass because
+  `activityMarks` and `renderTimeline` already compute what they assert, per
+  the plan.
+- `node --test test/timeline.test.mjs` against a scratch copy of
+  `public/timeline.js`, `public/format.js` and this round's test file, with
+  the reviewer's exact `bucket = 0` mutation applied to the scratch copy only
+  — 51 tests, 47 pass, 4 fail, exit 1. The four failures are exactly this
+  round's four new cases, quoted above.
+
+Not run this round: `npm --prefix tools/argus-ui test` and `./test.sh` — the
+plan reserves both for the implementer, and this round touches only
+`test/timeline.test.mjs`.
+
+### Deliberately not written
+
+Matches the round's own list exactly, nothing added or dropped:
+
+- Where a mark ends up in pixels, and whether it visually overlaps its bar —
+  needs a DOM and therefore a dependency; case 3 reads the `style` attribute
+  out of the markup string instead, the most this project can observe.
+- Sub-bucket precision — 120 buckets over the window is the chosen
+  resolution; case 2 asserts a one-bucket band rather than an equality for
+  exactly this reason.
+- Count, kind, bucket bounding, the 500-record ceiling, curve scaling,
+  geometry, `mergeToolMarks`, escaping and the composition of curve and
+  bar — already pinned by cases the reviewer walked and found sound; they
+  are re-run by the command list above and need nothing new.
+- `app.js` wiring, `styles.css`, `tools/argus`, the landing view, scrubbing,
+  live mode and per-lane selection — untouched by this round, or not this
+  increment's.
+
+### Gaps and conflicts found in the plan
+
+None. The plan's "Numbers I verified" section gave exact inputs and exact
+expected `leftPct` values (including the deliberate non-equality tolerance
+for case 2, and the exact regex for reading marks out of rendered markup for
+case 3), so every case mapped to one concrete assertion with no guessed
+expectation.
