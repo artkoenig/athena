@@ -6,7 +6,7 @@ of `todo`, `done`, `blocked`, `dropped`.
 
 ## content-pipeline — Content flows from the CLI through the collector to the JSON API
 
-**Status:** todo
+**Status:** done
 
 **Delivers:** A recording made through `argus env` carries conversation
 content — user prompts, tool details, tool content, and the API
@@ -31,10 +31,12 @@ retrievable by time and by agent from the API alone.
   (decision: no such recordings exist). This binds every later increment as
   well; it is recorded here.
 
-**Open questions this increment must answer** (findings for the increments
-after it): the exact flag names for the body events and whether the current
-CLI emits them at all; what agent attribution (`agent.name` and related)
-actually arrives on subagent activity and on request bodies.
+**Outcome:** Accepted after one correction round. Both open questions are
+answered by measurement: the body events are emittable and now flow end to
+end, and subagent attribution arrives as `query_source` (grammar
+`agent:<source>:<name>`) with concurrent same-type agents distinguishable
+only by span. The findings are in `researcher.md` (Increment 1) and
+`reviewer.md`; the increments below are re-cut against them.
 
 ## timeline-landing — The timeline is the central session view, with one lane per agent
 
@@ -43,7 +45,8 @@ actually arrives on subagent activity and on request bodies.
 **Delivers:** Opening a session in the argus UI lands on a timeline view that
 draws one lane for the main session and one per subagent, each lane spanning
 that agent's lifetime. The previous technical views survive, reachable from
-the timeline and subordinate to it.
+the timeline and subordinate to it. Along the way the UI stops advising a
+flag that `argus env` now sets, a falsehood content-pipeline introduced.
 
 **Acceptance criteria:**
 - Opening a session in the argus UI lands on the timeline view. The previous
@@ -51,10 +54,21 @@ the timeline and subordinate to it.
   it, subordinate to the timeline — not the other way round.
 - The timeline draws one lane for the main session and one lane per subagent,
   each agent lane spanning that agent's lifetime, so "which agents are
-  running at this moment" is answered by looking at any vertical slice. If
-  the content-pipeline increment found subagent attribution incomplete, the
-  lanes show what is attributable and the gap is a reported finding, not
-  papered over.
+  running at this moment" is answered by looking at any vertical slice.
+- Two subagents of the same type running concurrently get two lanes, never
+  one merged lane. (Content-pipeline measured that such agents share one
+  `query_source` and are told apart only by span, so a lane keyed on the
+  agent name alone silently merges them.)
+- The UI no longer advises setting `OTEL_LOG_TOOL_DETAILS=1` (or any other
+  flag `argus env` now sets by default) — that advice became false when the
+  flags became the default.
+
+**Open question this increment must answer** (a finding for the increments
+after it): what marks a lane's start and end in the data the collector
+serves. Content-pipeline measured a `claude_code.subagent_completed` event as
+the natural end marker for a subagent, but the collector does not know that
+event today; whether lane lifetimes come from it or from the records already
+served is the researcher's call, reported as a finding.
 
 ## lane-density — Activity and context growth are visible on the lanes themselves
 

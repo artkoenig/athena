@@ -57,3 +57,61 @@ events (verify against the CLI's monitoring documentation) and what agent
 attribution actually arrives for subagent activity and request bodies. Their
 answers are findings the later increments consume; if either comes back
 short, the backlog gets re-cut, not silently absorbed.
+
+## After increment 1
+
+**Closed.** content-pipeline is `done` — the review accepted it on round 1
+after one correction round (a test-coverage gap on `api_response_body`,
+closed with test cases only, no production change).
+
+**What the increment answered, and what that did to the cut.** The two
+questions the whole plan hinged on came back answered by measurement, not
+reading:
+
+1. *The body events are emittable* (`OTEL_LOG_RAW_API_BODIES=1`), so the
+   "if not emittable, build from the best the flags provide" hedge is dead
+   everywhere downstream. context-inspector keeps its full criterion — the
+   nearest request body exists and is served whole.
+2. *Attribution is by `query_source`, not `agent.name`*, and two concurrent
+   subagents of the same type share one `query_source`, told apart only by
+   span. That retires timeline-landing's old hedge ("if attribution is
+   incomplete, show what is attributable") — attribution is complete enough
+   for lanes — and replaces it with a sharper criterion the measurement
+   makes necessary: two concurrent same-type agents get two lanes, never one
+   merged lane. Without that criterion, a lane keyed on the agent name would
+   pass review and be wrong.
+
+**One criterion added.** timeline-landing gains: the UI no longer advises
+setting `OTEL_LOG_TOOL_DETAILS=1`. Content-pipeline made that advice false
+(the flag is now on by default), the reviewer recorded it as blast radius and
+deliberately left it for a UI increment, and timeline-landing is the first
+increment that owns the UI. Leaving a known falsehood on screen through the
+rest of the run would be churn later for silence now.
+
+**One open question moved onto timeline-landing.** The issue never said what
+bounds a lane's lifetime. Content-pipeline surfaced a candidate — a
+`claude_code.subagent_completed` end-marker event the collector does not read
+today — but whether lanes are bounded by it or by the records already served
+is a code-facts question I cannot settle, so it is written into
+timeline-landing for the researcher to answer and report.
+
+**What I deliberately did not change.** The timeline-landing / lane-density
+seam stays, though its original reason weakened: the data question behind
+lane-density ("what is context size computed from") now has a measured answer
+(per-request `body_length` over time, servable from the content metadata
+index). The seam survives on size alone — timeline-landing already carries
+the navigation rework plus lane derivation, likely across both packages, and
+folding the density rendering in would make one increment too large to
+review. scrub-live, context-inspector and tool-usage stand as cut; nothing
+the increment showed touches their seams, and tool-usage got quiet good news
+(tool calls arrive with `tool_input` under the now-default flags).
+
+**What stays out.** The reviewer's remaining blast-radius notes — span-carried
+tool content is unbudgeted and unstripped, `/api/events?search=` now walks
+the bodies, and the 32 MB ingest cap versus the raised content limit — are
+recorded, not scheduled: none violates an issue criterion and none has a
+demonstrated failure. If a later increment trips over one of them, it enters
+the backlog then, with that increment as its reason.
+
+Budget: 1 of at most 8 increments spent; five remain planned, so the run fits
+with room to split once more if a lane increment demands it.
