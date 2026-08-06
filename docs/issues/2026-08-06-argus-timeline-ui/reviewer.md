@@ -1012,3 +1012,118 @@ I raise neither, as in round 1. Handoff files are outside what I judge.
   tool marks at that cutoff. Degradation at scale within a fixed retention
   window, not a wrong drawing of what is retained; the content limit predates
   increment 3 and the event limit is the server's own maximum.
+
+## Increment 4
+
+**Status: one finding requires a correction.** The scrub and the live mode are
+built and behave correctly where I can read them, but nothing pins the one wire
+that makes the criterion's first half work: delete the branch that routes the
+slider's `input` event to `scrubTo`, and the suite still passes 103/103 while
+the timeline no longer scrubs.
+
+### Commands run
+
+- `npm --prefix tools/argus-ui test` — 103 cases, 103 pass, 0 fail, 0 skipped,
+  0 todo, exit 0. Nothing excluded. This is the only command my prompt lists;
+  `tools/argus`' suite and `./test.sh` were not run, by that list.
+- The same command once more in a throwaway `git worktree` outside the checkout,
+  against a deliberately broken copy, to verify finding 1 below. The worktree was
+  removed; the checkout under review was never modified.
+
+### Finding 1 — no test fails when the scrub control stops scrubbing
+
+Criterion violated: "The timeline can be scrubbed backward and forward to any
+point of the recorded session" — the behaviour is implemented but unverified, so
+it is one edit away from being lost silently.
+
+Reproduction: in `tools/argus-ui/public/app.js:1113-1118`, delete the four lines
+
+```js
+    if (event.target.id === 'timeline-scrub') {
+      scrubTo(event.target);
+      return;
+    }
+```
+
+from the `input` listener in `wireEvents`, and run
+`npm --prefix tools/argus-ui test`: 103 cases, 103 pass, exit 0 (verified in a
+sandbox worktree). With those lines gone, dragging or arrow-keying the slider
+changes nothing in the page: `state.cursor` stays live, the cursor line and the
+dimmed region stay at 100%, and the next refresh re-renders the thumb back onto
+the head. The nearest existing case, "a drag moves the cursor without
+re-rendering the page under the pointer" (`test/page.test.mjs:260`), reads
+`scrubTo`'s own body and passes with `scrubTo` never called by anything.
+
+The same hole covers the drag guard: nothing asserts that
+`scrubbing` is ever set to `true`. Delete the `pointerdown` listener at
+`app.js:1103-1105` and the suite is green again, while the `scrubbing` check
+inside `scheduleRefresh` — which the case at `test/page.test.mjs:290` does pin —
+becomes dead code and a refresh mid-drag replaces the slider under the pointer.
+
+The asymmetry makes the gap plain: the return-to-live half of the criterion *is*
+pinned at the page level ("a control returns the page to live",
+`test/page.test.mjs:279`, asserts `wireEvents` acts on `data-cursor-live` and
+writes `liveCursor()`), and the scrub half has no equivalent. `functionSource`
+already extracts the whole of `wireEvents`, including both listeners, so a case
+in the file's established style reaches them.
+
+### Criterion — the timeline scrubs, and a live mode follows the head
+
+Met in the code, read from the diff against `main`.
+
+- **Scrub over the whole recorded session.** `renderTimeline`
+  (`tools/argus-ui/public/timeline.js:372`) emits
+  `<input type="range" id="timeline-scrub" min="{view.startMs}"
+  max="{view.endMs}" step="1">`, whose bounds are the window `buildLanes`
+  derived from `session.firstSeenMs`/`lastSeenMs` and every content record — the
+  same window the lanes are drawn in — so every millisecond of the session is
+  addressable, backward and forward. Pinned by "the scrub control spans the whole
+  recorded session" (`test/timeline.test.mjs`).
+- **The cursor is visible and consistent.** The thumb, the `.timeline-cursor-line`,
+  the dimmed `.timeline-ahead` region and the clock readout all come from a single
+  `resolveCursor` call per render (`timeline.js:428`) and a single one per drag
+  (`app.js` `paintCursor`), so they cannot drift apart. Pinned at 37.5% and at the
+  head by two rendering cases.
+- **Live follows the newest data.** `liveCursor()` carries no time, and
+  `resolveCursor` resolves live to the window's current `endMs` on every render;
+  the SSE `ingest` handler schedules the refresh that re-renders. Pinned by "live
+  mode follows the head as new data arrives".
+- **Scrubbing leaves live, including on the head.** `scrubCursor` always returns
+  `live: false`, clamped into the window; pinned, head case included.
+- **A control returns to live.** The `Live` button carries `data-cursor-live` and
+  `aria-pressed`, and the delegated click handler writes `liveCursor()` and
+  re-renders (`app.js:1057`).
+- **Position arithmetic is safe at the edges.** A zero-length window resolves to
+  `leftPct: 100` rather than dividing by zero; out-of-window and `NaN` times clamp
+  to an end; `resolveCursor` leaves its argument untouched. All four pinned, and
+  two rendering cases assert the markup contains no `NaN`.
+
+### Beyond the criteria
+
+- **Increments 1–3 still hold.** `renderTimeline`'s new second parameter is
+  optional and `cursor?.live !== false` resolves live, so the increment 2/3 call
+  shape `renderTimeline(view)` renders unchanged — pinned by "the timeline still
+  renders from a bare view with no cursor given". The one edited older case now
+  matches `.lane-bar` styles specifically instead of every `style="` in the
+  document, which the new cursor attributes would otherwise have swept in; that
+  tightens it rather than weakening it, and it still forbids `NaN` anywhere.
+- **Nothing else reads the changed markup.** `.timeline-lanes` gained a
+  `position: relative` and a first child that carries no `data-lane`, and no
+  selector or test counts children of `.timeline-lanes`. The cursor overlay's
+  `left`/`right` use `--label-w`/`--meta-w`, both declared on `.timeline`
+  (`styles.css:796`, and the narrow-screen override at `:1212`), which the overlay
+  inherits — so it spans exactly the lane track column at both widths, and
+  `pointer-events: none` keeps it off future lane clicks.
+- **No document made stale.** `tools/argus-ui/README.md` gained three lines
+  describing the cursor and the Live control, matching what ships; no other file
+  in the repository describes the timeline's controls.
+- **No scope beyond the criterion.** The diff adds the cursor, the control, their
+  wiring and their styling, and touches nothing belonging to the later increments'
+  context and tool views.
+- **Observation, not a finding — the in-flight refresh window.** `scrubbing`
+  defers only refreshes that have not started; a `refresh()` already awaiting the
+  collector when the pointer goes down still calls `renderDetail()` and replaces
+  the slider mid-drag, ending that drag (the cursor value already scrubbed to
+  survives, and a second grab continues). Browser-only behaviour I cannot
+  reproduce here, and the criterion stays reachable, so it is on the record
+  without a reproduction.
