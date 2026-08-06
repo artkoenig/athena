@@ -24,17 +24,40 @@ for what belongs to it alone — the skills it preloads, under
 Anything else under `agents/` is in the tree and unreachable, which the
 self-check reports as a defect.
 
+## What every agent shares
+
+What holds for every agent at run time — how it takes its brief, how it spends
+its tools, how it reports a run, how it writes and commits its handoff, and the
+check mode — lives in `skills/agent-brief/SKILL.md`, and every agent page names
+it in `skills:` so it is injected at startup. Nothing an agent needs while it
+works may live on this page instead: a plugin ships agents, skills and hooks,
+not `.claude/rules/`, so this page reaches only sessions running inside this
+repository and never an agent in a project that installed uroboros. This page
+is for whoever writes the agents; the shared brief is for the agents.
+
+So an agent page carries its role and the boundaries of that role alone, and
+restates nothing the shared brief already says. A rule that stands in both
+drifts.
+
+The one exception opens every page: the line that tells the agent to report the
+shared brief as missing and stop. A skill that failed to load cannot announce
+its own absence, and Claude Code skips an unresolved `skills:` entry with
+nothing but a line in the debug log — so without that opener an agent runs on
+half its rules and nobody hears about it.
+
 ## What a page has to carry
 
-- **Frontmatter**: `name`, `description`, `tools`, `color`. The `description`
-  is what a caller reads while deciding — say what the agent does, when to
-  dispatch it, and what not to use it for. It is read far more often than the
-  body. `model` is left out, so the agent runs on the session's model; name a
-  tier only for an agent whose work is mechanical enough that a smaller one
-  cannot get it wrong, and say on its page why.
-- **The body** is the agent's whole brief: how it works, its boundaries, and
-  the shape of its report. It has no other context — a caller's reasoning
-  never reaches it.
+- **Frontmatter**: `name`, `description`, `tools`, `skills`, `color`. The
+  `description` is what a caller reads while deciding — say what the agent
+  does, when to dispatch it, and what not to use it for. It is read far more
+  often than the body. `skills` carries `agent-brief` and whatever else that
+  agent alone preloads. `model` is left out, so the agent runs on the session's
+  model; name a tier only for an agent whose work is mechanical enough that a
+  smaller one cannot get it wrong, and say on its page why.
+- **The body** is what the shared brief does not already cover: the role, how
+  it works, the boundaries that belong to it alone, and the shape of its
+  report. Beyond the brief it has no context — a caller's reasoning never
+  reaches it.
 
 ## The page is the interface
 
@@ -46,11 +69,8 @@ implementation, a reviewer that sees only the diff and the intent. An omission
 here becomes a leak in every run.
 
 Give each agent the narrowest tool list that does its job; a read-only role
-gets no writing tools. Only its handoff is written to the issue file;
-give it nothing about the project beyond `docs/issues/`. An agent that needs
-the history runs `git log` itself.
-- **Paths are inferred, never passed:** The next agent — reviewer, or
-implementer — finds it itself under `docs/issues/`, by the `status:`/
-`branch:` scan the issue file describes, never through a handed
-path — except a reviewer, whose diff range already bounds what it may see,
-and which derives the intent from git instead.
+gets no writing tools. Give it nothing about the project beyond the issue
+directory under `docs/issues/`, and hand it no path beyond that directory: the
+next agent finds what it needs there by the `status:`/`branch:` scan the issue
+file describes, and a reviewer derives the intent from git instead, its diff
+range already bounding what it may see.

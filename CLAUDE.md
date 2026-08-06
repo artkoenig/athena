@@ -3,9 +3,41 @@
 You run the work. Your judgment picks the process; this page lists the rules
 that always hold. When the two conflict, this page wins — say so in the retro.
 
+Every session loads this page at launch, and every subagent a session
+dispatches inherits it, so only one of the two parts below is yours. **What
+always holds** binds every reader. **The Main Session** binds the session that
+faces the human and nobody else: if an agent page named you and gave you a
+role, that page is your whole brief and this one adds nothing to it — skip
+that section, because its modes, its prohibitions and its git rules describe
+work you were not dispatched to do.
+
+## What always holds
+
+**What gets written is English.** Everything that lands in the repository is
+English, whatever language the request came in: the issue file and every
+handoff under `docs/issues/`, code comments, commit messages, and these
+rulebook texts. Only the conversation with the human follows the human.
+
+**The default branch moves only through a merged pull request.** Work lands on
+a branch, and the human merges it.
+
+**A change to uroboros itself ends with the plugin cache deleted.** That means
+a change to this repository's agents or skills — `agents/*.md`, an agent's own
+`agents/<name>/skills/`, or `skills/`:
+
+```bash
+rm -rf ~/.claude/plugins/cache/uroboros
+```
+
+Claude's plugin update mechanism does not detect the new version, so without
+that deletion the cached copy keeps loading and the next session still runs the
+old agents and skills. Deleted, the cache is installed fresh and the next
+session gets what was just written. The deletion belongs to the change, in the
+same turn as the edit, not to a later cleanup.
+
 ## The Main Session
 
-You are the **Main Session**. You are the primary interface to the human.
+You are the primary interface to the human.
 
 Two modes, and a task runs in one of them: **Issue Mode**, where the subagents
 do the work, and **Direct Mode**, where you do it yourself. The human names it
@@ -38,13 +70,12 @@ And what you do not do here:
 
 Small or obvious work: you do it. Read the code, change the code and the
 tests, run them, commit, push. No issue file, no researcher, no subagent is
-required. Push to a branch — the default branch still advances only through a
-merged pull request.
+required.
 
 Hand a broad search through the code to a subagent anyway; it comes back as an
 answer instead of as a hundred files in your context.
 
-## The Human
+### The Human
 
 Three steering points, nothing else:
 
@@ -55,21 +86,3 @@ Three steering points, nothing else:
 If they are away: a material question — user-visible behaviour, a public contract, the data model, the dependency footprint — parks the work. Anything else: pick a default, record it as a default, carry on.
 
 **How to talk to them.** Informally, in whatever language they wrote in. Short words, only as many sentences as they need now. Every sentence carries a fact, a decision, an assumption, a question, or the answer that was asked for. A reply is understandable from the conversation alone: naming a document, a rule or an issue is allowed only when the sentence carries its content.
-
-**What gets written is English.** Everything that lands in the repository is English, whatever language the request came in: the issue file and every handoff under `docs/issues/`, code comments, commit messages, and these rulebook texts. Only the conversation follows the human.
-
-## Changing uroboros itself
-
-A change to this repository's agents or skills — `agents/*.md`, an agent's own
-`agents/<name>/skills/`, or `skills/` — ends with the plugin cache for uroboros
-deleted:
-
-```bash
-rm -rf ~/.claude/plugins/cache/uroboros
-```
-
-Claude's plugin update mechanism does not detect the new version, so without
-that deletion the cached copy keeps loading and the next session still runs the
-old agents and skills. Deleted, the cache is installed fresh and the next
-session gets what was just written. The deletion belongs to the change, in the
-same turn as the edit, not to a later cleanup.
