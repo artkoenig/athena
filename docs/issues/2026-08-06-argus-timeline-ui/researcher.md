@@ -577,3 +577,182 @@ case that is red before this change; every case listed above is new or an
 addition to a file whose existing cases this change does not touch, with one
 exception to watch: `test/server.test.mjs`'s `/api/config` case asserts specific
 keys of the env block and adding keys does not break it.
+
+## Round 1
+
+Correction round for the reviewer's single finding (`reviewer.md`, Round 0,
+Finding 1). One test case is unsatisfiable and turns `bash test.sh` red. The
+whole correction is in one test file; no production file changes.
+
+### What is wrong, and what the fix is
+
+`tools/argus/test/server.test.mjs:404-421` asserts
+
+```js
+JSON.stringify(events.items[0]).includes(bodyText)
+```
+
+with `bodyText = JSON.stringify({ system: 'hi', messages: [] })`, i.e. the
+literal `{"system":"hi","messages":[]}`. In the serialized item the attribute
+appears as a JSON *string*, every inner quote escaped —
+`"body":"{\"system\":\"hi\",\"messages\":[]}"` — so the unescaped literal is
+never a substring. The assertion cannot hold for any body containing a `"`,
+which every Messages API body does. The case fails at line 416 with
+`the body attribute must survive the round trip, untruncated`.
+
+The behaviour it means to check is already correct, and I confirmed that by
+reading rather than by running:
+
+- `#applyLog` touches `attrs.body` only to add `contentBytesOf(log)` to the
+  budget (`tools/argus/src/store.mjs:495`); nothing parses, cuts or rewrites
+  the attribute at ingest.
+- `/api/events` spreads the stored record, so `attrs` reaches the client
+  verbatim (`tools/argus/src/server.mjs:247-253`).
+- `describeEvent` reads `body_length` (falling back to `body.length`) for the
+  one-line summary only (`tools/argus/src/claude.mjs:253-260`).
+
+So the fix is to assert on the value instead of on the serialized haystack:
+`events.items[0].attrs.body` **equals** the ingested text. Equality also pins
+"untruncated", since a cut body differs in length. I add the oversized edge the
+reviewer offered, because the criterion's claim is precisely that a body far
+past the CLI's 61 440-unit default survives, and a 28-character fixture would
+never have caught a cut.
+
+Rejected alternatives:
+
+- **Escape the needle** (`JSON.stringify(bodyText).slice(1, -1)` as the
+  substring). It would pass, but it asserts a serialization detail and stays a
+  substring check: a body concatenated with something else would still pass.
+- **Change the collector** so the body round-trips unescaped. There is nothing
+  to change — the escaping is `JSON.stringify`'s, and the transport is correct.
+- **Delete the case.** It is the only automated check for acceptance criterion
+  2; dropping it would leave that criterion unverified.
+
+### Module map
+
+- `tools/argus/test/server.test.mjs` — the only file this round changes. Test
+  helpers it already carries:
+  - `bodyEventPayload(sessionId, bodyText, timeNano = T0)` (line 73) builds an
+    OTLP/JSON logs payload with one `claude_code.api_request_body` record whose
+    attributes are `session.id`, `query_source: 'repl_main_thread'`,
+    `model: 'claude-opus-5'`, `body: bodyText`, `body_length: bodyText.length`.
+  - `withServer(options, run)` (line 101) creates `new TelemetryStore()` with
+    default options and a server on port 0, and calls `run({ base, store })`.
+- `tools/argus/src/server.mjs` — `/api/events` accepts `session`, `event`,
+  `trace`, `search`, `errors`, `sinceSeq`, `limit` (default 200, cap 2000);
+  ingest bodies are capped at 32 MB (`MAX_BODY_BYTES`, line 17), so a
+  ~200 KB payload passes comfortably.
+- `tools/argus/src/store.mjs` — default `maxContentBytes` is 268 435 456
+  (line 56), so a 200 000-character body is nowhere near the eviction budget in
+  a default store.
+
+Read for context, not changed: `tools/argus/src/claude.mjs`,
+`tools/argus/src/store.mjs`, `tools/argus/src/server.mjs`.
+
+### Environment
+
+- Node ≥ 20.11, already installed. `tools/argus` has zero runtime dependencies
+  and no install step: `npm --prefix tools/argus test` runs without
+  `npm install` ever having run.
+- Whole suite: `bash test.sh` from the repository root — the repository suite,
+  the worktree suite, `tools/argus`, `tools/argus-ui`, `tools/log-parser`.
+- Single file, from the repository root:
+  `node --test tools/argus/test/server.test.mjs`.
+- There is no linter and no formatter in this repository. Nothing else is to be
+  installed or run.
+
+### Test plan
+
+Tests are needed, and this round's change *is* the test change: the test-author
+owns the whole correction and the implementer changes no production file. Note
+plainly, so nobody waits for it: the corrected case is expected to pass against
+the untouched collector on its first run. It is the repair of an unsatisfiable
+assertion, not a red-first case. If it does go red, that is a real defect in
+`tools/argus/src/` and belongs in the implementer's round — but I have read the
+path end to end and expect green.
+
+Nothing from Round 0's test plan is asked for again. The cases below are the
+whole of what this round asks for; every other case in the tree stays exactly as
+it is.
+
+#### What
+
+Acceptance criterion 2 ("the collector stores and serves what those events
+carry; content-bearing records are exposed over the JSON API like the existing
+signals") — two cases:
+
+1. **The round trip is exact.** Ingest one `claude_code.api_request_body`
+   record for session `s-body` with
+   `bodyText = JSON.stringify({ system: 'hi', messages: [] })`. Read
+   `/api/events?session=s-body&event=claude_code.api_request_body`. Expect
+   `items.length === 1` and `items[0].attrs.body === bodyText` — an equality,
+   not a substring check, so escaping in the serialized item cannot make it
+   fail and concatenated junk cannot make it pass.
+2. **An oversized body is not cut** (the edge: past the limit). Ingest a second
+   record for session `s-body-big` whose body is
+   `JSON.stringify({ system: 'x'.repeat(200000), messages: [] })` — well past
+   the CLI's 61 440-unit `CLAUDE_CODE_OTEL_CONTENT_MAX_LENGTH` default. Read
+   `/api/events?session=s-body-big&event=claude_code.api_request_body` and
+   expect `items[0].attrs.body.length === bodyText.length` and
+   `items[0].attrs.body === bodyText`.
+
+Left untested, deliberately: the empty-body and missing-`body` edges (no
+criterion asks what an attribute-less record does, and `describeEvent` already
+falls back to `body_length`), `claude_code.api_response_body` (same code path,
+same attribute, no separate behaviour), and everything Round 0 listed as
+untested — the interface, criteria 3 and 6, and criterion 9's flagless
+recordings, which decision 5 forbids pinning.
+
+#### How
+
+Both cases go in `tools/argus/test/server.test.mjs`, at the position of the
+existing case (lines 404-421), replacing it. Level: integration through a real
+HTTP server over a real `TelemetryStore` — no fakes, exactly like every other
+case in that file. Framework: `node:test` with `node:assert/strict`, both
+already imported at the top.
+
+Conventions in that file to follow:
+
+- One `test('<lowercase sentence naming the behaviour>', async () => { ... })`
+  per case, the body wrapped in `await withServer({}, async ({ base }) => { ... })`.
+- Ingest with
+  `await fetch(`${base}/v1/logs`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: bodyEventPayload(...) })`
+  and assert `ingest.status === 200` before querying, as the existing case and
+  the timeline case both do.
+- Read with
+  `await (await fetch(`${base}/api/events?...`)).json()`.
+- Every non-obvious assertion carries a third-argument message saying what must
+  hold, in the voice the file already uses ("ingest volume must not leak to
+  anonymous probes").
+- Reuse `bodyEventPayload`; do not add a helper. Give the two cases different
+  session ids and filter by `session=` so neither sees the other's record.
+- Keep the first case's name, which already states the behaviour:
+  `a claude_code.api_request_body record is exposed over /api/events with its body attribute intact`.
+  Name the second for its edge, e.g.
+  `an oversized request body comes back from /api/events uncut`.
+
+Command that runs just this file, from the repository root:
+
+```
+node --test tools/argus/test/server.test.mjs
+```
+
+#### What counts as done
+
+One command, from the repository root:
+
+```
+bash test.sh
+```
+
+That is the whole list. Acceptance criterion 10 names it, and the reviewer's
+finding is that it exits 1; nothing else is to be run, no single-file run
+belongs in the verdict, and there is no linter to invoke.
+
+#### What is already red
+
+I ran nothing, here or in Round 0, and took no baseline. From the reviewer's
+Round 0 run, one case is red — the case this round replaces — and the other 162
+`tools/argus` cases plus all four other suites were green with nothing skipped.
+I know of no other red case. The first run belongs to whoever runs it
+downstream.
