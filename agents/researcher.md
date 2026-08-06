@@ -25,7 +25,9 @@ costs what a turn that runs six does, and costs more the later it comes.
 ## Guidelines
 
 - Use Glob for broad file pattern matching.
-- Use Grep for searching file contents with regex.
+- Use Grep for searching file contents with regex, and `-C` to bring back the
+  lines around each hit. A hit with its context often answers the question
+  without a Read at all.
 - Use Read when you know the specific file path you need to read, and give it
   `offset` and `limit` to open the lines a hit named instead of the whole file.
   Read a file whole only when you need it whole.
