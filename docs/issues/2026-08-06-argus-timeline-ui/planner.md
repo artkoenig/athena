@@ -162,3 +162,70 @@ with that increment as its reason.
 
 Budget: 2 of at most 8 increments spent; four remain planned, so the run
 still fits with room to split twice if the detail-panel increments demand it.
+
+## After increment 3
+
+**Closed.** lane-density is `done` — the review accepted it on round 2, after
+two correction rounds each closing one finding. Round-zero's finding was a
+real wiring defect (a stale response could paint another session's tool calls
+onto the lanes and permanently jam the incremental fetch watermark), fixed in
+production code and pinned. Round 1's finding was a test gap only — nothing
+tied an activity mark's position to the moment its activity happened, so a
+constant position would have passed — closed with test cases, no production
+line changed.
+
+**What the increment measured, and what that does to the cut.** The
+researcher ran a live capture, and three facts came back that the remaining
+increments consume:
+
+1. *Tool-call attribution is settled.* `claude_code.tool_result` carries no
+   `query_source` and no `agent.name` — but its `spanId` is exactly the
+   owning lane's span. So "which tools has this agent used" has an exact
+   rule with no name matching: the tool events carrying that lane's span,
+   with everything else falling to main. tool-usage inherits a measured
+   answer where it might have carried an open question. That is a fact for
+   its researcher, not a criterion change, so the criterion stands as
+   written.
+2. *The tool payloads are server-side on purpose.* The page keeps only
+   `{seq, timeMs, spanId}` per tool event (the full `tool_input` would hold
+   megabytes in page state); the names and parameters tool-usage must show
+   remain on `/api/events`, fetchable on demand for one lane at one moment.
+   Again a fact for the researcher, not a re-cut.
+3. *One recorded unknown fell as a by-product:* `claude_code.subagent_completed`
+   arrives as a plain log record carrying the subagent's lane `spanId` —
+   increment 2 had left this deliberately unmeasured. I corrected the
+   sentence in timeline-landing's outcome so the backlog stops asserting an
+   unknown that is now known. It stays unused and unscheduled: no open
+   criterion needs an exact lane end. Quietly measured alongside it: real
+   token counts exist on `claude_code.api_request` (input and cache tokens,
+   with attribution) — available if a later need arises, needed by no open
+   criterion, recorded and not scheduled.
+
+**What I deliberately did not change.** All three open increments stand as
+cut, in their order, with their criteria untouched. scrub-live still precedes
+the two detail panels because "the chosen time" is what they select at. The
+context-inspector / tool-usage seam holds, and the increment confirmed it
+rather than disturbing it: the two panels now visibly ride different data
+paths (the inspector reads the stored request body the content index points
+at; tool-usage reads the tool events on demand), so each remains a reviewable
+diff of its own. The pure-function surface in `timeline.js` grew again
+(density, marks, merge — all importable by `node --test`), so the cursor and
+selection work keeps a tested base to build on; good news for their
+researchers, not a reason to re-cut.
+
+**What stays out.** The reviewer's observations stay recorded, not
+scheduled, because none violates a criterion and none has a demonstrated
+failure: the 2000-record ceilings (the content index's window from increment
+1, and now the first tool-event fetch of a session taking only the newest
+2000) truncate the oldest history of an over-long session — degradation at
+scale within a fixed retention window, not a wrong drawing of what is
+retained. The reviewer's in-checkout doubt about subagent tool attribution
+(same `spanId` on a subagent's bodies and its tool results) is answered by
+the researcher's capture, which measured exactly that identity; it needs no
+scheduling. The earlier blast-radius notes (span-carried tool content
+unbudgeted, `search=` walking bodies, the 32 MB ingest cap) stand unchanged.
+If a later increment trips over any of these, it enters the backlog then,
+with that increment as its reason.
+
+Budget: 3 of at most 8 increments spent; three remain planned, so the run
+still fits with room to split twice if a detail panel demands it.

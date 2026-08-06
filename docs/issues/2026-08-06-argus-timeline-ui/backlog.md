@@ -70,14 +70,14 @@ start and end — is answered: a lane is a span, bounded by the first and last
 content record carrying that `spanId`, read off the content index the
 collector already serves; the main lane spans the session's own
 `firstSeenMs`…`lastSeenMs`. The `claude_code.subagent_completed` end-marker
-stays unmeasured (log record or span event — unknown) and unscheduled: no
-open criterion needs an exact lane end, and any later increment that wants
-one must measure that first. Details in `researcher.md` (Increment 2) and
-`reviewer.md`.
+was later measured as a by-product of increment 3: it arrives as a plain log
+record carrying the subagent's lane `spanId`. It stays unused and
+unscheduled — no open criterion needs an exact lane end. Details in
+`researcher.md` (Increments 2 and 3) and `reviewer.md`.
 
 ## lane-density — Activity and context growth are visible on the lanes themselves
 
-**Status:** todo
+**Status:** done
 
 **Delivers:** Each lane carries its agent's activity over time and, behind
 it, the context size over time, so where token consumption grows is visible
@@ -87,6 +87,20 @@ on the timeline without opening any detail.
 - Each lane shows its activity over time (tool calls, API requests) and, as a
   curve or area behind it, the context size over time, so growth in token
   consumption is visible on the timeline itself without opening any detail.
+
+**Outcome:** Accepted on round 2 after two correction rounds, each closing
+one finding: first a wiring race in `loadTimeline` (a stale response could
+paint another session's tool calls and permanently jam the fetch watermark —
+fixed with a selection re-check and `mergeToolMarks`), then a test gap (the
+marks' time-to-position mapping was unpinned; closed with test cases only,
+no production change). The increment's live capture settled tool-call
+attribution by measurement: `claude_code.tool_result` carries no name
+attribution at all, but its `spanId` is exactly the owning lane's span, so a
+tool call belongs to the lane whose span it carries and to the main lane
+otherwise. Page state keeps only `{seq, timeMs, spanId}` per tool event,
+fetched incrementally by `sinceSeq`; the tool payloads (name, parameters)
+stay server-side, retrievable on demand. Details in `researcher.md`
+(Increment 3) and `reviewer.md`.
 
 ## scrub-live — The timeline scrubs, and a live mode follows the head
 
