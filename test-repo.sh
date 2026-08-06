@@ -131,7 +131,7 @@ echo "=== a correction round reuses the handoff it already has"
 # writes one file for the whole run and a later round appends a section to it,
 # so no prompt in the loop may build a round-suffixed handoff name again.
 suffixed="$(grep -n -- '-\${round}\.md\|-<X>\.md' \
-  "$root/workflows/loop.js" "$root"/agents/*.md "$root"/skills/agent-brief/SKILL.md 2>/dev/null || true)"
+  "$root"/workflows/*.js "$root"/agents/*.md "$root"/skills/agent-brief/SKILL.md 2>/dev/null || true)"
 if [ -z "$suffixed" ]; then
   ok "no round-suffixed handoff file name is left in the loop or the agent pages"
 else
@@ -145,6 +145,93 @@ if grep -q 'Append a .*## Round' "$root/workflows/loop.js"; then
   ok "the loop tells a correction round to append its section"
 else
   no "the loop no longer tells a correction round to append its section"
+fi
+
+# Same bargain in the incremental loop, where the section names an increment
+# as well as a round.
+if grep -q 'Append a .*## Increment\|Append a .*heading(' "$root/workflows/agile-loop.js"; then
+  ok "the incremental loop tells every dispatch to append its section"
+else
+  no "the incremental loop no longer tells a dispatch to append its section"
+fi
+
+echo
+echo "=== the two workflows coexist"
+
+# `loop` and `agile-loop` are two files rather than one with a switch, and the
+# plugin ships the directory, so a new one is live the moment it is written —
+# including one that does not parse. A workflow script is only ever compiled at
+# dispatch, minutes into a run, so nothing else in this repository would catch
+# a syntax error before an agent chain had already been paid for. Compiling
+# them here is that check: `new AsyncFunction` parses the body without running
+# a line of it.
+node -e '
+  const fs = require("fs"), path = require("path");
+  const root = process.argv[1];
+  const dir = path.join(root, "workflows");
+  const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+  const problems = [];
+  const names = new Map();
+  const files = fs.readdirSync(dir).filter((f) => f.endsWith(".js")).sort();
+  for (const file of files) {
+    const src = fs.readFileSync(path.join(dir, file), "utf8");
+    // Top-level `return` and `await` are what the workflow runtime gives a
+    // script, so the body only parses inside an async function — and `export`
+    // only parses outside one. Trading the keyword away leaves the syntax the
+    // check is for.
+    try { new AsyncFunction(src.replace(/^export const meta =/m, "const meta =")); }
+    catch (e) { problems.push(file + " does not parse: " + e.message); continue; }
+    const meta = /export const meta = \{[\s\S]*?\bname:\s*.([\w-]+)./.exec(src);
+    if (!meta) { problems.push(file + ": no meta.name"); continue; }
+    if (names.has(meta[1])) problems.push(meta[1] + " is declared by " + names.get(meta[1]) + " and " + file);
+    names.set(meta[1], file);
+  }
+  for (const wanted of ["loop", "agile-loop"]) {
+    if (!names.has(wanted)) problems.push("no workflow declares the name " + wanted);
+  }
+  if (problems.length) { console.error(problems.join("; ")); process.exit(1); }
+' "$root"
+if [ $? -eq 0 ]; then
+  ok "every workflow script parses and declares its own name, loop and agile-loop among them"
+else
+  no "a workflow script does not parse, or two of them claim one name"
+fi
+
+# The incremental loop is the one that hands an agent a slice of the issue, and
+# the rule that makes that safe — the named increment is the whole of what the
+# agent is asked for — has to reach the agent, not just the script. The shared
+# brief is the only channel that does so in every project alike.
+if grep -q 'increment' "$root/skills/agent-brief/SKILL.md"; then
+  ok "the shared brief tells an agent what a prompt naming one increment means"
+else
+  no "nothing in the shared brief bounds an agent to the increment its prompt names"
+fi
+
+echo
+echo "=== every agent page is declared"
+
+# Agent discovery for a plugin scans `agents/` recursively, so `plugin.json`
+# declares the pages instead — and nothing compares the two. A page missing
+# from the list is an agent that is simply not there in any session, which the
+# workflow calling it discovers only at dispatch.
+node -e '
+  const fs = require("fs"), path = require("path");
+  const root = process.argv[1];
+  const declared = JSON.parse(fs.readFileSync(path.join(root, ".claude-plugin/plugin.json"), "utf8")).agents || [];
+  const onDisk = fs.readdirSync(path.join(root, "agents")).filter((f) => f.endsWith(".md")).sort();
+  const problems = [];
+  for (const page of onDisk) {
+    if (!declared.includes("./agents/" + page)) problems.push("agents/" + page + " is not declared in plugin.json");
+  }
+  for (const entry of declared) {
+    if (!fs.existsSync(path.join(root, entry))) problems.push(entry + " is declared but does not exist");
+  }
+  if (problems.length) { console.error(problems.join("; ")); process.exit(1); }
+' "$root"
+if [ $? -eq 0 ]; then
+  ok "plugin.json declares every page in agents/ and nothing that is not there"
+else
+  no "plugin.json and agents/ disagree about which agents exist"
 fi
 
 echo
