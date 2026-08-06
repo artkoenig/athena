@@ -1107,3 +1107,443 @@ was 34 cases, 0 failed at the reviewer's run, and nothing has changed since, so
 the three new cases are the only ones whose first result is unknown — and from the
 source they will pass, because the behaviour they pin is already there.
 
+## Increment 3 — activity and context growth on the lanes themselves
+
+Everything below changes `tools/argus-ui` only. The collector is not touched: the
+two routes it already serves (`/api/content`, `/api/events`) carry every fact a
+lane needs, and no new aggregation belongs in a headless collector the UI can do
+in one pass over data it already fetches.
+
+### What I measured, and why
+
+I ran one live capture, because the question this increment turns on — **what a
+lane's activity is attributable by** — is answered by no file in this repository.
+Increment 1 measured the *body* events; nothing measured `claude_code.tool_result`.
+Commands, all outside the repository (throwaway collector on a free port,
+persisting into the scratchpad):
+
+- `node tools/argus/bin/argus.mjs start --port 4451 --persist <scratch>/tel` (background), `curl /api/health` → `{"ok":true,…}`.
+- `node tools/argus/bin/argus.mjs env --port 4451 --format dotenv` → the block below was exported into the child process.
+- `claude -p "…echo main-tool… Task → general-purpose subagent → echo sub-tool…" --allowedTools "Bash,Task" --max-turns 12`, Claude Code 2.1.223, **exit 0**. 29 log records, 15 spans, 27 metric points persisted.
+- Two `node -e` dumps over the persisted JSONL (logs and spans), exit 0.
+- The collector was stopped afterwards; nothing was written inside the repository.
+
+I ran **no** test command, not even as a baseline.
+
+**Finding 1 — `claude_code.tool_result` carries no attribution attributes at all.**
+Its attributes are exactly `prompt.id`, `tool_name`, `tool_use_id`, `success`,
+`duration_ms`, `tool_parameters`, `tool_input`, `tool_input_size_bytes`,
+`tool_result_size_bytes` (plus the standard user/session/organization set). There
+is **no `query_source` and no `agent.name`** on it, in either the main session's
+tool calls or a subagent's. Name-based attribution of tool calls is therefore
+impossible; the span is the only handle.
+
+**Finding 2 — and the span is exactly the lane's span.** Measured, same session:
+
+| record | `spanId` | span that id names |
+| --- | --- | --- |
+| main `api_request_body` (×3) | `03474d19d7dcc150` | `claude_code.interaction` |
+| main `tool_result` (Bash, and the `Agent` call itself) | `03474d19d7dcc150` | the same interaction span |
+| subagent `api_request_body` (×2), `query_source=agent:builtin:general-purpose` | `059b80bba5b73c6f` | `claude_code.tool.execution` under the `Agent` `claude_code.tool` span |
+| subagent `tool_result` (Bash) | `059b80bba5b73c6f` | the same execution span |
+
+So a `tool_result` is emitted on the *conversation* span that owns it, not on the
+tool's own span — which is the span increment 2 keyed lanes on. **A tool call
+belongs to the lane whose `spanId` it carries, and to the main lane otherwise.**
+That is an exact rule with no name matching and no trace walk.
+
+**Finding 3 — `claude_code.tool_decision` is useless for lanes.** Its `spanId`
+was `d3ee3645022b7550` / `ba40464a21224882` / `0fe052f2b2dc57c6`, all
+`claude_code.tool.blocked_on_user` spans (children of the per-tool span), never a
+lane span. It also carries no `query_source`. Activity therefore comes from
+`tool_result`, and `tool_decision` is not fetched.
+
+**Finding 4 — `claude_code.api_request` would give real token counts.** It carries
+`input_tokens`, `cache_read_tokens`, `cache_creation_tokens`, `query_source` and,
+for a subagent, even `agent.name`, on the lane span. Measured pair: a main request
+with `body_length=107303` chars alongside `cache_read=36953 + cache_creation=126`
+tokens. The two track each other (~2.9 chars per token). I still use `bodyLength`
+for the curve — see the decisions — but the token route is now measured and
+available to a later increment that wants it.
+
+**Finding 5 (answering a question the run left open, not work for this
+increment) — `claude_code.subagent_completed` arrives as a plain log record**, not
+as a span event: it sat in `logs.jsonl` with `spanId` = the subagent's lane span
+`059b80bba5b73c6f` and attributes `agent_type`, `agent.source`, `is_built_in`,
+`is_async`, `total_tokens=19417`, `total_tool_uses=1`, `duration_ms=5727`,
+`model`, `final_model`, `model_swapped`. It reaches `/api/events` today, unnamed
+by `claude.mjs`. Increment 2 recorded that settling this costs a live capture;
+the capture happened for another reason, so the answer is recorded here. **No
+code in this increment uses it and no test may pin it** — lane ends stay as
+increment 2 defined them. Also unnamed by `claude.mjs` and seen in the same
+capture: `hook_execution_start`, `hook_registered`, `hook_execution_complete`.
+
+**Finding 6 — the `tool_result` payload is not free.** `tool_input` is the whole
+call parameters (for a `Write` that is the file's content), so refetching the
+tool-event list on every SSE-driven refresh would ship megabytes per poll — the
+regression increment 1 avoided for bodies. The plan therefore fetches tool events
+**incrementally** (`sinceSeq`) and keeps only `{ seq, timeMs, spanId }`.
+
+### The data behind the two visuals
+
+- **Context size over time** = the `bodyLength` of each `claude_code.api_request_body`
+  record on that lane, from the `/api/content` index the page already fetches for
+  the lanes. A request body *is* the context at that moment, and `bodyLength` is
+  the untruncated character count the CLI reported. Zero extra requests.
+- **Activity over time** = those same request-body records (API requests) plus the
+  `claude_code.tool_result` records (tool calls), each placed by `timeMs` and
+  attributed by `spanId` per finding 2.
+
+### Implementation plan
+
+Four files change. No new file, no collector change, no dependency.
+
+**A. `public/timeline.js` — new pure functions, and a richer `renderTimeline`.**
+
+New exported constants:
+
+```js
+export const TOOL_EVENT = 'claude_code.tool_result';
+export const REQUEST_EVENT = 'claude_code.api_request_body';
+export const ACTIVITY_BUCKETS = 120;
+export const MIN_CURVE_WIDTH_PCT = 0.6;
+```
+
+New exported functions:
+
+- `laneKeyOf(record)` — the one lane-key rule, extracted from `buildLanes`'s body
+  unchanged: `'main'` when `record.isSubagent !== true`, otherwise
+  `` `agent:${record.spanId ?? ''}:${record.agent ?? ''}` ``. `buildLanes` calls it
+  instead of inlining the template, so the key exists in one place only. No
+  behaviour change; increment 2's cases stay green.
+- `contextPoints(records, window, maxBodyLength)` → `[{ x, y }]`, both in 0…100:
+  1. keep records with a finite `timeMs > 0`, sort ascending by `timeMs`;
+  2. `span = Math.max(1, window.endMs - window.startMs)`;
+  3. `x = clamp(((timeMs - window.startMs) / span) * 100, 0, 100)`;
+  4. `y = maxBodyLength > 0 ? clamp(100 - (bodyLength / maxBodyLength) * 100, 0, 100) : 100`
+     — `y` is an SVG coordinate, so 100 is the baseline and 0 the top;
+  5. `[]` when no record qualifies. `bodyLength` is read with
+     `Number.isFinite(record.bodyLength) ? record.bodyLength : 0`, never truthiness.
+- `areaPolygon(points)` → the `points` attribute of an SVG polygon, or `''` for an
+  empty array. It closes the area on the baseline and widens a single-point lane
+  so one request is still a visible plateau:
+  `x0,100`, then every `x,y`, then — when `xLast - x0 < MIN_CURVE_WIDTH_PCT` — a
+  repeat of the last `y` at `xEnd = Math.min(100, x0 + MIN_CURVE_WIDTH_PCT)`, then
+  `xEnd,100`. Every number is `toFixed(3)`, the same convention as the bar's style.
+- `activityMarks(items, window)` → `[{ leftPct, kind, count }]`. `items` are
+  `{ timeMs, kind: 'request' | 'tool' }`. Records are bucketed into
+  `ACTIVITY_BUCKETS` columns over the window —
+  `bucket = clamp(Math.floor(((timeMs - window.startMs) / span) * ACTIVITY_BUCKETS), 0, ACTIVITY_BUCKETS - 1)`
+  with the same `span` guard — one entry per (bucket, kind) that has at least one
+  record, `leftPct = (bucket / ACTIVITY_BUCKETS) * 100`, `count` the number of
+  records in it. Sorted by `leftPct`, then `kind` alphabetically, so the output is
+  deterministic whatever order the API returned. Bucketing is what keeps a
+  2000-record session from painting 2000 elements.
+- `buildDensity(view, { content = [], tools = [] } = {})` → a new view object,
+  `{ ...view, maxBodyLength, lanes }`, leaving its argument untouched:
+  1. `requests` = entries of `content` with `eventName === REQUEST_EVENT` and a
+     finite `timeMs > 0`. Response bodies are ignored — see the decisions.
+  2. `maxBodyLength` = the largest `bodyLength` among them, else `0`.
+  3. `spanToLane` = a Map from `lane.spanId` to `lane.key`, built from the agent
+     lanes of `view.lanes` in order, first one wins.
+  4. Each request record goes to `laneKeyOf(record)`; each tool record goes to
+     `spanToLane.get(tool.spanId) ?? 'main'`. A key that matches no lane is
+     dropped rather than inventing a lane — `buildLanes` owns which lanes exist.
+  5. Each lane gains `context` (`contextPoints` of its request records),
+     `activity` (`activityMarks` of its request + tool records), `requests`,
+     `toolCalls` and `peakBodyLength` (the largest `bodyLength` on that lane, `0`
+     when it has none).
+- `renderTimeline(view)` — additions inside `.lane-track`, in this order, so the
+  curve is literally behind the bar:
+  ```html
+  <span class="lane-track">
+    <svg class="lane-curve" data-kind="agent" viewBox="0 0 100 100"
+         preserveAspectRatio="none" aria-hidden="true"><polygon points="…"></polygon></svg>
+    <span class="lane-bar" data-kind="agent" style="left:…%;width:…%"></span>
+    <span class="lane-mark" data-kind="request" style="left:12.500%" title="2 API requests"></span>
+    <span class="lane-mark" data-kind="tool" style="left:25.000%" title="1 tool call"></span>
+  </span>
+  ```
+  The `<svg>` block is omitted entirely when `areaPolygon` returns `''`; a lane
+  with no activity renders no `.lane-mark`. `.lane-meta` becomes
+  `<span class="lane-meta" data-peak="<peakBodyLength>" data-requests="<n>" data-tools="<n>" title="…">
+  <duration> · <fmtNum(peak)></span>` — the numbers live in data attributes so a
+  test can pin the fact without pinning the implementer's sentence. A legend row
+  goes above the axis:
+  `<div class="timeline-legend"><span data-kind="context">context size</span><span data-kind="request">API request</span><span data-kind="tool">tool call</span></div>`.
+  **`renderTimeline` must keep working on a bare `buildLanes` view**: read
+  `lane.activity ?? []`, `lane.context ?? []`, `lane.peakBodyLength ?? 0`,
+  `lane.requests ?? 0`, `lane.toolCalls ?? 0`. Increment 2's cases call
+  `renderTimeline(buildLanes(…))` directly and must stay green untouched.
+
+**B. `public/app.js` — one more loader, incremental, and the composition.**
+
+- State: add `toolMarks: []` and `toolSeq: 0` next to `content`. `toolMarks` holds
+  `{ seq, timeMs, spanId }` and nothing else — the tool parameters are a later
+  increment's business and keeping them would hold megabytes in the page.
+- `loadTimeline()` keeps its `/api/content` request and gains, in the same
+  function, a second one issued in parallel with its own `.catch`, so either
+  failure costs only its own half:
+  ```js
+  const [content, tools] = await Promise.all([
+    api('/api/content', { session: id, limit: 2000 }).catch(() => null),
+    api('/api/events', { session: id, event: TOOL_EVENT, sinceSeq: state.toolSeq, limit: 2000 }).catch(() => null),
+  ]);
+  ```
+  `content` replaces `state.content` (or `[]` on failure, as today); the tool items
+  are **appended**: for each item push `{ seq: item.seq, timeMs: item.timeMs, spanId: item.spanId }`
+  and raise `state.toolSeq` to the largest `seq` seen. `sinceSeq` is why the
+  refresh that fires on every SSE ingest ships nothing it already has.
+- `selectSession` resets `state.toolMarks = []` and `state.toolSeq = 0` next to
+  `state.content = []`; without it a second session inherits the first's marks.
+- `renderDetail` composes:
+  ```js
+  ${renderTimeline(buildDensity(buildLanes({ session, content: state.content }),
+    { content: state.content, tools: state.toolMarks }))}
+  ```
+  and imports `buildDensity` and `TOOL_EVENT` alongside the existing imports.
+
+**C. `public/styles.css` — appended to the existing timeline block (lines 786–865).**
+
+- `.timeline` gains `--meta-w: 120px`; `.timeline-axis` and `.lane` use
+  `grid-template-columns: var(--label-w) 1fr var(--meta-w)` instead of the literal
+  `64px`, and the responsive block at line ~1080 sets `--meta-w: 84px` beside the
+  `--label-w` it already overrides.
+- `.lane-track` height 16px → 26px, so a curve fits behind the bar.
+- `.lane-bar` moves to the bottom of the track (`top: auto; bottom: 0; height: 5px`)
+  and keeps its colours.
+- `.lane-curve { position: absolute; inset: 0; width: 100%; height: 100%; }` with
+  `.lane-curve polygon { fill: var(--accent-soft); }` and
+  `.lane-curve[data-kind="agent"] polygon { fill: color-mix(in srgb, var(--violet) 20%, transparent); }`
+  — `color-mix` is already used in this file (line 319), so this adds no custom
+  property and no new colour.
+- `.lane-mark { position: absolute; top: 2px; bottom: 7px; width: 2px; margin-left: -1px; border-radius: 1px; }`,
+  `[data-kind="request"]` → `var(--teal)`, `[data-kind="tool"]` → `var(--warn)`.
+  Both exist in `:root` and in the light-mode block, and neither collides with the
+  lane bars' accent/violet.
+- `.timeline-legend` — a small flex row of muted labels with a colour swatch each
+  (`::before`), reusing the same three colours.
+
+**D. `tools/argus-ui/README.md` — one edit.** The **Timeline** bullet (line 62)
+gains what the lanes now carry: activity marks for API requests and tool calls,
+and the context size behind each lane as a shaded area. `CLAUDE.md` needs no
+change: no convention changes.
+
+### Decisions I rejected
+
+- **Token counts from `claude_code.api_request` for the curve.** Measured and
+  real (finding 4), but it costs a second event fetch per refresh and a second
+  attribution path, and the planner already settled the curve on the content
+  index's `bodyLength` after increment 1. Chars are the served context itself,
+  exact, and already in hand. The label says "context" and never "tokens", so
+  nothing on screen claims a token count it does not have.
+- **`claude_code.tool_decision` as the tool-call signal.** Its span is a
+  `blocked_on_user` span, never a lane span (finding 3).
+- **Attributing tool calls by agent name or `query_source`.** The attributes are
+  simply not on the record (finding 1), and even if they were, two concurrent
+  same-type agents share the name — the merge increment 2's criterion forbids.
+- **Walking the trace tree to map a tool span to its agent.** One
+  `/api/traces/<id>` request per trace per refresh, whole span trees, to recover a
+  parent link the log record already carries. Rejected on cost and on need.
+- **Refetching the whole tool-event list every refresh.** Megabytes per poll
+  (finding 6); `sinceSeq` exists precisely for this.
+- **Keeping the tool events' `attrs` in page state.** Same reason. Increment 6
+  wants tool names and parameters for *one* lane at *one* moment and can ask for
+  exactly that.
+- **Counting `api_response_body` records as activity or context.** A response
+  arrives within a millisecond of its request and would double every mark with no
+  information; and the response is not the context. They are ignored on the lane.
+- **A per-lane y-scale for the curve.** It makes every lane's curve fill its
+  track, which hides the very thing the criterion asks for: *where* consumption
+  grows. One scale across the session (`maxBodyLength`) is what makes a subagent's
+  hill visibly smaller than the main session's mountain, and the per-lane
+  `data-peak` plus the meta number is what keeps a small lane readable anyway.
+- **A `<canvas>` or a charting dependency.** Zero dependencies is this project's
+  first rule, and a canvas would need DOM code where the rest of this module is a
+  pure string renderer.
+- **A step curve** (hold the value until the next request) instead of a linear
+  polygon. More faithful to how context actually changes, twice the vertices, and
+  the criterion asks for "a curve or area". Linear, and recorded here so the
+  choice is visible.
+- **A collector route that aggregates lane density.** The UI has both inputs in
+  hand; a route would be a second implementation of the same grouping in a
+  headless process.
+- **Scrub cursor, live-mode control, per-lane selection, tool names and
+  parameters on screen.** All named as later increments.
+
+### Consequences to accept, not paper over
+
+- A tool call that was **rejected** (a `tool_decision` with `decision: reject` and
+  no `tool_result`) leaves no mark. A call that never ran is not activity.
+- A subagent that made **no API request** gets no lane from `buildLanes`, so its
+  tool calls fall to the main lane. A Task subagent's first act is a model call,
+  so this does not occur in practice.
+- The main lane collects every tool call whose span is not an agent lane's,
+  including a multi-turn session's several `claude_code.interaction` spans. That
+  is the intended reading: everything that is not a subagent is the main session.
+- More than 2000 tool results between two refreshes would advance the watermark
+  past the oldest of that batch. Refreshes are seconds apart; a batch that size is
+  not a real session.
+- The oldest lanes of a session past the content index's 2000-record window are
+  already absent (increment 2's recorded consequence); their density is absent
+  with them.
+
+### Module map
+
+| Path | What it holds | Entry points |
+| --- | --- | --- |
+| `tools/argus-ui/public/timeline.js` | Lane derivation, density and the timeline markup; pure, no DOM | **new** `TOOL_EVENT`, `REQUEST_EVENT`, `ACTIVITY_BUCKETS`, `MIN_CURVE_WIDTH_PCT`, `laneKeyOf`, `contextPoints`, `areaPolygon`, `activityMarks`, `buildDensity`; **changed** `renderTimeline`, `buildLanes` (calls `laneKeyOf`) |
+| `tools/argus-ui/public/app.js` | The page: state, fetching, rendering, wiring | `state` (`toolMarks`, `toolSeq`), `loadTimeline`, `selectSession`, `renderDetail`, the import line |
+| `tools/argus-ui/public/styles.css` | Every style; dark-first with a light-mode `:root` | the timeline block at lines 786–865 and the responsive block near line 1080 |
+| `tools/argus-ui/README.md` | User-facing page | the **Timeline** bullet, line 62 |
+| `tools/argus-ui/public/format.js` | `esc`, `fmtNum`, `fmtDur`, `fmtClock`, … | unchanged; `fmtNum(108204) === '108.2k'` is what the meta prints |
+| `tools/argus-ui/test/independence.test.mjs` | The no-outside-imports rule | **unchanged** — no new file under `public/`, so nothing to add |
+
+Facts about the collector's API this plan rests on, so nobody has to open that
+project:
+
+- `GET /api/content?session=&agent=&main=1&span=&event=&limit=` → `{ items: [...] }`,
+  ascending by time, `limit` capped at 2000, walked newest-first. Each item:
+  `{ seq, timeMs, sessionId, traceId, spanId, eventName, querySource, agent,
+  isSubagent, model, requestId, promptId, eventSequence, bodyLength, bodyChars,
+  truncated, bodyRef }` — never a body. `bodyLength` is a number (the collector
+  parses the CLI's string), `isSubagent` a real boolean, `agent` a string or `null`.
+- `GET /api/events?session=&event=&trace=&search=&errors=&sinceSeq=&limit=` →
+  `{ items: [...] }`, ascending by time, `limit` capped at 2000, `sinceSeq`
+  returning only records newer than that `seq`. Each item is the stored log record
+  plus `summary` and `attribution`: `{ seq, timeMs, observedMs, severity,
+  eventName, body, attrs, traceId, spanId, sessionId, isError, … }`. `spanId` is a
+  lower-case hex string, `''` when the record carried none.
+- The UI's own server forwards `/api/*` to the collector with the query string
+  intact and adds the collector's token server-side.
+
+### Environment
+
+- Node v22.22.2 at `/opt/node22/bin/node`, on the `PATH`; the package requires ≥ 20.11.
+- `tools/argus-ui` has **zero runtime and zero dev dependencies**; `npm install` is
+  not needed and must not become needed. Adding a dependency is not a coding
+  decision — it goes to the human.
+- Whole package, from the repository root: `npm --prefix tools/argus-ui test`
+  (`node --test "test/*.test.mjs"`).
+- A single file, from the repository root:
+  `node --test tools/argus-ui/test/timeline.test.mjs`, same shape for
+  `page.test.mjs`, `server.test.mjs`, `config.test.mjs`, `independence.test.mjs`.
+- `public/*.js` is importable by `node --test` because the package is
+  `"type": "module"`: `import { buildDensity } from '../public/timeline.js';`
+  works with no loader flag.
+- **There is no linter and no formatter in this repository** — nothing to run,
+  nothing to configure.
+- `./test.sh` runs every suite in the repository. It is **not** on this
+  increment's list: the closing increment (`tool-usage`) owns it, and nothing
+  outside `tools/argus-ui` changes here.
+
+### Test plan
+
+Tests are needed. Framework: `node:test` with `node:assert/strict`, the only thing
+this project uses. Conventions, taken from the two files the cases land in: every
+test name is a full lowercase sentence stating the fact ('a tool call lands on the
+lane whose span it carries'); fixtures are local factory helpers at the top of the
+file (`session()`, `record()`, `threeRecordContent()` in `timeline.test.mjs`;
+`walk()`, `functionSource()` in `page.test.mjs`); nothing is mocked beyond those;
+every assertion that could be read two ways carries a message saying what the fact
+is; banner comments (`// Criterion 1 — …`) separate the criteria; and a message is
+asserted as an absence, never as a wording — which is why the lane meta's numbers
+go into `data-*` attributes and no case asserts a title's sentence.
+
+Two files are edited; no test file is created:
+
+- `tools/argus-ui/test/timeline.test.mjs` — the new unit cases, under a new banner
+  `// Criterion 5 — activity and context growth on the lanes themselves`, appended
+  after the existing cases, which stay exactly as they are. Two new local
+  factories next to the existing ones:
+  ```js
+  const toolMark = (over = {}) => ({ seq: 1, timeMs: 2000, spanId: 'sp-a', ...over });
+  const density = (over = {}) => buildDensity(buildLanes({ session: session(), content: [], ...over.lanes }), { content: [], tools: [], ...over });
+  ```
+  (the implementer may inline `buildDensity(buildLanes(…), …)` per case instead if
+  that reads better; the factories for `session()` and `record()` are the ones
+  already in the file and every case builds from those.)
+- `tools/argus-ui/test/page.test.mjs` — three source-level cases under a new
+  banner, using the existing `functionSource` helper.
+
+`window` below means `{ startMs: 1000, endMs: 5000 }` unless a case says otherwise.
+
+#### The criterion — each lane shows its activity over time, and the context size behind it
+
+| # | Case | Input / state | Expected | File | Level |
+| --- | --- | --- | --- | --- | --- |
+| 1 | every lane comes back with a density, even an empty session | `buildDensity(buildLanes({ session: session(), content: [] }), {})` | one lane; `context` and `activity` are `[]`, `requests === 0`, `toolCalls === 0`, `peakBodyLength === 0`, `maxBodyLength === 0` | `timeline.test.mjs` | unit |
+| 2 | requests land on the lane that made them | `threeRecordContent()` as both lanes input and `content` | main lane `requests === 1`, agent lane `requests === 3`; each lane's `context` has that many points | `timeline.test.mjs` | unit |
+| 3 | a tool call lands on the lane whose span it carries | `threeRecordContent()` plus `tools: [toolMark({ spanId: 'sp-a', timeMs: 2200 })]` | the `sp-a` lane has `toolCalls === 1`, the main lane `toolCalls === 0` | `timeline.test.mjs` | unit |
+| 4 | a tool call on a span no lane owns belongs to the main session | same content, `tools: [toolMark({ spanId: 'interaction-1' }), toolMark({ seq: 2, spanId: '' })]` | main lane `toolCalls === 2`, agent lane `0` — the measured main-session case, where the span is the interaction's | `timeline.test.mjs` | unit |
+| 5 | two concurrent agents of one type keep their own tool calls | the four-record `sp-a`/`sp-b` `general-purpose` fixture of criterion 3 (increment 2), plus one tool mark per span | each agent lane has `toolCalls === 1`; neither has 2 | `timeline.test.mjs` | unit |
+| 6 | a response body is neither activity nor context | one main request record and one `record({ eventName: 'claude_code.api_response_body', timeMs: 2600, bodyLength: 900 })` | main lane `requests === 1`, `context.length === 1`, and `activity` totals one record | `timeline.test.mjs` | unit |
+| 7 | the curve is scaled across the whole session, not per lane | a main record `bodyLength: 100000` and a subagent record `bodyLength: 25000` | `maxBodyLength === 100000`; the main point's `y === 0`, the agent point's `y === 75`; `peakBodyLength` is 100000 and 25000 respectively | `timeline.test.mjs` | unit |
+| 8 | a session whose requests all report no size still yields a drawable curve | records with `bodyLength: 0` | every point's `y === 100`, every `x` finite — no division by zero | `timeline.test.mjs` | unit |
+| 9 | `contextPoints` places a record by time inside the window | records at 1000, 3000, 5000 with `bodyLength` 10/20/20, window 1000…5000, max 20 | `x` values 0, 50, 100 and `y` values 50, 0, 0 — exact, the arithmetic is exact here | `timeline.test.mjs` | unit |
+| 10 | `contextPoints` survives a zero-length window | window `{ startMs: 1000, endMs: 1000 }`, two records | both `x` and `y` finite (`Number.isFinite`) and inside 0…100 | `timeline.test.mjs` | unit |
+| 11 | the area closes on the baseline | `areaPolygon` of two points | the string starts with `<x0>,100.000` and ends with `,100.000`, contains both `y` values, and matches no `NaN` | `timeline.test.mjs` | unit |
+| 12 | a single request is still a visible area | `areaPolygon` of one point at `x: 10` | four vertices; the last `x` is at least `10 + MIN_CURVE_WIDTH_PCT` and at most 100 | `timeline.test.mjs` | unit |
+| 13 | no requests, no polygon | `areaPolygon([])` | `''` | `timeline.test.mjs` | unit |
+| 14 | activity in one bucket is one mark carrying its count | two request items 1 ms apart inside a 4000 ms window | one mark, `kind === 'request'`, `count === 2` | `timeline.test.mjs` | unit |
+| 15 | a tool call and an API request at the same moment stay two marks | one `request` and one `tool` item at the same `timeMs` | two marks, same `leftPct`, kinds `request` and `tool` | `timeline.test.mjs` | unit |
+| 16 | the marks are bounded however many records arrive | 500 request items spread over the window | `marks.length <= ACTIVITY_BUCKETS`, and the summed `count` is 500 — bucketing loses no record | `timeline.test.mjs` | unit |
+| 17 | a mark never leaves the track | items at `window.startMs`, `window.endMs`, and one past `endMs` | every `leftPct` is `>= 0` and `< 100`; and against a zero-length window every `leftPct` is finite | `timeline.test.mjs` | unit |
+| 18 | the density is rendered behind the bar, not instead of it | `renderTimeline` of the case-3 view | for the agent lane's row: an `<svg class="lane-curve"` occurs before its `<span class="lane-bar`, the `points` attribute is non-empty and matches no `NaN`, and the row carries `data-kind="request"` and `data-kind="tool"` marks | `timeline.test.mjs` | unit |
+| 19 | a lane with nothing on it renders as a bare lane | `renderTimeline` of the case-1 view | the markup contains one `data-lane="` and no `lane-curve`, no `lane-mark`, and no `NaN` | `timeline.test.mjs` | unit |
+| 20 | the lane meta reports the size and the counts as data | `renderTimeline` of the case-3 view | the agent lane's `.lane-meta` carries `data-peak="10"` (the fixture's `bodyLength`), `data-requests="3"`, `data-tools="1"`; assert the attribute values, never the title's wording | `timeline.test.mjs` | unit |
+| 21 | the timeline still renders from lanes alone | `renderTimeline(buildLanes({ session: session(), content: threeRecordContent() }))` — no `buildDensity` | two `data-lane="` occurrences, no `NaN`, no throw: the density is additive and the increment-2 call shape keeps working | `timeline.test.mjs` | unit |
+| 22 | the page asks the collector for the tool calls | `functionSource(appJs, 'loadTimeline')` | contains `/api/events`, `TOOL_EVENT` and `sinceSeq` — the tool events are fetched, and incrementally | `page.test.mjs` | source |
+| 23 | selecting a session forgets the previous session's tool calls | `functionSource(appJs, 'selectSession')` | matches `/state\.toolMarks\s*=\s*\[\]/` and `/state\.toolSeq\s*=\s*0/` | `page.test.mjs` | source |
+| 24 | the timeline is rendered with its density | `functionSource(appJs, 'renderDetail')` | contains `buildDensity(`, and its index is below that of `renderTimeline(`'s opening call — the lanes reach the renderer through the density, not around it | `page.test.mjs` | source |
+
+Case 24's index check is `renderDetail.indexOf('renderTimeline(') < renderDetail.indexOf('buildDensity(')`,
+because `renderTimeline(buildDensity(…))` is the composition; assert both indices
+are `>= 0` first, each with its own message, so a missing call fails on its own
+name rather than on an index comparison.
+
+#### Deliberately untested, and why
+
+- **Colours, pixel positions and whether the curve reads well.** `node --test` sees
+  strings; the numbers behind the drawing are pinned in cases 7–17 and the look is
+  what the review is for.
+- **`TOOL_EVENT`'s value as a contract with the collector.** The name comes from
+  the CLI and is measured above; pinning the string in a UI case would restate the
+  constant, and `server.test.mjs` already proves the proxy forwards `/api/*` with
+  its query string intact.
+- **The incremental fetch actually skipping records it has** — that is the
+  collector's `sinceSeq`, pinned in that project's suite; re-asserting it here
+  would pin someone else's behaviour. Case 22 pins that the UI asks for it.
+- **`state.toolMarks` growing across refreshes.** It is loader wiring in `app.js`,
+  which this project has no DOM harness for and will not grow one for (jsdom is a
+  dependency, and zero dependencies is the project's first rule).
+- **`claude_code.subagent_completed`, `tool_decision`, `api_request` tokens.**
+  Measured above, used by nothing here; no case may pin behaviour for them.
+- **Lane derivation, geometry, labels, escaping and the landing view.** Increment
+  2's cases own them, they stay untouched, and the command below re-runs them.
+- **Recordings made without the content flags** — out of contract by the issue's
+  own decision.
+- **`tools/argus`** — not touched by this increment.
+
+#### What counts as done
+
+```
+npm --prefix tools/argus-ui test
+```
+
+That one command, from the repository root, is the whole list. It runs the new
+cases with the rest of `timeline.test.mjs` and `page.test.mjs` and the other three
+files, costs seconds, and needs no install. `tools/argus` and `./test.sh` are off
+the list on purpose: nothing outside `tools/argus-ui` changes here, and the
+closing increment owns the full-suite run.
+
+#### What is already red
+
+I did not run the list, not once and not as a baseline; the first run belongs to
+whoever runs it downstream. From reading, nothing is red before the change and
+nothing existing should turn red by it: the increment-2 cases assert lane
+structure, geometry, labels and the tab strip, none of which this plan alters, and
+case 21 exists precisely to keep `renderTimeline(buildLanes(…))` — the shape those
+cases call — working while the density is optional. `independence.test.mjs` adds
+no file to guard, and `page.test.mjs`'s flag-absence case is untouched by anything
+this increment writes (`claude_code.tool_result` is an event name, not a flag).
