@@ -67,8 +67,10 @@ linter it leaves out, and an empty list means the review is a reading — so the
 cost of checking is a decision made once, with the codebase in view, instead of
 four agents each reaching for `test.sh` to be safe.
 
-Every agent commits its handoff into `docs/issues/<timestamp>-<slug>/`, so the
-record of a run is the issue and not anyone's context window. That is what makes
+Every agent commits its handoff into `docs/issues/<timestamp>-<slug>/`, one file
+per role for the whole run — a correction round appends its section to that file
+rather than writing a new one — so the record of a run is the issue and not
+anyone's context window. That is what makes
 unattended work possible: idea to pull request with nobody at the keyboard, and
 a session picking the work back up hours later resumes from the record rather
 than from a conversation that is gone.

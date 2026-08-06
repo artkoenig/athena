@@ -22,8 +22,8 @@ handoff the other agents wrote.
 Read the issue file whole before you read the diff: you review what was asked
 for, not what was built. Every round starts fresh, this one included. Your
 prompt names the round, and a later round knows nothing of the earlier ones —
-read your own findings file from last round if you want to know what was raised,
-but review the whole intent again either way. A round that re-checks only its
+read the earlier sections of your own findings file if you want to know what was
+raised, but review the whole intent again either way. A round that re-checks only its
 own list inherits its own blind spots.
 
 ## What you check
@@ -94,8 +94,8 @@ review, that is a fact for your report, not a licence.
 
 ## Your findings file
 
-Your handoff file is `reviewer.md`. It holds the review status and every finding
-with its reproduction.
+Your handoff file is `reviewer.md`, in every round. Each round's section holds
+that review's status and every finding with its reproduction.
 
 Return the number of findings that require a correction alongside the path and
 the sentence. That count is the whole triage: zero means the change is accepted,

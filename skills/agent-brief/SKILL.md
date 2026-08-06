@@ -69,6 +69,17 @@ Write it as a Markdown file in the issue directory, under the name your page
 gives it, and commit it with whatever else you produced. Write it out in full:
 no placeholders, no summaries that drop detail.
 
+One role writes one file, whatever round it is. In a correction round you do
+not start a second one and you do not rewrite the first: open the file your
+page names, append a `## Round <X>` section for the round your prompt names,
+and leave every earlier section exactly as it stands. The file grows with the
+run, so a reader pointed at it gets the whole history of that role and never
+has to work out which copy is current.
+
+Reading someone else's file follows from that: its last `## Round` section is
+what binds now, and everything above it is how the change got here — context
+you may consult, never a work order you carry out again.
+
 It is the next agent's whole brief, and every word in it is context that agent
 pays for. So put one instruction in one sentence, write that sentence in the
 imperative, and state each rule once — two wordings of one rule disagree after

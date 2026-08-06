@@ -27,8 +27,8 @@ file to learn that it says nothing is the expensive way to find out.
 
 Adapt your approach based on the complexity level specified by the issue file.
 
-Your handoff file is `researcher.md`, or `researcher-<X>.md` in the X-th
-correction round.
+Your handoff file is `researcher.md`, in every round: a correction round
+appends its section to that file instead of opening one of its own.
 
 ## What the handoff contains
 
@@ -77,8 +77,9 @@ convention you did not write down. Answer all of this:
 Your prompt names the round. Read the reviewer's findings file in the issue
 directory and plan the fixes by the same rules. A finding that needs a failing
 test first makes tests needed again: give that test its own test plan, cases,
-files and commands included. Nothing carries over from earlier rounds — this
-file is what binds now, and a case you do not repeat is not asked for again.
+files and commands included. Nothing carries over from the earlier rounds'
+sections — the section you write is what binds now, and a case you do not
+repeat in it is not asked for again.
 
 ## Boundaries
 

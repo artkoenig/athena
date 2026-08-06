@@ -130,18 +130,38 @@ const noDispatch =
   'do NOT hand over to anyone — the script calls the next agent itself. Write ' +
   'your handoff file, commit it, then return.'
 
+// One role, one file, for the whole run. A correction round appends its section
+// to the file that is already there instead of opening `<role>-<round>.md`, so
+// the issue directory holds four handoffs however many rounds it took, and
+// whoever is pointed at `researcher.md` reads the current plan and the history
+// that produced it in one place. The shared brief carries the same rule for the
+// agents; this is where the prompts say which round it is.
+function handoff(file, round) {
+  return round === 0
+    ? `Write your handoff to ${dir}/${file}.\n`
+    : `Append a \`## Round ${round}\` section to the existing ${dir}/${file}, and ` +
+        `leave every earlier section as it stands. Do not open a second file.\n`
+}
+
+// How to point an agent at somebody else's file: from round 1 on, only the
+// round's own section is the work order.
+function section(file, round) {
+  return round === 0 ? file : `the \`## Round ${round}\` section of ${file}`
+}
+
 function research(round) {
-  const file = round === 0 ? 'researcher.md' : `researcher-${round}.md`
   const correction =
     round === 0
       ? ''
       : `This is correction loop ${round} of ${MAX_CORRECTIONS}. Read the reviewer's ` +
-        `findings file in the issue directory and plan the corrections. ` +
+        `findings file in the issue directory, its newest round section first, and ` +
+        `plan the corrections. ` +
         `Set needsTests true only if a finding needs a new failing test first, and ` +
-        `then give that test its own Test Plan section in this file — the earlier ` +
-        `rounds' plans do not carry over, the list of commands that count included.\n`
+        `then give that test its own Test Plan section inside this round's section — ` +
+        `the earlier rounds' plans do not carry over, the list of commands that ` +
+        `count included.\n`
   return agent(
-    `Issue directory: ${dir}\n${correction}Write your handoff to ${dir}/${file}.\n${noDispatch}`,
+    `Issue directory: ${dir}\n${correction}${handoff('researcher.md', round)}${noDispatch}`,
     { agentType: 'uroboros:researcher', phase: 'Research', label: `research:${round}`, schema: PLAN },
   )
 }
@@ -157,7 +177,7 @@ if (plan.needsTests) {
   await agent(
     `Issue directory: ${dir}\nYour work order is the Test Plan section of ` +
       `${plan.handoffFile}: write those cases, in the files and style it names, and ` +
-      `no others.\nWrite your handoff to ${dir}/test-author.md.\n${noDispatch}`,
+      `no others.\n${handoff('test-author.md', 0)}${noDispatch}`,
     { agentType: 'uroboros:test-author', phase: 'Tests', label: 'tests' },
   )
 }
@@ -172,30 +192,30 @@ const rounds = []
 for (let round = 0; round <= MAX_CORRECTIONS; round++) {
   if (round > 0) {
     plan = await research(round)
-    log(`Correction plan ${round} written to ${plan.handoffFile}`)
+    log(`Correction plan ${round} appended to ${plan.handoffFile}`)
     if (plan.needsTests) {
       await agent(
         `Issue directory: ${dir}\nThe reviewer's reproduction spec is your criterion, ` +
-          `and the Test Plan section of ${plan.handoffFile} is your work order for it. ` +
-          `Write your handoff to ${dir}/test-author-${round}.md.\n${noDispatch}`,
+          `and the Test Plan section of ${section(plan.handoffFile, round)} is your ` +
+          `work order for it.\n${handoff('test-author.md', round)}${noDispatch}`,
         { agentType: 'uroboros:test-author', phase: 'Tests', label: `tests:${round}` },
       )
     }
   }
 
-  const implFile = round === 0 ? 'implementer.md' : `implementer-${round}.md`
   await agent(
-    `Issue directory: ${dir}\nYour brief is ${plan.handoffFile}.\n` +
+    `Issue directory: ${dir}\nYour brief is ${section(plan.handoffFile, round)}.\n` +
       checkList(plan.checks) +
-      `Write your handoff to ${dir}/${implFile}.\n${noDispatch}`,
+      handoff('implementer.md', round) +
+      noDispatch,
     { agentType: 'uroboros:implementer', phase: 'Implement', label: `implement:${round}` },
   )
 
-  const revFile = round === 0 ? 'reviewer.md' : `reviewer-${round}.md`
   verdict = await agent(
     `Issue directory: ${dir}\nReview round ${round}. Check the whole diff against main.\n` +
       checkList(plan.checks) +
-      `Write your findings to ${dir}/${revFile}.\n${noDispatch}`,
+      handoff('reviewer.md', round) +
+      noDispatch,
     { agentType: 'uroboros:reviewer', phase: 'Review', label: `review:${round}`, schema: VERDICT },
   )
 
