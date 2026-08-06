@@ -125,3 +125,65 @@ act on, because they are outside this increment.
    the life of the session entry, by the module's stated contract). So it
    answers "did this recording ever carry content", not "how many bodies are
    still in memory".
+
+## Increment 1 — Round 1
+
+**No production file changed this round, and none needed to.** The plan for this
+round states it plainly: the five new cases are regression pins for
+`claude_code.api_response_body`, the implementation already handles that event on
+every path the reviewer's finding named, and every case is expected green on its
+first run with no production edit. I ran the list and that is what happened.
+
+### What I did
+
+1. Read `researcher.md` (`## Increment 1 — Round 1`) and `test-author.md`
+   (`## Increment 1 — Round 1`).
+2. Confirmed the working tree was clean at `99a347b "Add Round 1 test cases for
+   api_response_body content coverage"` — the test-author's five cases and two
+   fixture helpers were already committed, and the production files were
+   untouched (`git status --short`, no output).
+3. Ran the one command the plan lists as what counts as done.
+
+I edited no test and wrote no test, per my boundaries. I opened no production
+file, because the run gave me nothing to fix.
+
+### Commands run
+
+- `npm --prefix tools/argus test` (from the repository root) — **159 tests, 159
+  pass, 0 fail, 0 cancelled, 0 skipped, 0 todo, exit 0.** Nothing excluded.
+  That is the round-0 total of 154 plus the five cases this round added.
+
+That one command is the whole "what counts as done" list in `researcher.md` for
+this round. `./test.sh` and the `argus-ui` suite were deliberately not run — the
+plan reserves them for the closing increment, and nothing outside
+`tools/argus/test` changed here. There is no linter and no formatter in this
+repository, so there was nothing else to run.
+
+### Nothing left red
+
+No failure remains, so there is nothing to attribute to untouched code and
+nothing left open.
+
+### Notes for the reviewer
+
+Neither is a blocking question; I am reporting them rather than acting on them.
+
+1. **The plan's "turns three of them red at once" count is off by one, and the
+   test-author already measured it.** `test-author.md` records that removing
+   `EVENT.apiResponseBody` from `CONTENT_EVENTS` turns four cases red (1, 2, 3
+   and 4), not three (1, 3 and 4), because `contentAt` with an explicit
+   `eventName` of the response event also stops matching once indexing stops. I
+   did not re-run that reproduction — deliberately mutating production code to
+   check a sensitivity is not implementation work, and both counts support the
+   round's conclusion that the new cases catch the regression. The discrepancy is
+   in the researcher's prose only; no case and no production line depends on it.
+2. **The three round-0 notes above still stand unchanged** (`intParam` refusing a
+   negative `at`; `contentAt` walking `contentLogs` in ingest order rather than
+   sorted by time; `counts.contentRecords` never decremented on eviction). This
+   round touched nothing that bears on any of them, and none was filed as a
+   correction.
+3. **The reviewer's two "beyond the criteria" notes remain unaddressed by
+   design** — span-carried tool content is still unstripped and unbudgeted, and
+   `/api/events?search=` still stringifies bodies. The round's plan explicitly
+   rules both out of scope and instructs that those surfaces not be edited here,
+   so I left them alone.
