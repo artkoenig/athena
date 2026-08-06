@@ -792,13 +792,45 @@ td.name {
 
 .timeline {
   /* Lane labels are agent names, not span paths, so they need less room than
-     the waterfall's. */
+     the waterfall's. The meta column carries a duration and a context size. */
   --label-w: 180px;
+  --meta-w: 120px;
+}
+
+.timeline-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 10px;
+  color: var(--text-faint);
+  margin-bottom: 6px;
+}
+
+.timeline-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.timeline-legend span::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--accent-soft);
+}
+
+.timeline-legend span[data-kind="request"]::before {
+  background: var(--teal);
+}
+
+.timeline-legend span[data-kind="tool"]::before {
+  background: var(--warn);
 }
 
 .timeline-axis {
   display: grid;
-  grid-template-columns: var(--label-w) 1fr 64px;
+  grid-template-columns: var(--label-w) 1fr var(--meta-w);
   gap: 8px;
   font-size: 10px;
   color: var(--text-faint);
@@ -819,7 +851,7 @@ td.name {
 
 .lane {
   display: grid;
-  grid-template-columns: var(--label-w) 1fr 64px;
+  grid-template-columns: var(--label-w) 1fr var(--meta-w);
   align-items: center;
   gap: 8px;
   padding: 3px 0;
@@ -836,13 +868,17 @@ td.name {
 
 .lane-track {
   position: relative;
-  height: 16px;
+  /* Tall enough for a context curve to read behind the bar and its marks. */
+  height: 26px;
 }
 
+/* The lifetime bar sits on the floor of the track, so the curve above it is the
+   thing that carries the shape and the bar only says where the lane ran. */
 .lane-bar {
   position: absolute;
-  top: 3px;
-  height: 10px;
+  top: auto;
+  bottom: 0;
+  height: 5px;
   min-width: 2px;
   border-radius: 3px;
   background: var(--accent);
@@ -854,6 +890,38 @@ td.name {
 
 .lane-bar[data-kind="agent"] {
   background: var(--violet);
+}
+
+.lane-curve {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.lane-curve polygon {
+  fill: var(--accent-soft);
+}
+
+.lane-curve[data-kind="agent"] polygon {
+  fill: color-mix(in srgb, var(--violet) 20%, transparent);
+}
+
+.lane-mark {
+  position: absolute;
+  top: 2px;
+  bottom: 7px;
+  width: 2px;
+  margin-left: -1px;
+  border-radius: 1px;
+}
+
+.lane-mark[data-kind="request"] {
+  background: var(--teal);
+}
+
+.lane-mark[data-kind="tool"] {
+  background: var(--warn);
 }
 
 .lane-meta {
@@ -1079,6 +1147,7 @@ td.name {
 
   .timeline {
     --label-w: 110px;
+    --meta-w: 84px;
   }
 
   .stat-strip {

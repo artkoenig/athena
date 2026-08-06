@@ -8,7 +8,7 @@
  */
 
 import { esc, fmtNum, fmtCost, fmtDur, fmtClock, fmtAgo, isLive, shortId } from './format.js';
-import { buildLanes, renderTimeline, renderDetailViews } from './timeline.js';
+import { buildLanes, buildDensity, renderTimeline, renderDetailViews, TOOL_EVENT } from './timeline.js';
 
 const TOKEN = new URLSearchParams(location.search).get('token');
 
@@ -22,6 +22,11 @@ const state = {
   // timeline, and the views below it are where a reader goes next.
   tab: null,
   content: [],
+  // Tool calls, kept as { seq, timeMs, spanId } and nothing else: a tool result
+  // carries its whole call parameters, and holding those would put megabytes in
+  // the page for two numbers and a span.
+  toolMarks: [],
+  toolSeq: 0,
   trace: null,
   selectedTraceId: null,
   selectedSpanId: null,
@@ -162,7 +167,12 @@ function renderDetail() {
       </div>
     </div>
 
-    ${renderTimeline(buildLanes({ session, content: state.content }))}
+    ${renderTimeline(
+      buildDensity(buildLanes({ session, content: state.content }), {
+        content: state.content,
+        tools: state.toolMarks,
+      }),
+    )}
 
     ${renderDetailViews({ selected: state.tab, counts })}
 
@@ -821,17 +831,28 @@ async function loadSession() {
   }
 }
 
-/** The content index behind the lanes. A failure here costs the lanes, not the page. */
+/**
+ * The two indexes behind the lanes: the content records for the context curve,
+ * and the tool results for the activity marks. A failure here costs the lanes,
+ * not the page, and each half fails on its own.
+ */
 async function loadTimeline() {
-  if (!state.selectedSessionId) {
+  const id = state.selectedSessionId;
+  if (!id) {
     state.content = [];
+    state.toolMarks = [];
+    state.toolSeq = 0;
     return;
   }
-  try {
-    const data = await api('/api/content', { session: state.selectedSessionId, limit: 2000 });
-    state.content = data.items;
-  } catch {
-    state.content = [];
+  // sinceSeq is why the refresh that fires on every ingest ships nothing it has.
+  const [content, tools] = await Promise.all([
+    api('/api/content', { session: id, limit: 2000 }).catch(() => null),
+    api('/api/events', { session: id, event: TOOL_EVENT, sinceSeq: state.toolSeq, limit: 2000 }).catch(() => null),
+  ]);
+  state.content = content?.items ?? [];
+  for (const item of tools?.items ?? []) {
+    state.toolMarks.push({ seq: item.seq, timeMs: item.timeMs, spanId: item.spanId });
+    if (item.seq > state.toolSeq) state.toolSeq = item.seq;
   }
 }
 
@@ -912,6 +933,8 @@ function selectSession(id, { render = true } = {}) {
   // Every session opens on its timeline, whatever view the previous one was on.
   state.tab = null;
   state.content = [];
+  state.toolMarks = [];
+  state.toolSeq = 0;
   location.hash = `#/session/${encodeURIComponent(id)}`;
   if (render) refresh({ sessions: false }).then(renderSessionList);
 }

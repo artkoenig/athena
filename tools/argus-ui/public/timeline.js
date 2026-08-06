@@ -16,6 +16,18 @@ import { esc, fmtClock, fmtDur, fmtNum } from './format.js';
 /** A bar narrower than this is invisible, so an instant of activity gets this much. */
 export const MIN_LANE_WIDTH_PCT = 0.6;
 
+/** The log event a tool call leaves behind. Its span is the lane's span. */
+export const TOOL_EVENT = 'claude_code.tool_result';
+
+/** The content record that *is* the context at that moment. */
+export const REQUEST_EVENT = 'claude_code.api_request_body';
+
+/** Activity is bucketed into this many columns, so 2000 records paint at most this many marks. */
+export const ACTIVITY_BUCKETS = 120;
+
+/** An area narrower than this is invisible, so a single request gets this much. */
+export const MIN_CURVE_WIDTH_PCT = 0.6;
+
 /** The technical views, subordinate to the timeline and all still reachable. */
 export const DETAIL_VIEWS = [
   { id: 'overview', label: 'Overview' },
@@ -27,6 +39,25 @@ export const DETAIL_VIEWS = [
 ];
 
 const usableTime = (record) => Number.isFinite(record?.timeMs) && record.timeMs > 0;
+
+const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
+
+const sizeOf = (record) => (Number.isFinite(record?.bodyLength) ? record.bodyLength : 0);
+
+const countLabel = ({ kind, count }) =>
+  `${count} ${kind === 'tool' ? 'tool call' : 'API request'}${count === 1 ? '' : 's'}`;
+
+/**
+ * The one lane-key rule, in one place.
+ *
+ * A record with no span groups by name, and a record with a span never merges
+ * with another span — which is what keeps two concurrent subagents of one type
+ * two lanes rather than one.
+ */
+export function laneKeyOf(record) {
+  if (record?.isSubagent !== true) return 'main';
+  return `agent:${record.spanId ?? ''}:${record.agent ?? ''}`;
+}
 
 /**
  * Derive the lanes of a session from its content index.
@@ -60,12 +91,10 @@ export function buildLanes({ session = null, content = [] } = {}) {
     records: mainRecords.length,
   };
 
-  // One rule, no branch: a record with no span groups by name, and a record with
-  // a span never merges with another span.
   const byKey = new Map();
   for (const record of records) {
     if (record.isSubagent !== true) continue;
-    const key = `agent:${record.spanId ?? ''}:${record.agent ?? ''}`;
+    const key = laneKeyOf(record);
     const lane = byKey.get(key);
     if (!lane) {
       byKey.set(key, {
@@ -122,7 +151,141 @@ export function laneGeometry(lane, window) {
 }
 
 /**
- * The timeline markup, from the result of `buildLanes`.
+ * The context curve of one lane, as points in a 0…100 box.
+ *
+ * `y` is an SVG coordinate, so 100 is the baseline and 0 the top. The scale is
+ * the session's own peak, passed in, never the lane's: a subagent's hill has to
+ * read smaller than the main session's mountain, which is the whole point of
+ * showing consumption over time.
+ */
+export function contextPoints(records, window, maxBodyLength) {
+  const startMs = window?.startMs ?? 0;
+  const span = Math.max(1, (window?.endMs ?? 0) - startMs);
+  return (Array.isArray(records) ? records : [])
+    .filter(usableTime)
+    .slice()
+    .sort((a, b) => a.timeMs - b.timeMs)
+    .map((record) => ({
+      x: clamp(((record.timeMs - startMs) / span) * 100, 0, 100),
+      y: maxBodyLength > 0 ? clamp(100 - (sizeOf(record) / maxBodyLength) * 100, 0, 100) : 100,
+    }));
+}
+
+/**
+ * The `points` attribute of the area under a curve, closed on the baseline.
+ *
+ * A lane with a single request would otherwise be a zero-width line, so its
+ * plateau is widened to `MIN_CURVE_WIDTH_PCT` — never past the right edge.
+ */
+export function areaPolygon(points) {
+  const list = Array.isArray(points) ? points : [];
+  if (!list.length) return '';
+  const first = list[0];
+  const last = list[list.length - 1];
+  const vertices = [`${first.x.toFixed(3)},${(100).toFixed(3)}`];
+  for (const point of list) vertices.push(`${point.x.toFixed(3)},${point.y.toFixed(3)}`);
+  let endX = last.x;
+  if (endX - first.x < MIN_CURVE_WIDTH_PCT) {
+    endX = Math.min(100, first.x + MIN_CURVE_WIDTH_PCT);
+    vertices.push(`${endX.toFixed(3)},${last.y.toFixed(3)}`);
+  }
+  vertices.push(`${endX.toFixed(3)},${(100).toFixed(3)}`);
+  return vertices.join(' ');
+}
+
+/**
+ * Activity marks for one lane, bucketed so a long session paints a bounded
+ * number of elements and still loses no record.
+ *
+ * @param {{ timeMs: number, kind: 'request'|'tool' }[]} items
+ */
+export function activityMarks(items, window) {
+  const startMs = window?.startMs ?? 0;
+  const span = Math.max(1, (window?.endMs ?? 0) - startMs);
+  const buckets = new Map();
+  for (const item of Array.isArray(items) ? items : []) {
+    if (!usableTime(item)) continue;
+    const bucket = clamp(
+      Math.floor(((item.timeMs - startMs) / span) * ACTIVITY_BUCKETS),
+      0,
+      ACTIVITY_BUCKETS - 1,
+    );
+    const key = `${bucket}:${item.kind}`;
+    const found = buckets.get(key);
+    if (found) {
+      found.count += 1;
+      continue;
+    }
+    buckets.set(key, { leftPct: (bucket / ACTIVITY_BUCKETS) * 100, kind: item.kind, count: 1 });
+  }
+  return [...buckets.values()].sort(
+    (a, b) => a.leftPct - b.leftPct || (a.kind < b.kind ? -1 : a.kind > b.kind ? 1 : 0),
+  );
+}
+
+/**
+ * Attach what each lane did to the lanes `buildLanes` derived, leaving its
+ * argument untouched.
+ *
+ * A request belongs to the lane that made it, by the same key rule the lanes
+ * were built with. A tool call carries no attribution attribute at all — only
+ * the span of the conversation that made it, which is exactly the lane's span —
+ * so it lands on that lane, and on the main lane when the span owns none.
+ *
+ * @param {{ startMs: number, endMs: number, lanes: object[] }} view
+ * @param {{ content?: object[], tools?: object[] }} sources
+ */
+export function buildDensity(view, { content = [], tools = [] } = {}) {
+  const lanes = view?.lanes ?? [];
+  const window = { startMs: view?.startMs ?? 0, endMs: view?.endMs ?? 0 };
+
+  const requests = (Array.isArray(content) ? content : []).filter(
+    (record) => record?.eventName === REQUEST_EVENT && usableTime(record),
+  );
+  const maxBodyLength = requests.reduce((peak, record) => Math.max(peak, sizeOf(record)), 0);
+
+  const spanToLane = new Map();
+  for (const lane of lanes) {
+    if (lane.kind !== 'agent' || !lane.spanId) continue;
+    if (!spanToLane.has(lane.spanId)) spanToLane.set(lane.spanId, lane.key);
+  }
+
+  // A key that matches no lane is dropped rather than inventing a lane:
+  // `buildLanes` owns which lanes exist.
+  const owned = new Map(lanes.map((lane) => [lane.key, { requests: [], tools: [] }]));
+  for (const record of requests) owned.get(laneKeyOf(record))?.requests.push(record);
+  for (const tool of Array.isArray(tools) ? tools : []) {
+    if (!usableTime(tool)) continue;
+    owned.get(spanToLane.get(tool.spanId) ?? 'main')?.tools.push(tool);
+  }
+
+  return {
+    ...view,
+    maxBodyLength,
+    lanes: lanes.map((lane) => {
+      const own = owned.get(lane.key) ?? { requests: [], tools: [] };
+      return {
+        ...lane,
+        context: contextPoints(own.requests, window, maxBodyLength),
+        activity: activityMarks(
+          [
+            ...own.requests.map((record) => ({ timeMs: record.timeMs, kind: 'request' })),
+            ...own.tools.map((tool) => ({ timeMs: tool.timeMs, kind: 'tool' })),
+          ],
+          window,
+        ),
+        requests: own.requests.length,
+        toolCalls: own.tools.length,
+        peakBodyLength: own.requests.reduce((peak, record) => Math.max(peak, sizeOf(record)), 0),
+      };
+    }),
+  };
+}
+
+/**
+ * The timeline markup, from the result of `buildLanes` — or of `buildDensity`,
+ * which only ever adds to it. The density is optional on purpose: a lane with
+ * none renders as a bare bar rather than not at all.
  *
  * @param {{ startMs: number, endMs: number, lanes: object[] }} view
  */
@@ -138,19 +301,50 @@ export function renderTimeline(view) {
   const rows = lanes
     .map((lane) => {
       const { leftPct, widthPct } = laneGeometry(lane, window);
+      const requests = lane.requests ?? 0;
+      const toolCalls = lane.toolCalls ?? 0;
+      const peak = lane.peakBodyLength ?? 0;
+      const duration = fmtDur(lane.endMs - lane.startMs);
+
+      // The curve is written before the bar so it sits behind it, not instead
+      // of it; a lane with no requests gets no <svg> at all.
+      const points = areaPolygon(lane.context ?? []);
+      const curve = points
+        ? `<svg class="lane-curve" data-kind="${esc(lane.kind)}" viewBox="0 0 100 100"
+            preserveAspectRatio="none" aria-hidden="true"><polygon points="${esc(points)}"></polygon></svg>`
+        : '';
+
+      const marks = (lane.activity ?? [])
+        .map(
+          (mark) => `<span class="lane-mark" data-kind="${esc(mark.kind)}"
+            style="left:${mark.leftPct.toFixed(3)}%" title="${esc(countLabel(mark))}"></span>`,
+        )
+        .join('');
+
+      // The numbers live in data attributes so what a lane carries can be read
+      // without reading a sentence.
+      const meta = `<span class="lane-meta" data-peak="${esc(peak)}" data-requests="${esc(requests)}"
+        data-tools="${esc(toolCalls)}" title="${esc(
+          `${duration} · ${countLabel({ kind: 'request', count: requests })} · ${countLabel({
+            kind: 'tool',
+            count: toolCalls,
+          })} · peak context ${fmtNum(peak)} chars`,
+        )}">${esc(peak > 0 ? `${duration} · ${fmtNum(peak)}` : duration)}</span>`;
+
       return `<div class="lane" data-lane="${esc(lane.key)}" data-kind="${esc(lane.kind)}">
         <span class="lane-label" title="${esc(lane.label)}">${esc(lane.label)}</span>
         <span class="lane-track">
-          <span class="lane-bar" data-kind="${esc(lane.kind)}"
-            style="left:${leftPct.toFixed(3)}%;width:${widthPct.toFixed(3)}%"></span>
+          ${curve}<span class="lane-bar" data-kind="${esc(lane.kind)}"
+            style="left:${leftPct.toFixed(3)}%;width:${widthPct.toFixed(3)}%"></span>${marks}
         </span>
-        <span class="lane-meta">${esc(fmtDur(lane.endMs - lane.startMs))}</span>
+        ${meta}
       </div>`;
     })
     .join('');
 
   return `<div class="panel timeline-panel">
     <div class="timeline">
+      <div class="timeline-legend"><span data-kind="context">context size</span><span data-kind="request">API request</span><span data-kind="tool">tool call</span></div>
       <div class="timeline-axis"><span></span><span class="timeline-ticks">${ticks}</span><span></span></div>
       ${rows}
     </div>

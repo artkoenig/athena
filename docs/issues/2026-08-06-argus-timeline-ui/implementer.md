@@ -338,3 +338,140 @@ reported a failure or a skip.
    knows it is a known, reported looseness rather than a fresh gap.
 3. **No blocking question.** The round's brief was unambiguous: change nothing,
    run one command, report it.
+
+## Increment 3
+
+Built the activity-and-context density on the lanes, exactly as the Increment 3
+section of `researcher.md` plans it: four files, no new file, no collector
+change, no dependency. `tools/argus` was not opened.
+
+### The tests are not mine, and I ran them first
+
+I ran `npm --prefix tools/argus-ui test` before touching a line. **24 tests, 20
+pass, 4 fail, exit 1** — and all four failures were this increment's, for the
+reason the test-author predicted:
+
+- `test/timeline.test.mjs` failed to load at all:
+  `SyntaxError: The requested module '../public/timeline.js' does not provide an
+  export named 'ACTIVITY_BUCKETS'`. That one failure stood for all 21 unit cases
+  of the increment, none of which registered individually.
+- `test/page.test.mjs`: `not ok 13 - the page asks the collector for the tool
+  calls, incrementally`, `not ok 14 - selecting a session forgets the previous
+  session's tool calls`, `not ok 15 - the timeline is composed with its density,
+  not around it`.
+
+Nothing else was red. I edited no test and wrote none.
+
+### What I changed
+
+**`tools/argus-ui/public/timeline.js`** — the four new constants (`TOOL_EVENT`,
+`REQUEST_EVENT`, `ACTIVITY_BUCKETS = 120`, `MIN_CURVE_WIDTH_PCT = 0.6`), the new
+pure functions, and a richer `renderTimeline`:
+
+- `laneKeyOf(record)` — the lane-key rule lifted out of `buildLanes`'s body
+  unchanged; `buildLanes` now calls it, so the key exists in one place only.
+- `contextPoints(records, window, maxBodyLength)` — SVG-coordinate points in
+  0…100, `y = 100` throughout when nothing reported a size, so a zero peak never
+  divides by zero.
+- `areaPolygon(points)` — the polygon closed on the baseline, widened to
+  `MIN_CURVE_WIDTH_PCT` and capped at 100 when a lane holds a single request;
+  `''` for an empty array, and every number through `toFixed(3)`.
+- `activityMarks(items, window)` — one entry per (bucket, kind) over
+  `ACTIVITY_BUCKETS` columns, sorted by `leftPct` then `kind`.
+- `buildDensity(view, { content, tools })` — returns a new view, leaving its
+  argument untouched. Requests are attributed by `laneKeyOf`, tool calls by a
+  `spanId → lane.key` map with `'main'` as the fallback, and a key that matches
+  no lane is dropped rather than inventing a lane. Each lane gains `context`,
+  `activity`, `requests`, `toolCalls`, `peakBodyLength`; the view gains
+  `maxBodyLength`.
+- `renderTimeline` — the `<svg class="lane-curve">` is written *before* the bar
+  inside `.lane-track`, so the curve is literally behind it; `.lane-mark` spans
+  follow it; `.lane-meta` carries `data-peak` / `data-requests` / `data-tools`
+  plus a title, and prints `<duration> · <fmtNum(peak)>`; a `.timeline-legend`
+  row sits above the axis. Every added field is read as `lane.context ?? []`,
+  `lane.peakBodyLength ?? 0` and so on, so `renderTimeline(buildLanes(…))` —
+  increment 2's call shape — still renders a bare lane with no curve and no
+  mark.
+
+**`tools/argus-ui/public/app.js`** — `state` gains `toolMarks: []` and
+`toolSeq: 0`; `loadTimeline()` issues its `/api/content` request and an
+incremental `/api/events` request for `TOOL_EVENT` in one `Promise.all`, each
+with its own `.catch(() => null)` so either failure costs only its own half;
+tool items are appended as `{ seq, timeMs, spanId }` and nothing else, raising
+`state.toolSeq` to the largest `seq` seen; `selectSession` resets both;
+`renderDetail` composes `renderTimeline(buildDensity(buildLanes(…), …))`.
+
+**`tools/argus-ui/public/styles.css`** — `--meta-w: 120px` on `.timeline` (84px
+in the ≤900px block), `.timeline-axis` and `.lane` switched from the literal
+`64px` to `var(--meta-w)`, `.lane-track` 16px → 26px, `.lane-bar` moved to the
+floor of the track (`top: auto; bottom: 0; height: 5px`), and new `.lane-curve`,
+`.lane-mark` and `.timeline-legend` rules. No new custom property and no new
+colour: the fills are `var(--accent-soft)`, `color-mix(… var(--violet) 20% …)`,
+`var(--teal)` and `var(--warn)`, all already defined in both themes.
+
+**`tools/argus-ui/README.md`** — the **Timeline** bullet now says the lanes are
+marked where an agent made an API request or called a tool and shaded behind
+with the size of the context it was carrying.
+
+`CLAUDE.md` and `test/independence.test.mjs` are untouched, as the plan says:
+no new file under `public/`, so there is nothing to add to the guard.
+
+### Commands run
+
+- `npm --prefix tools/argus-ui test` (from the repository root, before any edit;
+  `node --test "test/*.test.mjs"` over `config`, `independence`, `page`,
+  `server`, `timeline`) — **24 tests, 20 pass, 4 fail, exit 1**, the four listed
+  above.
+- `node --test tools/argus-ui/test/timeline.test.mjs` (mid-implementation, to
+  check the unit half before wiring the page) — **38 tests, 38 pass, exit 0**.
+- `node --test tools/argus-ui/test/page.test.mjs` (mid-implementation) —
+  **9 tests, 9 pass, exit 0**.
+- `npm --prefix tools/argus-ui test` (final) — **61 tests, 61 pass, 0 fail,
+  0 skipped, 0 todo, exit 0**.
+
+That single `npm --prefix tools/argus-ui test` is the whole of what counts as
+done for this increment. `tools/argus` and `./test.sh` are off the list by the
+plan's own decision and I ran neither. There is no linter and no formatter in
+this repository, so nothing else was run.
+
+Nothing red is left open: the four failures I started with were this
+increment's, and all four are green.
+
+### Problems hit
+
+None that changed the plan. Two details the plan left to the implementer, both
+settled the way its own test cases read:
+
+1. **The last vertex of `areaPolygon` when the points are already wide enough.**
+   The plan lists the vertices as `x0,100`, every `x,y`, an optional widened
+   repeat, then `xEnd,100`, without saying what `xEnd` is when no widening
+   happens. I read it as the last point's own `x`, which is what closes a
+   two-point area on the baseline under its last point.
+2. **The lane meta's visible text.** The plan pins the `data-*` attributes and
+   leaves the sentence open; I print `<duration> · <fmtNum(peak)>`, and just the
+   duration when a lane has no requests, so the old lane meta is unchanged for a
+   bare lane.
+
+### Notes for the reviewer, acted on nowhere
+
+1. **The context curve spans only a lane's requests, not its lane bar.** With
+   two requests at 12.5% and 37.5% of the window, the shaded area runs
+   12.5…37.5% and the lane bar runs the full lifetime beneath it. That follows
+   the plan exactly (points are placed at record times and closed on the
+   baseline), but it means a long lane with two early requests shows a short
+   hill at its left rather than a curve across its width. Whether that reads as
+   intended is a question for the eye, not for `node --test`.
+2. **`state.toolMarks` grows for as long as one session stays selected.** The
+   watermark makes each refresh cheap, but the array is only ever cleared by
+   `selectSession`; a session left open for hours accumulates one small object
+   per tool call. The plan chose this and the entries are three fields each, so
+   it is bounded in practice — recorded, not changed.
+3. **The two notes I filed in Increment 2's handoff still stand.** The 15s
+   repaint interval only fires for `state.tab === 'overview'` and so still never
+   repaints the landing view, and `loadTimeline()` still runs on every refresh
+   for every session — now with a second request alongside the first, though the
+   `sinceSeq` watermark is what keeps that one cheap. Both are outside this
+   increment's criteria.
+4. **The test-author reported no gap in this increment's plan**, and I found
+   none either: every expected value in the 21 unit cases followed from the
+   plan's own formulas.
