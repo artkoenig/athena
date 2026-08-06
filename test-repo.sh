@@ -197,6 +197,67 @@ else
   no "a workflow script does not parse, or two of them claim one name"
 fi
 
+# Parsing is not enough to be loadable. The loader reads `meta` with a parser
+# instead of running it, and rejects the whole script when any value there is
+# built rather than written out — a description joined from two strings is a
+# `BinaryExpression`, and the workflow it names then resolves nowhere. That
+# failure is invisible from the file: it parses, the suite above passes, and
+# only a dispatch months later reports the name as unknown. `agile-loop`
+# shipped that way. So the values are checked for being literal, here, where a
+# wrapped line is cheap to fix.
+node -e '
+  const fs = require("fs"), path = require("path");
+  const dir = path.join(process.argv[1], "workflows");
+  const APOS = String.fromCharCode(39);
+  const TICK = String.fromCharCode(96);
+  const QUOTES = "\"" + APOS + TICK;
+  // The two string forms a meta value may take, so they can be removed before
+  // what is left is judged. Built here rather than written out, because the
+  // pattern needs the very quote characters this script cannot spell.
+  const STRINGS = new RegExp(
+    APOS + "(?:[^" + APOS + "\\\\]|\\\\.)*" + APOS + "|\"(?:[^\"\\\\]|\\\\.)*\"",
+    "g",
+  );
+  const problems = [];
+  for (const file of fs.readdirSync(dir).filter((f) => f.endsWith(".js")).sort()) {
+    const src = fs.readFileSync(path.join(dir, file), "utf8");
+    const start = src.indexOf("export const meta = {");
+    if (start < 0) { problems.push(file + ": no meta object literal"); continue; }
+    // Brace matching, blind to braces inside strings, gives the object source
+    // without a parser this repository does not depend on.
+    let depth = 0, end = -1, quote = null;
+    for (let i = src.indexOf("{", start); i < src.length; i++) {
+      const c = src[i];
+      if (quote) { if (c === "\\") i++; else if (c === quote) quote = null; continue; }
+      if (QUOTES.indexOf(c) >= 0) { quote = c; continue; }
+      if (c === "{") depth++;
+      else if (c === "}" && --depth === 0) { end = i; break; }
+    }
+    if (end < 0) { problems.push(file + ": meta object is not closed"); continue; }
+    // What may remain once every literal and key is taken out is punctuation
+    // and nothing else. A leftover plus sign, backtick or bracket pair is the
+    // build the loader refuses; a leftover word is a variable it cannot
+    // resolve either.
+    const rest = src
+      .slice(start, end + 1)
+      .replace(/\/\/[^\n]*/g, "")
+      .replace(STRINGS, "")
+      .replace(/^export const meta =/, "")
+      .replace(/[A-Za-z_$][\w$]*\s*:/g, "")
+      .replace(/\b(?:true|false|null|\d+(?:\.\d+)?)\b/g, "")
+      .trim();
+    if (!/^[\s{}\[\],]*$/.test(rest)) {
+      problems.push(file + ": meta is not a pure literal, at " + JSON.stringify(rest.slice(0, 40)));
+    }
+  }
+  if (problems.length) { console.error(problems.join("; ")); process.exit(1); }
+' "$root"
+if [ $? -eq 0 ]; then
+  ok "every workflow declares meta as a pure literal, so the loader registers it"
+else
+  no "a workflow builds a meta value instead of writing it out; the loader registers nothing"
+fi
+
 # The incremental loop is the one that hands an agent a slice of the issue, and
 # the rule that makes that safe — the named increment is the whole of what the
 # agent is asked for — has to reach the agent, not just the script. The shared

@@ -10,17 +10,18 @@
 // and cannot import a sibling. Anything changed in one of the two chains
 // belongs in the other; `test-repo.sh` guards the parts of that where a
 // divergence would be silent.
+// `meta` is read by a parser, not by the runtime, and it must be a pure
+// literal: every value spelled out, no concatenation, no interpolation, no
+// call. A `description` built from two joined strings reads the same to a
+// human and is a `BinaryExpression` to the loader, which then registers no
+// workflow at all — the script stays on disk and its name resolves nowhere.
+// So these lines run long, and that is the price of being loadable.
 export const meta = {
   name: 'agile-loop',
   description:
-    'Runs the issue as a backlog: cut it into increments, work one per iteration through ' +
-    'research, tests, implementation and review, and re-cut the increments still open after each.',
+    'Runs the issue as a backlog: cut it into increments, work one per iteration through research, tests, implementation and review, and re-cut the increments still open after each.',
   whenToUse:
-    'When an issue file with confirmed acceptance criteria describes work worth delivering ' +
-    'in steps — several criteria, or a change whose later parts depend on what the earlier ' +
-    'ones turn up. For a single change use uroboros:loop instead; the backlog costs an extra ' +
-    'agent per iteration and buys nothing when there is nothing to re-cut. Pass the issue ' +
-    'directory as args.issueDir.',
+    'When an issue file with confirmed acceptance criteria describes work worth delivering in steps — several criteria, or a change whose later parts depend on what the earlier ones turn up. For a single change use uroboros:loop instead; the backlog costs an extra agent per iteration and buys nothing when there is nothing to re-cut. Pass the issue directory as args.issueDir.',
   phases: [
     { title: 'Decompose', detail: 'planner cuts the issue into a backlog of increments' },
     { title: 'Research', detail: 'researcher plans the current increment' },
