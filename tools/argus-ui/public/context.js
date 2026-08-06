@@ -1,11 +1,13 @@
 /**
  * argus-ui — the context behind one lane.
  *
- * Pure functions over `GET /api/content/at`: which record a lane asks for,
- * how the request body that *was* the context at a moment parses into a list
- * of blocks, and how that list renders. No `document`, no `fetch`, no
- * `location` — which is what lets `node --test` import this directly, the same
- * contract `timeline.js` keeps.
+ * Everything the panel behind one lane needs: which record it asks for and at
+ * which moment, the one call that goes and gets it through an api function the
+ * caller injects, what the page holds turned into what the panel is drawn from,
+ * and how the request body that *was* the context at a moment parses into a
+ * list of blocks and renders. No `document`, no `fetch`, no `location` — which
+ * is what lets `node --test` import this directly, the same contract
+ * `timeline.js` keeps.
  *
  * Two-thirds of a real context is the `tools` array, which is not a message, so
  * every top-level field the body carries gets a block of its own: a list that
@@ -14,6 +16,7 @@
  */
 
 import { esc, fmtClock, fmtNum, shortId } from './format.js';
+import { resolveCursor } from './timeline.js';
 
 /** A collapsed block shows this much of its text on one line. */
 export const PREVIEW_CHARS = 120;
@@ -161,6 +164,64 @@ export function laneContentQuery(lane) {
   if (lane.spanId) return { span: lane.spanId };
   if (lane.agent) return { agent: lane.agent };
   return null;
+}
+
+/**
+ * The whole request behind one lane's context: which session, which moment,
+ * which lane.
+ *
+ * The moment is resolved here and nowhere else, so "the nearest request at or
+ * before the cursor" is one decision in one place: a live cursor asks for the
+ * head of the window, a parked one for its own moment, and neither can ask for
+ * a moment outside the recorded window. A lane the filter cannot identify gets
+ * no request at all — an unfiltered one would answer with the main session's
+ * context under an agent's lane.
+ *
+ * @param {{ session: string|null, key: string|null, view: object|null, cursor: object|null }} input
+ * @returns {{ session: string, at: number }|null} plus exactly one of main/span/agent
+ */
+function laneContentRequest({ session = null, key = null, view = null, cursor = null } = {}) {
+  if (!session || !key) return null;
+  const filter = laneContentQuery((view?.lanes ?? []).find((lane) => lane.key === key));
+  if (!filter) return null;
+  return { session, at: resolveCursor(cursor, view).timeMs, ...filter };
+}
+
+/**
+ * Fetch the record one lane's context is drawn from, through the api function
+ * the caller hands in — this module reaches the network through nothing of its
+ * own.
+ *
+ * The rejection is swallowed here: a failed fetch costs the panel and not the
+ * page that is refreshing it. The record comes back tagged with the lane it was
+ * fetched for, which is what lets the caller drop an answer for a lane the
+ * reader has already left.
+ *
+ * @param {(path: string, params: object) => Promise<{ item?: object|null }>} api
+ * @param {{ session: string|null, key: string|null, view: object|null, cursor: object|null }} input
+ * @returns {Promise<{ key: string|null, item: object|null }>}
+ */
+export async function fetchLaneContext(api, { session = null, key = null, view = null, cursor = null } = {}) {
+  const request = laneContentRequest({ session, key, view, cursor });
+  const answer = request ? await api('/api/content/at', request).catch(() => null) : null;
+  return { key, item: answer?.item ?? null };
+}
+
+/**
+ * What the panel is drawn from, out of what the page holds.
+ *
+ * The held answer belongs to the lane it was fetched for; anything else means a
+ * fetch is still in flight, which is not the same answer as "there is nothing
+ * here". The two keys are the two fields `renderContextPanel` reads, so the
+ * result spreads straight into its input.
+ *
+ * @param {string|null} key the lane the reader has open
+ * @param {{ key: string|null, item: object|null }|null} held
+ * @returns {{ item: object|null, pending: boolean }}
+ */
+export function laneContextInput(key, held) {
+  const fresh = held?.key === key;
+  return { item: fresh ? (held.item ?? null) : null, pending: !fresh };
 }
 
 /**

@@ -8,7 +8,7 @@
  */
 
 import { esc, fmtNum, fmtCost, fmtDur, fmtClock, fmtAgo, isLive, shortId } from './format.js';
-import { laneContentQuery, renderContextPanel } from './context.js';
+import { fetchLaneContext, laneContextInput, renderContextPanel } from './context.js';
 import {
   buildLanes,
   buildDensity,
@@ -919,20 +919,12 @@ async function loadLaneContext() {
     clearLaneContext();
     return;
   }
-  const view = laneView();
-  const filter = laneContentQuery(view.lanes.find((entry) => entry.key === key));
-  const answer = filter
-    ? await api('/api/content/at', {
-        session: id,
-        at: resolveCursor(state.cursor, view).timeMs,
-        ...filter,
-      }).catch(() => null)
-    : null;
+  const held = await fetchLaneContext(api, { session: id, key, view: laneView(), cursor: state.cursor });
   // The selection can move while this is in flight — a click, a scrub or a
   // session change. An answer for a lane the reader has left must never be
   // painted under the lane they are on now.
   if (state.selectedSessionId !== id || state.selectedLane !== key) return;
-  state.laneContext = { key, item: answer?.item ?? null };
+  state.laneContext = held;
 }
 
 /**
@@ -944,13 +936,9 @@ function renderLanePanel() {
   if (!container) return;
   const key = state.selectedLane;
   const lane = key ? (laneView().lanes.find((entry) => entry.key === key) ?? null) : null;
-  // The held answer belongs to the lane it was fetched for; anything else means
-  // a fetch is still in flight, which is not the same as "there is nothing here".
-  const held = state.laneContext.key === key;
   container.innerHTML = renderContextPanel({
     lane,
-    item: held ? state.laneContext.item : null,
-    pending: !held,
+    ...laneContextInput(key, state.laneContext),
     expanded: state.expanded,
   });
 }

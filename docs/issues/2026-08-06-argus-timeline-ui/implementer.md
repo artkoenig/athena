@@ -1034,3 +1034,107 @@ No blocking question, and nothing red anywhere. Two notes for the reviewer:
   changes, the wording of the existing case, the impossible `"agent:"` record)
   were left alone as the plan directs; the last is closed by
   `laneContentQuery`'s final `return null`.
+
+## Increment 5 — Round 2
+
+Implemented the plan's section A and B exactly: the two hops the reviewer's
+findings named (M1, the cursor's moment in the request; M2, the fetched record
+reaching the panel) moved out of `app.js`'s source-only reach and into
+`context.js`, where `node --test` executes them with values. Two production
+files changed and nothing else: no test file, no markup, no CSS, no
+documentation, nothing under `tools/argus`.
+
+### The tests were red first, for the reason the plan predicts
+
+Ran the command list before touching any code: `npm --prefix tools/argus-ui test`
+— 128 tests, 123 pass, 5 fail, exit 1. The five are exactly the ones the
+test-author's handoff records for this round, and they fail on the absence of
+the new exports, never on a defect in the test:
+
+- `test/context.test.mjs` fails to load as a whole:
+  `SyntaxError: The requested module '../public/context.js' does not provide an export named 'fetchLaneContext'`.
+  That one failure covers F1–F12.
+- `not ok 31 - app.js takes the context panel from its module` (P1), AssertionError.
+- `not ok 37 - the panel asks the collector for the nearest request at the cursor's moment, for that lane only` (P2), AssertionError.
+- `not ok 38 - the fetched context is what the panel state holds` (P3), AssertionError.
+- `not ok 41 - the panel is drawn from the answer held for the lane it belongs to` (P4), AssertionError.
+
+### What changed
+
+**`tools/argus-ui/public/context.js`**
+
+- Module header (lines 1–14) rewritten so it still describes the whole module:
+  it now says the module holds which record the panel asks for and at which
+  moment, the one call that fetches it through an injected api function, what
+  the page holds turned into what the panel is drawn from, and the parsing and
+  rendering it already held. The "No `document`, no `fetch`, no `location`"
+  sentence is kept verbatim — it is still true and it is why `node --test` can
+  import this.
+- Added `import { resolveCursor } from './timeline.js';` under the existing
+  `format.js` import. `timeline.js` imports only `format.js`, so no cycle, and
+  the specifier resolves inside the project, so `independence.test.mjs` stays
+  green (confirmed by the run below).
+- Added, after `laneContentQuery` and byte-for-byte as the plan's snippet has
+  them: the private `laneContentRequest` (not exported — every decision it makes
+  is observed through `fetchLaneContext`), the exported `async fetchLaneContext(api, input)`,
+  and the exported `laneContextInput(key, held)`. Each keeps the plan's doc
+  comment as written.
+- `laneContentQuery`, `contextBlocks`, `renderContextPanel`, `PREVIEW_CHARS` and
+  every other line are untouched. `laneContentQuery` stays exported, as decision
+  4 of the plan requires, even though `app.js` no longer imports it.
+
+**`tools/argus-ui/public/app.js`**
+
+- Line 11 is now
+  `import { fetchLaneContext, laneContextInput, renderContextPanel } from './context.js';`.
+  `laneContentQuery` left the import; the page no longer calls it.
+- `resolveCursor` stays in the `./timeline.js` import — still used, now at line
+  1076 rather than the plan's quoted 1088 (the line moved because
+  `loadLaneContext` and `renderLanePanel` shrank above it; same call, same
+  behaviour).
+- `loadLaneContext` keeps its name, signature, doc comment, the
+  `clearLaneContext()` early return and both staleness guards. Its middle is now
+  the plan's two lines: `const held = await fetchLaneContext(api, { session: id, key, view: laneView(), cursor: state.cursor });`
+  followed by the unchanged guard comment, the guard, and `state.laneContext = held;`.
+  The old `const view = …`, `const filter = …`, `const answer = …` lines and the
+  `at:`/`...filter` object are gone.
+- `renderLanePanel` keeps the container lookup, the `if (!container) return;`
+  and its `key`/`lane` lines; the `const held = …` line and the two-line comment
+  above it are deleted (that text now sits on `laneContextInput`, and the plan
+  forbids keeping two wordings of one rule), and the call is now
+  `renderContextPanel({ lane, ...laneContextInput(key, state.laneContext), expanded: state.expanded })`.
+- `clearLaneContext` and `selectSession`'s reset keep their
+  `{ key: null, item: null }` literals untouched.
+
+### Commands run
+
+- `npm --prefix tools/argus-ui test` (baseline, before any edit) — 128 tests,
+  123 pass, 5 fail, exit 1. The five are listed above.
+- `npm --prefix tools/argus-ui test` (after the change) — 175 tests, 175 pass,
+  0 fail, exit 0. Nothing skipped, nothing excluded.
+
+That one command is the whole of what this round's plan lists as what counts as
+done. `tools/argus`' suite and `./test.sh` are off the list by the plan's own
+wording and were not run.
+
+The jump from 128 reported to 175 is the twelve F-cases in `context.test.mjs`
+registering individually now that the module imports (the whole file counted as
+one failing entry before) plus the rest of that file's 33 pre-existing cases
+becoming visible again; no case was added or removed by me, and every test file
+is exactly as the test-author left it.
+
+### Problems hit
+
+None. Nothing is blocked and no question is open. Two things worth recording,
+neither acted on:
+
+- **A plan line number that moved, not a conflict.** The plan's module map cites
+  `resolveCursor` as still used at `app.js:1088`; after the deletions it sits at
+  1076. Same call site, same expression, nothing about it changed.
+- **Beyond the criteria, noticed and left alone.** `context.js` now imports from
+  `timeline.js`, so the two front-end modules are no longer independent of each
+  other — the plan chose that deliberately (decision 3) and argues the direction
+  is right. Recorded only so a later reader does not mistake it for drift. The
+  reviewer's four "beyond the criteria" observations (the lane `<button>`,
+  `renderTimeline`'s third argument, the fourth module under `public/`, the
+  extra request per refresh) were closed by him and I pinned nothing for them.
