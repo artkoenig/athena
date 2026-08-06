@@ -1832,3 +1832,194 @@ whose first result is unknown — and before the fix they are red by constructio
 (`mergeToolMarks` does not exist, and `loadTimeline` carries neither the guard
 nor the merge). The `functionSource` change turns no existing case red, per the
 check above.
+
+## Increment 3 — Round 2
+
+The reviewer's `## Increment 3 — Round 1` section raises **one finding**, and
+this section plans that fix and nothing else. No case, command or instruction
+from any earlier section carries over; what binds now is below.
+
+### The finding, restated
+
+`tools/argus-ui/public/timeline.js:203–225`, `activityMarks`. The function maps
+an item's `timeMs` to a bucket and the bucket to a `leftPct`, and the rendered
+`<span class="lane-mark" style="left:…%">` carries that value — but no case in
+the suite constrains it. Replace the body's `bucket` with the constant `0` and
+every mark of every lane paints at the left edge whatever moment it happened at;
+`npm --prefix tools/argus-ui test` still passes 73/73. The reviewer walked each
+assertion that touches the marks and showed why: the count/kind cases assert
+count and kind only, the same-moment case asserts the two `leftPct` are equal
+*to each other* (`0 === 0` passes), the bounding case asserts `0 <= leftPct <
+100` (0 passes), and the render cases assert only that `data-kind="request"` and
+`data-kind="tool"` appear. "Activity **over time**" is therefore the one half of
+this increment's criterion that nothing verifies.
+
+**The production code is correct; only the tests are missing.** I read
+`activityMarks` and `renderTimeline` line by line and, to settle the exact
+numbers this plan pins rather than guess them, ran one throwaway import of
+`public/timeline.js` (not the suite, not `node --test`) — reported under
+"Numbers I verified" below, with why. So this round adds cases and changes no
+production file.
+
+### Implementation plan
+
+One file is edited: `tools/argus-ui/test/timeline.test.mjs`. Append a new banner
+and four cases after the existing last case (`the merged index is what the
+density reads`, `:654–665`). Every existing case stays byte-for-byte as it is,
+and the import list at the top of the file already names everything the new
+cases need (`activityMarks`, `ACTIVITY_BUCKETS`, `buildLanes`, `buildDensity`,
+`renderTimeline`, `record`-style factories) — no import line changes.
+
+No change to `public/timeline.js`, `public/app.js`, `public/styles.css`,
+`test/page.test.mjs`, any README, or anything under `tools/argus`. If a new case
+comes out red, the fault is in the case's arithmetic, not in `activityMarks`:
+compare it against the verified numbers below before touching production code,
+and if `activityMarks` genuinely disagrees with them, say so rather than
+loosening the assertion.
+
+### Numbers I verified, so nobody has to re-derive them
+
+Run once, deliberately, because a pinned constant that is wrong by a bucket
+turns into a loosened assertion downstream and the finding comes back. Window
+`{ startMs: 1000, endMs: 5000 }`, so a span of 4000 ms and
+`ACTIVITY_BUCKETS === 120`, one bucket = 33⅓ ms of time and
+`100 / 120 = 0.8333…` percent of track.
+
+- `activityMarks([{timeMs:1000},{timeMs:2000},{timeMs:3000},{timeMs:4000}]` all
+  `kind:'request'`, window`)` returns four marks with `leftPct` exactly
+  `[0, 25, 50, 75]` — the fractions 0, ¼, ½, ¾ are whole multiples of 1/120, so
+  these are exact equalities, not approximations. Do not add ± tolerance here;
+  the point of the case is the exact mapping.
+- An item at `1000 + 4000/3` (fraction ⅓) lands at `leftPct === 32.5`, not
+  33.333: `(1333.333…/4000)*120` is `39.999…` in floating point and floors to
+  bucket 39. The error is one bucket low, which is the documented resolution —
+  so any non-round-fraction assertion must be "at or below the ideal, by at most
+  one bucket width", never an equality and never a symmetric tolerance.
+- Rendered: `buildDensity(buildLanes({ session: session(), content }), {
+  content, tools: [...] })` with main-session requests at `timeMs` 2000 and 4000
+  and one tool mark at 3000 produces, in document order, exactly three
+  `lane-mark` spans: `request` at `left:25.000%`, `tool` at `left:50.000%`,
+  `request` at `left:75.000%`. A tool mark whose `spanId` matches no agent lane
+  falls to `main`, which is why a `spanId: null` tool lands on the only lane.
+- The regex that reads them, checked against the real markup (the attribute sits
+  on the next source line, so `[\s\S]*?` is required and `\s+` alone is
+  brittle):
+  `/<span class="lane-mark" data-kind="([a-z]+)"[\s\S]*?style="left:([0-9.]+)%"/g`.
+  The `.lane-bar` also carries a `left:`, which is why the class must be part of
+  the pattern.
+
+### Decisions I rejected
+
+- **Changing `activityMarks` to round instead of floor**, so fraction ⅓ lands on
+  33.333. It would make one assertion prettier and shift every mark up to half a
+  bucket to the right of the moment it belongs to; the finding asks for a test,
+  not for different behaviour, and a production change here would be scope I was
+  not given.
+- **A DOM-level case that measures a mark's computed position.** Needs jsdom;
+  zero runtime and dev dependencies is this project's first rule
+  (`tools/argus-ui/CLAUDE.md`). The render case reads the `style` attribute out
+  of the markup string instead, which is what this project can do and what every
+  other render case here already does.
+- **Asserting the pixel relationship between a mark and the curve** (that a
+  mark at time *t* sits over the curve vertex at time *t*). `contextPoints` maps
+  time exactly and `activityMarks` maps it to bucket resolution, so they legally
+  differ by up to one bucket; a case pinning them together would pin an
+  approximation as if it were a contract.
+- **A property-style case over random times.** A failure would report a random
+  input and read as flaky; four fixed cases with stated arithmetic fail with the
+  same information every time.
+- **Re-asserting the count, kind, bounding and bucketing facts** the existing
+  cases already own. They are green and untouched; the new cases add only the
+  position half.
+
+### Module map
+
+| Path | What it holds | Entry points |
+| --- | --- | --- |
+| `tools/argus-ui/test/timeline.test.mjs` | 665 lines, unit cases over the pure module; factories `session()` (`:20`), `record()` (`:21`), `threeRecordContent()` (`:39`), `toolMark()` (`:70`) at the top; banner comments separate the groups; the import list at `:4–17` already names every export the new cases use | **the only file edited**: four cases appended after `:665` under a new banner |
+| `tools/argus-ui/public/timeline.js` | `activityMarks` (`:203`) buckets an item's `timeMs` into `ACTIVITY_BUCKETS` (`:27`) columns and returns `{ leftPct, kind, count }` sorted by `leftPct` then `kind`; `renderTimeline` (`:321`) writes `leftPct.toFixed(3)` into `style="left:…%"` on `<span class="lane-mark">` (`:346–351`); `buildDensity` (`:239`) feeds it one `request` item per `api_request_body` record and one `tool` item per tool event, a tool on an unowned span falling to `main` (`:260`) | **untouched** — read only |
+| `tools/argus-ui/public/app.js`, `public/styles.css`, `test/page.test.mjs`, both READMEs, `tools/argus/**` | — | **untouched this round** |
+
+### Environment
+
+- Node v22.22.2 at `/opt/node22/bin/node`, on the `PATH`; the package requires
+  ≥ 20.11.
+- `tools/argus-ui` has zero runtime and zero dev dependencies. `npm install` is
+  not needed and must not become needed.
+- Whole package, from the repository root: `npm --prefix tools/argus-ui test`
+  (`node --test "test/*.test.mjs"`).
+- The one edited file alone, from the repository root:
+  `node --test tools/argus-ui/test/timeline.test.mjs`.
+- `public/timeline.js` is importable by `node --test` because the package is
+  `"type": "module"`; no loader flag.
+- There is no linter and no formatter in this repository: nothing to run.
+
+### Test Plan
+
+Tests are needed, and they are the whole of this round's work: the finding is a
+missing constraint, so the correction *is* the cases. Framework: `node:test`
+with `node:assert/strict`, the only thing this project uses.
+
+Conventions, taken from `test/timeline.test.mjs` itself: every test name is a
+full lowercase sentence stating the fact it pins; fixtures are the local
+factories at the top of the file and nothing else — no mocks, no DOM, no
+`fetch`, no fake timers; an assertion that could be read two ways carries a
+message saying what the fact is; a banner comment introduces each group; and no
+case asserts a user-visible sentence, only structure and numbers.
+
+New banner, appended at the end of the file:
+`// Criterion 5, round 2 — a mark sits where its moment sits, not merely somewhere on the track.`
+
+#### Cases
+
+| # | Case name | Input / state | Expected | File | Level |
+| --- | --- | --- | --- | --- | --- |
+| 1 | `a mark sits at the fraction of the track its moment sits at in the window` | `activityMarks([{ timeMs: 1000, kind: 'request' }, { timeMs: 2000, kind: 'request' }, { timeMs: 3000, kind: 'request' }, { timeMs: 4000, kind: 'request' }], { startMs: 1000, endMs: 5000 })` | `assert.deepEqual(marks.map((mark) => mark.leftPct), [0, 25, 50, 75])` with a message naming that these are quarters of the window; exact equality, no tolerance. This is the case the finding's mutation (`const bucket = 0`) fails. | `tools/argus-ui/test/timeline.test.mjs` | unit |
+| 2 | `a later moment always sits strictly right of an earlier one` | `activityMarks` over six `{ kind: 'tool' }` items at `timeMs` 1000, 1500, 2200, 3000, 3700, 4900 in the same window; marks come back sorted by `leftPct` | every consecutive pair satisfies `marks[i + 1].leftPct > marks[i].leftPct`, and for each mark `ideal - mark.leftPct` is `>= 0` and `<= 100 / ACTIVITY_BUCKETS + 1e-6`, where `ideal = ((timeMs - 1000) / 4000) * 100` for the item at the same index of the sorted input — assert with a message saying a mark may sit at most one bucket left of its moment and never right of it. Do **not** write an equality here: fraction ⅓-style inputs floor a bucket low (32.5 for 33.333), which the `>= 0` half deliberately allows. | `tools/argus-ui/test/timeline.test.mjs` | unit |
+| 3 | `the rendered marks carry the positions their moments earned` | `const content = [record({ seq: 1, timeMs: 2000, bodyLength: 10 }), record({ seq: 2, timeMs: 4000, bodyLength: 20 })];` then `renderTimeline(buildDensity(buildLanes({ session: session(), content }), { content, tools: [toolMark({ seq: 9, timeMs: 3000, spanId: null })] }))` | collect `[...html.matchAll(/<span class="lane-mark" data-kind="([a-z]+)"[\s\S]*?style="left:([0-9.]+)%"/g)]` and assert `deepEqual` of `[kind, left]` pairs to `[['request', '25.000'], ['tool', '50.000'], ['request', '75.000']]`, plus `assert.doesNotMatch(html, /NaN/)`. This is the case that pins the value reaching the markup rather than only the value `activityMarks` returns. | `tools/argus-ui/test/timeline.test.mjs` | unit (render, string-level) |
+| 4 | `a mark keeps following its moment when the window does not start at zero` | `activityMarks([{ timeMs: 1_700_000_000_000, kind: 'request' }, { timeMs: 1_700_000_002_000, kind: 'request' }], { startMs: 1_700_000_000_000, endMs: 1_700_000_008_000 })` — epoch-scale times, the real shape of the data | two marks with `leftPct` exactly `[0, 25]`, with a message that a mark's position is measured from the window start and not from the epoch. Fails if the `- startMs` subtraction is dropped. | `tools/argus-ui/test/timeline.test.mjs` | unit |
+
+Case 3 needs `session()`, `record()` and `toolMark()` exactly as the file already
+defines them; `session()` gives `firstSeenMs: 1000, lastSeenMs: 5000`, which is
+what makes the window 1000…5000 and the three expected positions the ones above.
+`toolMark({ spanId: null })` lands on `main` because no agent lane owns that
+span — the fixture has no subagent record.
+
+#### Deliberately untested, and why
+
+- **Where a mark ends up in pixels, and whether it visually overlaps its bar.**
+  Needs a DOM and therefore a dependency; the `style` attribute in the markup is
+  the last thing this project can observe, and case 3 observes it.
+- **Sub-bucket precision.** 120 buckets over the window is the chosen
+  resolution; pinning finer would pin a number the design does not promise, which
+  is why case 2 asserts a one-bucket band rather than an equality.
+- **Count, kind, bucket bounding, the 500-record ceiling, curve scaling,
+  geometry, `mergeToolMarks`, escaping and the composition of curve and bar.**
+  All already pinned by cases the reviewer walked and found sound; they are
+  re-run by the command below and need nothing new.
+- **`app.js` wiring, `styles.css`, `tools/argus`, the landing view, scrubbing,
+  live mode and per-lane selection.** Untouched by this round, or not this
+  increment's.
+
+#### What counts as done
+
+```
+npm --prefix tools/argus-ui test
+```
+
+That one command, from the repository root, is the whole list. It runs the four
+new cases together with all five test files of the package, costs seconds and
+needs no install. `tools/argus`' own suite and `./test.sh` stay off the list:
+nothing outside `tools/argus-ui/test/timeline.test.mjs` changes this round, and
+the closing increment owns the full-suite run.
+
+#### What is already red
+
+I did not run that command, not once and not as a baseline; the first run belongs
+to whoever runs it downstream. From reading and from the reviewer's report: the
+last run was 73 cases, 73 passing, exit 0, and no production file changes this
+round, so all 73 stay green and the four new cases are the only ones whose first
+result is unknown. Unlike the earlier rounds, they are expected to pass on the
+first run — `activityMarks` already computes what they assert, and the numbers
+they pin are the ones I verified above. A red new case means the case's
+arithmetic is wrong, not the module.
