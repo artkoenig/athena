@@ -384,3 +384,135 @@ scrubbing, live mode, per-lane detail) was built ahead of time.
   keeps the newest records, so a subagent that ran before the cutoff draws no
   lane at all. The store evicts old content by char budget anyway, so this is
   increment 1's window, not a regression introduced here.
+
+## Increment 2 — Round 1
+
+Status: **0 findings, accepted.** All four criteria are met in the code and each
+now has a case that fails when the behaviour breaks; nothing in the diff goes
+beyond them, and the suite is green.
+
+### Commands run
+
+- `npm --prefix tools/argus-ui test` — `node --test "test/*.test.mjs"`, 37 cases,
+  37 passed, 0 failed, 0 skipped, 0 todo, exit 0. Nothing was skipped or
+  excluded. This was the only command on the list; no other suite was run, and
+  no run was needed at the merge base because nothing was red.
+
+### Criterion 1 — opening a session lands on the timeline, technical views subordinate
+
+Met. `public/app.js` opens with `tab: null` in the state literal (line 23), and
+`renderTabBody` has an explicit `case null` that paints an empty `#tab-body`
+(lines 179-181), so a freshly loaded page shows the timeline and no technical
+view. `selectSession` resets `state.tab = null` (line 913), so switching
+sessions returns to the timeline whatever view the previous session was left on.
+`renderDetail` composes `renderTimeline(buildLanes(...))` (line 165) above
+`renderDetailViews({ selected: state.tab, counts })` (line 167) and the
+`#tab-body` container (line 169) — the timeline is never nested inside a view,
+so the subordination runs the right way. All six previous views stay reachable
+(`DETAIL_VIEWS` in `public/timeline.js`), the delegated `[data-tab]` handler
+opens one and closes the open one back to the timeline alone (line 973), and
+`loadTimeline` (line 824) refuels the lanes on every refresh with a failure that
+costs the lanes rather than the page.
+
+Covered: `test/page.test.mjs` cases 7-10 pin the module import, `tab: null` with
+no string default, the `state.tab = null` in `selectSession`, and the
+`renderTimeline` → `renderDetailViews` → `#tab-body` order inside `renderDetail`;
+`test/timeline.test.mjs` cases 21-23 pin that all six views are offered, that
+none is `aria-selected="true"` when nothing is chosen, and that exactly one is
+marked when one is. The previous round's Finding 1 reproduction — setting
+`tab: 'overview'` and deleting the `renderTimeline` line — now fails case 8 and
+case 10 respectively, so the gap it named is closed.
+
+### Criterion 2 — one lane for the main session, one per subagent, spanning its lifetime
+
+Met. `buildLanes` (`public/timeline.js:37`) gives the main session a lane from
+`session.firstSeenMs`/`lastSeenMs`, widened only by main-session records, and one
+lane per subagent group whose `startMs`/`endMs` are that group's first and last
+content record. Records without a usable time are filtered out before anything is
+derived, lanes are sorted by start time rather than API order, and
+`laneGeometry` clamps into `[0, 100]` behind a `Math.max(1, span)` guard, so a
+zero-length window paints no `NaN%` into a style attribute. Every lane is a bar
+in one shared window, so a vertical slice answers which agents were running.
+
+Covered: `test/timeline.test.mjs` cases 24-33 pin the empty-content main lane,
+the three-records-one-span agent lane, order independence, a subagent outliving
+the session, no-time records changing nothing, exact geometry, the minimum-width
+instant bar, the zero-length window, the rendered bars and the escaping of a
+hostile agent label.
+
+### Criterion 3 — two concurrent subagents of one type get two lanes
+
+Met. The lane key is `agent:<spanId>:<agent>` (`public/timeline.js:68`), so two
+`general-purpose` instances on `sp-a` and `sp-b` never merge, and the `#1`/`#2`
+label suffix is applied only where two lanes actually carry the same label.
+
+Covered: `test/timeline.test.mjs` cases 34-37 pin two lanes plus the numbered
+labels for the concurrent case, the rendered markup carrying both bars, two
+requests on one span still making one lane, and no suffix where labels differ.
+
+### Criterion 4 — the UI advises no flag `argus env` now sets by default
+
+Met. `OTEL_LOG_TOOL_DETAILS` is gone from the tasks placeholder,
+`CLAUDE_CODE_ENHANCED_TELEMETRY_BETA`/`OTEL_TRACES_EXPORTER` from the traces
+placeholder and from the setup paragraph in both `public/app.js` and
+`public/index.html`. I re-checked the list in `test/page.test.mjs:101` against
+`otelEnvFor` (`tools/argus/src/claude.mjs:310`): every name that function sets is
+on it except `UROBOROS_OBS_URL`/`UROBOROS_OBS_TOKEN`, and no file under `public/`
+names either, so the omission is inert. `tools/argus-ui/README.md` names no flag
+at all. The two names still advised — `OTEL_RESOURCE_ATTRIBUTES` and
+`CLAUDE_CODE_OTEL_DIAG_STDERR` — are set by nothing in `otelEnvFor`.
+
+Covered: `test/page.test.mjs` case 11 walks every file under `public/` against
+the 17 names and case 12 keeps the two legitimate ones from being deleted as
+collateral.
+
+### Nothing in the diff that no criterion asked for
+
+`public/format.js` is the eight formatters moved out of `app.js` unchanged (I
+diffed the bodies against `main`), which is what lets `timeline.js` escape
+without a second `esc`; `app.js` declares none of them any more and uses all
+eleven imports. The CSS block adds only lane, track, bar and axis rules, all
+against variables that already exist (`--accent`, `--violet`, `--text-faint`,
+`--mono`, `--border`). The README's new Timeline bullet and the "event tail"
+rewording describe exactly criteria 1 and 2. `index.html` already loaded
+`app.js` as a module on `main`, so the import addition needed no other change.
+Nothing from the excluded increments — activity blocks, context curve,
+scrubbing, live mode, per-lane context or tool list — was built ahead of time.
+The collector (`tools/argus/**`) is untouched by increment 2's commits; those
+hunks in the diff are increment 1's accepted baseline.
+
+### Beyond the criteria (blast radius)
+
+- **The module graph resolves as served.** `src/server.mjs` maps `.js` to
+  `text/javascript; charset=utf-8` and serves any file under `public/` with no
+  allowlist, so `index.html → app.js → timeline.js → format.js` loads. The
+  independence test was extended to both new files, so the "nothing reaches
+  outside the project" rule still covers them.
+- **No duplicate declaration in `app.js`.** The removed formatting block left no
+  `const esc` / `function fmt*` behind, so the imports cannot collide — which
+  matters because a `SyntaxError` there would blank the page and no test imports
+  `app.js`.
+- **The lane inputs match what the API serves.** `contentMetaOf`
+  (`tools/argus/src/claude.mjs:210`) emits `timeMs`, `spanId`, `agent` and
+  `isSubagent`, exactly the fields `buildLanes` reads, and `/api/content` caps
+  `limit` at 2000, the value `loadTimeline` asks for.
+- **No stale document.** `README.md`, `tools/argus/README.md` and
+  `tools/argus/CLAUDE.md` describe the collector, its API and how to start the
+  interface — none of them names which view a session opens on.
+  `tools/argus-ui/README.md` was updated in this diff.
+- **Empty `spanId` would merge same-type lanes — observation, not a finding.**
+  `contentMetaOf` normalises a missing span id to `''`, so two concurrent
+  `general-purpose` subagents whose records carry no span id key as one
+  `agent::general-purpose` lane. Whether the CLI ever emits content records
+  without a span id is behaviour I cannot verify from this checkout (no recorded
+  telemetry is present), so there is no reproduction and no finding; if such
+  records exist, the data holds no discriminator either.
+- **A long session still truncates the oldest lanes.** `/api/content?limit=2000`
+  keeps the newest records, so a subagent that ran before the cutoff draws no
+  lane. Unchanged from increment 1's retention window, not introduced here.
+- **Residual, below the finding bar:** nothing pins `renderTabBody`'s `case
+  null`. Deleting it would let the landing state fall through to the overview
+  panel *under* the timeline with the suite green. The landing state itself
+  (`tab: null`) and the timeline's presence are both pinned, and the project
+  forbids runtime dependencies, so a DOM-level test is not available; I raise
+  this as an observation rather than a correction.
