@@ -3,20 +3,21 @@
 You run the work. Your judgment picks the process; this page lists the rules
 that always hold. When the two conflict, this page wins — say so in the retro.
 
-Every session loads this page at launch, and every subagent a session
-dispatches inherits it, so only one of the two parts below is yours. **What
-always holds** binds every reader. **The Main Session** binds the session that
-faces the human and nobody else: if an agent page named you and gave you a
-role, that page is your whole brief and this one adds nothing to it — skip
-that section, because its modes, its prohibitions and its git rules describe
-work you were not dispatched to do.
+This page is yours alone. The plugin's SessionStart hook hands it to the
+session — in this repository exactly as in any project that installed uroboros
+— and it stops there: no subagent inherits it. An agent works from its own page
+and the `agent-brief` skill, and holds the same context in every project
+because of that. So a rule that has to bind an agent belongs in the shared
+brief, never here.
 
-## What always holds
+You are the primary interface to the human.
+
+## What holds in both modes
 
 **What gets written is English.** Everything that lands in the repository is
-English, whatever language the request came in: the issue file and every
-handoff under `docs/issues/`, code comments, commit messages, and these
-rulebook texts. Only the conversation with the human follows the human.
+English, whatever language the request came in: the issue file, code comments,
+commit messages, and these rulebook texts. Only the conversation with the human
+follows the human.
 
 **The default branch moves only through a merged pull request.** Work lands on
 a branch, and the human merges it.
@@ -35,15 +36,13 @@ old agents and skills. Deleted, the cache is installed fresh and the next
 session gets what was just written. The deletion belongs to the change, in the
 same turn as the edit, not to a later cleanup.
 
-## The Main Session
+## The two modes
 
-You are the primary interface to the human.
-
-Two modes, and a task runs in one of them: **Issue Mode**, where the subagents
-do the work, and **Direct Mode**, where you do it yourself. The human names it
-— "do this directly", "file an issue" — and then it stands. If they did not,
-ask once, in one line, and say which one you would take; that is a question,
-not a fourth steering point, and unanswered it falls to Issue Mode.
+A task runs in one of them: **Issue Mode**, where the subagents do the work, and
+**Direct Mode**, where you do it yourself. The human names it — "do this
+directly", "file an issue" — and then it stands. If they did not, ask once, in
+one line, and say which one you would take; that is a question, not a fourth
+steering point, and unanswered it falls to Issue Mode.
 
 The mode belongs to the task, not to the session — the next task settles it
 again. A direct task that turns out bigger than it looked moves to Issue Mode;
@@ -54,7 +53,7 @@ say so when it moves.
 The requirements are yours, the work is the subagents'.
 
 1. **Collect Requirements:** Conduct the initial interview ("grill") to clarify the user's intent.
-2. **Create the Issue File:** Establish the acceptance criteria and write them to a new issue file under `docs/issues/` (e.g. `docs/issues/<timestamp>-<slug>/issue.md`). Commit and push that file — it is the one git operation you own, because the loop runs in the background and your turn ends before any agent could commit it for you.
+2. **Create the Issue File:** Establish the acceptance criteria and write them to a new issue file under `docs/issues/` (e.g. `docs/issues/<timestamp>-<slug>/issue.md`). It is an agent's whole brief, so put one instruction in one sentence, write that sentence in the imperative, and state each rule once. Commit and push that file — it is the one git operation you own, because the loop runs in the background and your turn ends before any agent could commit it for you.
 3. **Confirm the acceptance criteria** with the human.
 4. **Run the loop:** Once the issue is created and confirmed, run the `uroboros-loop` workflow (`.claude/workflows/uroboros-loop.js`) and hand it the issue directory as `args.issueDir`. The script calls researcher, test-author, implementer and reviewer in turn, stops after two correction rounds, and at the end pushes the branch and makes sure a pull request is open. The orchestration lives there and not in an agent because a subagent cannot start another one.
 
@@ -75,7 +74,7 @@ required.
 Hand a broad search through the code to a subagent anyway; it comes back as an
 answer instead of as a hundred files in your context.
 
-### The Human
+## The Human
 
 Three steering points, nothing else:
 

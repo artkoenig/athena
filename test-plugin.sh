@@ -29,7 +29,7 @@ plugin_copy() {
   local dest="$1"
   mkdir -p "$dest"
   cp -R "$root/.claude-plugin" "$root/hooks" "$root/.githooks" "$dest/"
-  cp "$root/CLAUDE.md" "$dest/"
+  cp "$root/rulebook.md" "$dest/"
   for optional in skills agents; do
     [ -d "$root/$optional" ] && cp -R "$root/$optional" "$dest/"
   done
@@ -160,6 +160,36 @@ node -e '
 ' "$root"
 check $? "plugin.json declares exactly the agent files the tree holds"
 
+# An agent must hold the same context here as in a project that installed the
+# plugin, so exactly two things may reach it from uroboros: its own page and
+# the shared brief. Both travel with the plugin. A CLAUDE.md at the root would
+# not — it would load as this checkout's project memory and be inherited by
+# every subagent dispatched here, and no installing project can reproduce
+# that. Hence rulebook.md, delivered by the SessionStart hook, and hence every
+# agent page naming agent-brief in its skills list.
+node -e '
+  const fs = require("fs"), path = require("path");
+  const root = process.argv[1];
+  const problems = [];
+  if (fs.existsSync(path.join(root, "CLAUDE.md")))
+    problems.push("a CLAUDE.md at the plugin root would be inherited by every subagent in this checkout alone");
+  if (!fs.existsSync(path.join(root, "rulebook.md")))
+    problems.push("no rulebook.md at the plugin root");
+  if (!fs.existsSync(path.join(root, "skills/agent-brief/SKILL.md")))
+    problems.push("no skills/agent-brief/SKILL.md");
+  for (const file of fs.readdirSync(path.join(root, "agents")).filter(f => f.endsWith(".md"))) {
+    const text = fs.readFileSync(path.join(root, "agents", file), "utf8");
+    const fm = text.match(/^---\n([\s\S]*?)\n---\n/);
+    if (!fm) { problems.push(file + ": no frontmatter"); continue; }
+    if (!/^skills:\s*(\n\s*-\s*)?[\s\S]*?\bagent-brief\b/m.test(fm[1]))
+      problems.push(file + ": does not preload agent-brief");
+    if (!/agent-brief/.test(text.slice(fm[0].length).split("\n").slice(0, 6).join("\n")))
+      problems.push(file + ": does not open by reporting a missing shared brief");
+  }
+  if (problems.length) { console.error(problems.join("; ")); process.exit(1); }
+' "$root"
+check $? "the rulebook is rulebook.md, not a CLAUDE.md, and every agent page preloads the shared brief"
+
 # the marketplace manifest offers exactly this repository as the
 # uroboros plugin, and pins no version either.
 node -e '
@@ -192,21 +222,21 @@ check $? "claude plugin validate accepts the plugin manifest and its components"
 # the loader ignores (a misspelled `repository`) or one it misses
 # (`description`), or a file that lands in a component directory without
 # being a component — an `agents/CLAUDE.md` registers as an agent with no
-# frontmatter. So the gate is the warning list, not the exit code: two
-# warnings are expected on a defect-free tree, and any third is a defect.
+# frontmatter. So the gate is the warning list, not the exit code: one
+# warning is expected on a defect-free tree, and any second is a defect.
 #
-# The two: the missing version, and the root CLAUDE.md — the rulebook
-# itself, deliberately not loaded by the CLI's own convention and
-# delivered to sessions of installing projects via the hook instead.
+# The one: the missing version. The rulebook draws none, because it is
+# `rulebook.md` rather than a CLAUDE.md the CLI would notice and report as
+# unloaded — it is not a memory filename in any project, and the hook is
+# what delivers it.
 strict_out="$tmp/strict.txt"
 claude plugin validate "$root/.claude-plugin/plugin.json" --strict >"$strict_out" 2>&1
 warnings="$(grep -c '^  > ' "$strict_out")"
 version_warnings="$(grep -c '^  > version: No version specified' "$strict_out")"
-root_md_warnings="$(grep -c '^  > root: CLAUDE.md at the plugin root is not loaded' "$strict_out")"
-if [ "$warnings" = "2" ] && [ "$version_warnings" = "1" ] && [ "$root_md_warnings" = "1" ]; then
-  ok "--strict warns about the missing version and the root CLAUDE.md, and nothing else"
+if [ "$warnings" = "1" ] && [ "$version_warnings" = "1" ]; then
+  ok "--strict warns about the missing version and nothing else"
 else
-  no "--strict warns about more than the missing version and the root CLAUDE.md:"
+  no "--strict warns about more than the missing version:"
   grep '^  > ' "$strict_out" | sed 's/^/       /'
 fi
 
@@ -369,8 +399,8 @@ node -e '
   const out = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
   const rulebook = fs.readFileSync(process.argv[2], "utf8");
   if (!out.hookSpecificOutput.additionalContext.includes(rulebook.trimEnd())) process.exit(1);
-' "$tmp/happy.json" "$root/CLAUDE.md"
-check $? "the whole text of CLAUDE.md arrives verbatim in additionalContext"
+' "$tmp/happy.json" "$root/rulebook.md"
+check $? "the whole text of rulebook.md arrives verbatim in additionalContext"
 
 # hooks.json registers exactly one SessionStart command hook, and it
 # runs the script this suite exercises, from the plugin root.
@@ -392,13 +422,13 @@ echo "=== the plugin self-updates when remote"
 
 # The version the fake update lands on, and the plugin tree it resolves
 # to — a second copy with a marker line in its rulebook, so a test can tell
-# which copy's CLAUDE.md the hook actually delivered.
+# which copy's rulebook.md the hook actually delivered.
 selfupdate="$tmp/self-update"
 old_root="$selfupdate/old-version"
 new_root="$selfupdate/new-version"
 plugin_copy "$old_root"
 plugin_copy "$new_root"
-printf '\ntest-marker: new-version\n' >>"$new_root/CLAUDE.md"
+printf '\ntest-marker: new-version\n' >>"$new_root/rulebook.md"
 selfupdate_project="$tmp/self-update-project"
 project_repo "$selfupdate_project"
 fake_bin="$tmp/fake-bin"
@@ -543,10 +573,10 @@ esac
 # has to say so rather than report success.
 no_rulebook="$tmp/no-rulebook"
 plugin_copy "$no_rulebook"
-rm -f "$no_rulebook/CLAUDE.md"
+rm -f "$no_rulebook/rulebook.md"
 status="$(run_hook "$no_rulebook" "$empty_project" >"$tmp/no-rulebook.json" && hook_status "$tmp/no-rulebook.json")"
 case "$status" in
-  *"rulebook missing"*"FAILED"*) ok "a missing CLAUDE.md is named and success withdrawn" ;;
+  *"rulebook missing"*"FAILED"*) ok "a missing rulebook.md is named and success withdrawn" ;;
   *) no "a missing rulebook went unreported: $status" ;;
 esac
 

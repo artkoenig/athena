@@ -1,13 +1,18 @@
+---
+paths: agents/**
+---
 # The subagents
 
 This is `agents/`'s own page, and it sits here rather than in `agents/CLAUDE.md`
 because plugin discovery reads every `agents/*.md` as an agent — a `CLAUDE.md`
 there would register as a nameless agent and be counted as one by the
-self-check. It carries no `paths:` frontmatter, so it loads at launch and is
-inherited by every subagent the session dispatches. Scope it to a path and it
-would load only when a session reads a file under `agents/` — which a subagent
-never inherits, because inheritance passes on what the session loaded at launch
-and a path-scoped rule is by definition not that.
+self-check. Its `paths:` frontmatter is what keeps it out of a subagent's
+context: an unscoped rule loads at launch and is inherited by every subagent the
+session dispatches, and this page exists only in this checkout, so an agent
+would hold it here and nowhere else. Scoped, it loads when a session opens a
+file under `agents/` — which no subagent inherits, because inheritance passes on
+what the session loaded at launch and a path-scoped rule is by definition not
+that.
 
 One agent is one flat `<name>.md` in that directory, and every one of them is
 listed in `plugin.json`'s `agents` field. That list is not decoration: for a
@@ -26,14 +31,27 @@ self-check reports as a defect.
 
 ## What every agent shares
 
-What holds for every agent at run time — how it takes its brief, how it spends
-its tools, how it reports a run, how it writes and commits its handoff, and the
-check mode — lives in `skills/agent-brief/SKILL.md`, and every agent page names
-it in `skills:` so it is injected at startup. Nothing an agent needs while it
-works may live on this page instead: a plugin ships agents, skills and hooks,
-not `.claude/rules/`, so this page reaches only sessions running inside this
-repository and never an agent in a project that installed uroboros. This page
-is for whoever writes the agents; the shared brief is for the agents.
+What holds for every agent at run time — what always binds it, how it takes its
+brief, how it spends its tools, how it reports a run, how it writes and commits
+its handoff, and the check mode — lives in `skills/agent-brief/SKILL.md`, and
+every agent page names it in `skills:` so it is injected at startup. That skill
+ships with the plugin, so it is the only channel that reaches an agent in every
+project alike. This page is for whoever writes the agents; the shared brief is
+for the agents.
+
+An agent holds exactly three things: its own page, the shared brief, and
+whatever memory the host project itself provides. Nothing uroboros owns may
+reach it by any other route, or the same agent behaves differently here than in
+a project that installed the plugin. That is why the rulebook is `rulebook.md`
+rather than a `CLAUDE.md` — a `CLAUDE.md` here would load as project memory and
+be inherited, which no installing project can reproduce — and why every page in
+`.claude/rules/` carries `paths:`. The suite checks both.
+
+Three rules bind the session and the agents alike: English, the default branch
+moving only through a merged pull request, and the cache deletion after a change
+to uroboros' own agents or skills. They stand in the rulebook and in the shared
+brief, because the two audiences have no channel in common. Edit one, edit the
+other.
 
 So an agent page carries its role and the boundaries of that role alone, and
 restates nothing the shared brief already says. A rule that stands in both

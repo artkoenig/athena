@@ -57,6 +57,29 @@ else
 fi
 
 echo
+echo "=== no repository-local rule reaches an agent"
+
+# `.claude/rules/` is not shipped with the plugin, so anything it delivers
+# exists in this checkout and nowhere else. An unscoped page loads at launch
+# and is inherited by every subagent the session dispatches, which would give
+# an agent working here rules it never holds in a project that installed
+# uroboros. `paths:` frontmatter is what stops that: the page then loads only
+# when a session opens a file it governs, and inheritance passes on the launch
+# context alone.
+rules_unscoped=""
+for page in "$root"/.claude/rules/*.md; do
+  [ -e "$page" ] || continue
+  if ! head -1 "$page" | grep -q '^---$' || ! sed -n '2,/^---$/p' "$page" | grep -q '^paths:'; then
+    rules_unscoped="${rules_unscoped} $(basename "$page")"
+  fi
+done
+if [ -z "$rules_unscoped" ]; then
+  ok "every page in .claude/rules/ is path-scoped, so no subagent inherits one"
+else
+  no "unscoped rule pages would reach every subagent in this checkout alone:$rules_unscoped"
+fi
+
+echo
 echo "=== remote operation deploys the collector alone"
 
 # Dockerfile, compose.yaml and render.yaml build and run argus. The interface

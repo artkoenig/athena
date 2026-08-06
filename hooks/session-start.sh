@@ -3,10 +3,18 @@ set -u
 
 # ---------------------------------------------------------------------------
 # The plugin's SessionStart hook. It does two things a plugin cannot do by
-# itself: it puts the rulebook text into the session's context — a CLAUDE.md
-# at a plugin root is not loaded, and a skill is model-invoked and therefore
-# optional — and it points the project's git hooks at the push guard shipped
-# with the plugin, unless the project already has hooks of its own.
+# itself: it puts the rulebook text into the session's context — rulebook.md
+# is not a memory filename, so nothing loads it anywhere, and a skill is
+# model-invoked and therefore optional — and it points the project's git hooks
+# at the push guard shipped with the plugin, unless the project already has
+# hooks of its own.
+#
+# That the rulebook is not named CLAUDE.md is the point. A CLAUDE.md in the
+# uroboros checkout would load as project memory there and be inherited by
+# every subagent, which no installing project can reproduce — the same agent
+# would then hold the rulebook in one project and not in the other. Delivered
+# from here it reaches the session and stops there, identically everywhere,
+# and what an agent needs travels in the agent-brief skill instead.
 #
 # Skills and agents need nothing from here: plugin discovery exposes
 # skills/<name>/SKILL.md and agents/<name>.md on its own. What this script
@@ -46,7 +54,7 @@ if [ "${CLAUDE_CODE_REMOTE:-}" = "true" ] && command -v claude >/dev/null 2>&1; 
   fi
 fi
 
-rulebook="${plugin_root}/CLAUDE.md"
+rulebook="${plugin_root}/rulebook.md"
 guard_dir="${plugin_root}/.githooks"
 
 # JSON-encode stdin as the body of a JSON string: drop the control bytes that
@@ -110,7 +118,7 @@ done
 if [ -f "$rulebook" ]; then
   rulebook_state="rulebook delivered"
 else
-  rulebook_state="rulebook missing (no CLAUDE.md at the plugin root)"
+  rulebook_state="rulebook missing (no rulebook.md at the plugin root)"
   problems="${problems} ${rulebook_state};"
 fi
 

@@ -8,7 +8,8 @@
 just the name: a run reviews and corrects its own work, and what a run learns
 about the workflow is written back into the workflow. It ships as a Claude Code
 plugin and assumes a modern Anthropic agent — at least Opus 5. The rules are one
-page, [`CLAUDE.md`](CLAUDE.md); this one won't repeat it.
+page, [`rulebook.md`](rulebook.md), delivered to every session by the plugin's
+SessionStart hook; this one won't repeat it.
 
 ## Context is the scarce resource
 

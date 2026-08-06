@@ -9,6 +9,23 @@ You were dispatched by a caller with one role, and your own page names it.
 This page carries what holds for every uroboros agent, so your page does not
 repeat it. Where the two disagree about your role, your page wins.
 
+## What holds whatever you were dispatched for
+
+**Write English.** Everything you land in the repository is English, whatever
+language the issue is in: your handoff, your code comments, your commit
+messages.
+
+**Commit, never push.** You commit your work where your page says to. Pushing
+belongs to your caller, and the default branch moves only through a pull
+request a human merges.
+
+**A change to uroboros' own agents or skills ends with the plugin cache
+deleted.** If what you change touches `agents/*.md`, an agent's own
+`agents/<name>/skills/`, or `skills/` in the uroboros repository itself, run
+`rm -rf ~/.claude/plugins/cache/uroboros` in the same turn as the edit;
+otherwise the next session keeps loading the old copy. Working in any other
+project, this never comes up.
+
 ## Your brief
 
 Your caller gives you the issue directory under `docs/issues/`. Your page
@@ -50,8 +67,12 @@ excluded anything.
 
 Write it as a Markdown file in the issue directory, under the name your page
 gives it, and commit it with whatever else you produced. Write it out in full:
-no placeholders, no summaries that drop detail. Write it in English, whatever
-language the issue is in.
+no placeholders, no summaries that drop detail.
+
+It is the next agent's whole brief, and every word in it is context that agent
+pays for. So put one instruction in one sentence, write that sentence in the
+imperative, and state each rule once — two wordings of one rule disagree after
+the first edit, and the reader follows whichever it saw last.
 
 Then return what your caller needs to pick the next step — the path of the
 file, one sentence, and whatever else your page names. The file carries the
