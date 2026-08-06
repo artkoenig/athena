@@ -203,3 +203,153 @@ vacuous": the plan states the reviewer's reproduction turns three cases red
 depends on the response event being indexed. This does not change what any
 case asserts and no case was rewritten over it — it is reported for the
 researcher to reconcile, not acted on here.
+
+## Increment 2
+
+Wrote every case in the Increment 2 test plan of `researcher.md`, in the three
+files it named: two new (`tools/argus-ui/test/timeline.test.mjs`,
+`tools/argus-ui/test/page.test.mjs`) and one edited
+(`tools/argus-ui/test/independence.test.mjs`, adding `public/timeline.js` and
+`public/format.js` to its existence and ownership lists). No production file
+was opened — expected shapes came entirely from the plan's prose: the
+`buildLanes`/`laneGeometry`/`renderTimeline`/`DETAIL_VIEWS`/`renderDetailViews`
+signatures and algorithm, the field lists for `session`/`content` records, and
+the exact list of flag names criterion 4 forbids. Ran each file with
+`node --test tools/argus-ui/test/<file>.test.mjs` and confirm below that every
+new case fails for the reason the plan predicts.
+
+### Criterion 1 — opening a session lands on the timeline, the technical views stay reachable and subordinate
+
+| # | Case | Test | Result |
+| --- | --- | --- | --- |
+| 1 | `DETAIL_VIEWS` carries exactly the six ids, each with a non-empty label | `tools/argus-ui/test/timeline.test.mjs`: `'the timeline names exactly six technical views, each with a label'` | — |
+| 2 | `renderDetailViews({ selected: null })` offers every view, opens none | `tools/argus-ui/test/timeline.test.mjs`: `'opening a session with nothing selected offers every technical view and opens none'` | — |
+| 3 | `renderDetailViews({ selected: 'events' })` marks exactly one selected | `tools/argus-ui/test/timeline.test.mjs`: `'selecting one technical view marks exactly that one as selected'` | — |
+| 4 | `app.js` imports `./timeline.js`, `index.html` loads `/app.js` as a module | `tools/argus-ui/test/page.test.mjs`: `'app.js imports the timeline module, and index.html loads app.js as a module'` | fails: `AssertionError: app.js must import timeline.js so the timeline is reached by the page, not tested as an island` |
+
+Cases 1–3 fail together with the whole file, since `public/timeline.js` does
+not exist yet:
+
+```
+Error [ERR_MODULE_NOT_FOUND]: Cannot find module
+'/home/user/uroboros/tools/argus-ui/public/timeline.js' imported from
+/home/user/uroboros/tools/argus-ui/test/timeline.test.mjs
+```
+
+That is the correct failure for this state of the repository: `buildLanes`,
+`laneGeometry`, `renderTimeline`, `DETAIL_VIEWS` and `renderDetailViews` are
+all named by the plan as new and are genuinely absent (there is no
+`public/timeline.js` at all — checked by `ls tools/argus-ui/public/`, which
+lists only `app.js`, `index.html`, `styles.css`) — not a typo on this end.
+Once the implementer creates the module, the import will resolve and each of
+the fourteen cases in that file (1–3 and 5–18 below) will fail or pass on its
+own merits; until then the whole file reports this one `ERR_MODULE_NOT_FOUND`
+for all of them at once.
+
+### Criterion 2 — one lane for the main session, one per subagent, each spanning its lifetime
+
+| # | Case | Test | Result |
+| --- | --- | --- | --- |
+| 5 | Empty content: one main lane spanning the session | `'with no content the main lane still spans the whole session'` | — |
+| 6 | Main record plus three subagent records on one span: two lanes | `'a subagent spanning three records on one span gets its own lane'` | — |
+| 7 | Same records newest-first: identical result | `'lane order does not depend on the order the api returned the records'` | — |
+| 8 | Subagent past `lastSeenMs`: window widens, main lane does not | `'a subagent active past the session end widens the window but not the main lane'` | — |
+| 9 | Records with `timeMs: 0` / missing mixed in: identical to case 6 | `'records with no usable time widen nothing and change no lane'` | — |
+| 10 | `laneGeometry` exact arithmetic at two points | `'lane geometry is exact at round numbers'` | — |
+| 11 | `laneGeometry` for a single-instant lane | `'a single-instant lane is still a visible bar that never overflows its track'` | — |
+| 12 | `laneGeometry` against a zero-length window | `'lane geometry stays finite and in range against a zero-length window'` | — |
+| 13 | `renderTimeline` markup: two `data-lane`, valid `style` | `'the rendered timeline carries one bar for the main session and one for the subagent, each with valid geometry'` | — |
+| 14 | Hostile agent label escaped in markup | `'a hostile agent label is escaped in the rendered timeline, never raw'` | — |
+
+All ten (5–14) are in `tools/argus-ui/test/timeline.test.mjs` and fail with the
+same `ERR_MODULE_NOT_FOUND` quoted above, for the same reason: the module they
+import does not exist yet.
+
+### Criterion 3 — two concurrent subagents of one type get two lanes
+
+| # | Case | Test | Result |
+| --- | --- | --- | --- |
+| 15 | Two spans, one agent name, overlapping in time: two lanes, `#1`/`#2` labels | `'two concurrent subagents of the same type get two lanes, told apart by span and numbered in the label'` | — |
+| 16 | Same four records through `renderTimeline`: three `data-lane` | `'the rendered timeline never merges two concurrent same-type subagents into one bar'` | — |
+| 17 | Two records on one span, one agent: still one agent lane | `'a lane is a span, not a record: two requests on one span still make one lane'` | — |
+| 18 | Two different agent names on different spans: no `#1`/`#2` suffix | `'two different agent names on different spans get two lanes with no disambiguation suffix'` | — |
+
+All four (15–18) are in `tools/argus-ui/test/timeline.test.mjs`, in the same
+file and failing with the same `ERR_MODULE_NOT_FOUND`.
+
+### Criterion 4 — the UI no longer advises a flag `argus env` sets
+
+| # | Case | Test | Result |
+| --- | --- | --- | --- |
+| 19 | No file under `public/` names a flag `argus env` now sets | `tools/argus-ui/test/page.test.mjs`: `'no file under public names a flag argus env now sets by default'` | fails: `app.js names CLAUDE_CODE_ENHANCED_TELEMETRY_BETA`, `app.js names OTEL_TRACES_EXPORTER`, `app.js names OTEL_LOG_TOOL_DETAILS`, `index.html names CLAUDE_CODE_ENHANCED_TELEMETRY_BETA` |
+| 20 | Flags `argus env` does not set stay advised in `app.js` | `tools/argus-ui/test/page.test.mjs`: `'flags argus env does not set are still advised in app.js'` | passes today, unforced — `OTEL_RESOURCE_ATTRIBUTES` and `CLAUDE_CODE_OTEL_DIAG_STDERR` are already in `app.js` and the plan does not ask that either be added; this case is a guard against case 19's edit taking them out as collateral damage, not a case that needs the implementation to change |
+
+### Independence guard
+
+`tools/argus-ui/test/independence.test.mjs` was edited, not authored fresh:
+added `'public/timeline.js'` and `'public/format.js'` to the existence list in
+the first case and to the `owned` list in the second, exactly as the plan
+specifies. Both of its pre-existing cases now fail, correctly, because those
+two files do not exist yet:
+
+- `'the interface is a project of its own, with everything a project needs'`
+  fails: `tools/argus-ui/public/timeline.js is missing`
+- `'nothing in the interface reaches outside the interface'` fails: `the scan
+  does not cover public/timeline.js — it is not there to check`
+
+### Commands run
+
+- `node --test tools/argus-ui/test/timeline.test.mjs` — 1 top-level test
+  reported (the file fails to load), 0 pass, 1 fail, exit 1 — covers cases
+  1–3 and 5–18, eighteen cases, all red via the one `ERR_MODULE_NOT_FOUND`.
+- `node --test tools/argus-ui/test/page.test.mjs` — 3 tests, 1 pass
+  (case 20), 2 fail (cases 4 and 19), exit 1.
+- `node --test tools/argus-ui/test/independence.test.mjs` — 2 tests, 0 pass,
+  2 fail, exit 1.
+- `node --test tools/argus-ui/test/config.test.mjs tools/argus-ui/test/server.test.mjs`
+  — 12 tests, 12 pass, exit 0 — run only to confirm the untouched suites are
+  unaffected by these edits, not part of this increment's own list.
+
+None of the above is `npm --prefix tools/argus-ui test` or `./test.sh` — the
+plan reserves the full-suite run for the implementer once the code exists.
+
+### Deliberately not written
+
+Matches the plan's own list exactly, nothing added or dropped:
+
+- That `renderDetail` puts the timeline above the nav, and that `state.tab`
+  starts as `null` — DOM wiring in `app.js`, no harness for it and none to be
+  added (jsdom is a dependency the project has zero of).
+- Whether a lane bar is visually where it should be — geometry is pinned as
+  numbers, pixels are not a thing `node --test` can see.
+- The `/api/content` fetch itself — three lines of the existing `api()`
+  helper, and `server.test.mjs` already proves the proxy forwards query
+  strings intact.
+- The 2000-record window — the collector's own cap, pinned in that project's
+  suite.
+- A subagent record with an empty `spanId` — under contract every content
+  record carries a span; the key rule handles the case without a branch and
+  nothing promises behaviour for it.
+- Recordings made without the content flags — out of contract by the issue's
+  own decision.
+- `format.js` — a verbatim move of functions no case asserts today.
+- Everything increment 1 covered — untouched here, and `tools/argus` is not
+  on this increment's command list.
+
+### Gaps and conflicts found in the plan
+
+One documentation looseness, not acted on because no case needed it resolved:
+the plan describes `renderTimeline`'s signature in prose as
+`renderTimeline({ window, lanes })`, but `buildLanes` is specified to return a
+flat `{ startMs, endMs, durationMs, lanes }` with no nested `window` key, and
+the plan's own wiring line and test cases (`renderTimeline(buildLanes(…))`,
+case 13, case 16) compose the two directly. I wrote cases 13 and 16 exactly as
+the plan's own case descriptions specify the call
+(`renderTimeline(buildLanes({ session: session(), content }))`), which settles
+the question for testing purposes without guessing whether `renderTimeline`
+internally destructures `startMs`/`endMs` or a nested `window` object. Left
+for the researcher to tidy the prose if it matters for the implementer, since
+no test I wrote depends on which reading is correct.
+
+No other gap or conflict: every case in the plan mapped to a concrete,
+checkable expectation from its own field lists and algorithm description.

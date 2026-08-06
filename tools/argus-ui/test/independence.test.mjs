@@ -27,6 +27,8 @@ test('the interface is a project of its own, with everything a project needs', (
     'src/server.mjs',
     'public/index.html',
     'public/app.js',
+    'public/timeline.js',
+    'public/format.js',
     'public/styles.css',
     'test',
   ]) {
@@ -47,7 +49,14 @@ test('nothing in the interface reaches outside the interface', () => {
   const files = walk(PROJECT);
   const modules = files.filter((file) => file.endsWith('.mjs') || file.endsWith('.js'));
   const covered = modules.map((file) => path.relative(PROJECT, file));
-  for (const owned of ['bin/argus-ui.mjs', 'src/config.mjs', 'src/server.mjs', 'public/app.js']) {
+  for (const owned of [
+    'bin/argus-ui.mjs',
+    'src/config.mjs',
+    'src/server.mjs',
+    'public/app.js',
+    'public/timeline.js',
+    'public/format.js',
+  ]) {
     assert.ok(covered.includes(owned), `the scan does not cover ${owned} — it is not there to check`);
   }
 
