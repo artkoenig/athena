@@ -214,3 +214,77 @@ the llm_request bridge, the tool-span join and the parser end to end.
 - **No case covers the interface**, per the plan's own "What is left untested".
   AC3 and AC6 are reviewed by reading `renderTimeline`, `renderSlicePanel`,
   `loadTimeline`, `loadSlice` and the scrub/live/lane handlers in `wireEvents`.
+
+## Round 1
+
+The whole suite is green and I changed no file but this handoff. The
+researcher's Round 1 plan assigns this round's entire correction to the
+test-author — "the test-author owns the whole correction and the implementer
+changes no production file" — and the test-author has landed it
+(`tools/argus/test/server.test.mjs`, commit `9f24e8c`). I ran the command that
+counts, confirmed it passes, and stopped there. My Round 0 open question is
+closed by that change.
+
+### What counts as done, and what it said
+
+One command, the one the plan names, run from the repository root:
+
+- `bash test.sh` — all 5 suites, **exit 0**, `PASS: all 5 suites`. Per suite:
+  repository 10 cases pass; worktrees 4 cases pass; `tools/argus` 164 tests, 164
+  pass, 0 fail, 0 skipped; `tools/argus-ui` 14 tests, 14 pass, 0 fail, 0
+  skipped; `tools/log-parser` 23 tests, 23 pass, 0 fail, 0 skipped. Nothing was
+  skipped or excluded anywhere.
+
+I ran it twice — once in full to read the failure text if any, once filtered to
+capture the per-suite counts above — and got exit 0 both times. There is no
+linter and no formatter in this repository, and the plan names no other command,
+so I ran nothing else.
+
+`tools/argus` is 164 tests where Round 0 left 163: the one unsatisfiable case
+was replaced by the two the plan specifies (the exact round trip, and the
+oversized body that is not cut).
+
+### The tests came to me green, and that is what the plan said would happen
+
+My brief tells me to run the planned tests first and confirm they fail for the
+right reason before touching anything. Here they do not fail, and the plan
+predicted exactly that in its own test plan: "the corrected case is expected to
+pass against the untouched collector on its first run ... It is the repair of an
+unsatisfiable assertion, not a red-first case." So the absence of a red run is
+the planned outcome, not a missed step. Had the two cases gone red, the plan
+makes that a real defect in `tools/argus/src/` and mine to fix; they did not.
+
+### What I changed
+
+No production file, and no test file. The only file this round touches is this
+handoff. Round 0's implementation stands unmodified:
+`tools/argus/src/claude.mjs`, `tools/argus/src/context.mjs`,
+`tools/argus/src/store.mjs`, `tools/argus/src/server.mjs`,
+`tools/argus/src/config.mjs`, `tools/argus/bin/argus.mjs`,
+`tools/argus/scripts/demo-emit.mjs`, `tools/argus-ui/public/app.js`,
+`tools/argus-ui/public/styles.css`, `tools/argus/README.md`,
+`tools/argus-ui/README.md`, `skills/argus/SKILL.md`.
+
+### My Round 0 open question is answered
+
+Round 0 ended `done` with one case open: the body round-trip assertion that no
+implementation could satisfy, because a substring check for
+`{"system":"hi","messages":[]}` can never match a haystack in which every inner
+quote is escaped. The reviewer and the researcher agreed with that reading, and
+the test-author replaced the assertion with the equality I proposed,
+`events.items[0].attrs.body === bodyText`. It passes against the collector as
+Round 0 built it — no code of mine moved to make it pass, which is the evidence
+that the behaviour was always correct and only the assertion was wrong. I hold
+no open question this round.
+
+### Notes for the reviewer, outside what I was asked to change
+
+- Round 0's remaining notes still stand and none of them changed this round: the
+  `query_source: 'main'` collision with `MAIN_LANE_ID` is still right by
+  accident rather than by design and still deliberately left alone, and the
+  interface (`app.js`, `styles.css`) is still covered by no case, so AC3 and AC6
+  are still reviewed by reading.
+- The oversized-body case now ingests a ~200 KB payload on every run of
+  `tools/argus/test/server.test.mjs`. It is well inside both `MAX_BODY_BYTES`
+  (32 MB) and the default `maxContentBytes` (256 MB), and the suite's runtime did
+  not visibly change. Worth knowing only if the ingest cap is ever lowered.
