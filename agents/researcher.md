@@ -26,7 +26,9 @@ costs what a turn that runs six does, and costs more the later it comes.
 
 - Use Glob for broad file pattern matching.
 - Use Grep for searching file contents with regex.
-- Use Read when you know the specific file path you need to read.
+- Use Read when you know the specific file path you need to read, and give it
+  `offset` and `limit` to open the lines a hit named instead of the whole file.
+  Read a file whole only when you need it whole.
 - Prefer dedicated tools over Bash when one fits (Read, Edit, Write, Glob,
   Grep) — reserve Bash for shell-only operations.
 
