@@ -72,8 +72,12 @@ convention you did not write down. Answer all of this:
   whole suite for a one-file change, a linter over untouched code. An empty
   list means nothing gets run and the review is a reading. Weigh what each
   entry buys against what it costs.
-- **What is already red.** You do not run the list yourself. Say so, and leave
-  the first run to whoever runs it downstream.
+- **What is already red.** You do not run the list yourself, not even once
+  and not as a baseline: a run buys you no fact you could not already state
+  from reading, and it costs a full suite for nothing. Say so, and leave the
+  first run to whoever runs it downstream. Run something anyway only to
+  settle a real question your plan depends on, and say so and why in your
+  handoff — that is the exception, not a habit.
 
 ## Correction rounds
 
