@@ -563,3 +563,330 @@ on `/root/.claude/plugins/cache/uroboros/uroboros/` (the plugin cache is a full
 checkout of this repository, which is what makes `<skill base>/assets/` a real
 path in an installing project). `env` showed no `CLAUDE_PLUGIN_ROOT`, which is
 why the skill base directory is the channel and not that variable.
+
+## Round 1
+
+The reviewer filed five findings. Four of them are defects in the guards
+themselves — one guard that can never pass, one that guards the wrong thing,
+two suites of driver cases that cover one workflow of two — and one is a real
+defect in the recorder: `close` never sheds `run.steps`, so a long run keeps a
+full copy of the cut per closed increment. Nothing in the workflow scripts
+changes in this round.
+
+### Implementation plan
+
+Five changes, one per finding, in two production files and two test files.
+
+**Finding 1 — the two markers overlap, so the test-author guard can never
+pass.** `test-repo.sh`'s driver sets `PLAN_MARKER = 'PLAN-MARKER'` and
+`TESTPLAN_MARKER = 'TESTPLAN-MARKER'`, and `'TESTPLAN-MARKER'.includes(
+'PLAN-MARKER')` is `true`, so mode `w4`'s "does not carry the implementation
+plan" assertion fires against a prompt that carries only the test plan. The fix
+is in the driver alone: rename the two constants to strings neither of which
+contains the other —
+
+```js
+const PLAN_MARKER = 'MARKER-IMPLEMENTATION-PLAN';
+const TESTPLAN_MARKER = 'MARKER-TEST-PLAN';
+```
+
+— and add a standing assertion at the top of `main()` that the three markers are
+pairwise disjoint, so the same class of bug cannot come back silently. Rejected:
+asserting on the whole prompt with a regex anchored to the `## Implementation
+plan` heading. That pins the prompt's prose instead of its payload, and the
+payload is what criterion 1 is about.
+
+**Finding 2 — the planner page still names a handoff.** `agents/planner.md`
+line 55 says "Say in your handoff which criterion went where", and the planner
+writes no handoff. Change it to name the field that does reach the caller:
+"Say in your `summary` which criterion went where." That is the field the page's
+own "What you return" section already describes and the `BACKLOG` schema already
+carries, so nothing else moves. The guard that let it through matches file
+*names*; add a second guard that matches the *word* over the same file set
+(`workflows/*.js`, `agents/*.md`, `skills/*/SKILL.md`, `rulebook.md`,
+`README.md`). `hand-?off` is the pattern: "hand over", which the shared brief
+says twice, must not match. Rejected: widening the existing name guard's regex
+to include the word — the two failures read differently and a reader of a red
+line deserves to know which of the two it is.
+
+**Finding 3 — nothing fails if the per-step push instruction is deleted.** The
+guard is `grep -qi 'push'` over `SKILL.md`, `loop.js` and `agile-loop.js`, and
+both scripts contain "push" in the Publish prompt regardless. Replace the two
+workflow entries of that loop with a new driver mode `w8` that runs a fresh run
+and asserts, for every dispatch that is a recorded step — every call whose label
+is neither `load-state` nor `publish` — that its prompt names `backlog.json`,
+carries the word `record`, and carries the word `push`. That is behavioural
+rather than textual: it fails the moment `, then push the commit` leaves
+`noDispatch` in either script, and it does not care how the sentence is worded.
+Keep the `SKILL.md` entry of that loop but tighten it from `grep -qi 'push'` to
+`grep -q 'push the commit'`, which is the shared brief's own words at line 104
+and is not satisfied by the frontmatter description. Rejected: a plain
+`grep -q 'push the commit'` over the two scripts — it would pass on a script
+that carries the sentence in a comment and hands it to nobody.
+
+**Finding 4 — `agile-loop.js` is unguarded on the slices and on the human-question
+exit.** Modes `w4`-`w7` run against `workflows/loop.js` alone. Move them inside
+the existing `for wf in ... loop.js ... agile-loop.js` loop, prefix their case
+descriptions with `$wf_name` the way `w1`-`w3` already are, and add `w8` there
+too. No driver logic needs a branch for this: `contextFor` already returns a
+one-increment `decomposeReturn` for `w4`-`w7` whichever workflow is under test,
+and the assertions read the prompts by label. Traced against
+`workflows/agile-loop.js` by reading it: in `w4` the test-author prompt is
+`scope()` plus `plan.testPlan` (no `plan.plan`), in `w5` the implementer prompt
+is `plan.plan`, `plan.moduleMap`, `plan.environment`, `casesBlock` and
+`checkList` (no `plan.testPlan`), in `w6` the reviewer prompt is `scope()`,
+`baseline(1)` — empty for the first increment — and `checkList`, and in `w7` the
+research question breaks the round loop, then `if (blockedOnHuman.length) break`
+at line 692 leaves the increment loop and the run reaches `publish`, returning
+`blockedOnHuman`. So all four pass against `agile-loop.js` once the markers are
+disjoint; the test-author reports it if any does not.
+
+**Finding 5 — `run.steps` is never shed.** `close()` in
+`skills/agent-brief/assets/backlog.mjs` empties the closed increment's `steps`
+and leaves `backlog.run.steps` alone, so every `replan:<id>` return — a whole
+`BACKLOG`, the entire cut — survives every later close. Fix in `close()`: after
+`increment.steps = []`, walk `backlog.run.steps` and `delete step.return` on
+every entry, guarding a backlog that carries no `run` key at all.
+
+Shed the *return*, not the entry. Both workflows rebuild their resume map with
+`for (const s of (saved.run && saved.run.steps) || []) recorded.set(s.label,
+s.return)` and skip a step on `recorded.has(label)`; `Map.set(k, undefined)`
+leaves `has(k)` true, so a `{label, at}` stub still skips its step, while
+dropping the entry outright would re-dispatch `decompose` after every close and
+hand the planner an unasked-for re-cut. Nothing consumes a shed run-level
+return: `decompose`'s payload is only used when `saved.increments` is empty
+(`loop.js` line 513, `agile-loop.js` line 545), `asksTheHuman` tolerates
+`undefined`, and `agile-loop.js` guards `recut && Array.isArray(recut.increments)`
+before using it. Rejected: shedding only the run steps whose label names the
+increment being closed — `decompose` is the largest of them and belongs to no
+increment, so that fix would leave the biggest payload in place. Rejected:
+truncating returns at `init` instead — `close` is where the criterion puts the
+shed, and `init` runs on every re-cut including ones that close nothing.
+
+One residue is by design and worth stating: the close's own return is recorded
+*after* the shed, so exactly one run-level full return exists at any moment (the
+newest close or replan) alongside the in-flight increment's steps. That is the
+bounded state the criterion asks for, not the per-increment pile the reviewer
+found.
+
+Two page comments move with the code, both in `skills/agent-brief/assets/`
+and `agents/`: the header comment of `backlog.mjs` (lines 8-12) and the comment
+over `close()` (lines 156-159) both say closing sheds "its step returns" — they
+say the run's steps go too. `agents/planner.md`'s `close` bullet (lines 107-110)
+says the same and gets the same sentence. `skills/agent-brief/SKILL.md` needs no
+change: it never describes `close`.
+
+### Module map
+
+- `test-repo.sh` — the repository's own suite, 37 cases today. Three regions
+  change: the push-guard loop (lines 200-209), the driver source heredoc (lines
+  250-444: constants at 268-270, `contextFor` at 340-357, the mode branches at
+  385-432), and the `run_driver` calls (lines 456-466). One region is added: a
+  new word-level handoff guard, next to the existing name-level one at lines
+  126-143.
+- `skills/agent-brief/assets/backlog.mjs` — the recorder CLI, the only writer of
+  `backlog.json`. Entry point `close()` at lines 160-174; header comment at
+  lines 8-12.
+- `skills/agent-brief/assets/backlog.test.mjs` — the recorder's suite, 12 cases,
+  `node:test` + `node:assert/strict`. The close cases sit at lines 195-226.
+- `agents/planner.md` — the planner's page. Line 55 (the first-call paragraph)
+  and lines 107-110 (the `close` bullet).
+- `workflows/loop.js`, `workflows/agile-loop.js` — read only, not edited this
+  round. They are what the driver runs.
+
+### Environment
+
+- `node` v22.22.2 is on `PATH`; `node --test` and `node:test` are available.
+- `bash` runs every suite. `test.sh` and `test-repo.sh` are **not executable**
+  in this checkout (mode `-rw-r--r--`, unchanged from `origin/main`), so they
+  are invoked as `bash test.sh` and `bash test-repo.sh`. Do not `chmod` them:
+  the mode is a property of the checkout and outside this issue.
+- `npm` is needed only by the three `tools/` suites that `test.sh` runs; they
+  are zero-install and untouched by this round.
+- There is no linter and no formatter in this repository.
+- No network access is needed by any command below.
+
+### Test plan
+
+Tests are needed. Two findings need a red test first — finding 2 (the word
+`handoff` still in a prompt-bearing page) and finding 5 (`run.steps` never
+shed) — and three are repairs to the guards themselves, which the test-author
+owns.
+
+#### What proves each finding
+
+**Finding 1.** Mode `w4` against both workflows, once the markers are disjoint.
+Proof that the repair is real and not a deleted assertion: the driver's new
+disjointness assertion, which fails if anyone reintroduces a marker that
+contains another. Left untested: that the prompt carries the test plan in the
+*right place* in its text — the payload is what the criterion is about.
+
+**Finding 2.** A new `test-repo.sh` case: no file in `workflows/*.js`,
+`agents/*.md`, `skills/*/SKILL.md`, `rulebook.md`, `README.md` matches
+`hand-?off`, case-insensitively. Edge covered by the pattern choice: "hand
+over", which `skills/agent-brief/SKILL.md` and the agent pages carry, must not
+match. Left untested: `.claude/rules/agents.md`, deliberately outside the file
+set for the same reason the existing name guard leaves it out — it addresses
+whoever writes the agents, not an agent.
+
+**Finding 3.** New driver mode `w8`, run against both workflows: every recorded
+step's prompt names `backlog.json`, carries `record` and carries `push`. Plus
+the tightened `SKILL.md` grep. Left untested: that the agent actually pushes —
+that is a run-time behaviour no unit-level guard here can reach.
+
+**Finding 4.** Modes `w4`, `w5`, `w6`, `w7` and the new `w8` run against
+`workflows/agile-loop.js` as well as `workflows/loop.js`. Left untested: the
+agile-only mechanics `w1` already covers (the re-cut, `maxIncrements`,
+`MAX_ATTEMPTS`, `baseline()`), which no finding touches.
+
+**Finding 5.** Three cases in `backlog.test.mjs`: the shed itself, the shed
+repeated, and a backlog with no `run` key. Left untested: that a resumed
+workflow skips a shed step — the driver's `w3` fixture is changed to carry a
+shed `decompose` entry instead, which pins the same fact where the workflow
+scripts actually run.
+
+#### The cases
+
+All `test-repo.sh` work is one file; the command that runs it is
+`bash test-repo.sh`. All recorder work is one file; the command that runs it is
+`node --test skills/agent-brief/assets/backlog.test.mjs`.
+
+**A. `test-repo.sh` — the driver heredoc** (integration level: the driver runs
+each whole workflow script through `new AsyncFunction` with a stubbed `agent`).
+Conventions of that file: a case is one `run_driver "$wf" <mode> "<description>"`
+call whose description opens with the workflow's basename; assertions inside the
+driver push a sentence onto `failures` and the process exits 1 with them on
+stderr; nothing is mocked but `agent`, `log` and `phase`.
+
+1. **Disjoint markers.** At the top of `main()`, before any dispatch:
+   `PLAN_MARKER`, `TESTPLAN_MARKER` and `'CHECK-MARKER'` — assert no one of the
+   three contains another. Expected: passes for the renamed constants. It is the
+   guard against finding 1 returning, so it runs in every mode.
+2. **`w4` on both workflows** — "the test-author's prompt carries the test plan
+   and not the implementation plan". Unchanged assertions, disjoint markers, and
+   now inside the two-workflow loop.
+3. **`w5` on both workflows** — "the implementer's prompt carries the plan and
+   the checks and not the test plan". Unchanged assertions, moved into the loop.
+4. **`w6` on both workflows** — "the reviewer's prompt carries the checks
+   alone". Unchanged assertions, moved into the loop.
+5. **`w7` on both workflows** — "a question from the researcher ends the run at
+   publish". Unchanged assertions, moved into the loop.
+6. **`w8` on both workflows**, new — "every step's prompt tells the agent to
+   record its return and push the commit". `contextFor` gets a `w8` arm
+   identical to `w4`-`w6` (no saved state, one increment, a clean plan). The
+   mode branch, after the run:
+
+   ```js
+   for (const c of calls) {
+     if (c.label === 'load-state' || c.label === 'publish') continue;
+     assertTrue(/backlog\.json/.test(c.prompt) && /\brecord\b/i.test(c.prompt),
+       c.label + ' is not told to record its return into backlog.json');
+     assertTrue(/\bpush\b/i.test(c.prompt),
+       c.label + " is not told to push its step's commit");
+   }
+   ```
+
+   Six labels are covered on `loop.js` (`decompose`, `research:i1.0`,
+   `tests:i1.0`, `implement:i1.0`, `review:i1.0`, `close:i1`) and six on
+   `agile-loop.js` (with `replan:i1` for the last). Expected: passes as the
+   scripts stand. The mutation it exists for: delete `, then push the commit`
+   from `noDispatch` in either script and this case alone goes red.
+7. **`w3`'s fixture carries a shed run step.** In `doneBacklog()`, the
+   `decompose` entry loses its `return` key and keeps `label` and `at`; the
+   close entry keeps its return, which is what a real closed run looks like. The
+   assertion stays `['load-state', 'publish']`. Expected: passes — a `Map` entry
+   whose value is `undefined` still answers `has()` with true. This is the case
+   that proves the shed of finding 5 does not break resume.
+
+**B. `test-repo.sh` — the word guard** (shell level, next to the existing
+name-level guard at lines 126-143, same idiom: collect into a variable, `ok` on
+empty, `no` plus the indented lines otherwise).
+
+8. **"no prompt, agent page or skill still says handoff"** —
+   `grep -rniE 'hand-?off'` over `"$root"/workflows/*.js "$root"/agents/*.md
+   "$root"/skills/*/SKILL.md "$root/rulebook.md" "$root/README.md"`, empty
+   required. Expected before the fix: **red**, on
+   `agents/planner.md:55: ... Say in your handoff which criterion went where.`
+   Expected after: green. Verified by reading that this is the only match in
+   that file set today.
+
+**C. `test-repo.sh` — the push-guard loop** (shell level, lines 200-209).
+
+9. **The loop keeps `SKILL.md` and loses the two workflow files**, and its
+   condition tightens from `grep -qi 'push'` to `grep -q 'push the commit'`.
+   Expected: passes — `skills/agent-brief/SKILL.md` line 104 reads "Record your
+   step, commit it with your work, and push the commit." The mutation it exists
+   for: delete that paragraph and the frontmatter's "pushes its step return" no
+   longer saves the case.
+
+**D. `skills/agent-brief/assets/backlog.test.mjs`** (unit level, `node:test`
+with `node:assert/strict`). Conventions of that file: one `test('<a sentence
+saying what holds>', () => { ... })` per case; a fresh `tmpDir()` per case;
+payloads written with `writeJson`; the CLI invoked through `run([...])`, or
+`runFails([...])` when a non-zero exit is the point; nothing is stubbed, the
+real CLI runs as a child process; helpers `backlogTemplate` and
+`incrementPayload` build the fixtures. Add these after the existing close cases
+(line 214).
+
+10. **"close sheds the returns of the run's own steps and keeps their labels".**
+    `init` with `i1` and `i2`; `record - decompose` with a payload carrying
+    `{ increments: [...], summary: 'MARKER-RUN-STEP-RETURN' }`; `record i1
+    research:i1.0`; then `close <path> i1 done 'the review accepted it'`. Assert:
+    `run.steps.length === 1`; `run.steps[0].label === 'decompose'`;
+    `run.steps[0].at` still matches the ISO pattern the file already uses;
+    `Object.prototype.hasOwnProperty.call(run.steps[0], 'return') === false`;
+    and the raw file text does not contain `MARKER-RUN-STEP-RETURN`. Expected
+    before the fix: **red** — the key is still there and the marker is still in
+    the file. Expected after: green.
+11. **"closing a second increment leaves the already-shed run steps shed"**
+    (the repeat edge). Same setup, then `close i1 done`, then `record i2
+    research:i2.0`, then `close i2 done`. Assert exit 0 for both closes,
+    `run.steps.length === 1`, and still no `return` key. Expected before the
+    fix: **red** on the missing-key assertion. Expected after: green.
+12. **"close on a backlog that carries no run key exits 0 and writes the
+    status"** (the empty edge). Write `backlog.json` by hand — `{ version: 1,
+    issue: 'docs/issues/x', workflow: 'loop', increments: [{ id: 'i1', title:
+    'First', goal: 'First.', criteria: ['does i1'], status: 'todo', note: '',
+    steps: [] }] }`, no `run` key — then `close <path> i1 done`. Assert the call
+    exits 0, its stdout is the one `closed i1 as done` line, and the reread file
+    has `increments[0].status === 'done'`. Expected before the fix: green (the
+    old `close` never looks at `run`). Expected after: green — it is the guard
+    on the fix's own crash risk, and the test-author reports it as green on
+    arrival rather than as a proof.
+
+Nothing in `workflows/loop.js` or `workflows/agile-loop.js` is edited this
+round, so no case is written against a change in them.
+
+#### What counts as done
+
+Run these two, from the repository root, and nothing else:
+
+```
+bash test-repo.sh
+bash test.sh
+```
+
+`test-repo.sh` is where all but three of this round's cases live, and it runs in
+seconds, so it is listed on its own for a diagnosable exit code; `test.sh` is
+the criterion the issue states in as many words and is the only run that reaches
+the recorder suite. `node --test skills/agent-brief/assets/backlog.test.mjs` is
+the command for writing case 10-12 against and is named above for that, but it
+is not on this list: `test.sh` runs it.
+
+Expect `test-repo.sh` to report around 42 cases when this round is done (37
+today, minus the two workflow entries of the push loop, plus the word guard,
+plus `w4`-`w7` on `agile-loop.js`, plus `w8` on both). No assertion pins that
+number; it is a sanity figure, not a criterion.
+
+#### What is already red
+
+I ran nothing this round, and I state this from reading alone. Before the
+implementer's change: case 8 is red on `agents/planner.md:55`, and cases 10 and
+11 are red on the missing shed in `close()`. `test-repo.sh` is red today on
+`loop.js: the test-author's prompt carries the test plan and not the
+implementation plan`, which case 2 repairs. Everything else listed here — cases
+1, 3, 4, 5, 6, 7, 9 and 12 — is green on arrival against the code as it stands,
+and each names above the mutation it would catch. The rest of `test.sh` (the
+three `tools/` suites and `test-worktree.sh`) was green in the reviewer's run
+and nothing this round touches it. Whoever runs the list first reports what it
+says.
