@@ -199,6 +199,41 @@ export function visibleBlocks(blocks, hidden = []) {
 }
 
 /**
+ * How much of one record the filter leaves on screen, beside how much it holds.
+ *
+ * `visibleChars` is the sum of the visible blocks' own `chars`, and never the
+ * total minus what was hidden: the block texts do not add up to the body, whose
+ * JSON scaffolding belongs to no block, so subtracting would let an all-hidden
+ * panel claim hundreds of visible characters with no row on screen. The number
+ * chosen here is the one a reader can add up from the `data-chars` on the rows,
+ * and it is why the total is printed beside it and never replaced.
+ *
+ * `filtered` keys on a block actually removed, never on `hidden` being
+ * non-empty: an id this request does not carry has hidden nothing, and must
+ * leave the panel reading exactly as it does unfiltered.
+ *
+ * The record `contextBlocks` returns spreads straight in, so a caller may pass
+ * it whole — either with `hidden` as a key of the same object or as a second
+ * argument beside it. Neither argument is mutated, and `hidden` may be an array
+ * or a Set.
+ *
+ * @param {{ blocks?: object[], chars?: number, hidden?: string[]|Set<string> }} input
+ * @param {string[]|Set<string>} [hiddenIds] the hidden entries, when the record is passed whole
+ * @returns {{ chars: number, blocks: number, visibleChars: number, visibleBlocks: number, filtered: boolean }}
+ */
+export function contextCounts({ blocks = [], chars = 0, hidden = [] } = {}, hiddenIds = hidden) {
+  const all = blocks ?? [];
+  const shown = visibleBlocks(all, hiddenIds);
+  return {
+    chars,
+    blocks: all.length,
+    visibleChars: shown.reduce((total, block) => total + (block.chars ?? 0), 0),
+    visibleBlocks: shown.length,
+    filtered: shown.length !== all.length,
+  };
+}
+
+/**
  * The entry ids of the record the panel holds — what *all off* needs, without
  * the page having to re-derive anything of its own.
  *
@@ -422,23 +457,50 @@ export function renderContextPanel({
   const openKeys = new Set(expanded ?? []);
   const entries = contextFilterEntries(blocks);
 
-  const line = [fmtClock(item.timeMs), item.model, `${fmtNum(chars)} chars`, `${blocks.length} blocks`]
+  // Both numbers only when the filter actually took a block out of this record:
+  // hiding a kind the request does not carry leaves the head as it was, and an
+  // unfiltered head is byte-for-byte the one that was there before the filter
+  // existed.
+  const counts = contextCounts({ chars, blocks, hidden });
+  const charsPart = counts.filtered
+    ? `${fmtNum(counts.visibleChars)} of ${fmtNum(counts.chars)} chars`
+    : `${fmtNum(chars)} chars`;
+  const blocksPart = counts.filtered
+    ? `${counts.visibleBlocks} of ${counts.blocks} blocks`
+    : `${blocks.length} blocks`;
+
+  const line = [fmtClock(item.timeMs), item.model, charsPart, blocksPart]
     .filter(Boolean)
     .map((part) => esc(part))
     .join(' · ');
 
   // The numbers ride in data attributes so what the panel is built from can be
-  // read without reading a sentence. They are the whole record's, filtered or
-  // not: what the request holds does not change because a reader stopped
-  // looking at part of it.
+  // read without reading a sentence. `data-chars` and `data-blocks` are the
+  // whole record's, filtered or not: what the request holds does not change
+  // because a reader stopped looking at part of it. The visible pair joins them
+  // only while something is hidden, so their absence means nothing is.
+  const visibleAttrs = counts.filtered
+    ? ` data-visible-chars="${esc(counts.visibleChars)}" data-visible-blocks="${esc(counts.visibleBlocks)}"`
+    : '';
   const head = `<div class="context-head">${title}
-      <span class="context-meta" data-chars="${esc(chars)}" data-blocks="${esc(blocks.length)}"
+      <span class="context-meta" data-chars="${esc(chars)}" data-blocks="${esc(blocks.length)}"${visibleAttrs}
         data-time="${esc(item.timeMs)}" data-model="${esc(item.model ?? '')}"
         data-truncated="${item.truncated === true}">${line}</span>
       ${renderContextFilter({ entries, hidden, open: filterOpen })}
     </div>`;
 
-  const rows = visibleBlocks(blocks, hidden)
+  const shownBlocks = visibleBlocks(blocks, hidden);
+
+  // A request with no blocks at all keeps today's empty container: nothing is
+  // hidden there, so nothing may claim it is. The placeholder is for the one
+  // case a reader cannot otherwise explain — rows that exist and are all turned
+  // off — and it says where to turn them back on.
+  if (blocks.length > 0 && shownBlocks.length === 0) {
+    const message = 'Every kind in this request is hidden. Turn them back on in the filter above.';
+    return shell('ready', `${head}<div class="placeholder">${esc(message)}</div>`);
+  }
+
+  const rows = shownBlocks
     .map((block) => {
       // Keyed by the record too: when the cursor lands on a different request
       // the keys stop matching and everything collapses, which is right — it is

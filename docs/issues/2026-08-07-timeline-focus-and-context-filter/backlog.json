@@ -144,6 +144,26 @@
             ],
             "questions": []
           }
+        },
+        {
+          "label": "implement:filter-honesty.0",
+          "at": "2026-08-07T15:55:04.581Z",
+          "return": {
+            "deviations": [
+              "contextCounts's signature: the plan named the object form contextCounts({ blocks, chars, hidden }), while every one of the five unit cases the test-author wrote calls contextCounts(record, hidden) positionally (record being what contextBlocks returns). I may not edit a test, so I implemented contextCounts({ blocks = [], chars = 0, hidden = [] } = {}, hiddenIds = hidden): the plan's object form is the primary and documented shape, and an optional second positional argument supplies hidden when the record is passed whole. renderContextPanel calls the object form the plan named. Both call shapes are covered by the suite; the test-author had flagged this exact ambiguity as open.",
+              "renderContextPanel builds the chars/blocks parts of the head line as two named locals (charsPart/blocksPart) before the array rather than swapping them inline in the array literal; same shape, same .filter(Boolean).map(esc).join(' · '), just readable."
+            ],
+            "commands": [
+              {
+                "command": "npm --prefix tools/argus-ui test",
+                "exitCode": 0,
+                "note": "Whole argus-ui suite, node --test over its seven test files: 238 tests, 238 pass, 0 fail, 0 skipped, 0 todo. Before the change the same command was exit 1 with test/context.test.mjs failing whole at import time — SyntaxError: The requested module '../public/context.js' does not provide an export named 'contextCounts' — which is the right red for the planned cases."
+              }
+            ],
+            "blockers": [],
+            "questions": [],
+            "summary": "Added the exported pure contextCounts to tools/argus-ui/public/context.js and made renderContextPanel name visible-of-total chars and blocks in its head, carry data-visible-chars/data-visible-blocks only while a block is actually hidden, and render a single .placeholder in place of the ctx-blocks container when a record's every block is hidden."
+          }
         }
       ]
     },
