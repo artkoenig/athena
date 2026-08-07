@@ -13,6 +13,8 @@ import {
   hiddenAfterAll,
   contextEntryIds,
   contextCounts,
+  blockMatches,
+  renderContextSearch,
 } from '../public/context.js';
 import { esc, fmtNum, PREVIEW_CHARS } from '../public/format.js';
 
@@ -677,7 +679,15 @@ test('the panel input is built from the lane whose key the reader selected', () 
     held: { key: 'agent:sp-b:probe', item: rec },
     expanded: ['12:0'],
   });
-  assert.deepEqual(out, { lane: v.lanes[1], item: rec, pending: false, expanded: ['12:0'], hidden: [], filterOpen: false });
+  assert.deepEqual(out, {
+    lane: v.lanes[1],
+    item: rec,
+    pending: false,
+    expanded: ['12:0'],
+    hidden: [],
+    filterOpen: false,
+    search: '',
+  });
   assert.equal(
     out.lane,
     v.lanes[1],
@@ -702,7 +712,15 @@ test('a key no lane carries, and no key at all, leave nothing to draw', () => {
 
   const noArgOut = lanePanelInput();
   assert.equal(noArgOut.lane, null);
-  assert.deepEqual(noArgOut, { lane: null, item: null, pending: true, expanded: [], hidden: [], filterOpen: false });
+  assert.deepEqual(noArgOut, {
+    lane: null,
+    item: null,
+    pending: true,
+    expanded: [],
+    hidden: [],
+    filterOpen: false,
+    search: '',
+  });
 
   assert.equal(
     renderContextPanel(lanePanelInput({ view: view(), key: null, held: null })),
@@ -1291,4 +1309,247 @@ test('a request with no blocks at all shows no all-hidden placeholder', () => {
     html.includes('<div class="ctx-blocks">'),
     'the empty blocks container must still be present, not swapped for the all-hidden placeholder',
   );
+});
+
+// The context search: a query typed into the panel's own head narrows the block
+// list to what carries it, over and beside the kind filter.
+
+test('a query keeps the blocks whose own text carries it, and drops the rest', () => {
+  const { blocks } = contextBlocks(requestBody());
+  const kept = visibleBlocks(blocks, [], 'ping');
+  assert.deepEqual(
+    kept.map((b) => b.text),
+    ['ping'],
+    'the one block of this request whose text carries the query is the one that survives it',
+  );
+  assert.equal(kept[0].index, 2, 'a survivor keeps its own index, so the expansion keys hold across a search');
+});
+
+test('a query matches a block by its label too, which is where a field\'s name is written', () => {
+  const { blocks } = contextBlocks(requestBody());
+  const kept = visibleBlocks(blocks, [], 'max_tokens');
+  assert.equal(kept.length, 1, 'exactly the max_tokens field block');
+  assert.equal(kept[0].label, 'max_tokens');
+  assert.equal(
+    kept[0].text,
+    '64000',
+    'the block matched on its label alone — its own text carries the query nowhere, which is the point',
+  );
+});
+
+test('a query matches the whole text, not the one line the block collapsed to', () => {
+  const buried = `${'x'.repeat(PREVIEW_CHARS * 2)}needle`;
+  const body = requestBody({ system: [{ type: 'text', text: buried }] });
+  const { blocks } = contextBlocks(body);
+  const systemBlock = blocks.find((b) => b.text === buried);
+  assert.ok(systemBlock, 'the fixture block must be present');
+  assert.ok(
+    !systemBlock.preview.includes('needle'),
+    'the fixture must bury the query past the preview cut, or this case cannot tell text from preview',
+  );
+  assert.deepEqual(
+    visibleBlocks(blocks, [], 'needle').map((b) => b.text),
+    [buried],
+    'a string 240 characters into a block is in that block, and a search that says otherwise is lying',
+  );
+});
+
+test('the query is case-folded and trimmed', () => {
+  const { blocks } = contextBlocks(requestBody());
+  const expected = visibleBlocks(blocks, [], 'file created').map((b) => b.index);
+  assert.equal(expected.length, 1, 'the fixture must carry exactly one match, or this case is vacuous');
+  for (const query of ['File created', 'FILE CREATED', '  file created  ']) {
+    assert.deepEqual(
+      visibleBlocks(blocks, [], query).map((b) => b.index),
+      expected,
+      `${JSON.stringify(query)} must find the same block a plain lowercase query does`,
+    );
+  }
+});
+
+test('a query is matched literally, never as a regular expression', () => {
+  const body = requestBody({ system: [{ type: 'text', text: 'a.c' }, { type: 'text', text: 'abc' }] });
+  const { blocks } = contextBlocks(body);
+  assert.deepEqual(
+    visibleBlocks(blocks, [], 'a.c').map((b) => b.text),
+    ['a.c'],
+    'a reader typing a dot is looking for a dot — as a pattern this query would take abc with it',
+  );
+  assert.deepEqual(
+    visibleBlocks(blocks, [], '(unclosed').map((b) => b.text),
+    [],
+    'a query that is not valid regular-expression syntax must find nothing, never throw',
+  );
+});
+
+test('an empty query excludes nothing', () => {
+  const { blocks } = contextBlocks(requestBody());
+  for (const query of ['', '   ', null, undefined]) {
+    assert.equal(
+      visibleBlocks(blocks, [], query).length,
+      blocks.length,
+      `${JSON.stringify(query)} is not a search and must leave every block on screen`,
+    );
+  }
+  assert.equal(blockMatches({ label: 'x', text: 'y' }, ''), true);
+  assert.equal(blockMatches(undefined, 'z'), false, 'no block matches a real query, and asking must not throw');
+});
+
+test('the search and the kind filter both apply, and neither undoes the other', () => {
+  const { blocks } = contextBlocks(requestBody());
+  assert.deepEqual(
+    visibleBlocks(blocks, ['kind:user'], 'ping'),
+    [],
+    'a matching block of a hidden kind stays hidden — searching must not bring back what the filter turned off',
+  );
+  assert.deepEqual(
+    visibleBlocks(blocks, ['kind:system'], 'ping').map((b) => b.text),
+    ['ping'],
+    'hiding a kind the query does not reach must leave the match alone',
+  );
+
+  const hiddenSet = new Set(['kind:user']);
+  visibleBlocks(blocks, hiddenSet, 'ping');
+  assert.equal(hiddenSet.size, 1, 'the hidden Set the caller passed in must not be mutated');
+  assert.equal(blocks.length, 12, 'the blocks array the caller passed in must not be mutated');
+});
+
+test('a query narrows the visible counts and marks the record narrowed', () => {
+  const record = contextBlocks(requestBody());
+  const counts = contextCounts({ ...record, hidden: [], search: 'ping' });
+  assert.equal(counts.visibleBlocks, 1, 'one block of twelve carries the query');
+  assert.equal(counts.visibleChars, 4, 'and the visible characters are that block\'s own four');
+  assert.equal(counts.filtered, true);
+  assert.equal(counts.blocks, 12, 'the totals stay the record\'s own — a search must not make the context look smaller');
+  assert.equal(counts.chars, requestBody().length);
+
+  assert.deepEqual(
+    contextCounts(record, [], 'ping'),
+    counts,
+    'the query may be passed as a third argument beside a record passed whole',
+  );
+  assert.equal(
+    contextCounts({ ...record, search: 'e' }).filtered,
+    contextCounts(record, [], 'e').filtered,
+    'both spellings must agree on whether anything was excluded',
+  );
+});
+
+test('a query every block matches has excluded nothing, so the head says nothing about it', () => {
+  const { blocks } = contextBlocks(requestBody({ messages: [{ role: 'user', content: 'hi' }] }));
+  const all = blocks.map((b) => b.index);
+  assert.deepEqual(
+    visibleBlocks(blocks, [], 'e').map((b) => b.index),
+    all,
+    'the fixture must have every block carrying an e, or this case is vacuous',
+  );
+  assert.equal(contextCounts({ blocks, chars: 1, search: 'e' }).filtered, false);
+});
+
+test('the search box sits in the head, before the list it narrows and beside the filter', () => {
+  const html = renderContextPanel({ lane: lane(), item: item(), search: 'ping' });
+  assert.equal((html.match(/data-ctx-search/g) ?? []).length, 1, 'exactly one search box must be rendered');
+
+  const searchIdx = html.indexOf('data-ctx-search');
+  const filterIdx = html.indexOf('<details class="ctx-filter"');
+  const listIdx = html.indexOf('<div class="ctx-blocks">');
+  assert.ok(filterIdx >= 0, 'the kind filter must still be rendered beside the search');
+  assert.ok(listIdx >= 0, 'this query matches, so the block list must be present to sit below the box');
+  assert.ok(searchIdx < filterIdx, 'the search comes first, the dropdown it sits beside second');
+  assert.ok(filterIdx < listIdx, 'and both sit in the head, above the list they narrow');
+  assert.ok(html.includes('value="ping"'), 'the box must show the query back');
+});
+
+test('the query is escaped on its way back into the box', () => {
+  const html = renderContextPanel({ lane: lane(), item: item(), search: '"ping" & <b>' });
+  assert.ok(
+    html.includes('value="&quot;ping&quot; &amp; &lt;b&gt;"'),
+    'a raw quote here would break out of the attribute and the rest of the query would be markup',
+  );
+  assert.ok(!html.includes('<b>'), 'a raw tag from a query must never reach the DOM');
+  assert.ok(!html.includes('NaN') && !html.includes('undefined'));
+});
+
+test('the search box carries no attribute the lane or block handlers would catch', () => {
+  const box = renderContextSearch('q');
+  assert.doesNotMatch(box, /data-lane=/, 'a data-lane here would make every keystroke toggle the lane selection');
+  assert.doesNotMatch(box, /data-block=/, 'a data-block here would make every keystroke expand a block');
+  assert.ok(box.includes('value="q"'));
+});
+
+test('a query narrows the rows on screen and leaves the head\'s totals alone', () => {
+  const html = renderContextPanel({ lane: lane(), item: item(), search: 'ping' });
+  const chunks = blockChunks(html);
+  assert.equal(chunks.length, 1, 'only the matching block may be listed');
+  assert.ok(chunks[0].includes('data-kind="user"'));
+  assert.ok(html.includes('1 of 12 blocks'), 'the head must name visible of total, so a searched context cannot look smaller');
+  assert.match(html, /data-visible-blocks="1"/);
+  assert.match(html, new RegExp(`data-chars="${requestBody().length}"`), 'the total stays the body\'s own');
+  assert.equal(
+    (html.match(/data-ctx-entry="/g) ?? []).length,
+    10,
+    'the kind filter still lists what the request contains — a search narrows the list, not the request',
+  );
+});
+
+test('clearing the query restores the list byte for byte', () => {
+  const plain = renderContextPanel({ lane: lane(), item: item() });
+  for (const query of ['', '   ']) {
+    assert.equal(
+      renderContextPanel({ lane: lane(), item: item(), search: query }),
+      plain,
+      `a query of ${JSON.stringify(query)} must render exactly what no query renders`,
+    );
+  }
+});
+
+test('a query that matches nothing says so, and leaves the box to clear it in', () => {
+  const html = renderContextPanel({ lane: lane(), item: item(), search: 'zzz-no-such-string' });
+  assert.deepEqual(blockChunks(html), [], 'no block may be listed');
+  assert.match(html, /data-state="ready"/, 'this is not the empty-record state');
+  assert.equal((html.match(/class="placeholder"/g) ?? []).length, 1, 'exactly one placeholder replaces the rows');
+  assert.ok(
+    html.includes('data-ctx-search'),
+    'the box must survive its own last match, or there is nothing left to clear the query in',
+  );
+  assert.ok(html.includes('value="zzz-no-such-string"'), 'and it must still carry the query that emptied the list');
+
+  const placeholderText = html.slice(html.indexOf('class="placeholder"'));
+  assert.match(placeholderText, /matches/, 'the placeholder must say the query matched nothing');
+  assert.match(placeholderText, /search/, 'and that clearing the search is what brings the rows back');
+  assert.match(placeholderText, /zzz-no-such-string/, 'and it must name the query it is talking about');
+  assert.match(html, /data-visible-blocks="0"/);
+});
+
+test('with the kinds all hidden the placeholder names the filter, whatever was also typed', () => {
+  const hidden = contextEntryIds(item());
+  const html = renderContextPanel({ lane: lane(), item: item(), hidden, search: 'ping' });
+  const placeholderText = html.slice(html.indexOf('class="placeholder"'));
+  assert.match(
+    placeholderText,
+    /filter/,
+    'clearing the search would not bring one row back here, so the placeholder must point at the filter instead',
+  );
+  assert.doesNotMatch(placeholderText, /matches/, 'and it must not blame the query for what the filter did');
+});
+
+test('a request with no blocks at all carries no search box', () => {
+  const html = renderContextPanel({ lane: lane(), item: item({ body: '{"messages":[]}' }), search: 'ping' });
+  assert.ok(!html.includes('ctx-search'), 'with nothing in the request there is nothing to search');
+  assert.ok(!html.includes('class="placeholder"'), 'and an empty request is not a query that found nothing');
+});
+
+test('the query reaches the panel through the one builder', () => {
+  const withSearch = lanePanelInput({
+    view: view(),
+    key: 'main',
+    held: { key: 'main', item: item() },
+    expanded: [],
+    search: 'ping',
+  });
+  assert.equal(withSearch.search, 'ping');
+  assert.equal(lanePanelInput({ view: view(), key: 'main', held: null }).search, '', 'no query given is no search');
+
+  const html = renderContextPanel(withSearch);
+  assert.equal(blockChunks(html).length, 1, 'the query the builder carried must be the one the panel applied');
 });

@@ -181,21 +181,65 @@ export function contextFilterEntries(blocks) {
   return [...group('blocks'), ...group('fields')];
 }
 
+/* ------------------------------- the search ------------------------------ */
+
 /**
- * The blocks left once what the reader hid is taken out.
+ * A query as it is matched: trimmed and case-folded, so a pasted query with a
+ * trailing space still finds what a typed one does. An empty result means the
+ * search is off, which is the one value every caller branches on.
+ */
+const normalizeQuery = (query) => String(query ?? '').trim().toLowerCase();
+
+/**
+ * Whether one block answers a query.
+ *
+ * The whole text is searched and not the preview: a reader looking for a string
+ * 40 KB into a tool result means that block, and matching the one line it
+ * collapsed to would answer that it is not there. The label is searched beside
+ * it because `tools` names a field as often as it appears inside a prompt, and
+ * the label is the only place a field's name is written.
+ *
+ * The match is a plain substring and never a regular expression: a query is
+ * typed by a reader, so `(` is a character they are looking for rather than a
+ * syntax error, and `.` matches a dot and nothing else.
+ *
+ * @param {{ label?: string, text?: string }} block
+ * @param {string} query
+ * @returns {boolean} true for every block while the query is empty
+ */
+export function blockMatches(block, query) {
+  const needle = normalizeQuery(query);
+  if (!needle) return true;
+  return (
+    String(block?.label ?? '').toLowerCase().includes(needle) ||
+    String(block?.text ?? '').toLowerCase().includes(needle)
+  );
+}
+
+/**
+ * The blocks left once what the reader hid and what the search excludes are
+ * taken out.
+ *
+ * The two narrowings are independent and both must pass: a block of a hidden
+ * kind stays hidden however well it matches, and searching never brings back
+ * what the filter turned off.
  *
  * Every survivor keeps its own `index`, so the expansion keys stay the same
  * whether the list is filtered or not: hiding one kind must not shut an
- * expanded block of another. Neither argument is mutated, and `hidden` may be
- * an array or a Set — the same freedom `expanded` already has.
+ * expanded block of another. No argument is mutated, and `hidden` may be an
+ * array or a Set — the same freedom `expanded` already has.
  *
  * @param {object[]} blocks
  * @param {string[]|Set<string>} hidden
+ * @param {string} search the query the reader typed; empty excludes nothing
  * @returns {object[]}
  */
-export function visibleBlocks(blocks, hidden = []) {
+export function visibleBlocks(blocks, hidden = [], search = '') {
   const hiddenIds = new Set(hidden ?? []);
-  return (blocks ?? []).filter((block) => !hiddenIds.has(entryIdOf(block)));
+  const needle = normalizeQuery(search);
+  return (blocks ?? []).filter(
+    (block) => !hiddenIds.has(entryIdOf(block)) && (!needle || blockMatches(block, needle)),
+  );
 }
 
 /**
@@ -209,21 +253,23 @@ export function visibleBlocks(blocks, hidden = []) {
  * and it is why the total is printed beside it and never replaced.
  *
  * `filtered` keys on a block actually removed, never on `hidden` being
- * non-empty: an id this request does not carry has hidden nothing, and must
- * leave the panel reading exactly as it does unfiltered.
+ * non-empty or a query having been typed: an id this request does not carry has
+ * hidden nothing, and a query every block matches has excluded nothing — both
+ * must leave the panel reading exactly as it does unfiltered.
  *
  * The record `contextBlocks` returns spreads straight in, so a caller may pass
- * it whole — either with `hidden` as a key of the same object or as a second
- * argument beside it. Neither argument is mutated, and `hidden` may be an array
- * or a Set.
+ * it whole — either with `hidden` and `search` as keys of the same object or as
+ * further arguments beside it. No argument is mutated, and `hidden` may be an
+ * array or a Set.
  *
- * @param {{ blocks?: object[], chars?: number, hidden?: string[]|Set<string> }} input
+ * @param {{ blocks?: object[], chars?: number, hidden?: string[]|Set<string>, search?: string }} input
  * @param {string[]|Set<string>} [hiddenIds] the hidden entries, when the record is passed whole
+ * @param {string} [query] the search query, when the record is passed whole
  * @returns {{ chars: number, blocks: number, visibleChars: number, visibleBlocks: number, filtered: boolean }}
  */
-export function contextCounts({ blocks = [], chars = 0, hidden = [] } = {}, hiddenIds = hidden) {
+export function contextCounts({ blocks = [], chars = 0, hidden = [], search = '' } = {}, hiddenIds = hidden, query = search) {
   const all = blocks ?? [];
-  const shown = visibleBlocks(all, hiddenIds);
+  const shown = visibleBlocks(all, hiddenIds, query);
   return {
     chars,
     blocks: all.length,
@@ -307,6 +353,27 @@ export function renderContextFilter({ entries = [], hidden = [], open = false } 
         ${group('blocks', 'Blocks')}${group('fields', 'Fields')}
       </div>
     </details>`;
+}
+
+/**
+ * The search box, carrying the query the reader typed.
+ *
+ * It is rendered for every request that has blocks at all, including one whose
+ * own query has emptied the list: a box that disappeared with its last match
+ * would leave the reader nothing to clear it in.
+ *
+ * The same rule the dropdown keeps applies here — no `data-lane` and no
+ * `data-block`, or every keystroke would toggle a lane or expand a block.
+ *
+ * @param {string} search
+ * @returns {string}
+ */
+export function renderContextSearch(search = '') {
+  return `<label class="ctx-search">
+        <span class="visually-hidden">Search this context</span>
+        <input id="ctx-search" type="search" data-ctx-search autocomplete="off"
+          placeholder="search context…" value="${esc(search)}">
+      </label>`;
 }
 
 /**
@@ -401,9 +468,9 @@ export function laneContextInput(key, held) {
  * argument whole: the page cannot drop one of them on the way.
  *
  * @param {{ view: object|null, key: string|null, held: object|null, expanded: string[]|Set<string>,
- *   hidden: string[]|Set<string>, filterOpen: boolean }} input
+ *   hidden: string[]|Set<string>, filterOpen: boolean, search: string }} input
  * @returns {{ lane: object|null, item: object|null, pending: boolean, expanded: string[]|Set<string>,
- *   hidden: string[]|Set<string>, filterOpen: boolean }}
+ *   hidden: string[]|Set<string>, filterOpen: boolean, search: string }}
  */
 export function lanePanelInput({
   view = null,
@@ -412,9 +479,10 @@ export function lanePanelInput({
   expanded = [],
   hidden = [],
   filterOpen = false,
+  search = '',
 } = {}) {
   const lane = laneByKey(view, key);
-  return { lane, ...laneContextInput(key, held), expanded, hidden, filterOpen };
+  return { lane, ...laneContextInput(key, held), expanded, hidden, filterOpen, search };
 }
 
 /**
@@ -425,7 +493,7 @@ export function lanePanelInput({
  * inside the panel toggle the lane selection.
  *
  * @param {{ lane: object|null, item: object|null, pending: boolean, expanded: string[]|Set<string>,
- *   hidden: string[]|Set<string>, filterOpen: boolean }} input
+ *   hidden: string[]|Set<string>, filterOpen: boolean, search: string }} input
  */
 export function renderContextPanel({
   lane = null,
@@ -434,6 +502,7 @@ export function renderContextPanel({
   expanded = [],
   hidden = [],
   filterOpen = false,
+  search = '',
 } = {}) {
   if (!lane) return '';
 
@@ -457,11 +526,11 @@ export function renderContextPanel({
   const openKeys = new Set(expanded ?? []);
   const entries = contextFilterEntries(blocks);
 
-  // Both numbers only when the filter actually took a block out of this record:
-  // hiding a kind the request does not carry leaves the head as it was, and an
-  // unfiltered head is byte-for-byte the one that was there before the filter
-  // existed.
-  const counts = contextCounts({ chars, blocks, hidden });
+  // Both numbers only when the filter or the search actually took a block out of
+  // this record: hiding a kind the request does not carry leaves the head as it
+  // was, and an unnarrowed head is byte-for-byte the one that was there before
+  // either existed.
+  const counts = contextCounts({ chars, blocks, hidden, search });
   const charsPart = counts.filtered
     ? `${fmtNum(counts.visibleChars)} of ${fmtNum(counts.chars)} chars`
     : `${fmtNum(chars)} chars`;
@@ -486,17 +555,30 @@ export function renderContextPanel({
       <span class="context-meta" data-chars="${esc(chars)}" data-blocks="${esc(blocks.length)}"${visibleAttrs}
         data-time="${esc(item.timeMs)}" data-model="${esc(item.model ?? '')}"
         data-truncated="${item.truncated === true}">${line}</span>
-      ${renderContextFilter({ entries, hidden, open: filterOpen })}
+      ${
+        blocks.length
+          ? `<div class="context-controls">${renderContextSearch(search)}${renderContextFilter({
+              entries,
+              hidden,
+              open: filterOpen,
+            })}</div>`
+          : ''
+      }
     </div>`;
 
-  const shownBlocks = visibleBlocks(blocks, hidden);
+  const shownBlocks = visibleBlocks(blocks, hidden, search);
 
   // A request with no blocks at all keeps today's empty container: nothing is
-  // hidden there, so nothing may claim it is. The placeholder is for the one
-  // case a reader cannot otherwise explain — rows that exist and are all turned
-  // off — and it says where to turn them back on.
+  // narrowed there, so nothing may claim it is. The placeholder is for the one
+  // case a reader cannot otherwise explain — rows that exist and none on screen
+  // — and it has to name the right cause of the two, because clearing the
+  // search does not help when the kinds are all turned off. So the filter alone
+  // is asked first: if it empties the list by itself, that is what the reader
+  // has to undo, whatever they also typed.
   if (blocks.length > 0 && shownBlocks.length === 0) {
-    const message = 'Every kind in this request is hidden. Turn them back on in the filter above.';
+    const message = visibleBlocks(blocks, hidden).length === 0
+      ? 'Every kind in this request is hidden. Turn them back on in the filter above.'
+      : `Nothing in this request matches “${String(search).trim()}”. Clear the search to see it again.`;
     return shell('ready', `${head}<div class="placeholder">${esc(message)}</div>`);
   }
 

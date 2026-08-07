@@ -50,12 +50,14 @@ const state = {
   laneContext: { key: null, item: null },
   // Which blocks the reader has expanded, so a live refresh does not shut them.
   expanded: new Set(),
-  // Which context entries the reader has hidden, and whether the filter's own
-  // dropdown is open. Both are page-wide and last until the page is reloaded:
-  // hiding a kind is a preference, not a position, so neither is reset where
-  // `expanded` is, and neither is written to storage.
+  // Which context entries the reader has hidden, whether the filter's own
+  // dropdown is open, and what they are searching the context for. All three are
+  // page-wide and last until the page is reloaded: hiding a kind and looking for
+  // a string are preferences, not positions, so none is reset where `expanded`
+  // is, and none is written to storage.
   contextHidden: new Set(),
   contextFilterOpen: false,
+  contextSearch: '',
   search: '',
   authError: false,
 };
@@ -416,10 +418,17 @@ async function loadLaneContext() {
 /**
  * The panel repaints inside its own container. A full re-render would replace
  * the scrub slider under the pointer and end the drag that asked for it.
+ *
+ * The repaint still replaces the panel's own search box, and typing in it is
+ * what asks for the repaint — so the focus and the caret go back where they
+ * were, or the second character of a query could never be typed.
  */
 function renderLanePanel() {
   const container = document.getElementById('lane-panel');
   if (!container) return;
+  const active = document.activeElement;
+  const focusId = active && container.contains(active) ? active.id : null;
+  const caret = typeof active?.selectionStart === 'number' ? active.selectionStart : null;
   const view = laneView();
   container.innerHTML = renderContextPanel(
     lanePanelInput({
@@ -429,8 +438,16 @@ function renderLanePanel() {
       expanded: state.expanded,
       hidden: state.contextHidden,
       filterOpen: state.contextFilterOpen,
+      search: state.contextSearch,
     }),
   );
+  if (!focusId) return;
+  const restored = document.getElementById(focusId);
+  if (!restored) return;
+  restored.focus();
+  if (caret !== null && typeof restored.setSelectionRange === 'function') {
+    restored.setSelectionRange(caret, caret);
+  }
 }
 
 let laneContextTimer = null;
@@ -660,7 +677,18 @@ function wireEvents() {
 
   document.getElementById('detail').addEventListener('input', (event) => {
     // Keyboard scrubbing (arrow keys on a range) arrives here too.
-    if (event.target.id === 'timeline-scrub') scrubTo(event.target);
+    if (event.target.id === 'timeline-scrub') {
+      scrubTo(event.target);
+      return;
+    }
+    // The search runs over the record the panel already holds, so a keystroke
+    // costs a repaint and never a request. The type="search" clear button and
+    // Escape both arrive here as an input event with an empty value, which is
+    // exactly what turning the search off looks like.
+    if (event.target.matches('input[data-ctx-search]')) {
+      state.contextSearch = event.target.value;
+      renderLanePanel();
+    }
   });
 
   let sessionSearchTimer = null;

@@ -727,6 +727,30 @@ button {
   color: var(--text-faint);
 }
 
+/* The search and the filter narrow the same list, so they sit together and
+   wrap together when the head runs out of room. */
+.context-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ctx-search input {
+  width: 150px;
+  padding: 2px 6px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text);
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.ctx-search input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
 /* The filter is a dropdown and not a row of chips so that opening it floats
    over the block list instead of pushing it down the page. */
 .ctx-filter {
