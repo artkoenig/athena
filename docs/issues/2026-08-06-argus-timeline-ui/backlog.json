@@ -226,6 +226,16 @@
             "questions": [],
             "summary": "Added a shared chosen time to the session timeline: chosenTimePct, clampChosenTime, laneRowsHtml and scrubStateHtml in public/timeline.js with a third options argument on timelineHtml, state.atMs/state.following plus renderChosenTime, syncChosenTime and the scrub/live event branches in public/app.js, the three new rules in the timeline section of public/styles.css, and one sentence on the README's Timeline bullet."
           }
+        },
+        {
+          "label": "review:scrub-live.0",
+          "at": "2026-08-07T12:07:41.880Z",
+          "return": {
+            "findings": [],
+            "reason": "",
+            "questions": [],
+            "summary": "Reviewed the whole diff against main for increment 4 (a chosen time, scrubbing and live mode): `npm --prefix tools/argus-ui test` ran 70 cases, 0 failed, exit 0; every acceptance criterion of the increment is met by tools/argus-ui/public/timeline.js and public/app.js, each is pinned by a test that boots the real app.js against the fake DOM (scrub input moves all four playheads and the readout, scrubbing sets aria-pressed=false, an SSE ingest that extends lastMs re-pins the head while following and leaves a scrubbed time alone, the Live control returns to the head and following resumes), the playhead uses the same window arithmetic as the activity marks and the context curve and is pinned to line up with both, the chosen time is the single state.atMs the view reads from, and nothing outside the increment's scope was changed: app.js's formatting helpers moved unchanged into public/format.js with every identifier it still uses imported, index.html already loads app.js as a module, the added CSS is only the playhead and scrub row, and the README sentence documents the new control. No stale document or broken caller found in the blast radius."
+          }
         }
       ]
     },
