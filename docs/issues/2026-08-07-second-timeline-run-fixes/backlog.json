@@ -92,421 +92,41 @@
         "The check leaves nothing behind whichever way it ends - no throwaway repository, no temporary directory, no process, and nothing written into the repository under test - and that is exercised on the failing path too.",
         "./test.sh is green, and the run is reported with the command, what it covered and its exit code."
       ],
-      "status": "todo",
-      "note": "Recut after collector-fixture. Criteria 2 and 3 replace a criterion that asked the report to state which behaviour was chosen for each case: the reviewer of collector-fixture said plainly it does not read backlog.json, so a criterion satisfied only in a step return cannot be judged and the distinction has to live in the suite instead. Criterion 4 grew a process-and-temp-directory clause and the failing path from the same increment, where a fixture that promised to leave nothing behind still left an empty log per run. The spawned-git timing lesson stands too: collector-fixture round 0 was rejected for asserting a spawned process gone with zero grace, so any wait in this check polls to a deadline.",
-      "steps": [
-        {
-          "label": "research:signing-check.0",
-          "at": "2026-08-07T23:17:14.426Z",
-          "return": {
-            "needsTests": true,
-            "summary": "Add bin/check-commit-signing, a script that signs a commit in a throwaway repository when signing is configured and skips when it is not, plus test-signing.sh proving both outcomes and the cleanup, and wire both into test.sh.",
-            "plan": "## What gets built\n\nThree files change and one is edited for wording.\n\n### 1. `bin/check-commit-signing` (new, bash, mode 755)\n\nThe checker. Run it as `bash bin/check-commit-signing`, with no arguments. It resolves the repository it guards from its own location, the way `test.sh` does: `root=\"$(cd \"$(dirname \"${BASH_SOURCE[0]}\")/..\" && pwd)\"`. Header comment in the style of `test-worktree.sh`: say that every agent commits its step return, so a signing misconfiguration costs a whole agent's work, and that this catches it before the work rather than after.\n\nStart with `set -u` and no `set -e` (the suites in this repository do the same).\n\nStep 1 — read the effective signing configuration of the repository under test, once, with `git -C \"$root\" config --get <key>` for `commit.gpgsign`, `gpg.format`, `user.signingkey`, `gpg.program`, `gpg.ssh.program`, `gpg.ssh.defaultKeyCommand`, `user.name` and `user.email`. `git config --get` exits 1 when a key is unset, so capture each with `|| true` and treat the result as the empty string.\n\nStep 2 — decide whether signing is configured for this run. It is configured if and only if `git -C \"$root\" config --get --bool commit.gpgsign` prints `true`. Any other outcome — unset, `false`, missing — is an environment where no agent commit will be signed, so print to stdout\n\n```\nSKIP: commit signing is not configured here — commit.gpgsign is not true, so no agent commit will be signed\n```\n\nand exit 0 without creating anything. Key the decision on `commit.gpgsign` alone: a `user.signingkey` left in a global config with `commit.gpgsign=false` is a machine where signing is off for the run, and failing there would make the check cry wolf on every developer machine that carries a key it does not use.\n\nStep 3 — when it is configured, create the throwaway repository: `tmp=\"$(mktemp -d)\"` immediately followed by `trap 'rm -rf \"$tmp\"' EXIT`, so every later exit path cleans up, then `git init -q -b signing-check \"$tmp/repo\"`. Seed the throwaway repository's *local* config with every non-empty value read in step 1, including `commit.gpgsign=true`: the throwaway repository inherits global and system config on its own, and this copy is what makes a repository-local signing setting of the checkout under test part of the check. When `user.name` or `user.email` came back empty, set `Uroboros signing check` and `signing-check@example.invalid` locally so the commit cannot fail for a missing identity instead of for signing.\n\nStep 4 — write a file into the throwaway repository, `git -C \"$tmp/repo\" add`, then `git -C \"$tmp/repo\" commit -m \"signing check\"` with stdout and stderr captured together into a variable and the exit code kept.\n\nStep 5 — judge it:\n\n- Commit exit code non-zero: print the failure block (below) to stderr, headed `FAIL: commit signing is configured but signing a commit failed`, and exit 1.\n- Commit exit code zero but `git -C \"$tmp/repo\" cat-file commit HEAD` carries no line starting with `gpgsig`: print the same block headed `FAIL: git reported success but the commit carries no signature`, and exit 1.\n- Otherwise print `OK: a signed commit succeeded in a throwaway repository` to stdout and exit 0.\n\nThe failure block, after its heading, names what is misconfigured, one setting per line, in this exact `  <key> = <value>` shape, printing `(unset)` for an empty value:\n\n```\n  commit.gpgsign = true\n  gpg.format = ssh\n  user.signingkey = /home/claude/.ssh/commit_signing_key.pub\n  gpg.program = (unset)\n  gpg.ssh.program = /tmp/code-sign\n  git said:\n    <the captured git output, each line indented by four spaces>\n```\n\nThose exact key names and the ` = ` separator are a contract the suite asserts on, as are the `SKIP:`, `OK:` and `FAIL:` prefixes; do not reword them.\n\nExit codes are 0 for pass and skip, 1 for fail, and nothing else. Start no background process, and write nothing outside `$tmp` — the checker only ever reads from `$root`.\n\n### 2. `test-signing.sh` (new, the test-author writes it)\n\nThe checker's own suite, at the repository root beside `test-repo.sh` and `test-worktree.sh`, invoked as `bash test-signing.sh`. It drives `bin/check-commit-signing` in fabricated environments and asserts the two outcomes and the cleanup.\n\n### 3. `test.sh` (edited)\n\nAdd two `run` entries, both above the existing `run \"the repository itself\"` so a signing misconfiguration shows up in the first lines of the output, each with a short comment in the style of the ones already there:\n\n```bash\nrun \"commit signing in this environment\" \\\n  bash \"$root/bin/check-commit-signing\"\n\nrun \"the commit-signing check itself\" \\\n  bash \"$root/test-signing.sh\"\n```\n\nKeep the literal path `bin/check-commit-signing` in that file: the suite greps `test.sh` for it.\n\n### 4. `README.md` (edited)\n\nThe `## Tests` section says \"`bash test.sh` — five suites, one command: the repository's own rules, what a parallel run in a worktree needs, and the three tools.\" That count was already one short of the six suites `test.sh` runs, and this change makes it eight. Replace the count with what the command covers, so the sentence cannot go stale on the next suite: name that it checks commit signing works here, the repository's own rules, what a parallel run in a worktree needs, the backlog recorder, and the three tools.\n\n## Decisions, including the rejected ones\n\n**A separate script rather than the check inlined in `test.sh`.** The suite has to run the check under a fabricated environment to prove both outcomes, and it can only do that if the check is a command it can spawn. Inlining it in `test.sh` would make the two outcomes unprovable and force the criterion to be argued in prose.\n\n**`bin/` rather than a new `scripts/` directory.** `bin/` already holds the repository's runnable commands (`argus`, `parse-agent-log`), and an agent about to start work can run this one directly, which is the point of catching the failure before the work.\n\n**A separate `test-signing.sh` rather than cases appended to `test-repo.sh`.** `test-repo.sh` is 1370 lines of facts about the repository's own files; this is behaviour of a script under fabricated environments, and `test-worktree.sh` is the precedent for a concern getting its own suite file and its own `run` line.\n\n**Config copied into the throwaway repository rather than inherited only.** A throwaway repository under `$TMPDIR` inherits global and system config by itself, which is where signing usually lives, but not the repository-local config of the checkout an agent commits in — a worktree shares that local config. Copying the effective values makes the check reflect the commit the agent will actually make.\n\n**Keyed on `commit.gpgsign`, not on `user.signingkey` being present.** This is the line between \"signing is legitimately not configured for the run\" and \"configured but broken\", and it is the same condition git itself uses to decide whether a plain `git commit` signs.\n\n**The signature header is checked, not just git's exit code.** A commit that git reports as made but that carries no `gpgsig` header is the silent version of the same failure, and the extra line costs nothing.\n\n**Rejected: verifying the signature with `git verify-commit`.** That needs an allowed-signers file the environment has no reason to carry, and the failure this increment exists for is at signing time (exit 128), not at verification.\n\n**Rejected: generating a real key for a hermetic success case.** `ssh-keygen` is not installed in this environment, and a real gpg key would need a `GNUPGHOME` and would leave a `gpg-agent` behind — exactly what the criteria forbid. The suite fakes the signer program instead; I verified by experiment that git 2.43 accepts a fake `gpg.ssh.program` that writes the `.sig` file, and that a signer exiting 1 makes `git commit` exit 128.\n\n## Facts about this environment the implementer needs\n\nSigning is configured here and works today: `commit.gpgsign=true`, `gpg.format=ssh`, `user.signingkey=/home/claude/.ssh/commit_signing_key.pub`, `gpg.ssh.program=/tmp/code-sign`, all from the global config, and `HEAD` carries a `gpgsig` header. So `bash bin/check-commit-signing` takes the configured path here and has to print `OK:` and exit 0. `ssh-keygen` is not installed; `gpg`, `pgrep`, `git` 2.43.0 and node 22 are.",
-            "moduleMap": "/home/user/uroboros/bin/check-commit-signing — NEW, bash, mode 755. The checker: reads the effective signing config of its own checkout, skips with exit 0 when commit.gpgsign is not true, otherwise makes a signed commit in a throwaway repository under $TMPDIR and exits 1 with a block naming the settings when it fails. Entry point: the whole file, run as `bash bin/check-commit-signing`, no arguments.\n/home/user/uroboros/test-signing.sh — NEW, bash, the test-author writes it. The checker's suite: spawns bin/check-commit-signing under fabricated GIT_CONFIG_GLOBAL/HOME/TMPDIR and asserts exit code, message, leftovers and processes. Entry point: `bash test-signing.sh`, exit 0 = all cases pass.\n/home/user/uroboros/test.sh — EDIT. The one command behind \"the suite is green\"; a `run <label> <command>` helper per suite, a failure counter and a PASS/FAIL footer. Add two `run` entries above `run \"the repository itself\"`.\n/home/user/uroboros/README.md — EDIT, the `## Tests` section around line 267 (\"`bash test.sh` — five suites, one command…\"). Replace the stale count with what the command covers.\n/home/user/uroboros/test-worktree.sh — READ ONLY, the style template for the new suite: header comment, `set -u`, `root=`, `passed`/`failed` counters, `ok`/`no`/`check` helpers, `echo \"=== section\"` headings, PASS/FAIL footer with `exit 1`.\n/home/user/uroboros/test-repo.sh — READ ONLY, the same helpers plus the pattern for building a fixture in a `mktemp -d` and removing it afterwards.",
-            "environment": "Repository root: /home/user/uroboros. Run everything from there.\n\nTools present: bash, git 2.43.0, /usr/bin/pgrep, /usr/bin/gpg, node 22 (/opt/node22/bin/node) and npm. `ssh-keygen` is NOT installed, so no test may generate or use a real SSH key. There is no linter and no formatter in this repository; nothing else has to be installed, and the tool suites `test.sh` runs are zero-dependency, so no `npm install` step is needed.\n\nCommands the plan asks for, both from the repository root:\n- `bash test-signing.sh` — the new suite alone; needs nothing beyond bash and git.\n- `bash test.sh` — every suite, the new signing entries included; needs npm on PATH for the three tool suites.\n\nGit signing in this environment: `commit.gpgsign=true`, `gpg.format=ssh`, `user.signingkey=/home/claude/.ssh/commit_signing_key.pub`, `gpg.ssh.program=/tmp/code-sign`, all global; signing works today (HEAD carries a `gpgsig` header). `git config --global --list` reads $HOME/.gitconfig with HOME=/root; there is no /etc/gitconfig.",
-            "testPlan": "## Whether\n\nTests are needed. The increment is a script whose two branches and whose cleanup are all criteria in their own right.\n\n## The file\n\nOne new file: `/home/user/uroboros/test-signing.sh`, a bash suite at the repository root, run as `bash test-signing.sh` from that root. No framework — this repository's shell suites are hand-rolled, and `test-worktree.sh` is the template to copy exactly:\n\n- A header comment saying what the suite owns and that it leaves the checkout as it was, then `set -u` (no `set -e`).\n- `root=\"$(cd \"$(dirname \"${BASH_SOURCE[0]}\")\" && pwd)\"`.\n- `passed=0`, `failed=0`, and the three helpers verbatim: `ok() { passed=$((passed + 1)); echo \"  ok   — $1\"; }`, `no() { failed=$((failed + 1)); echo \"  FAIL — $1\"; }`, `check() { if [ \"$1\" = \"0\" ]; then ok \"$2\"; else no \"$2\"; fi; }`.\n- Sections introduced by `echo` then `echo \"=== <sentence>\"`.\n- A case name is a lowercase sentence stating the fact that holds when it passes (\"the check passes over an environment where signing is not configured\"), and a `no` message names what was seen instead.\n- The footer verbatim: blank `echo`, then `if [ \"$failed\" -eq 0 ]; then echo \"PASS: $passed cases\"; else echo \"FAIL: $failed of $((passed + failed)) cases\"; exit 1; fi`.\n- Every comment above a case says why the case exists, not what the code does — that is the house style in both existing shell suites.\n\nNothing is faked that the check really does: the suite runs the real `bin/check-commit-signing` as a real process against a real git. What is faked is the signer program and the git configuration it reads.\n\n## Sandbox and fixtures\n\nOne sandbox root for the whole suite, `sandbox_root=\"$(mktemp -d)\"` with `trap 'rm -rf \"$sandbox_root\"' EXIT` right after it, and a per-case subdirectory under it so each case's leftovers are its own. Per case, create `$case/tmp` (empty, handed to the checker as `TMPDIR`), `$case/home`, and:\n\n- `$case/fake_key.pub` containing `ssh-ed25519 AAAAfake signing-check@example.invalid` — the file must exist, git passes its path to the signer.\n- `$case/bad-signer`, `chmod +x`, exactly the failure of the run this issue is about:\n```bash\n#!/bin/bash\necho 'Key file set to \"/home/claude/.ssh/commit_signing_key.pub\" (ignored, using server key)' >&2\necho 'signing failed' >&2\nexit 1\n```\n- `$case/good-signer`, `chmod +x`, emulating `ssh-keygen -Y sign -n git -f <key> <buffer>`; git reads the signature from `<buffer>.sig` and does not inspect what it contains:\n```bash\n#!/bin/bash\nfor a in \"$@\"; do last=\"$a\"; done\nprintf -- '-----BEGIN SSH SIGNATURE-----\\nZmFrZQ==\\n-----END SSH SIGNATURE-----\\n' >\"$last.sig\"\n```\n- `$case/gitconfig`, the fabricated global config. The signing variant (substitute the case's own paths):\n```\n[user]\n\tname = Signing Check\n\temail = signing-check@example.invalid\n\tsigningkey = <case>/fake_key.pub\n[gpg]\n\tformat = ssh\n[gpg \"ssh\"]\n\tprogram = <case>/bad-signer\n[commit]\n\tgpgsign = true\n```\nThe unconfigured variant carries the `[user]` `name` and `email` only.\n\nThe checker is spawned once per case and its combined output captured:\n```bash\nout=\"$(env HOME=\"$case/home\" TMPDIR=\"$case/tmp\" \\\n  GIT_CONFIG_GLOBAL=\"$case/gitconfig\" GIT_CONFIG_SYSTEM=/dev/null \\\n  bash \"$root/bin/check-commit-signing\" 2>&1)\"\ncode=$?\n```\nSeveral cases assert on that one run; do not re-run the checker per assertion. `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_SYSTEM` are what make the case hermetic — they govern every `git` the checker starts, the one it runs against this checkout included. I verified by experiment that this pair, this config shape and both signer fakes produce the exact outcomes the cases below assert (fake signer exiting 1: `git commit` exit 128 with `error: … signing failed` and `fatal: failed to write commit object`; good fake: exit 0 and a `gpgsig` header on HEAD).\n\n## The cases\n\n### Section: the check passes over an environment where signing is not configured\n\nCriterion covered: telling apart an environment where signing is legitimately not configured, and passing over it.\n\n1. **Signing off, no keys.** Config: `[user]` name and email only. Expected: `code` is 0. Case name: \"an environment without commit.gpgsign passes the check\". The `no` message prints `$code` and `$out`.\n2. **Same run, the message.** Expected: `$out` contains `SKIP:` and contains `commit.gpgsign`. Name: \"the skipped check says why it skipped\". This is the case that goes red if the checker starts failing silently or stops naming the setting it keyed on.\n3. **Same run, leftovers.** Expected: `ls -A \"$case/tmp\"` is empty. Name: \"the skipped check leaves no temporary directory behind\".\n4. **A key present but signing switched off.** Config: the signing variant, but `gpgsign = false` and `program = <case>/bad-signer`. Expected: `code` is 0 and `$out` contains `SKIP:`. Name: \"a signing key with commit.gpgsign false is not an environment the check fails\". This is the edge that pins the distinction: a checker keying on `user.signingkey` being set, or on `gpg.format`, goes red here while case 5 still passes.\n\n### Section: the check fails loudly when a configured signer cannot sign\n\nCriterion covered: failing loudly with a message naming what is misconfigured, and leaving nothing behind on that path.\n\n5. **Configured, signer exits 1.** Config: the signing variant with `bad-signer` and `gpgsign = true`. Expected: `code` is 1. Name: \"a configured signer that cannot sign fails the check\".\n6. **Same run, the message names the misconfiguration.** Expected: `$out` contains `FAIL:`, contains the literal `user.signingkey = $case/fake_key.pub`, contains the literal `gpg.ssh.program = $case/bad-signer`, and contains `signing failed` (git's own words, passed through). Four separate `ok`/`no` cases or one case per substring — one per substring, so a dropped line names itself. Names: \"the failure says FAIL\", \"the failure names the signing key\", \"the failure names the signer program\", \"the failure carries what git said\". Use `case \"$out\" in *\"needle\"*)` or `grep -qF -- \"needle\"` on a here-string; `-F` matters, the needles carry slashes and dots.\n7. **Same run, no throwaway repository and no temporary directory left.** Expected: `ls -A \"$case/tmp\"` is empty. Name: \"the failing check leaves no throwaway repository behind\".\n8. **Same run, no process left.** Expected: `pgrep -f \"$case\"` finds nothing. Name: \"the failing check leaves no process behind\". Guard the tool: when `command -v pgrep` is empty, report `no` naming pgrep as missing rather than `ok`, so the absence of the tool is loud instead of silently green.\n9. **Same run, the repository under test is untouched.** Snapshot `git -C \"$root\" status --porcelain` into a variable immediately before the run and again after it — with the plain ambient environment, not the fabricated one — and expect the two to be identical strings. Name: \"the failing check writes nothing into the repository under test\". Comparing before with after rather than expecting an empty status is what makes the case survive being run on a dirty working tree.\n\n### Section: the check passes when a configured signer works\n\nCriterion covered: the check does not cry wolf, so \"fails loudly\" and \"passes over\" stay distinguishable rather than the check just always failing when configured.\n\n10. **Configured, signer works.** Config: the signing variant with `good-signer`. Expected: `code` is 0 and `$out` contains `OK:`. Two cases, one per assertion. Names: \"a configured signer that works passes the check\", \"the passing check says so\".\n11. **Same run, leftovers.** Expected: `ls -A \"$case/tmp\"` is empty. Name: \"the passing check leaves no temporary directory behind\".\n\n### Section: test.sh runs the check\n\n12. **Registration.** `grep -qF 'bin/check-commit-signing' \"$root/test.sh\"`. Name: \"test.sh runs bin/check-commit-signing\". This mirrors the existing case in `test-repo.sh` that greps `test.sh` for the recorder suite, and it is what stops the check from being dropped out of the one command that proves the suite green.\n\n## What is left untested, and why\n\n- **The copy of repository-local signing config into the throwaway repository.** Exercising it would mean writing signing config into the checkout under test, which one of this increment's own criteria forbids. The fabricated global config reaches the throwaway repository by inheritance as well, so cases 5 and 10 pass either way.\n- **The `git reported success but the commit carries no signature` branch.** No signer can succeed and leave the commit unsigned when `commit.gpgsign` is true, so the branch is defensive and cannot be driven from outside the script.\n- **The live environment's own outcome.** It is not a case in `test-signing.sh` — it is the `run \"commit signing in this environment\"` entry in `test.sh`, whose result depends on the machine by design.\n- **Whether a lingering `gpg-agent` would be caught.** Case 8 catches any process whose command line carries the sandbox path, which is what a child of the checker would carry; a daemon started outside that path is out of reach and out of scope.\n\n## What is already red\n\nI ran no suite, not even as a baseline. `test-signing.sh` fails whole until `bin/check-commit-signing` exists (a missing command exits 127, so every case reports FAIL), and case 12 fails until `test.sh` names the checker. Nothing else in the repository is known red; the last commits on this branch were made and pushed with signing working.\n\n## What counts as done\n\n`bash test-signing.sh` and `bash test.sh`, both from the repository root, both exit 0. Nothing else gets run.",
-            "checks": [
-              "bash test-signing.sh",
-              "bash test.sh"
-            ],
-            "questions": []
-          }
-        },
-        {
-          "label": "tests:signing-check.0",
-          "at": "2026-08-07T23:21:41.651Z",
-          "return": {
-            "cases": [
-              {
-                "case": "Signing off, no keys. Config: [user] name and email only. Expected: code is 0.",
-                "file": "/home/user/uroboros/test-signing.sh",
-                "testName": "an environment without commit.gpgsign passes the check",
-                "expected": "code is 0 when commit.gpgsign is not set true",
-                "got": "code=127, out=bash: /home/user/uroboros/bin/check-commit-signing: No such file or directory (bin/check-commit-signing does not exist yet)"
-              },
-              {
-                "case": "Same run, the message. Expected: $out contains SKIP: and contains commit.gpgsign.",
-                "file": "/home/user/uroboros/test-signing.sh",
-                "testName": "the skipped check says why it skipped",
-                "expected": "output contains 'SKIP:' and names 'commit.gpgsign'",
-                "got": "out=bash: /home/user/uroboros/bin/check-commit-signing: No such file or directory"
-              },
-              {
-                "case": "Same run, leftovers. Expected: ls -A \"$case/tmp\" is empty.",
-                "file": "/home/user/uroboros/test-signing.sh",
-                "testName": "the skipped check leaves no temporary directory behind",
-                "expected": "TMPDIR is empty after the run",
-                "got": "passes vacuously today (nothing runs to leave anything behind); confirmed non-tautological against a stub implementation, see summary"
-              },
-              {
-                "case": "A key present but signing switched off. Config: signing variant, but gpgsign=false and program=bad-signer. Expected: code is 0 and $out contains SKIP:.",
-                "file": "/home/user/uroboros/test-signing.sh",
-                "testName": "a signing key with commit.gpgsign false is not an environment the check fails",
-                "expected": "code=0 and output contains 'SKIP:' even though a signing key is present",
-                "got": "code=127, out=bash: /home/user/uroboros/bin/check-commit-signing: No such file or directory"
-              },
-              {
-                "case": "Configured, signer exits 1. Config: signing variant with bad-signer and gpgsign=true. Expected: code is 1.",
-                "file": "/home/user/uroboros/test-signing.sh",
-                "testName": "a configured signer that cannot sign fails the check",
-                "expected": "code is 1",
-                "got": "code=127, not 1 — out=bash: /home/user/uroboros/bin/check-commit-signing: No such file or directory"
-              },
-              {
-                "case": "Same run, the message names the misconfiguration — FAIL: substring.",
-                "file": "/home/user/uroboros/test-signing.sh",
-                "testName": "the failure says FAIL",
-                "expected": "output contains 'FAIL:'",
-                "got": "out=bash: /home/user/uroboros/bin/check-commit-signing: No such file or directory"
-              },
-              {
-                "case": "Same run, the message names the misconfiguration — user.signingkey line.",
-                "file": "/home/user/uroboros/test-signing.sh",
-                "testName": "the failure names the signing key",
-                "expected": "output contains the literal 'user.signingkey = $case/fake_key.pub'",
-                "got": "out=bash: /home/user/uroboros/bin/check-commit-signing: No such file or directory"
-              },
-              {
-                "case": "Same run, the message names the misconfiguration — gpg.ssh.program line.",
-                "file": "/home/user/uroboros/test-signing.sh",
-                "testName": "the failure names the signer program",
-                "expected": "output contains the literal 'gpg.ssh.program = $case/bad-signer'",
-                "got": "out=bash: /home/user/uroboros/bin/check-commit-signing: No such file or directory"
-              },
-              {
-                "case": "Same run, the message names the misconfiguration — git's own words.",
-                "file": "/home/user/uroboros/test-signing.sh",
-                "testName": "the failure carries what git said",
-                "expected": "output contains 'signing failed'",
-                "got": "out=bash: /home/user/uroboros/bin/check-commit-signing: No such file or directory"
-              },
-              {
-                "case": "Same run, no throwaway repository and no temporary directory left.",
-                "file": "/home/user/uroboros/test-signing.sh",
-                "testName": "the failing check leaves no throwaway repository behind",
-                "expected": "TMPDIR is empty after the failing run",
-                "got": "passes vacuously today (nothing runs to leave anything behind); confirmed non-tautological against a stub implementation, see summary"
-              },
-              {
-                "case": "Same run, no process left.",
-                "file": "/home/user/uroboros/test-signing.sh",
-                "testName": "the failing check leaves no process behind",
-                "expected": "pgrep -f \"$case\" finds nothing; reports FAIL naming pgrep as missing if the tool itself is absent",
-                "got": "passes today because nothing runs to leave a process; pgrep is present in this environment so the guard branch is not exercised by this run"
-              },
-              {
-                "case": "Same run, the repository under test is untouched.",
-                "file": "/home/user/uroboros/test-signing.sh",
-                "testName": "the failing check writes nothing into the repository under test",
-                "expected": "git -C \"$root\" status --porcelain is identical before and after the run",
-                "got": "passes today because the run never touches $root (nothing to run); it is exercised for real once bin/check-commit-signing exists, see summary"
-              },
-              {
-                "case": "Configured, signer works. Expected: code is 0 and $out contains OK: (two cases).",
-                "file": "/home/user/uroboros/test-signing.sh",
-                "testName": "a configured signer that works passes the check",
-                "expected": "code is 0",
-                "got": "code=127, not 0 — out=bash: /home/user/uroboros/bin/check-commit-signing: No such file or directory"
-              },
-              {
-                "case": "Configured, signer works — the message.",
-                "file": "/home/user/uroboros/test-signing.sh",
-                "testName": "the passing check says so",
-                "expected": "output contains 'OK:'",
-                "got": "out=bash: /home/user/uroboros/bin/check-commit-signing: No such file or directory"
-              },
-              {
-                "case": "Same run, leftovers.",
-                "file": "/home/user/uroboros/test-signing.sh",
-                "testName": "the passing check leaves no temporary directory behind",
-                "expected": "TMPDIR is empty after the passing run",
-                "got": "passes vacuously today (nothing runs to leave anything behind); confirmed non-tautological against a stub implementation, see summary"
-              },
-              {
-                "case": "Registration: test.sh runs bin/check-commit-signing.",
-                "file": "/home/user/uroboros/test-signing.sh",
-                "testName": "test.sh runs bin/check-commit-signing",
-                "expected": "grep -qF 'bin/check-commit-signing' \"$root/test.sh\" succeeds",
-                "got": "test.sh does not run bin/check-commit-signing (not yet wired in)"
-              }
-            ],
-            "openQuestions": [],
-            "questions": [],
-            "summary": "Wrote /home/user/uroboros/test-signing.sh, a hand-rolled bash suite copying test-worktree.sh's header/helpers/footer verbatim, with all 12 planned cases (16 ok/no assertions) spawning the real bin/check-commit-signing under a fabricated HOME/TMPDIR/GIT_CONFIG_GLOBAL/GIT_CONFIG_SYSTEM against fabricated bad-signer/good-signer fakes and gitconfigs, exactly as the plan specified verbatim scripts and config shapes. `bash test-signing.sh` from the repository root: 16 cases, 11 FAIL / 5 ok, exit 1 — every failure is bin/check-commit-signing not existing (exit 127, 'No such file or directory'), which is the plan's own predicted already-red state; the 5 passing cases are the three 'leaves no temporary directory/process/repository-status-change behind' assertions that hold vacuously when nothing runs, which the plan's own fixtures make true either way. I additionally built a throwaway, uncommitted stub implementation matching the research plan's spec, copied it to bin/check-commit-signing together with the two run lines in test.sh, reran test-signing.sh and got all 16 cases green (exit 0) confirming the assertions are not tautological, then deleted the stub and reverted test.sh via git checkout — git status --porcelain now shows only test-signing.sh untracked, no other file touched. I did not write or touch bin/check-commit-signing or test.sh; those are the implementer's to write. What is left untested is exactly what the plan marked out of scope: the copy of repository-local signing config into the throwaway repository, the defensive 'git reported success but no signature' branch, the live environment's own run.\"test.sh\" entry, and a gpg-agent daemon started outside the sandbox path."
-          }
-        },
-        {
-          "label": "implement:signing-check.0",
-          "at": "2026-08-07T23:25:25.816Z",
-          "return": {
-            "deviations": [],
-            "commands": [
-              {
-                "command": "bash test-signing.sh",
-                "exitCode": 0,
-                "note": "16 cases, all pass. Run before the change it was 11 of 16 red with code=127 (the checker did not exist); the only non-checker case, the test.sh registration grep, went green with the test.sh edit."
-              },
-              {
-                "command": "bash test.sh",
-                "exitCode": 0,
-                "note": "All 8 suites pass, nothing skipped or excluded: commit signing in this environment (OK, the configured path), the commit-signing check itself (16 cases), the repository itself (82), worktrees (4), the backlog recorder, tools/argus, tools/argus-ui, tools/log-parser. Run with /opt/node22/bin on PATH so npm resolves."
-              }
-            ],
-            "blockers": [],
-            "questions": [],
-            "summary": "Added bin/check-commit-signing (mode 755), which skips with exit 0 when commit.gpgsign is not true and otherwise makes a signed commit in a throwaway repository seeded with the checkout's effective signing config, failing with exit 1 and a block naming commit.gpgsign, gpg.format, user.signingkey, gpg.program, gpg.ssh.program and git's own output; registered it and test-signing.sh as the first two run entries in test.sh; replaced the stale suite count in README.md's Tests section with what the command covers."
-          }
-        },
-        {
-          "label": "review:signing-check.0",
-          "at": "2026-08-07T23:32:09.501Z",
-          "return": {
-            "findings": [
-              {
-                "claim": "test-signing.sh is not hermetic against the checkout's own git config: a repository-local commit.gpgsign makes three of its cases fail, so ./test.sh goes red for an environment setting rather than for a check that stopped distinguishing its two outcomes.",
-                "reproduction": "Clone the checkout to a path outside it, run `git config commit.gpgsign true` in the clone (repository-local scope, the spelling `git config commit.gpgsign true` gives by default), then run `bash test-signing.sh` in the clone: the cases 'an environment without commit.gpgsign passes the check', 'the skipped check says why it skipped' and 'a signing key with commit.gpgsign false is not an environment the check fails' all report FAIL and the suite exits 1 (verified in a sandbox clone: FAIL: 3 of 16 cases). Cause: run_checker at test-signing.sh:56-62 neutralises only global and system config through GIT_CONFIG_GLOBAL and GIT_CONFIG_SYSTEM, while bin/check-commit-signing:36 decides on `git -C \"$root\" config --get --bool commit.gpgsign` read from the checkout itself, and no environment variable overrides repository-local config.",
-                "criterion": "Both of those outcomes are exercised by the suite itself rather than argued in prose, so the check goes red when it stops distinguishing them or stops catching a configured-but-failing signer.",
-                "fix": "needs-plan"
-              }
-            ],
-            "reason": "The suite that proves the signing check tells its two outcomes apart still reads the checkout's own repository-local git config, so on a machine where commit signing is switched on per repository three of its cases fail and ./test.sh goes red although the check itself is working.",
-            "questions": [],
-            "summary": "Ran the two listed commands in one call from the repository root: `bash test-signing.sh` — 16 cases covering the skip path, the configured-but-failing path, the configured-and-working path and the test.sh wiring, exit 0; `bash test.sh` — all 8 suites including the new 'commit signing in this environment' (printed 'OK: a signed commit succeeded in a throwaway repository', this container has commit.gpgsign=true with gpg.format=ssh and gpg.ssh.program=/tmp/code-sign in global config) and 'the commit-signing check itself', exit 0. Against the criteria: bin/check-commit-signing makes a real signed commit in a throwaway repository, keys the skip on commit.gpgsign alone, prints FAIL with commit.gpgsign, gpg.format, user.signingkey, gpg.program, gpg.ssh.program and git's own output on the failing path, and cleans up through an EXIT trap; test-signing.sh exercises the skip, the configured-but-failing and the configured-and-working outcomes with fake signer programs, and pins TMPDIR emptiness on all three paths plus a process check and a before/after `git status --porcelain` of the repository under test on the failing path. One verified defect, filed above: the suite's fabricated environment does not cover repository-local config, so its outcome depends on the checkout it runs in. Blast radius otherwise: nothing found — the new files are tracked so a worktree gets them, .worktreeinclude covers gitignored files only and is unaffected, no other page states a suite count, and the historical issue documents that say 'five suites' are frozen records of past runs. Two observations that need no correction: the README Tests sentence enumerates 'that commit signing works here, the repository's own rules, what a parallel run in a worktree needs, the backlog recorder, and the three tools' and omits the commit-signing check's own suite, while its 'every suite, one command' claim stays true; and the 'git reported success but the commit carries no signature' branch at bin/check-commit-signing:95-98 has no case, which looks unreachable through git rather than untested on purpose."
-          }
-        },
-        {
-          "label": "research:signing-check.1",
-          "at": "2026-08-07T23:40:08.140Z",
-          "return": {
-            "needsTests": true,
-            "plan": "The finding is in the suite, not in the checker. bin/check-commit-signing decides on the effective configuration of the repository it inspects (line 36: git -C \"$root\" config --get --bool commit.gpgsign), and repository-local config is part of that effective configuration on purpose: an agent committing in this checkout is bound by it, so the checker must read it. What is wrong is that run_checker (test-signing.sh:56-62) points the checker at the checkout the suite runs from while neutralising only GIT_CONFIG_GLOBAL and GIT_CONFIG_SYSTEM, and no environment variable can neutralise a repository-local setting. A checkout carrying commit.gpgsign locally therefore turns three cases red for an environment setting.\n\nCorrect it entirely inside /home/user/uroboros/test-signing.sh, by giving every case its own sandbox checkout and pointing the checker at that:\n\n1. make_fixtures builds, per case directory, a sandbox checkout at <case>/checkout: a fresh repository (git init -q -b main), a real directory <case>/checkout/bin holding a symlink named check-commit-signing that points at the real /home/user/uroboros/bin/check-commit-signing, and one untracked file (for example <case>/checkout/dirty.txt) so the sandbox checkout has a non-empty git status. It also creates an empty <case>/gitconfig, which cases that configure signing globally append to. It keeps building fake_key.pub, bad-signer and good-signer exactly as it does today.\n\n2. run_checker invokes bash \"<case>/checkout/bin/check-commit-signing\". Bash does not resolve symlinks in BASH_SOURCE and bin is a real directory, so the checker's own root derivation at bin/check-commit-signing:14 resolves to <case>/checkout. I verified this with a throwaway probe before planning it: a script at a real path, invoked through a symlink in <dir>/checkout/bin, printed root=<dir>/checkout. Rejected: copying the script into the sandbox, because the suite would then run a copy and every reader has to reason about drift; adding a repository-path argument to bin/check-commit-signing, because it is a production affordance no caller uses and it leaves the location-derived default - the only form test.sh invokes - unexercised.\n\n3. run_checker also strips the ambient git environment, which the current harness does not. GIT_CONFIG_COUNT is set to 3 in this container (it injects credential.interactive and two url.insteadOf entries at command-line scope, which outranks every config file), so a case is hermetic only once it is gone. Prefix every checker run with: env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_OBJECT_DIRECTORY -u GIT_COMMON_DIR -u GIT_NAMESPACE -u GIT_CEILING_DIRECTORIES -u GIT_CONFIG -u GIT_CONFIG_COUNT -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL -u GIT_COMMITTER_NAME -u GIT_COMMITTER_EMAIL, then the assignments HOME=<case>/home TMPDIR=<case>/tmp GIT_CONFIG_GLOBAL=<case>/gitconfig GIT_CONFIG_SYSTEM=/dev/null. Hold that unset list in one place (a bash array used by both run_checker and the suite's own git calls) so the two cannot drift; env requires the -u options before the assignments.\n\n4. Every git the suite itself runs - the fixture git init, the git config writes into a sandbox checkout, every git status snapshot including the one against the checkout the suite runs from - uses that same unset list with GIT_CONFIG_GLOBAL=/dev/null and GIT_CONFIG_SYSTEM=/dev/null, so fixture creation and status output cannot inherit an ambient template, hook or status setting. Do not pass GIT_CONFIG_GLOBAL=/dev/null to the checker runs themselves; those need the case's own global file.\n\n5. The four existing groups keep configuring signing through the case's global file and keep their present expectations. They are hermetic now because the checker's root is a freshly initialised sandbox checkout whose local config is empty.\n\n6. Two new cases put the configuration in the sandbox checkout's own local config instead, and they are the go-red guard for this finding: one with a full working signing configuration set locally and an empty global file, which must exit 0 and say OK; one with commit.gpgsign=false set locally over a global file that says commit.gpgsign=true with the good signer, which must exit 0 and say SKIP. If anyone points run_checker back at the checkout the suite runs from, the first turns FAIL (it would find no configuration and skip) and the second turns FAIL (it would find the global true and sign), whatever the machine's own config says. The first also pins the checker's copying of the inspected repository's config into its throwaway repository (bin/check-commit-signing:51-65): without that copy the throwaway commit is unsigned and the checker exits 1.\n\n7. Move the \"writes nothing into the repository under test\" assertions from the checkout the suite runs from to the sandbox checkout the checker was actually pointed at, where they are no longer a proxy, and add a suite-level guard that the checkout the suite runs from is untouched from the first line of the suite to the last.\n\nProduction change: expect none. bin/check-commit-signing is correct as it stands - do not change its decision rule, its message format or its cleanup, and do not change the two lines of test.sh that run it and the suite. If a case in the hermetic harness goes red, say whether the cause is the harness or a real checker defect before touching production code.",
-            "moduleMap": "/home/user/uroboros/test-signing.sh - the suite being corrected: ok/no/check helpers, make_fixtures (per-case fixture builder), run_checker (spawns the checker, sets caller-visible out and code), the case groups, the PASS/FAIL summary at the end; entry point bash test-signing.sh.\n/home/user/uroboros/bin/check-commit-signing - the checker under test: root derived from the script's own location at line 14, the skip decision at line 36, the copy of effective config into the throwaway repository at lines 51-65, report() at lines 74-86, cleanup by trap at line 42; entry point bash bin/check-commit-signing; no change expected.\n/home/user/uroboros/test.sh - the one green command: runs bin/check-commit-signing first and test-signing.sh second (lines 20-27); no change expected.",
-            "environment": "bash 5 and git 2.43 (git init -b needs 2.28+), coreutils (mktemp, find, sort, cp), and pgrep from procps at /usr/bin/pgrep - the suite reports a loud FAIL rather than skipping if pgrep is missing.\nnode v22 and npm on PATH, needed only by the npm suites that ./test.sh runs; every package in this repository is zero-dependency, so no install step is needed first.\nThere is no linter and no formatter in this repository, so there is nothing to run for style.\nThe three commands the test plan asks for, all run from the repository root /home/user/uroboros: bash test-signing.sh; the copy-based reproduction one-liner listed in checks, which needs about 7 MB of free space under TMPDIR and no network; ./test.sh (it is executable).\nThis container's global git config sets commit.gpgsign=true, gpg.format=ssh and gpg.ssh.program=/tmp/code-sign, so the first suite of ./test.sh really does make a signed commit here rather than skipping.",
-            "testPlan": "Tests are needed, and they are the whole of the fix: the defect the review found lives in the test suite, so the test-author's change is the correction and no production file is expected to change.\n\nFILE, FRAMEWORK, CONVENTIONS\n\nOne file: /home/user/uroboros/test-signing.sh. There is no framework - it is a plain bash script run as bash test-signing.sh, exit 0 when every case passes. Keep its conventions exactly: set -u and no set -e; passed/failed counters; ok \"sentence\" and no \"sentence plus the observed values\" and check $? \"sentence\"; group headers printed as echo \"=== ...\"; one lower-case sentence naming the behaviour per case, never a test id; a comment above each case saying what goes red and why; a final PASS: N cases or FAIL: n of N cases with exit 1. One mktemp -d sandbox for the whole suite with a single trap 'rm -rf \"$sandbox_root\"' EXIT, and a subdirectory per case. Nothing is mocked except the signer program and the git configuration the checker reads: the checker runs as a real process against a real git.\n\nThere is no per-case runner in a bash suite; the command that runs every case below is the same one: bash test-signing.sh, from /home/user/uroboros.\n\nHARNESS (rewrite, per the plan the implementer also has)\n\nmake_fixtures <dir> keeps creating <dir>/tmp, <dir>/home, fake_key.pub, bad-signer and good-signer unchanged, and additionally creates an empty <dir>/gitconfig, a sandbox checkout at <dir>/checkout initialised with git init -q -b main, a real directory <dir>/checkout/bin holding a symlink check-commit-signing pointing at \"$root/bin/check-commit-signing\", and one untracked file <dir>/checkout/dirty.txt.\n\nrun_checker <case_dir> spawns bash \"<case_dir>/checkout/bin/check-commit-signing\" with combined output into out and exit code into code, under: env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_OBJECT_DIRECTORY -u GIT_COMMON_DIR -u GIT_NAMESPACE -u GIT_CEILING_DIRECTORIES -u GIT_CONFIG -u GIT_CONFIG_COUNT -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL -u GIT_COMMITTER_NAME -u GIT_COMMITTER_EMAIL HOME=<case_dir>/home TMPDIR=<case_dir>/tmp GIT_CONFIG_GLOBAL=<case_dir>/gitconfig GIT_CONFIG_SYSTEM=/dev/null. Every git the suite itself runs uses the same unset list with GIT_CONFIG_GLOBAL=/dev/null and GIT_CONFIG_SYSTEM=/dev/null.\n\nCASES\n\nAll are the same level: an end-to-end run of the real checker as a child process against fabricated configuration. Criterion references are to the increment's five criteria.\n\nGroup A - signing not configured (criteria 2 and 3). State: case directory unconfigured; global file carries user.name and user.email only; sandbox checkout local config empty. One run_checker.\nA1 \"an environment without commit.gpgsign passes the check\" - expect code 0.\nA2 \"the skipped check says why it skipped\" - expect the output to contain SKIP: and the literal commit.gpgsign.\nA3 \"the skipped check leaves no temporary directory behind\" - expect <case>/tmp to be empty.\n\nGroup B - a key present with signing switched off (criteria 2 and 3). State: case directory key-present-signing-off; global file carries identity, user.signingkey=<case>/fake_key.pub, gpg.format=ssh, gpg.ssh.program=<case>/bad-signer and commit.gpgsign=false. One run_checker.\nB1 \"a signing key with commit.gpgsign false is not an environment the check fails\" - expect code 0 and SKIP: in the output. This is the edge that stops the check crying wolf on a machine that carries a key but does not sign.\n\nGroup C - configured but broken (criteria 2, 3 and 4). State: case directory configured-bad; global file as in B but with commit.gpgsign=true. Around the single run_checker, in this order: status_before = git status --porcelain of <case>/checkout; tree_before = find <case>/checkout, sorted under LC_ALL=C, paths only and .git included; run_checker; tree_after by the same command; status_after.\nC1 \"a configured signer that cannot sign fails the check\" - expect code 1 exactly, not merely non-zero.\nC2 \"the failure says FAIL\" - output contains FAIL:.\nC3 \"the failure names the signing key\" - output contains user.signingkey = <case>/fake_key.pub.\nC4 \"the failure names the signer program\" - output contains gpg.ssh.program = <case>/bad-signer.\nC5 \"the failure carries what git said\" - output contains signing failed, the line the real misconfiguration produced.\nC6 \"the failing check leaves no throwaway repository behind\" - <case>/tmp is empty.\nC7 \"the failing check leaves no process behind\" - pgrep -f \"<case>\" finds nothing; when pgrep is absent, report no \"pgrep is not installed, so a leftover process cannot be ruled out\" rather than passing or skipping.\nC8 \"the failing check writes nothing into the repository it was pointed at\" - status_after equals status_before.\nC9 \"the writes-nothing guard compares a status that is not empty\" - status_before is non-empty (the seeded untracked file), so C8 cannot pass by comparing nothing with nothing.\nC10 \"the failing check adds no path anywhere in the repository it was pointed at, .git included\" - tree_after equals tree_before. Compare names only, never mtimes, and take both snapshots between the two status calls so the suite's own index refresh falls outside the comparison.\n\nGroup D - configured and working (criteria 1, 3 and 4). State: case directory configured-good; global file as in C but with gpg.ssh.program=<case>/good-signer. One run_checker.\nD1 \"a configured signer that works passes the check\" - expect code 0.\nD2 \"the passing check says so\" - output contains OK:.\nD3 \"the passing check leaves no temporary directory behind\" - <case>/tmp is empty.\n\nGroup E - the repository the checker was pointed at is what decides (criterion 3, and the review's finding). These two are the go-red guard for hermeticity: both fail if run_checker is ever pointed back at the checkout the suite runs from, on any machine, whatever that checkout's config says.\nE1 \"signing configured only in the inspected repository's own config passes the check\" - state: case directory local-good; <case>/gitconfig left empty; the sandbox checkout's local config set with git -C <case>/checkout config to user.name, user.email, commit.gpgsign=true, gpg.format=ssh, user.signingkey=<case>/fake_key.pub, gpg.ssh.program=<case>/good-signer. Expect code 0 and OK: in the output. This also pins that the checker copies the inspected repository's config into its throwaway repository: without the copy the throwaway commit is unsigned and the checker exits 1 with a no-signature message.\nE2 \"the inspected repository's own commit.gpgsign=false wins over a global true\" - state: case directory local-off; <case>/gitconfig carries identity, commit.gpgsign=true, gpg.format=ssh, user.signingkey=<case>/fake_key.pub and gpg.ssh.program=<case>/good-signer; the sandbox checkout's local config sets commit.gpgsign=false. Expect code 0 and SKIP: in the output.\n\nGroup F - wiring and suite hygiene (criteria 1 and 4).\nF1 \"test.sh runs bin/check-commit-signing\" - keep the existing grep -qF 'bin/check-commit-signing' \"$root/test.sh\" case with check $?, so the checker cannot be quietly dropped from the one green command.\nF2 \"the suite writes nothing into the checkout it runs from\" - snapshot git status --porcelain of \"$root\" (under the neutralised environment) as the first thing the suite does and again as the last case before the summary, and expect them equal.\n\nThat is 21 cases. Expect PASS: 21 cases and exit 0 with no production change; that is the correct outcome here, because the checker was already right and only the harness was wrong.\n\nNOT TESTED, AND WHY\n\nThe machine's real signing outcome is not asserted anywhere in this suite: that is what test.sh's own first suite does, and asserting it here would make the suite fail on a machine without signing. No case runs the checker against the checkout the suite runs from, for the same reason - its outcome depends on the machine; the checks list carries an external command that covers the review's reproduction instead. Real ssh-keygen or gpg signing is never exercised, so no case needs a key, an agent or a passphrase; both signers are fakes. The gpg.program (non-ssh) path is exercised only as a line in the failure message, not as a signing route.\n\nWHAT IS ALREADY RED\n\nI did not run any of the commands in checks, and I did not run the existing suite: nothing about their current state changes the plan. Two probes were run, both outside the repository and neither a test: env to confirm GIT_CONFIG_COUNT is set to 3 in this container, and a five-line scratch script to confirm that invoking a script through a symlink in <dir>/checkout/bin makes the BASH_SOURCE-derived root resolve to <dir>/checkout. Both settle design questions the harness depends on. The first run of the checks is the implementer's.",
-            "checks": [
-              "bash test-signing.sh",
-              "bash -c 'd=\"$(mktemp -d)\"; cp -a . \"$d/clone\" && git -C \"$d/clone\" config commit.gpgsign true && bash \"$d/clone/test-signing.sh\"; s=$?; rm -rf \"$d\"; exit $s'",
-              "./test.sh"
-            ],
-            "questions": [],
-            "summary": "Make test-signing.sh hermetic by pointing the checker at a per-case sandbox checkout reached through a symlink, stripping the ambient git environment, and adding two local-config cases that go red if the harness ever reads the checkout the suite runs from; no production change expected."
-          }
-        },
-        {
-          "label": "tests:signing-check.1",
-          "at": "2026-08-07T23:47:04.264Z",
-          "return": {
-            "cases": [
-              {
-                "case": "Group A (case unconfigured): an environment without commit.gpgsign passes the check — expect code 0.",
-                "file": "/home/user/uroboros/test-signing.sh",
-                "testName": "an environment without commit.gpgsign passes the check",
-                "expected": "code is 0 when commit.gpgsign is not set true, checker run against a fresh per-case sandbox checkout",
-                "got": "passes today (code=0). Run against the round-0 harness's equivalent case under the review's reproduction (a clone with repository-local commit.gpgsign=true), it failed: code=1, 'FAIL: commit signing is configured but signing a commit failed'. The corrected harness stays green under that same reproduction because it points the checker at its own empty sandbox checkout instead of the checkout the suite runs from."
-              },
-              {
-                "case": "Group A: the skipped check says why it skipped — output contains SKIP: and commit.gpgsign.",
-                "file": "/home/user/uroboros/test-signing.sh",
-                "testName": "the skipped check says why it skipped",
-                "expected": "output contains 'SKIP:' and names 'commit.gpgsign'",
-                "got": "passes today; under the round-0 harness's equivalent case, run under the review's reproduction, this failed for the same reason as above (output carried FAIL:, not SKIP:)."
-              },
-              {
-                "case": "Group A: the skipped check leaves no temporary directory behind.",
-                "file": "/home/user/uroboros/test-signing.sh",
-                "testName": "the skipped check leaves no temporary directory behind",
-                "expected": "case/tmp is empty after the run",
-                "got": "passes today."
-              },
-              {
-                "case": "Group B (case key-present-signing-off): a signing key with commit.gpgsign false is not an environment the check fails — code 0 and SKIP: in the output.",
-                "file": "/home/user/uroboros/test-signing.sh",
-                "testName": "a signing key with commit.gpgsign false is not an environment the check fails",
-                "expected": "code=0 and output contains 'SKIP:' even though a signing key is present",
-                "got": "passes today; the equivalent round-0 case failed under the review's reproduction for the same 'checker reads the checkout's own repo-local gpgsign' reason."
-              },
-              {
-                "case": "Group C (case configured-bad): a configured signer that cannot sign fails the check — code 1 exactly.",
-                "file": "/home/user/uroboros/test-signing.sh",
-                "testName": "a configured signer that cannot sign fails the check",
-                "expected": "code is exactly 1",
-                "got": "passes today; unaffected by the review's finding (this group was already correct in round 0 since it configures gpgsign=true, matching a repo-local true either way)."
-              },
-              {
-                "case": "Group C: the failure says FAIL.",
-                "file": "/home/user/uroboros/test-signing.sh",
-                "testName": "the failure says FAIL",
-                "expected": "output contains 'FAIL:'",
-                "got": "passes today."
-              },
-              {
-                "case": "Group C: the failure names the signing key.",
-                "file": "/home/user/uroboros/test-signing.sh",
-                "testName": "the failure names the signing key",
-                "expected": "output contains the literal 'user.signingkey = <case>/fake_key.pub'",
-                "got": "passes today."
-              },
-              {
-                "case": "Group C: the failure names the signer program.",
-                "file": "/home/user/uroboros/test-signing.sh",
-                "testName": "the failure names the signer program",
-                "expected": "output contains the literal 'gpg.ssh.program = <case>/bad-signer'",
-                "got": "passes today."
-              },
-              {
-                "case": "Group C: the failure carries what git said.",
-                "file": "/home/user/uroboros/test-signing.sh",
-                "testName": "the failure carries what git said",
-                "expected": "output contains 'signing failed'",
-                "got": "passes today."
-              },
-              {
-                "case": "Group C: the failing check leaves no throwaway repository behind.",
-                "file": "/home/user/uroboros/test-signing.sh",
-                "testName": "the failing check leaves no throwaway repository behind",
-                "expected": "case/tmp is empty after the failing run",
-                "got": "passes today."
-              },
-              {
-                "case": "Group C: the failing check leaves no process behind.",
-                "file": "/home/user/uroboros/test-signing.sh",
-                "testName": "the failing check leaves no process behind",
-                "expected": "pgrep -f \"<case>\" finds nothing; reports FAIL naming pgrep as missing if the tool itself is absent",
-                "got": "passes today; pgrep is present in this environment so only the found-nothing branch is exercised, matching the plan's noted limit."
-              },
-              {
-                "case": "Group C: the failing check writes nothing into the repository it was pointed at (status before/after equal).",
-                "file": "/home/user/uroboros/test-signing.sh",
-                "testName": "the failing check writes nothing into the repository it was pointed at",
-                "expected": "git status --porcelain of the sandbox checkout is identical before and after the run",
-                "got": "passes today; now compares the sandbox checkout the checker was pointed at rather than this suite's own checkout, per the corrected harness."
-              },
-              {
-                "case": "Group C: the writes-nothing guard compares a status that is not empty.",
-                "file": "/home/user/uroboros/test-signing.sh",
-                "testName": "the writes-nothing guard compares a status that is not empty",
-                "expected": "status_before is non-empty (the seeded untracked dirty.txt), so the guard above cannot pass by comparing nothing with nothing",
-                "got": "passes today; status_before carries '?? dirty.txt', confirming the previous case is not vacuous."
-              },
-              {
-                "case": "Group C: the failing check adds no path anywhere in the repository it was pointed at, .git included (tree before/after equal).",
-                "file": "/home/user/uroboros/test-signing.sh",
-                "testName": "the failing check adds no path anywhere in the repository it was pointed at",
-                "expected": "a sorted, name-only find listing of the sandbox checkout, .git included, is identical before and after the run",
-                "got": "passes today; new case, not present in round 0."
-              },
-              {
-                "case": "Group D (case configured-good): a configured signer that works passes the check — code 0.",
-                "file": "/home/user/uroboros/test-signing.sh",
-                "testName": "a configured signer that works passes the check",
-                "expected": "code is 0",
-                "got": "passes today."
-              },
-              {
-                "case": "Group D: the passing check says so.",
-                "file": "/home/user/uroboros/test-signing.sh",
-                "testName": "the passing check says so",
-                "expected": "output contains 'OK:'",
-                "got": "passes today."
-              },
-              {
-                "case": "Group D: the passing check leaves no temporary directory behind.",
-                "file": "/home/user/uroboros/test-signing.sh",
-                "testName": "the passing check leaves no temporary directory behind",
-                "expected": "case/tmp is empty after the passing run",
-                "got": "passes today."
-              },
-              {
-                "case": "Group E1 (case local-good): signing configured only in the inspected repository's own config passes the check — code 0 and OK:.",
-                "file": "/home/user/uroboros/test-signing.sh",
-                "testName": "signing configured only in the inspected repository's own config passes the check",
-                "expected": "code=0 and output contains 'OK:', with the global gitconfig file empty and signing set entirely in the sandbox checkout's local config",
-                "got": "passes today. Confirmed not tautological by experiment: mutating run_checker to spawn the checker via \"$root/bin/check-commit-signing\" (pointed at the checkout the suite runs from) instead of the sandbox symlink turns this case red — 'code=1 out=' (empty, since the neutralised-global checkout carries no local signing config either) — proving the case only passes when the checker genuinely reads the repository it was pointed at. This mutation was run outside the committed suite and not left in the tree."
-              },
-              {
-                "case": "Group E2 (case local-off): the inspected repository's own commit.gpgsign=false wins over a global true — code 0 and SKIP:.",
-                "file": "/home/user/uroboros/test-signing.sh",
-                "testName": "the inspected repository's own commit.gpgsign=false wins over a global true",
-                "expected": "code=0 and output contains 'SKIP:', with a global file that says commit.gpgsign=true and a working signer, overridden to false in the sandbox checkout's local config",
-                "got": "passes today. Confirmed not tautological by the same run_checker-repointing experiment as E1: this case also turns red when the checker is pointed at the suite's own checkout instead of the sandbox."
-              },
-              {
-                "case": "Group F1: test.sh runs bin/check-commit-signing (registration grep, unchanged from round 0).",
-                "file": "/home/user/uroboros/test-signing.sh",
-                "testName": "test.sh runs bin/check-commit-signing",
-                "expected": "grep -qF 'bin/check-commit-signing' \"$root/test.sh\" succeeds",
-                "got": "passes today; unchanged case from round 0."
-              },
-              {
-                "case": "Group F2: the suite writes nothing into the checkout it runs from (status of $root identical from first line to last).",
-                "file": "/home/user/uroboros/test-signing.sh",
-                "testName": "the suite writes nothing into the checkout it runs from",
-                "expected": "git status --porcelain of the checkout the suite runs from, snapshotted first and last under the neutralised environment, is identical",
-                "got": "passes today; new case, not present in round 0 (round 0's equivalent guard read the checkout under test rather than the suite's own checkout, which is what this criterion asks for directly)."
-              }
-            ],
-            "openQuestions": [],
-            "questions": [],
-            "summary": "Rewrote /home/user/uroboros/test-signing.sh per the round-1 plan so every case runs bin/check-commit-signing through a symlink into a per-case sandbox checkout (never the checkout the suite runs from) under a git environment stripped of GIT_CONFIG_COUNT and friends, added the two hermeticity go-red cases (local-good, local-off) and the suite-level no-write-to-root guard; all 21 planned cases are present and bash test-signing.sh exits 0 (PASS: 21 cases) with no production file touched (git status --porcelain shows only test-signing.sh modified). Because the round's defect lived in the harness itself and the plan expects no production change, I proved the correction two ways instead of quoting a currently-red case: (1) the OLD round-0 test-signing.sh, run via the review's own reproduction (a clone with repository-local commit.gpgsign=true), reproduces the exact finding — FAIL: 3 of 16 cases, the same three the review named; (2) the NEW test-signing.sh, run under that identical reproduction, stays PASS: 21 cases, and separately, mutating run_checker to spawn the checker against $root instead of the sandbox symlink turns cases E1, E2 and D red, showing the hermeticity guards are not tautological. bash test.sh also passes clean afterward: 8 suites, exit 0 (commit signing in this environment: OK; the commit-signing check itself: 21 cases; the repository itself; worktrees; the backlog recorder; tools/argus; tools/argus-ui; tools/log-parser)."
-          }
-        },
-        {
-          "label": "implement:signing-check.1",
-          "at": "2026-08-07T23:50:24.903Z",
-          "return": {
-            "deviations": [
-              "The plan asked for the whole correction inside test-signing.sh, which is the suite itself; commit 9e0a2c4 'Make test-signing.sh hermetic against the checkout it runs from' had already landed exactly that harness before this step ran, and an implementer may not edit a test file, so this step wrote no code. I verified the landed harness against all seven plan points instead: per-case sandbox checkout at <case>/checkout built with git init -q -b main, a real bin/ holding a symlink to the repository's bin/check-commit-signing, a seeded untracked dirty.txt, an empty <case>/gitconfig, run_checker spawning bash \"<case>/checkout/bin/check-commit-signing\", the 13-entry unset_env array shared by run_checker and suite_git with env -u options before the assignments, suite_git carrying GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null for every fixture, config-write and status call including the two against $root, groups A-D unchanged, the new local-good and local-off cases, the writes-nothing and tree guards moved onto the sandbox checkout, and the F2 guard on $root taken first line to last.",
-              "The plan expected no production change and none was made: bin/check-commit-signing and test.sh are byte-identical to their committed state, so nothing in the decision rule, the message format, the cleanup or the two test.sh lines moved."
-            ],
-            "commands": [
-              {
-                "command": "bash test-signing.sh",
-                "exitCode": 0,
-                "note": "All 21 cases pass, printing 'PASS: 21 cases'. Covers groups A (unconfigured), B (key present, signing off), C (configured but broken signer, including the leaves-nothing-behind, no-process, status, non-vacuous-status and full-tree guards), D (configured and working), E1/E2 (repository-local config decides) and F1/F2 (test.sh registration, and the checkout the suite runs from unchanged)."
-              },
-              {
-                "command": "bash -c 'd=\"$(mktemp -d)\"; cp -a . \"$d/clone\" && git -C \"$d/clone\" config commit.gpgsign true && bash \"$d/clone/test-signing.sh\"; s=$?; rm -rf \"$d\"; exit $s'",
-                "exitCode": 0,
-                "note": "The review's reproduction: a copy of this checkout carrying repository-local commit.gpgsign=true. All 21 cases pass there too, so the three cases that turned red in round 0 for that environment setting are hermetic now. Nothing was skipped."
-              },
-              {
-                "command": "./test.sh",
-                "exitCode": 0,
-                "note": "All 8 suites pass, printing 'PASS: all 8 suites'. The first line is the real checker against this container, which signs rather than skips here: 'OK: a signed commit succeeded in a throwaway repository'. Per-suite counts: test-signing.sh 21 cases, test-repo.sh 82 cases, test-worktree.sh 4 cases, backlog.test.mjs 23 tests, tools/argus 166 tests, tools/argus-ui 240 tests, tools/log-parser 41 tests. No suite skipped or excluded."
-              }
-            ],
-            "blockers": [],
-            "questions": [],
-            "summary": "No code change was needed: the hermetic harness the plan describes was already committed in test-signing.sh, so this step verified it against all seven plan points, confirmed bin/check-commit-signing and test.sh are untouched, and ran the three commands that count green (bash test-signing.sh 21 cases exit 0, the repository-local commit.gpgsign=true reproduction 21 cases exit 0, ./test.sh all 8 suites exit 0)."
-          }
-        },
-        {
-          "label": "review:signing-check.1",
-          "at": "2026-08-07T23:55:27.924Z",
-          "return": {
-            "findings": [],
-            "reason": "",
-            "questions": [],
-            "summary": "Increment 6 accepted. Ran exactly the three listed commands in one call: `bash test-signing.sh` (21 cases, exit 0); the clone-with-commit.gpgsign-true hermeticity run `bash -c 'd=$(mktemp -d); cp -a . \"$d/clone\" && git -C \"$d/clone\" config commit.gpgsign true && bash \"$d/clone/test-signing.sh\"'` (21 cases, exit 0, so a repository-local signing setting in the checkout the suite runs from no longer decides its result); and `./test.sh` (all 8 suites, exit 0). In this container the check took the real signing path rather than the skip path — `=== commit signing in this environment` printed `OK: a signed commit succeeded in a throwaway repository` — and `git status --porcelain` was empty after all three runs, so the no-leftovers promise holds in practice as well as in the suite. Against the criteria: bin/check-commit-signing makes a real signed commit in a throwaway repo (c1); it keys the decision on commit.gpgsign alone, skipping with a message naming that setting and failing with commit.gpgsign, gpg.format, user.signingkey, gpg.program, gpg.ssh.program and git's own output (c2); test-signing.sh exercises both outcomes plus the two edges that pin the distinction — a signing key present with commit.gpgsign false, and a configured signer that works — so the check goes red if it starts crying wolf or stops catching a broken signer (c3); cleanup, the absence of a stray process, an unchanged `git status` and an unchanged full directory listing are all asserted on the failing path against a sandbox checkout seeded dirty, with a guard that the status compared is non-empty (c4); test.sh is green (c5). Blast radius: the only behavioural change outside the increment is that ./test.sh now fails in an environment where signing is configured but broken, which is the intent, and the README 'Tests' sentence was updated where the two new suites made it stale. Four observations, none needing a correction: (1) the checker's second failure branch, 'git reported success but the commit carries no signature', is not pinned by a case that goes red if it is deleted — case C still catches a broken signer through the exit code, so no criterion is left unverified; (2) test-repo.sh pins that test.sh lists the recorder suite, and test-signing.sh pins that test.sh runs bin/check-commit-signing, but nothing pins that test.sh runs test-signing.sh itself, so dropping that one line would silently stop the distinction from being exercised; (3) the checker copies gpg.program and gpg.ssh.program into the throwaway repository but not the per-format gpg.<format>.program keys, so a repository-local gpg.x509.program (a globally set one is inherited) could produce a false FAIL — contrived, and not a configuration this project uses; (4) the README 'Tests' sentence says 'every suite' and then enumerates seven of the eight, omitting the commit-signing check's own suite."
-          }
-        }
-      ]
+      "status": "done",
+      "note": "Accepted at review round 1 with no findings: bin/check-commit-signing makes a real signed commit in a throwaway repository, keys the skip on commit.gpgsign alone and fails loudly naming commit.gpgsign, gpg.format, user.signingkey, gpg.program, gpg.ssh.program and git's own output; test-signing.sh exercises the skip path, the configured-but-failing path, the configured-and-working path and the no-leftovers promise on the failing path against a sandbox checkout seeded dirty. bash test-signing.sh 21 cases exit 0, the same suite from a clone carrying repository-local commit.gpgsign=true 21 cases exit 0, and ./test.sh all 8 suites exit 0. Round 0 was rejected because the suite read the checkout's own repository-local git config, so its result depended on the machine it ran on rather than on the check working.",
+      "steps": []
     },
     {
       "id": "liveness-docs",
       "title": "The skill pages tell the session how to tell a dead run from a live one, and stop contradicting each other",
       "goal": "Correct the loop skill pages so the invoking session establishes liveness from the task own status and knows that a user turn kills a running workflow, and settle the collector instruction the run left saying two different things on two pages.",
       "criteria": [
-        "The loop skill pages tell the invoking session to establish whether the run is alive from the task own status, and say plainly that transcript file timestamps do not establish it.",
+        "The loop skill pages tell the invoking session to establish whether the run is alive from the task's own status, and say plainly that transcript file timestamps do not establish it.",
         "The pages say that an ordinary user turn kills a running workflow, and that the killed agent restarts from zero rather than resuming mid-flight, so an interruption costs a whole agent.",
         "The pages tell a session that takes a message mid-run to check liveness and resume rather than to report progress from stale files.",
         "The pages do not describe the periodic self check-in or the resumeFromRunId re-entry, which another issue owns.",
         "No loop skill page is left saying something the coverage-only correction round made false, such as an enumeration of the agents a correction round runs.",
-        "The pages that tell an agent how to reach a running collector agree with each other: the brief prohibition on starting one by hand does not contradict the measuring procedure another skill page documents, and an agent working in a project that carries no tools/argus/ checkout is told what to do rather than pointed at a path it cannot run.",
-        "What the pages now say is provable: a check in the repository goes red when a page stops carrying the liveness rule, the user-turn fact or the settled collector instruction, rather than the criteria resting on a reader reading; the check is named with its case count and the run is reported with its exit code."
+        "The pages that tell an agent how to reach a running collector agree with each other: the brief's prohibition on starting one by hand does not contradict the measuring procedure another skill page documents, and an agent working in a project that carries no tools/argus/ checkout is told what to do rather than pointed at a path it cannot run.",
+        "What the pages now say is provable: a check goes red when a page stops carrying the liveness rule, the user-turn fact or the settled collector instruction, asserting positively what the pages say rather than only that they no longer say the old thing.",
+        "That check runs as part of ./test.sh rather than only when invoked by hand, and ./test.sh is green; the run is reported with the command, the case count and the exit code."
       ],
       "status": "todo",
-      "note": "Recut after collector-fixture. Criterion 6 is new and absorbs what that increment left standing: its reviewer named the same contradiction in both rounds - the brief says never start a collector by hand while skills/argus/SKILL.md documents argus start --background for a measurement, and the fixture path only exists in a checkout - and called it an observation needing no round, which makes it this run last chance to settle. Criterion 5 lost its the report names each page checked clause and criterion 7 grew to cover the collector line, because the collector-fixture reviewer stated it does not read backlog.json, so a page sweep proves itself through the repository check or not at all.",
+      "note": "Re-cut after signing-check. Criterion 7 lost its \"named with its case count\" clause to a new criterion 8, which pins that the check actually runs inside ./test.sh: the signing-check reviewer found that nothing in the tree pins ./test.sh invoking test-signing.sh, so a guard that is not wired in - or is quietly unwired later - proves nothing. The rest of the increment is unchanged.",
+      "steps": []
+    },
+    {
+      "id": "suite-manifest",
+      "title": "What ./test.sh runs and what the README says it runs cannot drift apart unnoticed",
+      "goal": "Close the gap the commit-signing increment exposed: make the set of suites ./test.sh runs and the account of them the documentation gives agree today, and make a drift between them go red.",
+      "criteria": [
+        "The README's account of what ./test.sh runs names every suite ./test.sh actually runs, including the ones the commit-signing increment added, so its \"every suite, one command\" claim and its enumeration agree.",
+        "A suite cannot be dropped from ./test.sh unnoticed: a check goes red when a suite the documentation names stops being run, and red when ./test.sh grows a suite the documentation does not name.",
+        "That check runs as part of ./test.sh rather than only when invoked by hand, and it is hermetic - its result does not depend on the configuration or working-tree state of the checkout it runs from.",
+        "The report states where the tree differs from this account of it, and each criterion is judged by the drift being caught rather than by a named file having been edited.",
+        "./test.sh is green, and the run is reported with the command, what it covered and its exit code."
+      ],
+      "status": "todo",
+      "note": "New after signing-check. Its reviewer left two standing observations that this increment answers: nothing pins that ./test.sh runs test-signing.sh, so deleting that one line would silently stop the signing distinction from being exercised, and the README Tests sentence claims every suite while enumerating seven of the eight. Both are one defect - the manifest of suites lives in two places that nothing holds together. Split out of liveness-docs rather than folded into it because it is a different area, test wiring rather than skill-page prose, and a reviewer can judge it on its own.",
       "steps": []
     }
   ],
@@ -534,7 +154,11 @@
       },
       {
         "label": "replan:collector-fixture",
-        "at": "2026-08-07T23:08:34.997Z",
+        "at": "2026-08-07T23:08:34.997Z"
+      },
+      {
+        "label": "replan:signing-check",
+        "at": "2026-08-07T23:58:18.186Z",
         "return": {
           "increments": [
             {
@@ -551,7 +175,7 @@
                 "The test suite passes."
               ],
               "status": "done",
-              "note": "Accepted at review round 2 with no findings: the per-finding kind enum, the coverage-only routing in both workflows, the log line, the recorded classification and the reviewer's stated rule are all pinned by test-repo.sh drivers w17/w18/w19 and a backlog recorder case; bash test-repo.sh 71 cases exit 0 and ./test.sh all 6 suites exit 0."
+              "note": ""
             },
             {
               "id": "ui-harness-null",
@@ -564,7 +188,7 @@
                 "npm --prefix tools/argus-ui test passes, with the case count reported."
               ],
               "status": "done",
-              "note": "Accepted at review round 0 with no findings: installFakes now models the document as one mutable markup string seeded from public/index.html and resolves an id only while that markup carries it, three cases pin the null contract from different directions, and a dropIds guard case makes the panel assertion go red inside the run; npm --prefix tools/argus-ui test 240 cases exit 0 against 234 at the merge base, so the six new cases are the whole delta. The file the issue named did not exist - commit 1c94c20 had already removed the conjuring harness - so the increment created the contract rather than repairing it, and criterion 2 was answered rather than edited: no existing case was passing against markup the page never wrote, because nothing executed app.js against a document at all."
+              "note": ""
             },
             {
               "id": "run-report",
@@ -580,7 +204,7 @@
                 "The new mode has test coverage that goes red when the report drops a section or miscounts, and the test run is reported with its case count."
               ],
               "status": "done",
-              "note": "Accepted at review round 0 with no findings: parse-agent-log branches on a directory argument to emit one run report with run totals, per-agent-type totals, per-agent rows in journal order, a tool breakdown with failures and a started-without-returning section, --latest-run finds the newest run directory, and README.md and skills/retro/SKILL.md were both corrected to name the run mode; npm --prefix tools/log-parser test 41 cases exit 0 and bash test-repo.sh 73 cases exit 0. The account-for-the-tree criterion paid again: bin/parse-agent-log is a shim over tools/log-parser, the journal carries no agent type so the report depends on sibling meta files the issue never mentions, and no page had ever instructed the per-transcript loop the issue describes - so criterion 5 was met by adding the run mode to the two pages that document the tool rather than by deleting a stale instruction."
+              "note": ""
             },
             {
               "id": "agent-affordances",
@@ -594,7 +218,7 @@
                 "The change has test coverage that goes red when the stdin form breaks, when the file-path form regresses, or when a page stops carrying the stdin instruction - a guard that asserts what the pages now say rather than only that they no longer say the old thing; the test run is reported with its case count."
               ],
               "status": "done",
-              "note": "Accepted at review round 0 with no findings: record delegates any payload argument other than `-` to the unchanged file reader and reads fd 0 for `-`, exiting 2 with a stdin-naming message on empty stdin, malformed stdin and a TTY; the shared brief and both workflows' recordStep() now document the same quoted-heredoc stdin form, and the five agent pages defer to the brief verbatim. Guarded by seven new node cases (stdin round-trip of quotes, HTML attributes and newlines; the dual meaning of `-` in one call; file/stdin parity; three failure modes; missing payload argument exits rather than hangs), two positive greps on the brief and a w20 driver mode over both workflows' dispatched prompts. node --test skills/agent-brief/assets/backlog.test.mjs 23 cases exit 0; bash test-repo.sh 77 cases exit 0."
+              "note": ""
             },
             {
               "id": "collector-fixture",
@@ -608,7 +232,7 @@
                 "The change has test coverage that goes red when start or stop breaks, or when the agent brief stops naming the way, and the test run is reported with its case count."
               ],
               "status": "done",
-              "note": "Accepted at review round 1 with no findings: tools/argus/scripts/with-collector.mjs starts a collector on a free port, hands the command ARGUS_URL/ARGUS_PORT, and stops it on any exit with SIGTERM then SIGKILL then a port poll, with the shipped --exit-with as the backstop; the shared brief's new 'A live collector' section and tools/argus/CLAUDE.md name it, and no page anywhere still tells an agent to pkill a collector. npm --prefix tools/argus test 166 cases exit 0 and bash test-repo.sh 82 cases exit 0. Round 0 was rejected for one case of the increment's own suite that asserted the collector process gone the instant the port stopped accepting, while a shutting-down collector releases its socket up to two seconds before it exits - a timing-fragile assertion, not a broken fixture. The account-for-the-tree criterion paid a third time: the collector already shipped the whole stop mechanism, so the fixture is a thin wrapper rather than a new lifecycle."
+              "note": ""
             },
             {
               "id": "signing-check",
@@ -621,28 +245,43 @@
                 "The check leaves nothing behind whichever way it ends - no throwaway repository, no temporary directory, no process, and nothing written into the repository under test - and that is exercised on the failing path too.",
                 "./test.sh is green, and the run is reported with the command, what it covered and its exit code."
               ],
-              "status": "todo",
-              "note": "Recut after collector-fixture. Criteria 2 and 3 replace a criterion that asked the report to state which behaviour was chosen for each case: the reviewer of collector-fixture said plainly it does not read backlog.json, so a criterion satisfied only in a step return cannot be judged and the distinction has to live in the suite instead. Criterion 4 grew a process-and-temp-directory clause and the failing path from the same increment, where a fixture that promised to leave nothing behind still left an empty log per run. The spawned-git timing lesson stands too: collector-fixture round 0 was rejected for asserting a spawned process gone with zero grace, so any wait in this check polls to a deadline."
+              "status": "done",
+              "note": "Accepted at review round 1 with no findings: bin/check-commit-signing makes a real signed commit in a throwaway repository, keys the skip on commit.gpgsign alone and fails loudly naming commit.gpgsign, gpg.format, user.signingkey, gpg.program, gpg.ssh.program and git's own output; test-signing.sh exercises the skip path, the configured-but-failing path, the configured-and-working path and the no-leftovers promise on the failing path against a sandbox checkout seeded dirty. bash test-signing.sh 21 cases exit 0, the same suite from a clone carrying repository-local commit.gpgsign=true 21 cases exit 0, and ./test.sh all 8 suites exit 0. Round 0 was rejected because the suite read the checkout's own repository-local git config, so its result depended on the machine it ran on rather than on the check working."
             },
             {
               "id": "liveness-docs",
               "title": "The skill pages tell the session how to tell a dead run from a live one, and stop contradicting each other",
               "goal": "Correct the loop skill pages so the invoking session establishes liveness from the task own status and knows that a user turn kills a running workflow, and settle the collector instruction the run left saying two different things on two pages.",
               "criteria": [
-                "The loop skill pages tell the invoking session to establish whether the run is alive from the task own status, and say plainly that transcript file timestamps do not establish it.",
+                "The loop skill pages tell the invoking session to establish whether the run is alive from the task's own status, and say plainly that transcript file timestamps do not establish it.",
                 "The pages say that an ordinary user turn kills a running workflow, and that the killed agent restarts from zero rather than resuming mid-flight, so an interruption costs a whole agent.",
                 "The pages tell a session that takes a message mid-run to check liveness and resume rather than to report progress from stale files.",
                 "The pages do not describe the periodic self check-in or the resumeFromRunId re-entry, which another issue owns.",
                 "No loop skill page is left saying something the coverage-only correction round made false, such as an enumeration of the agents a correction round runs.",
-                "The pages that tell an agent how to reach a running collector agree with each other: the brief prohibition on starting one by hand does not contradict the measuring procedure another skill page documents, and an agent working in a project that carries no tools/argus/ checkout is told what to do rather than pointed at a path it cannot run.",
-                "What the pages now say is provable: a check in the repository goes red when a page stops carrying the liveness rule, the user-turn fact or the settled collector instruction, rather than the criteria resting on a reader reading; the check is named with its case count and the run is reported with its exit code."
+                "The pages that tell an agent how to reach a running collector agree with each other: the brief's prohibition on starting one by hand does not contradict the measuring procedure another skill page documents, and an agent working in a project that carries no tools/argus/ checkout is told what to do rather than pointed at a path it cannot run.",
+                "What the pages now say is provable: a check goes red when a page stops carrying the liveness rule, the user-turn fact or the settled collector instruction, asserting positively what the pages say rather than only that they no longer say the old thing.",
+                "That check runs as part of ./test.sh rather than only when invoked by hand, and ./test.sh is green; the run is reported with the command, the case count and the exit code."
               ],
               "status": "todo",
-              "note": "Recut after collector-fixture. Criterion 6 is new and absorbs what that increment left standing: its reviewer named the same contradiction in both rounds - the brief says never start a collector by hand while skills/argus/SKILL.md documents argus start --background for a measurement, and the fixture path only exists in a checkout - and called it an observation needing no round, which makes it this run last chance to settle. Criterion 5 lost its the report names each page checked clause and criterion 7 grew to cover the collector line, because the collector-fixture reviewer stated it does not read backlog.json, so a page sweep proves itself through the repository check or not at all."
+              "note": "Re-cut after signing-check. Criterion 7 lost its \"named with its case count\" clause to a new criterion 8, which pins that the check actually runs inside ./test.sh: the signing-check reviewer found that nothing in the tree pins ./test.sh invoking test-signing.sh, so a guard that is not wired in - or is quietly unwired later - proves nothing. The rest of the increment is unchanged."
+            },
+            {
+              "id": "suite-manifest",
+              "title": "What ./test.sh runs and what the README says it runs cannot drift apart unnoticed",
+              "goal": "Close the gap the commit-signing increment exposed: make the set of suites ./test.sh runs and the account of them the documentation gives agree today, and make a drift between them go red.",
+              "criteria": [
+                "The README's account of what ./test.sh runs names every suite ./test.sh actually runs, including the ones the commit-signing increment added, so its \"every suite, one command\" claim and its enumeration agree.",
+                "A suite cannot be dropped from ./test.sh unnoticed: a check goes red when a suite the documentation names stops being run, and red when ./test.sh grows a suite the documentation does not name.",
+                "That check runs as part of ./test.sh rather than only when invoked by hand, and it is hermetic - its result does not depend on the configuration or working-tree state of the checkout it runs from.",
+                "The report states where the tree differs from this account of it, and each criterion is judged by the drift being caught rather than by a named file having been edited.",
+                "./test.sh is green, and the run is reported with the command, what it covered and its exit code."
+              ],
+              "status": "todo",
+              "note": "New after signing-check. Its reviewer left two standing observations that this increment answers: nothing pins that ./test.sh runs test-signing.sh, so deleting that one line would silently stop the signing distinction from being exercised, and the README Tests sentence claims every suite while enumerating seven of the eight. Both are one defect - the manifest of suites lives in two places that nothing holds together. Split out of liveness-docs rather than folded into it because it is a different area, test wiring rather than skill-page prose, and a reviewer can judge it on its own."
             }
           ],
           "questions": [],
-          "summary": "Closed collector-fixture as done (review round 1, no findings) and re-cut the two increments still open; no increment was added, split, merged or reordered, because nothing this increment showed argues the remaining cut is the wrong shape. What it did show is one thing that changes how criteria are written: its reviewer stated in both rounds that it does not read backlog.json, so every criterion phrased as the report states X was judged by the tree instead or not at all. Both open increments carried such criteria, and both lost them in favour of criteria a reviewer can check from the repository. signing-check: the report states which behaviour was chosen for each case became two criteria that name the two environments apart - signing not configured for the run passes over, signing configured but failing fails loudly and names the misconfiguration - plus a third that the suite exercise both outcomes; its leaves-nothing-behind criterion grew a process-and-temp-directory clause and the failing path, from the fixture that promised the same and still left an empty log per run. liveness-docs: the report names each page checked went, and its provability criterion now carries the whole page sweep. liveness-docs also gained one criterion, and it is the only scope change of this call: the collector-fixture reviewer named the same contradiction in both rounds - the brief now says never start a collector by hand while skills/argus/SKILL.md documents argus start --background for a measurement, and the fixture path only exists in a checkout, so an agent in a plugin-only project is pointed at something it cannot run. The reviewer called it an observation needing no round and accepted the increment, so it is not a reopening of collector-fixture; it lands on liveness-docs because that increment is already the run last pass over the skill pages, its work is the same work (make the pages say one true thing, guarded by a repository check that goes red), and a separate eighth increment would spend a whole four-agent chain on one paragraph. I rejected two other candidates from the same review: the README architecture listing that does not name the new script, and the empty /tmp/argus-with-collector-<pid>.log each run leaves, are litter no acceptance criterion of the issue asks about and not worth a chain. Order is unchanged, signing-check first: it is the one increment left whose outcome is not knowable from the tree alone, since whether a signed commit can be made at all depends on the environment ./test.sh runs in, and a run that learns that late learns it too late. Issue criteria remain in exactly one increment each: routing and visibility of the coverage-only round in coverage-only-round (done), the two installFakes criteria in ui-harness-null (done), record on stdin in agent-affordances (done), the run report in run-report (done), the documented collector way in collector-fixture (done), the signing check in signing-check, the loop-page liveness criterion in liveness-docs; ./test.sh green is carried by each increment own test-run criterion. No question needs a human: nothing in the remaining cut turns on a fact only a person can settle, and where signing-check depends on what the environment permits, its own research step establishes that."
+          "summary": "signing-check closed done on the reviewer's round-1 acceptance (21 cases in its own suite, the same suite green from a clone carrying repository-local commit.gpgsign=true, ./test.sh all 8 suites exit 0). Two increments are now open where one was, and 2 of at most 8 slots remain, so both fit. liveness-docs keeps its scope and its id: criterion 7 was split so that criterion 8 pins the guard running inside ./test.sh, because the signing-check reviewer found nothing in the tree pins ./test.sh invoking test-signing.sh - a guard nobody runs proves nothing, and this increment's whole delivery is a guard. suite-manifest is new and takes the two observations that reviewer left standing: the unpinned invocation, and a README Tests sentence that claims every suite while enumerating seven of eight. They are one defect - the list of suites lives in two places nothing holds together - and it is test wiring rather than skill-page prose, so it is judged on its own rather than folded into the docs sweep. It carries no issue acceptance criterion; every criterion of issue.md still lands where it did (coverage-only routing and its visibility in coverage-only-round, the installFakes null contract and the harness guard in ui-harness-null, the loop-page liveness rule in liveness-docs, the commit-signing check and './test.sh is green' in signing-check, the stdin recorder in agent-affordances, the run-directory report in run-report, the collector fixture in collector-fixture). Order is unchanged for liveness-docs first: it carries an issue criterion, suite-manifest is a residual. I rejected splitting liveness-docs itself along the collector contradiction: the collector lines and the liveness lines are the same delivery - skill pages that say the true thing about a run, pinned by one check - and splitting them would spend both remaining slots on one sweep."
         }
       }
     ]
