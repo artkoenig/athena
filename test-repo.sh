@@ -227,6 +227,17 @@ else
   no "the shared brief does not instruct pushing the step's commit"
 fi
 
+# Round 2, finding 3: a step worked a second time after a restart can find
+# what its interrupted first run already committed — failing tests that
+# exist, code that half-exists — and nothing said so, so a repeated step was
+# free to write everything a second time instead of finishing or correcting
+# it.
+if grep -q 'already committed' "$root/skills/agent-brief/SKILL.md"; then
+  ok "the shared brief tells a repeated step what its first run may have left behind"
+else
+  no "the shared brief does not tell a repeated step what its first run may have left behind"
+fi
+
 # The plain loop's one-increment shape is enforced in the schema, not just
 # asked for in a prompt an agent could misread.
 if grep -q 'maxItems: 1' "$root/workflows/loop.js"; then
@@ -293,7 +304,17 @@ const isAgile = path.basename(file) === 'agile-loop.js';
 const PLAN_MARKER = 'MARKER-IMPLEMENTATION-PLAN';
 const TESTPLAN_MARKER = 'MARKER-TEST-PLAN';
 const CHECK_MARKER = 'echo CHECK-MARKER';
-const DISJOINT_MARKERS = [PLAN_MARKER, TESTPLAN_MARKER, 'CHECK-MARKER'];
+const DISJOINT_MARKERS = [
+  PLAN_MARKER,
+  TESTPLAN_MARKER,
+  'CHECK-MARKER',
+  'MARKER-HUMAN-QUESTION',
+  'MARKER-OPEN-QUESTION',
+  'MARKER-FINDING-CLAIM',
+  'MARKER-FINDING-REPRODUCTION',
+  'MARKER-FINDING-CRITERION',
+  'MARKER-VERDICT-REASON',
+];
 
 const planReturn = {
   needsTests: true,
@@ -321,6 +342,31 @@ const buildReturn = {
 };
 const verdictReturnClean = { findings: [], reason: '', questions: [], summary: 'verdict summary' };
 
+// Round 2, finding 1's fixture: a step that ended the previous run with a
+// question for the human. A resumed run must work this step again instead of
+// replaying the stale question, so w9 dispatches research:i1.0 a second time
+// and expects the clean planReturn back (see returnFor's ctx.researchReturn
+// override below).
+const planReturnWithMarkedQuestion = Object.assign({}, planReturn, {
+  questions: ['MARKER-HUMAN-QUESTION'],
+});
+// Round 2, finding 2's fixtures: a dirty round-0 review and the test-author's
+// open question from round 0, both of which the round-1 researcher prompt
+// must carry.
+const testsReturnWithOpenQuestion = Object.assign({}, testsReturn, {
+  openQuestions: ['MARKER-OPEN-QUESTION'],
+});
+const verdictReturnWithFinding = {
+  findings: [{
+    claim: 'MARKER-FINDING-CLAIM',
+    reproduction: 'MARKER-FINDING-REPRODUCTION',
+    criterion: 'MARKER-FINDING-CRITERION',
+  }],
+  reason: 'MARKER-VERDICT-REASON',
+  questions: [],
+  summary: 'verdict summary',
+};
+
 function increment(id) {
   return { id, title: 'Deliver ' + id, goal: 'Deliver ' + id + '.', criteria: ['does ' + id], status: 'todo', note: '' };
 }
@@ -338,6 +384,26 @@ function resumeBacklog() {
         steps: [
           { label: 'research:i1.0', at: '2026-08-07T00:00:00.000Z', return: planReturn },
           { label: 'tests:i1.0', at: '2026-08-07T00:00:01.000Z', return: testsReturn },
+        ],
+      },
+    ],
+    run: { steps: [{ label: 'decompose', at: '2026-08-07T00:00:00.000Z', return: decomposeReturnOne }] },
+  };
+}
+
+// Round 2, finding 1's fixture: a run whose research:i1.0 step ended with a
+// question for the human, recorded exactly as backlog.mjs record would leave
+// it. A resumed run must not replay this stale return.
+function questionBacklog() {
+  return {
+    version: 1,
+    issue: 'docs/issues/x',
+    workflow: isAgile ? 'agile-loop' : 'loop',
+    increments: [
+      {
+        id: 'i1', title: 'Deliver i1', goal: 'Deliver i1.', criteria: ['does i1'], status: 'todo', note: '',
+        steps: [
+          { label: 'research:i1.0', at: '2026-08-07T00:00:00.000Z', return: planReturnWithMarkedQuestion },
         ],
       },
     ],
@@ -382,6 +448,10 @@ function contextFor(m) {
       return { stateReturn: { exists: false, backlogJson: '', summary: '' }, decomposeReturn: decomposeReturnOne, researchReturn: planReturn };
     case 'w7':
       return { stateReturn: { exists: false, backlogJson: '', summary: '' }, decomposeReturn: decomposeReturnOne, researchReturn: planReturnWithQuestion };
+    case 'w9':
+      return { stateReturn: { exists: true, backlogJson: JSON.stringify(questionBacklog(), null, 2) + '\n', summary: '' }, decomposeReturn: decomposeReturnOne, researchReturn: planReturn };
+    case 'w10':
+      return { stateReturn: { exists: false, backlogJson: '', summary: '' }, decomposeReturn: decomposeReturnOne, researchReturn: planReturn, testsReturn: testsReturnWithOpenQuestion, verdictFor: (label) => (label === 'review:i1.0' ? verdictReturnWithFinding : verdictReturnClean) };
     default:
       throw new Error('unknown mode ' + m);
   }
@@ -393,9 +463,13 @@ function returnFor(label) {
   if (label === 'load-state') return ctx.stateReturn;
   if (label === 'decompose') return ctx.decomposeReturn;
   if (label.startsWith('research:')) return ctx.researchReturn;
-  if (label.startsWith('tests:')) return testsReturn;
+  // Round 2, w10: the round-0 test-author's openQuestions and the round-0
+  // review's findings both have to reach the round-1 researcher, so these
+  // two lookups take a per-mode override instead of the fixed fixture every
+  // earlier mode was content with.
+  if (label.startsWith('tests:')) return ctx.testsReturn || testsReturn;
   if (label.startsWith('implement:')) return buildReturn;
-  if (label.startsWith('review:')) return verdictReturnClean;
+  if (label.startsWith('review:')) return ctx.verdictFor ? ctx.verdictFor(label) : verdictReturnClean;
   if (label.startsWith('close:') || label.startsWith('replan:')) return { summary: 'closed' };
   if (label === 'publish') return { summary: 'published' };
   throw new Error('unexpected label ' + label);
@@ -420,7 +494,11 @@ async function main() {
     calls.push({ label: opts.label, agentType: opts.agentType, prompt });
     return returnFor(opts.label);
   };
-  const result = await fn({ issueDir: 'docs/issues/x' }, stub, () => {}, () => {});
+  // Round 2, w10: the reviewer's reason sentence has to reach the human in
+  // the chat, which in this driver means the log() the workflow calls, so
+  // the stub captures instead of discarding it.
+  const logs = [];
+  const result = await fn({ issueDir: 'docs/issues/x' }, stub, (m) => logs.push(String(m)), () => {});
   const labels = calls.map((c) => c.label);
 
   if (mode === 'w1') {
@@ -480,6 +558,44 @@ async function main() {
       assertTrue(/\bpush\b/i.test(c.prompt),
         c.label + " is not told to push its step's commit");
     }
+  } else if (mode === 'w9') {
+    // Round 2, finding 1: a recorded step whose return carried a question
+    // used to be replayed as-is, so a resumed run dispatched only
+    // load-state and publish, forever. This pins the fix: the step that
+    // asked is worked again, with the question and the answer's location in
+    // its prompt, and the run makes it all the way to a clean close.
+    const closeLabel = isAgile ? 'replan:i1' : 'close:i1';
+    assertEqualArrays(labels,
+      ['load-state', 'research:i1.0', 'tests:i1.0', 'implement:i1.0', 'review:i1.0', closeLabel, 'publish'],
+      'the resumed run did not work the step that asked the human again, or did not carry on past it');
+    const researchCall = calls.find((c) => c.label === 'research:i1.0');
+    assertTrue(!!researchCall && researchCall.prompt.includes('MARKER-HUMAN-QUESTION'),
+      "the repeated step's prompt does not carry the question it asked");
+    assertTrue(!!researchCall && /## Decisions/.test(researchCall.prompt) && /issue\.md/.test(researchCall.prompt),
+      "the repeated step's prompt does not send the agent to the answer under ## Decisions in issue.md");
+    assertTrue(!!result && Array.isArray(result.blockedOnHuman) && result.blockedOnHuman.length === 0,
+      'the resumed run ended on the stale recorded question instead of making progress');
+  } else if (mode === 'w10') {
+    // Round 2, finding 2: nothing exercised a correction round before this
+    // mode, so the findings channel (researcher <- reviewer) and the reason
+    // sentence (human <- reviewer) were both untested.
+    const closeLabel = isAgile ? 'replan:i1' : 'close:i1';
+    assertEqualArrays(labels,
+      ['load-state', 'decompose', 'research:i1.0', 'tests:i1.0', 'implement:i1.0', 'review:i1.0',
+       'research:i1.1', 'tests:i1.1', 'implement:i1.1', 'review:i1.1', closeLabel, 'publish'],
+      'a review with findings does not open exactly one correction round');
+    const round1 = calls.find((c) => c.label === 'research:i1.1');
+    for (const marker of ['MARKER-FINDING-CLAIM', 'MARKER-FINDING-REPRODUCTION', 'MARKER-FINDING-CRITERION']) {
+      assertTrue(!!round1 && round1.prompt.includes(marker),
+        "the correction round's researcher prompt does not carry " + marker);
+    }
+    assertTrue(!!round1 && round1.prompt.includes('MARKER-OPEN-QUESTION'),
+      "the correction round's researcher prompt does not carry what the test-author left open");
+    const round0 = calls.find((c) => c.label === 'research:i1.0');
+    assertTrue(!!round0 && !round0.prompt.includes('MARKER-FINDING-CLAIM'),
+      "the first round's researcher prompt carries findings that do not exist yet");
+    assertTrue(logs.some((l) => l.includes('MARKER-VERDICT-REASON')),
+      "the reviewer's reason sentence never reached the human in the chat");
   } else {
     throw new Error('unknown mode ' + mode);
   }
@@ -520,6 +636,8 @@ for wf in "$root/workflows/loop.js" "$root/workflows/agile-loop.js"; do
   run_driver "$wf" w6 "$wf_name: the reviewer's prompt carries the checks alone"
   run_driver "$wf" w7 "$wf_name: a question from the researcher ends the run at publish"
   run_driver "$wf" w8 "$wf_name: every step's prompt tells the agent to record its return and push the commit"
+  run_driver "$wf" w9 "$wf_name: a run resumed after a question for the human works that step again with the question in its prompt"
+  run_driver "$wf" w10 "$wf_name: a correction round carries the reviewer's findings to the researcher and the reason to the human"
 done
 
 rm -rf "$driver_tmp"

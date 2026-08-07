@@ -383,3 +383,128 @@ test-repo.sh` and `bash test.sh` as the implementer's and the judgment's
 commands, not mine; `node --test
 skills/agent-brief/assets/backlog.test.mjs` is named only as the command to
 write cases 10-12 against, which is what I used it for.
+
+## Round 2
+
+The criterion this round is the reviewer's Round 1 reproduction spec, and the
+Test plan section of `researcher.md`'s `## Round 2` is my work order for it. I
+read `issue.md` and `researcher.md` (its top-level content and `## Round 2`)
+only. All work this round is in one file, `test-repo.sh`; the recorder
+(`skills/agent-brief/assets/backlog.mjs` and its suite) is untouched, as the
+plan says, and I opened neither it nor `workflows/loop.js` nor
+`workflows/agile-loop.js`.
+
+Five items were planned: one block of shared driver changes with no case of
+its own, two new driver modes (`w9`, `w10`) each run on both workflows, two new
+`run_driver` lines, and one new grep case. All are written, in `test-repo.sh`,
+at the level the plan names.
+
+### A. `test-repo.sh` — the driver heredoc
+
+Run with `bash test-repo.sh`.
+
+1. **Shared driver changes** (no case of their own). Added beside the
+   existing fixtures: `planReturnWithMarkedQuestion` (a `questions:
+   ['MARKER-HUMAN-QUESTION']` variant of `planReturn`),
+   `testsReturnWithOpenQuestion` (`openQuestions: ['MARKER-OPEN-QUESTION']`),
+   `verdictReturnWithFinding` (one finding carrying `MARKER-FINDING-CLAIM`,
+   `MARKER-FINDING-REPRODUCTION`, `MARKER-FINDING-CRITERION`, and `reason:
+   'MARKER-VERDICT-REASON'`), and a new `questionBacklog()` fixture beside
+   `resumeBacklog()` whose one recorded step (`research:i1.0`) carries
+   `planReturnWithMarkedQuestion`. `DISJOINT_MARKERS` gained the six new
+   marker strings. `returnFor`'s `tests:` and `review:` lookups now prefer a
+   per-mode override (`ctx.testsReturn`, `ctx.verdictFor`) before falling
+   back to the fixed fixtures every earlier mode used. The stub's `log`
+   parameter now pushes into a `logs` array instead of discarding, so `w10`
+   can assert on it. `contextFor` gained a `case 'w9':` arm (the state loader
+   returns `questionBacklog()`, the researcher's clean return is
+   `planReturn`) and a `case 'w10':` arm (a fresh run, `ctx.testsReturn =
+   testsReturnWithOpenQuestion`, `ctx.verdictFor` returning
+   `verdictReturnWithFinding` for `review:i1.0` and `verdictReturnClean`
+   otherwise).
+2. **`w9` on both workflows** — "`$wf_name`: a run resumed after a question
+   for the human works that step again with the question in its prompt".
+   New `mode === 'w9'` branch: asserts the dispatched labels are
+   `['load-state', 'research:i1.0', 'tests:i1.0', 'implement:i1.0',
+   'review:i1.0', <close/replan>, 'publish']` (`decompose` absent, since it
+   was recorded without a question and stays skipped), that
+   `research:i1.0`'s prompt contains `MARKER-HUMAN-QUESTION`, that it also
+   matches both `## Decisions` and `issue\.md`, and that `result.blockedOnHuman`
+   is an empty array. **Result: red** on both workflows, exactly as the plan
+   predicted:
+
+   ```
+   FAIL — loop.js: a run resumed after a question for the human works that step again with the question in its prompt:
+          the resumed run did not work the step that asked the human again, or did not carry on past it — expected ["load-state","research:i1.0","tests:i1.0","implement:i1.0","review:i1.0","close:i1","publish"] got ["load-state","publish"]
+          the repeated step's prompt does not carry the question it asked
+          the repeated step's prompt does not send the agent to the answer under ## Decisions in issue.md
+          the resumed run ended on the stale recorded question instead of making progress
+   FAIL — agile-loop.js: a run resumed after a question for the human works that step again with the question in its prompt:
+          the resumed run did not work the step that asked the human again, or did not carry on past it — expected ["load-state","research:i1.0","tests:i1.0","implement:i1.0","review:i1.0","replan:i1","publish"] got ["load-state","publish"]
+          the repeated step's prompt does not carry the question it asked
+          the repeated step's prompt does not send the agent to the answer under ## Decisions in issue.md
+          the resumed run ended on the stale recorded question instead of making progress
+   ```
+
+   Both scripts today load a recorded step whose return carries a question
+   the same as any other recorded step, so `recorded.has('research:i1.0')`
+   is true, the run never dispatches it again, and — with no `todo` work
+   left to reach — it goes straight from `load-state` to `publish`. This is
+   finding 1's own reproduction, confirmed against the real scripts rather
+   than re-derived.
+3. **`w10` on both workflows** — "`$wf_name`: a correction round carries the
+   reviewer's findings to the researcher and the reason to the human". New
+   `mode === 'w10'` branch: asserts the full round-0-then-round-1 label
+   sequence, that `research:i1.1`'s prompt carries all three finding
+   markers and `MARKER-OPEN-QUESTION`, that `research:i1.0`'s prompt carries
+   none of the finding markers, and that `logs` contains a line with
+   `MARKER-VERDICT-REASON`. **Result: green** on both `loop.js` and
+   `agile-loop.js`, as the plan predicted ("Expected before and after the
+   change: green") — this is finding 2's own repair, a new guard rather than
+   a fix to production code, and it already holds against the correction-round
+   mechanism both scripts already have.
+
+### B. `test-repo.sh` — the shared-brief greps
+
+4. **"the shared brief tells a repeated step what its first run may have
+   left behind"** — new block beside the `push the commit` case,
+   `grep -q 'already committed' skills/agent-brief/SKILL.md`. **Result: red**,
+   exactly as the plan predicted: the phrase appears nowhere in that file
+   today, so the case fails with `the shared brief does not tell a repeated
+   step what its first run may have left behind`.
+
+### The two new `run_driver` lines
+
+Added inside the existing `for wf in ... loop.js ... agile-loop.js` loop,
+directly after the `w8` line, one for `w9` and one for `w10`, both prefixed
+with `$wf_name` per the file's convention.
+
+Full run: `bash test-repo.sh` → `FAIL: 3 of 47 cases` — exactly the researcher's
+own prediction (`w9` on both workflows, plus the `already committed` grep;
+`w10` green on arrival). The 47-case count matches the plan's own sanity
+figure exactly. Nothing else in the file moved: every case carried over from
+round 0 and round 1 is still green.
+
+### Every case from the plan is written; none was skipped
+
+The shared driver changes and both new modes (`w9`, `w10`), both `run_driver`
+lines, and the one new grep case are all present, in `test-repo.sh` alone, as
+the plan named. `skills/agent-brief/assets/backlog.mjs` and its suite were not
+touched — the plan said this round changes neither production file there, and
+I opened no production file at all this round, in either the recorder or the
+two workflow scripts.
+
+### Gaps and conflicts found in the test plan
+
+None. Every case in the Round 2 plan pinned a concrete assertion and a
+concrete expected result (red, green, or green-on-arrival), and what I
+observed matched what the plan predicted in its "What proves each finding"
+and "What is already red" sections in every instance.
+
+### Environment
+
+`node --version` → `v22.22.2`. `bash test-repo.sh` was run from the
+repository root; no setup beyond `git`, `node` and `mktemp`, all present.
+`bash test.sh` was not run — the plan's "What counts as done" for this round
+names it as the implementer's and the judgment's command, and `test-repo.sh`
+alone is where every case of this round lives.
