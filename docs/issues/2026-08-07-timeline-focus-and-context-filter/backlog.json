@@ -307,6 +307,22 @@
             "questions": [],
             "summary": "Deleted the tool list panel module and the per-call parameter ballast: public/tools.js is gone, renderLanePanel paints only the context panel, and a tool mark is now seq, moment and span alone."
           }
+        },
+        {
+          "label": "review:tools-box.0",
+          "at": "2026-08-07T16:18:40.751Z",
+          "return": {
+            "findings": [
+              {
+                "claim": "tools/argus-ui/README.md still promises the tool list panel this increment deleted, so the project's own description of the interface is now false.",
+                "reproduction": "tools/argus-ui/README.md lines 71-73, in the \"Timeline\" bullet under \"What it shows\", read \"The same click also lists, under the context, every tool that agent had called by that moment — newest first, each row naming the tool and expanding to the parameters it was called with.\" After this change renderLanePanel() in tools/argus-ui/public/app.js line 947 assigns container.innerHTML = renderContextPanel(...) alone and public/tools.js no longer exists, so clicking a lane paints the context panel and nothing else — a reader following the README looks for a tool list under the context and finds none. No later increment's criteria touch this sentence; the tabs increment only covers the Overview/Tasks/Traces/Events/Metrics/Attributes bullets below it.",
+                "criterion": "none"
+              }
+            ],
+            "reason": "The argus-ui README still describes the per-lane tool list — naming each tool and expanding to its call parameters — as something a lane click shows, which this increment removed; the interface's own documentation now describes a panel that no longer exists.",
+            "questions": [],
+            "summary": "Ran the one listed command, `npm --prefix tools/argus-ui test`, 223 cases, exit 0, no skips; the increment meets every one of its criteria in code and in tests, and the only defect found is the stale tool-list sentence left in tools/argus-ui/README.md."
+          }
         }
       ]
     },
