@@ -697,8 +697,13 @@ button {
 
 /* -------------------------------- context ------------------------------- */
 
+/* A panel clips to its rounded corners, which would cut the filter's dropdown
+   off at the border it is meant to float over. Nothing in this panel reaches
+   the corners — the padding holds every row inside them — so this one does not
+   need the clip. */
 .context-panel {
   padding: 10px 12px 4px;
+  overflow: visible;
 }
 
 .context-head {
