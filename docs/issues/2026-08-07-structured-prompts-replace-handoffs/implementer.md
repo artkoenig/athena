@@ -395,3 +395,81 @@ None. Every code block the plan gave was applied as written.
   loop that calls it, next to `step()` where the plan's module map puts it. It
   reads only `recorded`, which is initialised by the state loader long before
   any call reaches it.
+
+## Round 4
+
+The whole of this round is the reviewer's one finding: both workflow scripts
+took the increments the run works from the state snapshot read at startup
+whenever that snapshot held any, even when the Decompose step was dispatched
+again in this session and returned a newer cut. I applied the plan's fix
+verbatim in both scripts and nothing else. No deviation from the plan.
+
+### Files changed
+
+- `workflows/loop.js` — two edits. A `const cutWasReplayed =
+  recorded.has('decompose')` line with the plan's comment, immediately above
+  the `const backlog = await step('decompose', ...)` dispatch; and the
+  `increments` binding below `asksTheHuman('decompose', backlog)` replaced with
+  the plan's `savedIncrements` / `cutIncrements` / `increments` block and its
+  comment, verbatim.
+- `workflows/agile-loop.js` — the identical two edits, with the last binding
+  written `let increments = ...` because the re-cut assigns to it.
+
+Nothing else moved in either file: `step()`, `forgetSteps()`,
+`carriedQuestions`, `asksTheHuman`, every prompt and the re-cut block are
+byte-identical to before. `skills/agent-brief/assets/backlog.mjs`, its suite,
+every agent page, every `SKILL.md`, `rulebook.md`, `README.md` and
+`test-repo.sh` were not opened for editing, as the plan required. The two
+"facts, neither a finding" the plan told me to leave alone — the stale word in
+`backlog.mjs`'s comment and the non-executable mode of `test.sh` and
+`test-repo.sh` — are untouched.
+
+The standing constraint held: neither new comment contains the word `handoff`
+in any spelling nor any of the guarded file names, and the guard case for it is
+green.
+
+### The tests, run before the change
+
+`bash test-repo.sh` — 54 cases, exit 1, `FAIL: 4 of 54 cases`. The four are
+exactly the ones the test plan predicted red, `w13` and `w14` on each of the
+two workflow scripts, and each failed on the three assertions the plan named:
+
+```
+FAIL — loop.js: a Decompose worked again after the human's answer has its new cut worked, not the one the state file still held:
+       the run worked the stale cut from the state file instead of the cut the re-dispatched Decompose returned — expected ["load-state","decompose","research:i3.0",...,"close:i3","publish"] got ["load-state","decompose","research:i1.0",...,"close:i1","publish"]
+       a prompt of this run carries the superseded increment the state file still held
+       the closing planner was not told about the increment of the fresh cut
+```
+
+`agile-loop.js` failed on the same three lines with the longer `i1`-then-`i2`
+sequence the plan described. Every other case in the file was green before the
+change. I wrote and edited no test.
+
+### The commands that count, run after the change
+
+- `bash test-repo.sh` — 54 cases, exit 0, `PASS: 54 cases`. Nothing skipped or
+  excluded. The count matches the plan's sanity figure of 54 exactly.
+- `bash test.sh` — exit 0, `PASS: all 6 suites` (`test-repo.sh`,
+  `test-worktree.sh`, the recorder suite `node --test
+  skills/agent-brief/assets/backlog.test.mjs`, and the three `tools/` suites;
+  the last of them reports `# tests 23`, `# pass 23`, `# fail 0`). Nothing
+  skipped or excluded.
+
+Those are the two commands the plan's "What counts as done" names, and I ran
+nothing else. There is no linter and no formatter in this repository.
+
+### Problems, and notes for the reviewer
+
+- No blockers, no open questions, nothing red.
+- One thing worth a reader's eye, not a defect: the `w13`/`w14` mode branch
+  asserts `blockedOnHuman` is empty, and it is, because `asksTheHuman` is
+  called on the fresh Decompose return, whose `questions` is `[]`. The question
+  carried out of the *previous* run reaches the re-dispatched Decompose through
+  `answeredBlock('decompose')` in its prompt, which is what the `w13`-only
+  `MARKER-CUT-QUESTION` assertion pins. The two channels are separate and both
+  are now guarded.
+- The empty-return fallback (`cutIncrements || savedIncrements`) is in the code
+  as the plan specified and is deliberately untested, per the plan's own "Left
+  untested" list. A Decompose that returns no increments at all falls back to
+  the snapshot rather than to `[]`, so a malformed return cannot make the run
+  report itself accepted with nothing worked.

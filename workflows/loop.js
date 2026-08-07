@@ -519,6 +519,10 @@ function asksTheHuman(label, out) {
   return questions.length > 0
 }
 
+// Asked before the step runs, never after: `step` writes the label into
+// `recorded` the moment it dispatches, so the answer afterwards is always yes.
+const cutWasReplayed = recorded.has('decompose')
+
 const backlog = await step('decompose', 'Decompose', () =>
   agent(
     `Issue directory: ${dir}\n` +
@@ -537,13 +541,21 @@ const backlog = await step('decompose', 'Decompose', () =>
 )
 asksTheHuman('decompose', backlog)
 
-// The recorded state is authoritative about what is still open: the decompose
-// return is what the planner said when it opened the run, and a status set by a
-// later close lives in the file, not in that return.
+// Which of the two lists of increments the run works. A replayed cut is the
+// older of them: the decompose return is what the planner said when it opened
+// the run, and a status a later close set lives in the file, not in that
+// return. A Decompose dispatched again this session is the opposite case — the
+// planner has just rewritten the file, so its return is the newer of the two
+// and the snapshot this run read at startup is the stale one. Either side
+// falls back to the other when it is empty.
+const savedIncrements =
+  saved && Array.isArray(saved.increments) && saved.increments.length ? saved.increments : null
+const cutIncrements =
+  backlog && Array.isArray(backlog.increments) && backlog.increments.length
+    ? backlog.increments
+    : null
 const increments =
-  saved && Array.isArray(saved.increments) && saved.increments.length
-    ? saved.increments
-    : (backlog && backlog.increments) || []
+  (cutWasReplayed ? savedIncrements || cutIncrements : cutIncrements || savedIncrements) || []
 
 let task = null
 if (!blockedOnHuman.length) {
