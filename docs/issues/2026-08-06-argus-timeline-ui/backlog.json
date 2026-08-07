@@ -510,6 +510,59 @@
             ],
             "questions": []
           }
+        },
+        {
+          "label": "tests:timeline-landing.2",
+          "at": "2026-08-07T10:56:23.772Z",
+          "return": {
+            "summary": "Wrote tools/argus-ui/test/app.test.mjs with the six planned cases (A-F) booting the real public/app.js against a hand-rolled fake DOM; all six pass on the unmodified tree (node --test test/app.test.mjs, 6 pass, exit 0), and each of the reviewer's three reproduction edits turns exactly the named cases red, confirmed and reverted one at a time.",
+            "cases": [
+              {
+                "case": "Case A - opening a session lands on the timeline view: opening a session draws a lane per agent and opens no technical view.",
+                "file": "tools/argus-ui/test/app.test.mjs",
+                "testName": "opening a session draws a lane per agent and opens no technical view",
+                "expected": "el('detail').innerHTML has exactly four `data-lane-id=\"` occurrences, one each for main, agent:agt-a, agent:agt-b, unattributed; no `aria-selected=\"true\"`; el('view-body').innerHTML === ''.",
+                "got": "Passes on the unmodified tree. Under reviewer edit 1 (`state.view = DEFAULT_VIEW;` -> `state.view = 'overview';` at app.js line 932) it fails: `assert.ok(!html.includes('aria-selected=\"true\"'))` evaluates false, actual false vs expected true - the overview tab opens selected instead of no view. Under edit 2 (deleting the `${timelineHtml(state.agents, state.agentWindow)}` line at app.js line 168) it fails with `settle() timed out` because no `data-lane-id=` ever appears (the default settle predicate never resolves). Under edit 3 (deleting `await loadAgents();` at app.js line 833) it fails the same way: `settle() timed out`, because state.agents never populates so no lane markup appears."
+              },
+              {
+                "case": "Case B - the technical views are subordinate to the timeline, not the other way round.",
+                "file": "tools/argus-ui/test/app.test.mjs",
+                "testName": "the strip of technical views is rendered below the timeline, not in place of it",
+                "expected": "in el('detail').innerHTML, indexOf('data-lane-id=') < indexOf('role=\"tablist\"') < indexOf('id=\"view-body\"'); and all six data-view buttons (overview, todos, traces, events, metrics, raw) are present.",
+                "got": "Passes on the unmodified tree. Under reviewer edit 2 (deleting the timelineHtml line at app.js line 168) it fails: `settle() timed out; detail.innerHTML so far: ...` - the boot never reaches a state with `data-lane-id=` in the markup, since the line composing the timeline was removed."
+              },
+              {
+                "case": "Case C - the technical views stay reachable from the timeline.",
+                "file": "tools/argus-ui/test/app.test.mjs",
+                "testName": "clicking a technical view opens it under the timeline and leaves the lanes drawn",
+                "expected": "after clicking data-view=\"raw\", el('view-body').innerHTML contains 'Resource attributes'; el('detail').innerHTML still has four data-lane-id occurrences and exactly one aria-selected=\"true\" on the raw button; the timeline still precedes role=\"tablist\".",
+                "got": "Passes on the unmodified tree. Under reviewer edit 2 (deleting the timelineHtml line at app.js line 168) it fails: `settle() timed out; detail.innerHTML so far: ...` before the click can even be fired, because the initial boot (case A's bootApp) never settles without any data-lane-id= markup to find."
+              },
+              {
+                "case": "Case D - lanes come from the collector's per-instance join, not from the UI.",
+                "file": "tools/argus-ui/test/app.test.mjs",
+                "testName": "opening a session asks the collector for that session's agent lanes",
+                "expected": "handle.paths includes '/api/sessions/sess-1/agents'.",
+                "got": "Passes on the unmodified tree. Under reviewer edit 3 (deleting `await loadAgents();` at app.js line 833) it fails: `settle() timed out; detail.innerHTML so far: ...` - loadAgents is never invoked, /api/sessions/sess-1/agents is never fetched, so no data-lane-id= markup appears and the default settle predicate in bootApp never resolves (the boot itself times out before the assertion on `paths` is reached)."
+              },
+              {
+                "case": "Case E - opening a session lands on the timeline, whatever was open under the previous one.",
+                "file": "tools/argus-ui/test/app.test.mjs",
+                "testName": "switching sessions returns to the timeline alone, with the new session's lanes",
+                "expected": "after opening raw on sess-1 then switching to sess-2, el('detail').innerHTML contains data-lane-id=\"agent:agt-c\" and no aria-selected=\"true\"; el('view-body').innerHTML === ''.",
+                "got": "Passes on the unmodified tree. Under reviewer edit 1 (`state.view = DEFAULT_VIEW;` -> `state.view = 'overview';` at app.js line 932) it fails: `assert.ok(!html.includes('aria-selected=\"true\"'))` evaluates false - selecting sess-2 lands on the overview tab (selected) instead of on the timeline alone, because selectSession no longer resets state.view to null."
+              },
+              {
+                "case": "Case F - the empty edge: no lanes to draw.",
+                "file": "tools/argus-ui/test/app.test.mjs",
+                "testName": "a session whose agent lanes cannot be fetched still lands on the timeline, not on a technical tab",
+                "expected": "with /api/sessions/sess-1/agents failing, el('detail').innerHTML has no data-lane-id=, matches /no agent lanes/i, has no aria-selected=\"true\", and the placeholder precedes role=\"tablist\"; el('view-body').innerHTML === ''.",
+                "got": "Passes on the unmodified tree. Not named as a required target of any of the reviewer's three edits, so no failure was required or sought for it; noted only that it also failed as a knock-on effect under edit 1 (`aria-selected=\"true\"` appears because the overview tab opens selected), which is consistent with the same root cause edit 1 breaks in cases A and E."
+              }
+            ],
+            "openQuestions": [],
+            "questions": []
+          }
         }
       ]
     },
