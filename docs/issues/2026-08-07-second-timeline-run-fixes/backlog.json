@@ -1,0 +1,220 @@
+{
+  "version": 1,
+  "issue": "docs/issues/2026-08-07-second-timeline-run-fixes",
+  "workflow": "agile-loop",
+  "increments": [
+    {
+      "id": "coverage-round",
+      "title": "Give the coverage round its own budget, its record and the test-author page",
+      "goal": "Main already classifies findings and shortens an all-coverage round (#64). What it does not have: a coverage budget separate from the defect budget, the round kind and both budgets recorded in backlog.json, and a test-author page that knows the coverage round. Build those on top of what main has.",
+      "criteria": [
+        "Each increment carries two round budgets, spent independently: defect rounds stay at MAX_CORRECTIONS (2) and coverage rounds get their own 2.",
+        "A coverage round that escalates to the implementer counts against the defect budget, not the coverage one.",
+        "The reviewer's classification of each finding, the round's kind, and both budgets as spent are recorded in backlog.json with the round.",
+        "agents/test-author.md tells the test-author what a coverage correction round asks of it: the behaviour is already correct, so the case it writes is expected to pass, and a red case is reported rather than worked around.",
+        "What #64 already delivers is not rebuilt: the per-finding classification, the reviewer page wording, the shortened round itself and the log() line stay as main has them."
+      ],
+      "status": "todo",
+      "note": "Reopened 2026-08-07 after the branch was rebuilt on main. An earlier run of this increment was discarded: it was built on 1bc899d, before #64 merged the same shortened round from another branch, and the two disagreed in five places. #64 is the base now; only what it lacks is left here.",
+      "steps": []
+    },
+    {
+      "id": "coverage-escalation",
+      "title": "Pull the implementer back into a coverage round whose new test is red",
+      "goal": "When a test written during a shortened coverage round comes out red, let the round say so and run the implementer after the test-author, with the researcher still skipped.",
+      "criteria": [
+        "A test-author whose new test in a coverage round comes out red says so in its structured return.",
+        "On such a return the workflow runs the implementer after the test-author in the same round, and the researcher stays skipped.",
+        "That implementer's prompt carries the red case — file, test name, what it demands, what it produced — and the plan, module map and environment from the increment's original research.",
+        "agents/implementer.md names this case: with no fresh plan in the prompt, the red test is the brief and the implementer diagnoses from it.",
+        "A coverage round that escalates to the implementer counts against the defect budget, not the coverage one.",
+        "The repository's own descriptions of the correction round stay true once a coverage round can grow an implementer: README.md and rulebook.md name the escalation and which budget it spends."
+      ],
+      "status": "todo",
+      "note": "Kept first and kept whole; gained a criterion that README.md and rulebook.md stay true, because a stale description of the round chain was the finding that cost coverage-round its first correction round.",
+      "steps": []
+    },
+    {
+      "id": "ui-harness-null",
+      "title": "Make the UI test harness return null for markup the page never rendered",
+      "goal": "Close the trap that let two correction rounds pass assertions against conjured elements, and prove the harness with a case in the suite.",
+      "criteria": [
+        "installFakes in tools/argus-ui/test/app.test.mjs returns null for an id the rendered markup does not contain, so page code reading a container the page never wrote fails the way a browser would.",
+        "Every existing case in that suite still passes, or is corrected to assert what the page actually renders.",
+        "A case in the suite proves the harness itself: removing a container from the rendered markup makes at least one case go red, rather than a manual mutation check showing it.",
+        "The argus-ui suite passes."
+      ],
+      "status": "todo",
+      "note": "",
+      "steps": []
+    },
+    {
+      "id": "retro-run-report",
+      "title": "Report a whole workflow run from bin/parse-agent-log",
+      "goal": "Make the tool read a run directory and emit the retro's tables finished, so no session re-joins 44 transcripts against the journal by hand.",
+      "criteria": [
+        "bin/parse-agent-log takes a workflow run directory and reports the run as one thing.",
+        "Its output is finished markdown tables ready to paste into a retro: per-agent-type totals, per-agent rows joined to the journal's order, tool breakdown with failures, and which agents started without returning.",
+        "The retro skill's instructions use that mode instead of telling the session to loop the tool by hand."
+      ],
+      "status": "todo",
+      "note": "Moved ahead of the two page-only increments: it is the largest piece of net-new code left and the one whose feasibility is least known, and coverage-round showed a single increment can eat three chains, so the unknown has to surface while there is still budget to re-cut it.",
+      "steps": []
+    },
+    {
+      "id": "record-stdin",
+      "title": "Let the recorder take a step return on stdin",
+      "goal": "Give every agent a way to record a summary containing quotes or markup without building a JSON file in a heredoc, and tell agents to use it.",
+      "criteria": [
+        "backlog.mjs record accepts the step return on stdin as well as from a file path.",
+        "The file-path form keeps working.",
+        "The agent brief instructs agents to record their step return through the stdin form, so no agent has to survive a heredoc to record a summary containing quotes or markup."
+      ],
+      "status": "todo",
+      "note": "",
+      "steps": []
+    },
+    {
+      "id": "run-safety-pages",
+      "title": "State the liveness check and the signing fallback in the agent-facing pages",
+      "goal": "Stop a session reporting a dead run as running, and stop a signer outage costing an agent its finished work.",
+      "criteria": [
+        "The loop skill pages tell the invoking session to establish liveness from the task's own status rather than from transcript file timestamps.",
+        "Those pages say plainly that a user turn kills a running workflow, so a session that takes a message mid-run knows to check and resume rather than to report progress from stale files.",
+        "The agent brief has an agent retry a git commit that exits non-zero on 'signing failed' up to four times, waiting 2s, 4s, 8s and 16s, the way it already handles a failed push.",
+        "If it still fails, the agent commits with --no-gpg-sign and records in its step return that the commit is unsigned, so no step's work is ever lost to a signer outage.",
+        "./test.sh gains no signing check."
+      ],
+      "status": "todo",
+      "note": "",
+      "steps": []
+    },
+    {
+      "id": "collector-wrapper",
+      "title": "Wrap a command in a started and torn-down collector",
+      "goal": "Give an agent that needs a live collector one command that owns the collector's whole lifetime, so no agent is left holding a port or a pkill.",
+      "criteria": [
+        "An agent that needs a live collector runs one wrapper command that takes the command to run.",
+        "The wrapper starts a collector on a free port, passes the port to the command through the environment, runs it, and tears the collector down afterwards whether the command succeeded or crashed.",
+        "The wrapper is named in the agent brief, and no agent is left responsible for cleanup.",
+        "./test.sh is green."
+      ],
+      "status": "todo",
+      "note": "",
+      "steps": []
+    }
+  ],
+  "run": {
+    "steps": [
+      {
+        "label": "decompose",
+        "at": "2026-08-07T17:29:17.168Z"
+      },
+      {
+        "label": "replan:coverage-round",
+        "at": "2026-08-07T18:30:40.579Z",
+        "return": {
+          "increments": [
+            {
+              "id": "coverage-round",
+              "title": "Classify findings and shorten an all-coverage correction round",
+              "goal": "Have the reviewer mark every finding it returns as a defect or a coverage gap, and have the loop run a round whose findings are all coverage gaps with the test-author and reviewer alone, on its own round budget and visibly.",
+              "criteria": [
+                "The reviewer sets a field per finding in its structured return classifying that finding as a defect or a coverage gap, rather than a phrase the workflow greps for.",
+                "The reviewer's page says which is which: a coverage gap is a finding whose behaviour is correct and whose only failure is that nothing goes red when it breaks.",
+                "A correction round whose findings are all coverage gaps runs test-author and reviewer only; researcher and implementer are skipped.",
+                "A round with even one defect among its findings runs the full chain unchanged.",
+                "Each increment carries two round budgets, spent independently: defect rounds stay at MAX_CORRECTIONS (2) and coverage rounds get their own 2.",
+                "The workflow log()s that it is correcting coverage only when it shortens a round.",
+                "The reviewer's classification of each finding, the round's kind, and both budgets as spent are recorded in backlog.json with the round."
+              ],
+              "status": "done",
+              "note": "Accepted at round 2 with no findings; bash test-repo.sh, 75 cases, exit 0. All seven criteria met in both workflows, agents/reviewer.md and the backlog helper's new round subcommand. The two correction rounds it spent were both consistency findings outside the criteria: README.md and rulebook.md still described a single two-round budget, and agents/test-author.md still demanded every case go red."
+            },
+            {
+              "id": "coverage-escalation",
+              "title": "Pull the implementer back into a coverage round whose new test is red",
+              "goal": "When a test written during a shortened coverage round comes out red, let the round say so and run the implementer after the test-author, with the researcher still skipped.",
+              "criteria": [
+                "A test-author whose new test in a coverage round comes out red says so in its structured return.",
+                "On such a return the workflow runs the implementer after the test-author in the same round, and the researcher stays skipped.",
+                "That implementer's prompt carries the red case — file, test name, what it demands, what it produced — and the plan, module map and environment from the increment's original research.",
+                "agents/implementer.md names this case: with no fresh plan in the prompt, the red test is the brief and the implementer diagnoses from it.",
+                "A coverage round that escalates to the implementer counts against the defect budget, not the coverage one.",
+                "The repository's own descriptions of the correction round stay true once a coverage round can grow an implementer: README.md and rulebook.md name the escalation and which budget it spends."
+              ],
+              "status": "todo",
+              "note": "Kept first and kept whole; gained a criterion that README.md and rulebook.md stay true, because a stale description of the round chain was the finding that cost coverage-round its first correction round."
+            },
+            {
+              "id": "ui-harness-null",
+              "title": "Make the UI test harness return null for markup the page never rendered",
+              "goal": "Close the trap that let two correction rounds pass assertions against conjured elements, and prove the harness with a case in the suite.",
+              "criteria": [
+                "installFakes in tools/argus-ui/test/app.test.mjs returns null for an id the rendered markup does not contain, so page code reading a container the page never wrote fails the way a browser would.",
+                "Every existing case in that suite still passes, or is corrected to assert what the page actually renders.",
+                "A case in the suite proves the harness itself: removing a container from the rendered markup makes at least one case go red, rather than a manual mutation check showing it.",
+                "The argus-ui suite passes."
+              ],
+              "status": "todo",
+              "note": ""
+            },
+            {
+              "id": "retro-run-report",
+              "title": "Report a whole workflow run from bin/parse-agent-log",
+              "goal": "Make the tool read a run directory and emit the retro's tables finished, so no session re-joins 44 transcripts against the journal by hand.",
+              "criteria": [
+                "bin/parse-agent-log takes a workflow run directory and reports the run as one thing.",
+                "Its output is finished markdown tables ready to paste into a retro: per-agent-type totals, per-agent rows joined to the journal's order, tool breakdown with failures, and which agents started without returning.",
+                "The retro skill's instructions use that mode instead of telling the session to loop the tool by hand."
+              ],
+              "status": "todo",
+              "note": "Moved ahead of the two page-only increments: it is the largest piece of net-new code left and the one whose feasibility is least known, and coverage-round showed a single increment can eat three chains, so the unknown has to surface while there is still budget to re-cut it."
+            },
+            {
+              "id": "record-stdin",
+              "title": "Let the recorder take a step return on stdin",
+              "goal": "Give every agent a way to record a summary containing quotes or markup without building a JSON file in a heredoc, and tell agents to use it.",
+              "criteria": [
+                "backlog.mjs record accepts the step return on stdin as well as from a file path.",
+                "The file-path form keeps working.",
+                "The agent brief instructs agents to record their step return through the stdin form, so no agent has to survive a heredoc to record a summary containing quotes or markup."
+              ],
+              "status": "todo",
+              "note": ""
+            },
+            {
+              "id": "run-safety-pages",
+              "title": "State the liveness check and the signing fallback in the agent-facing pages",
+              "goal": "Stop a session reporting a dead run as running, and stop a signer outage costing an agent its finished work.",
+              "criteria": [
+                "The loop skill pages tell the invoking session to establish liveness from the task's own status rather than from transcript file timestamps.",
+                "Those pages say plainly that a user turn kills a running workflow, so a session that takes a message mid-run knows to check and resume rather than to report progress from stale files.",
+                "The agent brief has an agent retry a git commit that exits non-zero on 'signing failed' up to four times, waiting 2s, 4s, 8s and 16s, the way it already handles a failed push.",
+                "If it still fails, the agent commits with --no-gpg-sign and records in its step return that the commit is unsigned, so no step's work is ever lost to a signer outage.",
+                "./test.sh gains no signing check."
+              ],
+              "status": "todo",
+              "note": ""
+            },
+            {
+              "id": "collector-wrapper",
+              "title": "Wrap a command in a started and torn-down collector",
+              "goal": "Give an agent that needs a live collector one command that owns the collector's whole lifetime, so no agent is left holding a port or a pkill.",
+              "criteria": [
+                "An agent that needs a live collector runs one wrapper command that takes the command to run.",
+                "The wrapper starts a collector on a free port, passes the port to the command through the environment, runs it, and tears the collector down afterwards whether the command succeeded or crashed.",
+                "The wrapper is named in the agent brief, and no agent is left responsible for cleanup.",
+                "./test.sh is green."
+              ],
+              "status": "todo",
+              "note": ""
+            }
+          ],
+          "questions": [],
+          "summary": "coverage-round is closed done: the review accepted it at round 2 with no findings (bash test-repo.sh, 75 cases, exit 0). Three changes to the open cut, each from something that increment showed, and nothing else touched. (1) coverage-escalation gains a sixth criterion: README.md and rulebook.md must stay true once a coverage round can grow an implementer, naming the escalation and the budget it spends. coverage-round spent its first correction round entirely on those two files describing a single two-round budget and a single route back to the researcher, and its own fix wrote the coverage round into both — escalation makes those passages incomplete again, so the expectation is now a criterion instead of a correction round. (2) retro-run-report moves from fifth to third, ahead of record-stdin and run-safety-pages. It is the largest piece of net-new code left and the one whose feasibility is least established — whether a workflow run directory of transcripts plus journal.jsonl is reachable to build against is a fact the researcher settles, not a human, so it is not a question — and coverage-round showed one increment can consume three full chains, which means an unknown left late has no budget left to re-cut around it. record-stdin and run-safety-pages are page-and-small-helper work that is near certain to land, so they cost least by going late. (3) No merge, no split. I considered folding record-stdin and run-safety-pages into one agent-contract increment to save a chain: rejected, because both of coverage-round's correction rounds were consistency findings on prose, and mixing three unrelated page edits into one increment enlarges exactly that surface while the run has budget for seven more increments and only six are open. collector-wrapper stays last because it carries the whole-issue criterion that ./test.sh is green. Criterion coverage is unchanged and complete: every acceptance criterion of issue.md sits in exactly one increment — reviewer classification, the shortened round, the two budgets, the log() and the backlog record in coverage-round (done); the red-test escalation, the implementer's prompt, agents/implementer.md and the defect-budget charge in coverage-escalation; installFakes and its self-proving case in ui-harness-null; the parse-agent-log run mode and the retro skill's use of it in retro-run-report; the recorder's stdin form in record-stdin; the liveness check, the user-turn statement and the signing retry with its unsigned fallback in run-safety-pages; the collector wrapper and ./test.sh green in collector-wrapper."
+        }
+      }
+    ]
+  }
+}

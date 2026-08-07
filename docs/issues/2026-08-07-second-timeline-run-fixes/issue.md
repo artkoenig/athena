@@ -56,12 +56,20 @@ gap is found, and what the run costs around the chain.
    reset, and the interrupted agent restarts from zero rather than resuming
    mid-flight, so every interruption costs a whole agent.
 
-4. **Commit signing fails on a path every agent must take.** A researcher's
-   commit exited 128 with `Key file set to
+4. **Commit signing fails transiently on a path every agent must take.** A
+   researcher's commit exited 128 with `Key file set to
    "/home/claude/.ssh/commit_signing_key.pub" (ignored, using server key)` and
    then `signing failed`. Every agent in the chain commits and pushes its step
    return, so this sits on 44 mandatory paths per run, and it fails after the
-   agent's real work is already done.
+   agent's real work is already done. The grilling of 2026-08-07 established
+   that nothing is missing on this repository's side: the platform sets
+   `commit.gpgsign=true`, `gpg.format=ssh` and
+   `gpg.ssh.program=/tmp/code-sign` (a symlink to
+   `/opt/env-runner/environment-manager`) in `/root/.gitconfig`, the
+   `(ignored, using server key)` line is that signer's informational output on
+   every commit, and a probe commit taken during the interview carried a valid
+   `gpgsig` SSH signature. The failure is an outage of a server-side signer,
+   which is the same failure mode the agent brief already handles for `push`.
 
 5. **The recorder only accepts a path to a JSON file.** `backlog.mjs record
    <backlogPath> <incrementId|-> <label> <payloadFile>` leaves each agent to
@@ -91,16 +99,31 @@ gap is found, and what the run costs around the chain.
 
 ## Acceptance criteria
 
-- [ ] When every finding a reviewer returns is a coverage gap rather than a
-      defect, the correction round runs test-author and reviewer only, and
-      skips researcher and implementer. What makes a finding a coverage gap is
-      decided by the reviewer and carried in its structured return — a field
-      the reviewer sets per finding, not a phrase the workflow greps for — and
-      a round with even one defect among its findings runs the full chain
-      unchanged.
+- [ ] The reviewer classifies every finding it returns as a defect or a
+      coverage gap — a field it sets per finding in its structured return, not
+      a phrase the workflow greps for. Its page says which is which: a
+      coverage gap is a finding whose behaviour is correct and whose only
+      failure is that nothing goes red when it breaks.
+- [ ] When every finding of a round is a coverage gap, the correction round
+      runs test-author and reviewer only; researcher and implementer are
+      skipped. A round with even one defect among its findings runs the full
+      chain unchanged.
+- [ ] When a test the test-author writes in such a round comes out red, it
+      says so in its structured return, and the workflow runs the implementer
+      after it in the same round — the researcher stays skipped.
+- [ ] That implementer's prompt carries the red case (file, test name, what it
+      demands, what it produced) and the plan, module map and environment from
+      the increment's original research. `agents/implementer.md` names this
+      case: with no fresh plan in the prompt, the red test is the brief and the
+      implementer diagnoses from it.
+- [ ] Each increment carries two round budgets: defect rounds stay at
+      `MAX_CORRECTIONS` (2), and coverage rounds get their own 2. A coverage
+      round that escalates to the implementer counts against the defect budget,
+      not the coverage one.
 - [ ] The shortened round is visible in the run: the workflow `log()`s that it
       is correcting coverage only, and the reviewer's classification of each
-      finding is recorded in `backlog.json` with the round.
+      finding, the round's kind and both budgets as spent are recorded in
+      `backlog.json` with the round.
 - [ ] `installFakes` in `tools/argus-ui/test/app.test.mjs` returns `null` for
       an id the rendered markup does not contain, so page code reading a
       container the page never wrote fails the way a browser would. Every
@@ -114,23 +137,27 @@ gap is found, and what the run costs around the chain.
       say plainly that a user turn kills a running workflow, so a session that
       takes a message mid-run knows to check and resume rather than to report
       progress from stale files.
-- [ ] `./test.sh` verifies that commit signing works in the environment it runs
-      in — a signed commit in a throwaway repository, or the equivalent check
-      the setup allows — so a signing misconfiguration is caught before an
-      agent's first commit rather than after its work is done.
+- [ ] The agent brief handles a failed signature the way it already handles a
+      failed push: a `git commit` that exits non-zero on `signing failed` is
+      retried up to four times, waiting 2s, 4s, 8s and 16s. If it still fails,
+      the agent commits with `--no-gpg-sign` and records that the commit is
+      unsigned in its step return, so no step's work is ever lost to a signer
+      outage. `./test.sh` gains no signing check.
 - [ ] `backlog.mjs record` accepts the step return on stdin as well as from a
       file path, and the agent brief instructs agents to use the stdin form, so
       no agent has to survive a heredoc to record a summary containing quotes
       or markup. The file-path form keeps working.
 - [ ] `bin/parse-agent-log` takes a workflow run directory and reports the run
-      as one thing: per-agent-type totals, per-agent rows joined to the
-      journal's order, tool breakdown with failures, and which agents started
-      without returning. The retro skill's instructions use that mode instead
-      of telling the session to loop the tool by hand.
-- [ ] A documented way to start and stop a collector for ad-hoc inspection
-      exists and is named in the agent brief — a script or an existing test
-      helper made reachable — so an agent needing a live instance does not
-      improvise a `pkill`.
+      as one thing, as finished markdown tables ready to paste into a retro:
+      per-agent-type totals, per-agent rows joined to the journal's order, tool
+      breakdown with failures, and which agents started without returning. The
+      retro skill's instructions use that mode instead of telling the session to
+      loop the tool by hand.
+- [ ] An agent that needs a live collector runs one wrapper command that takes
+      the command to run: the wrapper starts a collector on a free port, passes
+      the port to the command through the environment, runs it, and tears the
+      collector down afterwards whether the command succeeded or crashed. It is
+      named in the agent brief, and no agent is left responsible for cleanup.
 - [ ] `./test.sh` is green.
 
 ## Out of scope
@@ -145,11 +172,55 @@ gap is found, and what the run costs around the chain.
   liveness-check correction and the fact that a user turn is the trigger.
 - The reviewer's standard itself. Rejecting a round for missing go-red coverage
   was right every time; nothing here softens it.
+- A pre-flight signing check in `./test.sh`. The original criterion asked for
+  one; the grilling established that the failure is a transient outage of a
+  server-side signer rather than a misconfiguration, so a check that passes at
+  suite time and fails at commit time hours later buys nothing. See Decisions.
 - Making the workflow survive a user turn. Whether the platform can keep a
   background run alive across a turn is not this repository's to change; the
   fix here is that the session knows and resumes.
 - The argus timeline feature. `docs/issues/2026-08-06-argus-timeline-ui` owns
   it and has one increment still open.
+
+## Decisions
+
+From the grilling interview of 2026-08-07, one entry per answer the human gave.
+
+- **A coverage round skips the researcher as well as the implementer, and pulls
+  only the implementer back in.** The interview opened with the escalation
+  proposal of running researcher and implementer both when a new test comes out
+  red; the human cut it to the implementer alone, because the test-author runs
+  before the implementer anyway and a red test is the same brief a researcher
+  would have written. The chain therefore never re-plans in a correction round
+  that began as coverage.
+- **That implementer diagnoses from the red test, with the increment's original
+  research as context.** Chosen over a bare red-test prompt and over reinstating
+  the researcher. The case is rare and a red test is a precise brief, so the
+  exception is written into the implementer's page rather than paid for with an
+  agent.
+- **The signing criterion is replaced by a retry with an unsigned fallback.**
+  The human asked what the documentation says about the cause before answering
+  the question as put; the check reported under Problem 4 showed the
+  configuration complete on the platform's side and signing working at the time
+  of the interview. A pre-flight check in `./test.sh` would therefore have been
+  green on the day of the failure and saved nothing, so it is dropped. The human
+  chose the fallback over retry-only: no step's work is lost to a signer outage,
+  at the price of individual unsigned commits, which the step return records.
+- **`parse-agent-log` emits finished markdown tables, not JSON.** Chosen over
+  JSON and over markdown-with-a-`--json`-flag: the hand-joining this run paid
+  for is exactly the formatting step, and one output form keeps two retros
+  comparable.
+- **The collector fixture wraps a command instead of offering start and stop.**
+  Chosen so that no agent is responsible for cleanup — the observed failure was
+  a crashed inspection followed by a `pkill`, and a wrapper that tears down on
+  both paths makes that unreachable.
+- **Coverage rounds get their own budget of 2, beside the 2 defect rounds.**
+  Chosen over one shared budget and over unlimited coverage rounds: the run lost
+  `context-inspector` to three coverage findings after both correction rounds,
+  and a round that now costs two agents does not deserve the same ration as one
+  that costs four. Unlimited was refused because a reviewer finding a fresh gap
+  each round would never end. Symmetry with `MAX_CORRECTIONS` decided the
+  number; an escalated round counts against the defect budget.
 
 ## Evidence
 
