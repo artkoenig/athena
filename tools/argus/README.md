@@ -560,6 +560,7 @@ and new Claude Code attributes.
 | `GET /api/sessions`      | Session list (`search`, `limit`, `offset`)                 |
 | `GET /api/sessions/:id`  | Session aggregates including traces                        |
 | `GET /api/sessions/:id/agents` | Agent lanes of a session: main, one per subagent instance, unattributed |
+| `GET /api/sessions/:id/context` | The request body one lane was sent at or before a moment (`lane`, `at`), whole text |
 | `GET /api/traces/:id`    | Spans of a trace, flat with `depth` in render order        |
 | `GET /api/events`        | Events (`session`, `event`, `trace`, `search`, `errors`); raw API bodies are left out here |
 | `GET /api/content`       | Content records (`session`, `kind`, `at`, `limit`, `body=1` for the text) |
@@ -606,7 +607,11 @@ npm run demo      # emit a synthetic session
   call is marked (`paramsTruncated: true`), because `/api/sessions/:id/agents` is
   refetched on every ingest while a session is live and a single `Write` call's
   parameters run to tens of kilobytes. The untruncated text stays available through
-  `GET /api/content?kind=tool_input&body=1`.
+  `GET /api/content?kind=tool_input&body=1`. For the same reason the payload carries no
+  request body text at all, only the reported sizes of the context curve; the body itself
+  is fetched per lane and moment through
+  `GET /api/sessions/:id/context?lane=<laneId>&at=<ms>`, which answers with the whole
+  text.
 - The store lives in the process. For long-term retention or alerting, the telemetry
   belongs in a real backend (Honeycomb, Grafana, Datadog, Langfuse) — both work in
   parallel, `OTEL_EXPORTER_OTLP_*` variables can point each signal at a different

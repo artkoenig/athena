@@ -234,6 +234,25 @@ export function createServer({ store, token = null, endpoint = '', persist = nul
       else sendJson(res, 200, agents);
       return true;
     }
+    // The one route that answers with a whole request body text, uncapped: it is
+    // asked once per lane and chosen moment, not on every ingest tick the way
+    // `/agents` is, which is exactly why the lanes payload carries sizes only.
+    const contextMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/context$/);
+    if (contextMatch) {
+      const lane = searchParams.get('lane');
+      if (!lane) {
+        sendJson(res, 400, { error: 'lane required' });
+        return true;
+      }
+      const context = store.getLaneContext(
+        decodeURIComponent(contextMatch[1]),
+        lane,
+        intParam(searchParams, 'at', null),
+      );
+      if (!context) sendJson(res, 404, { error: 'unknown session' });
+      else sendJson(res, 200, context);
+      return true;
+    }
     const traceMatch = pathname.match(/^\/api\/traces\/([^/]+)$/);
     if (traceMatch) {
       const trace = store.getTrace(decodeURIComponent(traceMatch[1]));

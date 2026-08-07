@@ -64,7 +64,12 @@ for an `HttpOnly; SameSite=Strict` cookie and drops it from the address bar.
   carries a chosen time that can be scrubbed to any point of the session and
   follows the newest data until it is scrubbed, with a Live control that
   returns it to the head. A lane can be selected, and the selection lists that
-  agent's tool calls up to the chosen time with each call's parameters.
+  agent's tool calls up to the chosen time with each call's parameters. Beside
+  that listing it shows the context that lane was holding at the chosen time —
+  the request body it last sent, as a structured message list whose blocks
+  collapse to one line with a size and expand to the exact full text. That body
+  is fetched per lane and moment, so a body the collector reports as cut, or as
+  a size with no exported text, is shown as such rather than as a gap.
 - **Sessions** — every session by last activity, with cost, tokens and errors.
 - **Overview** — cost, tokens by type including cache hit rate, interactions,
   requests, tool calls, lines of code, commits, active time; tables per model

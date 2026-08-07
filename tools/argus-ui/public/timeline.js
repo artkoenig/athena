@@ -8,6 +8,7 @@
  * pinned without a DOM.
  */
 
+import { contextSectionHtml } from './context.js';
 import { esc, fmtClock, fmtDur, fmtNum, shortId } from './format.js';
 
 /**
@@ -388,16 +389,23 @@ function toolCallHtml(entry) {
 
 /**
  * The panel under the timeline: what the selected lane's agent did up to the
- * chosen time, most recent first.
+ * chosen time, most recent first, beside the context it was holding at that
+ * moment.
  *
  * Nothing is selected — or the selection names a lane this session no longer
  * has — renders as nothing at all, which is the resting page.
  *
+ * The context is passed in rather than fetched here: this module stays pure,
+ * and the section renders its own pending state when the loaded context does
+ * not belong to this lane and this moment. Called without it, the panel is the
+ * same panel with the context still loading.
+ *
  * @param {object[]} items the lanes of the `/agents` payload
  * @param {number|null} atMs the chosen time
  * @param {string|null} selectedLaneId
+ * @param {null | {laneId: string, atMs: number, status: string, record: object|null}} context
  */
-export function laneDetailHtml(items = [], atMs = null, selectedLaneId = null) {
+export function laneDetailHtml(items = [], atMs = null, selectedLaneId = null, context = null) {
   if (!selectedLaneId) return '';
   const lane = items.find((candidate) => candidate?.id === selectedLaneId);
   if (!lane) return '';
@@ -422,7 +430,10 @@ export function laneDetailHtml(items = [], atMs = null, selectedLaneId = null) {
       )}</span>
       ${capped}
     </div>
-    ${body}
+    <div class="lane-detail-body">
+      ${contextSectionHtml(context, lane.id, atMs)}
+      <div class="lane-detail-calls">${body}</div>
+    </div>
   </div>`;
 }
 

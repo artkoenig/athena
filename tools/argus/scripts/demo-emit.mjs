@@ -90,6 +90,41 @@ function span({ traceId, spanId, parentSpanId, name, startMs, durationMs, attrib
   };
 }
 
+/**
+ * A whole, parseable request body of the shape the Anthropic API takes: a
+ * system string, the user's turn, an assistant turn with a tool call, and the
+ * tool's result. A real CLI truncates most of these, and the rest of this
+ * script keeps emitting the truncated fragment — this one is here so a demo
+ * session also exercises the structured reading of a complete body.
+ */
+function wholeRequestBody(model, prompt) {
+  return JSON.stringify({
+    model,
+    max_tokens: 8192,
+    system: 'You are Claude Code, running in a demo session emitted by argus.',
+    messages: [
+      { role: 'user', content: prompt },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'Let me look at the file first.' },
+          { type: 'tool_use', id: 'toolu_demo_1', name: 'Read', input: { file_path: '/src/index.mjs', limit: 200 } },
+        ],
+      },
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'toolu_demo_1',
+            content: 'export function main() {\n  return 0;\n}\n',
+          },
+        ],
+      },
+    ],
+  });
+}
+
 /** One agent turn: prompt -> model call -> tools -> model call -> response. */
 function buildTurn(sessionId, sequence, startMs) {
   const traceId = hexId(16);
@@ -186,16 +221,21 @@ function buildTurn(sessionId, sequence, startMs) {
       }),
     );
     // What was sent to the model, as the CLI reports it with
-    // OTEL_LOG_RAW_API_BODIES=1: a truncated body plus the untruncated length.
+    // OTEL_LOG_RAW_API_BODIES=1. The first call of an interaction carries a
+    // whole body, the rest the truncated fragment plus the untruncated length,
+    // so a demo session shows both the structured message list and the raw one.
+    const whole = llmCallIndex === 0 ? wholeRequestBody(model, prompt) : null;
     record(
       'claude_code.api_request_body',
-      {
-        model,
-        body: `{"model":"${model}","messages":[{"role":"user","content":"…`,
-        body_truncated: true,
-        body_length: contextLength(18_000, 9_000),
-        query_source: 'main',
-      },
+      whole
+        ? { model, body: whole, body_length: whole.length, query_source: 'main' }
+        : {
+            model,
+            body: `{"model":"${model}","messages":[{"role":"user","content":"…`,
+            body_truncated: true,
+            body_length: contextLength(18_000, 9_000),
+            query_source: 'main',
+          },
       cursor,
       9,
       llmSpanId,

@@ -39,6 +39,10 @@ const state = {
   // The selection the session view holds beside the chosen time: the lane
   // whose tool calls are listed below the timeline, or null for none.
   selectedLaneId: null,
+  // The one loaded lane context, `{laneId, atMs, status, record}`, or null when
+  // none has been loaded yet. It is keyed by the lane and the moment it was
+  // asked for, so the panel can tell an answer that still fits from a stale one.
+  laneContext: null,
   trace: null,
   selectedTraceId: null,
   selectedSpanId: null,
@@ -187,7 +191,7 @@ function renderDetail() {
       selectedLaneId: state.selectedLaneId,
     })}
 
-    <div id="lane-detail">${laneDetailHtml(state.agents, state.atMs, state.selectedLaneId)}</div>
+    <div id="lane-detail">${laneDetailHtml(state.agents, state.atMs, state.selectedLaneId, state.laneContext)}</div>
 
     ${viewStripHtml(state.view, counts)}
 
@@ -198,12 +202,77 @@ function renderDetail() {
 }
 
 /**
- * The selected lane's listing, repainted in its own container. Called from
- * both render paths, so the panel says the same thing however it was reached.
+ * The selected lane's listing and its context, repainted in their own
+ * container. Called from both render paths, so the panel says the same thing
+ * however it was reached, and it asks for the context it is missing.
  */
 function renderLaneDetail() {
   const panel = document.getElementById('lane-detail');
-  if (panel) panel.innerHTML = laneDetailHtml(state.agents, state.atMs, state.selectedLaneId);
+  if (panel) {
+    panel.innerHTML = laneDetailHtml(state.agents, state.atMs, state.selectedLaneId, state.laneContext);
+  }
+  ensureLaneContext();
+}
+
+/** How long a chosen time has to hold still before its context is fetched. */
+const CONTEXT_FETCH_DELAY_MS = 120;
+/** The `(lane, moment)` key of the request that is scheduled or in flight. */
+let contextPending = null;
+let contextTimer = null;
+
+/** The key one lane context is cached and requested under. */
+const contextKey = (laneId, atMs) => `${laneId} ${atMs}`;
+
+/**
+ * Fetches the selected lane's request body as of the chosen time, once per
+ * (lane, moment), and repaints the panel when it lands.
+ *
+ * The fetch is delayed: a scrub drag fires `input` continuously and every
+ * answer can be tens of kilobytes, so only a moment the user rests on is asked
+ * for. An answer that arrives after the selection or the chosen time has moved
+ * on is dropped — the panel renders its pending state instead, which is what
+ * keeps the context and the tool listing talking about the same moment.
+ *
+ * A failed fetch is stored as such for that key, so the page says so once
+ * rather than retrying forever; the next chosen time is a new key and tries
+ * again by itself.
+ */
+function ensureLaneContext() {
+  const sessionId = state.selectedSessionId;
+  const laneId = state.selectedLaneId;
+  const atMs = state.atMs;
+  if (!sessionId || !laneId || atMs === null) return Promise.resolve();
+  if (!state.agents.some((lane) => lane?.id === laneId)) return Promise.resolve();
+  const key = contextKey(laneId, atMs);
+  if (state.laneContext && contextKey(state.laneContext.laneId, state.laneContext.atMs) === key) {
+    return Promise.resolve();
+  }
+  if (contextPending === key) return Promise.resolve();
+
+  contextPending = key;
+  clearTimeout(contextTimer);
+  return new Promise((resolve) => {
+    contextTimer = setTimeout(async () => {
+      let next;
+      try {
+        const payload = await api(`/api/sessions/${encodeURIComponent(sessionId)}/context`, {
+          lane: laneId,
+          at: atMs,
+        });
+        next = { laneId, atMs, status: 'ready', record: payload?.record ?? null };
+      } catch {
+        next = { laneId, atMs, status: 'error', record: null };
+      }
+      if (contextPending === key) contextPending = null;
+      // The chosen time or the selection may have moved while this was in
+      // flight; that answer is about a moment nobody is looking at any more.
+      if (state.selectedLaneId === laneId && state.atMs === atMs) {
+        state.laneContext = next;
+        renderLaneDetail();
+      }
+      resolve();
+    }, CONTEXT_FETCH_DELAY_MS);
+  });
 }
 
 /**
@@ -877,6 +946,7 @@ async function loadSession() {
     state.atMs = null;
     state.following = true;
     state.selectedLaneId = null;
+    state.laneContext = null;
     return;
   }
   try {
@@ -889,6 +959,7 @@ async function loadSession() {
     state.atMs = null;
     state.following = true;
     state.selectedLaneId = null;
+    state.laneContext = null;
     return;
   }
   await loadAgents();
@@ -1007,6 +1078,7 @@ function selectSession(id, { render = true } = {}) {
   state.following = true;
   // ...and with no lane selected, whichever one was open under the last.
   state.selectedLaneId = null;
+  state.laneContext = null;
   // Opening a session lands on the timeline, whatever was open under the last one.
   state.view = DEFAULT_VIEW;
   location.hash = `#/session/${encodeURIComponent(id)}`;

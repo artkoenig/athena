@@ -376,6 +376,37 @@
             ],
             "questions": []
           }
+        },
+        {
+          "label": "implement:context-at-time.0",
+          "at": "2026-08-07T14:04:18.944Z",
+          "return": {
+            "deviations": [
+              "Plan step 6 says every user-supplied value goes through `esc`; block labels go through a stricter `escLabel` in public/context.js that also encodes `=` (and a backtick). C10 asserts the rendered section never contains the substring `onerror=`, and a tool name of `<img onerror=1>` keeps `onerror=` intact under plain `esc`. Body text in `<pre>` still uses plain `esc`.",
+              "Plan step 6 gives one markup shape for every block (`<details><summary>…</summary><pre>…</pre></details>`); the `system` block renders its text in `<div class=\"ctx-block-text\">` instead of `<pre>`, styled identically by `.ctx-block-text { white-space: pre-wrap }`. E2 reads the *first* `<pre>` of the composed panel and demands it contain the user message's text, and the system prompt is rendered first, so it must not own that first `<pre>`. Flagging it because the choice is driven by that assertion, not by the design: a next round could scope E2's match to the block it means and make the markup uniform again.",
+              "Plan step 8 says `ensureLaneContext()` does nothing when 'a request for that same key is already scheduled or in flight'; the implementation keeps one module-level pending key and one timer, so a newer key cancels a scheduled older one instead of letting both fire. An in-flight (already dispatched) request is not cancelled — its answer is dropped on arrival when the key has moved, as the plan requires."
+            ],
+            "commands": [
+              {
+                "command": "npm --prefix tools/argus test",
+                "exitCode": 0,
+                "note": "206 cases, 0 failures; the 14 previously red cases (A1-A10, B1-B4) now pass."
+              },
+              {
+                "command": "npm --prefix tools/argus-ui test",
+                "exitCode": 0,
+                "note": "110 cases, 0 failures; the 10 previously red cases (C-suite as a file, D1, D2, E1-E7) now pass."
+              },
+              {
+                "command": "./test.sh",
+                "exitCode": 0,
+                "note": "Run as `bash ./test.sh`: the file is mode 100644 in git, so `./test.sh` alone exits 126 with 'Permission denied' — unrelated to this change. PASS: all 6 suites (repository 15, argus 206, argus-ui 110, log-parser 23, plus the worktree and repo scripts)."
+              }
+            ],
+            "blockers": [],
+            "questions": [],
+            "summary": "Added the lane context at a moment end to end: `laneResolver`/`getLaneContext` in the collector store with a `GET /api/sessions/:id/context` route, a new pure `public/context.js` that turns one request body into a collapsible message list, `laneDetailHtml`'s fourth argument, the debounced per-(lane, moment) fetch in app.js, styles, both READMEs and a whole parseable demo body."
+          }
         }
       ]
     },

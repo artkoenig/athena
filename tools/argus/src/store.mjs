@@ -94,6 +94,62 @@ function requestBodyLength(log) {
 }
 
 /**
+ * The lane attribution of one session's spans and of the log records emitted
+ * under them, built once over a span list.
+ *
+ * There is exactly one of these so nothing joins a record to a lane a second
+ * way: the curve on `getAgents` and the body `getLaneContext` answers with must
+ * agree about which lane a record belongs to, or the panel would show one
+ * lane's body against another lane's marks.
+ *
+ * @param {object[]} spans this session's spans
+ */
+function laneResolver(spans) {
+  const byId = new Map(spans.map((span) => [span.spanId, span]));
+  const laneKeys = new Map();
+
+  /**
+   * Which lane a span belongs to. Spans that carry no agent attributes — the
+   * interaction, tool.execution, blocked_on_user and hook spans never do —
+   * inherit their lane from the parent chain, which is the only place their
+   * agent is recorded. A parent that is not in the buffer (it was evicted, or
+   * never arrived) is the one honest "cannot be attributed" case, and it lands
+   * on the unattributed lane rather than being folded into main.
+   */
+  const laneKeyOf = (span, depth = 0) => {
+    const cached = laneKeys.get(span.spanId);
+    if (cached) return cached;
+    let key;
+    const ref = agentRefOf(span.attrs ?? {});
+    if (ref) key = `${AGENT_LANE_PREFIX}${ref.agentId}`;
+    else if (!span.parentSpanId) key = MAIN_LANE_ID;
+    // The cap also stops a cyclic parent chain, which a malformed export can
+    // produce and which nothing else here would terminate.
+    else if (depth >= MAX_LANE_CHAIN_DEPTH) key = UNATTRIBUTED_LANE_ID;
+    else {
+      const parent = byId.get(span.parentSpanId);
+      key = parent ? laneKeyOf(parent, depth + 1) : UNATTRIBUTED_LANE_ID;
+    }
+    laneKeys.set(span.spanId, key);
+    return key;
+  };
+
+  /**
+   * The lane of a log record. These records carry no agent_id at all, so their
+   * lane is the lane of the span they were emitted under; one that names no
+   * span in the buffer is honestly unattributed rather than dropped or folded
+   * into main. `query_source` is deliberately not used as a fallback: it names
+   * the agent type, not the instance.
+   */
+  const laneOfLog = (log) => {
+    const span = log.spanId ? byId.get(log.spanId) : null;
+    return span ? laneKeyOf(span) : UNATTRIBUTED_LANE_ID;
+  };
+
+  return { byId, laneKeyOf, laneOfLog };
+}
+
+/**
  * Thin a list of `{length}` samples to at most `max` entries by splitting it
  * into equal buckets in order and keeping the largest sample of each, so the
  * peak of the curve survives being drawn thinner.
@@ -920,34 +976,7 @@ export class TelemetryStore {
   getAgents(sessionId) {
     if (!this.sessions.has(sessionId)) return null;
     const spans = this.spans.filter((span) => span.sessionId === sessionId);
-    const byId = new Map(spans.map((span) => [span.spanId, span]));
-    const laneKeys = new Map();
-
-    /**
-     * Which lane a span belongs to. Spans that carry no agent attributes — the
-     * interaction, tool.execution, blocked_on_user and hook spans never do —
-     * inherit their lane from the parent chain, which is the only place their
-     * agent is recorded. A parent that is not in the buffer (it was evicted, or
-     * never arrived) is the one honest "cannot be attributed" case, and it lands
-     * on the unattributed lane rather than being folded into main.
-     */
-    const laneKeyOf = (span, depth = 0) => {
-      const cached = laneKeys.get(span.spanId);
-      if (cached) return cached;
-      let key;
-      const ref = agentRefOf(span.attrs ?? {});
-      if (ref) key = `${AGENT_LANE_PREFIX}${ref.agentId}`;
-      else if (!span.parentSpanId) key = MAIN_LANE_ID;
-      // The cap also stops a cyclic parent chain, which a malformed export can
-      // produce and which nothing else here would terminate.
-      else if (depth >= MAX_LANE_CHAIN_DEPTH) key = UNATTRIBUTED_LANE_ID;
-      else {
-        const parent = byId.get(span.parentSpanId);
-        key = parent ? laneKeyOf(parent, depth + 1) : UNATTRIBUTED_LANE_ID;
-      }
-      laneKeys.set(span.spanId, key);
-      return key;
-    };
+    const { laneKeyOf, laneOfLog } = laneResolver(spans);
 
     const lanes = new Map();
 
@@ -1025,11 +1054,7 @@ export class TelemetryStore {
       }
     }
 
-    // The context curve. These records carry no agent_id at all, so their lane
-    // is the lane of the span they were emitted under; one that names no span
-    // in the buffer is honestly unattributed rather than dropped or folded into
-    // main. `query_source` is deliberately not used as a fallback: it names the
-    // agent type, not the instance.
+    // The context curve, attributed through the shared lane resolver above.
     //
     // The same walk also carries the tool call parameters: they arrive on the
     // `tool_result` event, not on the span, and they decorate the activity
@@ -1041,8 +1066,7 @@ export class TelemetryStore {
         if (!(log.timeMs > 0)) continue;
         const length = requestBodyLength(log);
         if (length === null) continue;
-        const span = log.spanId ? byId.get(log.spanId) : null;
-        const lane = laneFor(span ? laneKeyOf(span) : UNATTRIBUTED_LANE_ID);
+        const lane = laneFor(laneOfLog(log));
         lane.context.push({ atMs: log.timeMs, length });
       } else if (log.eventName === EVENT.toolResult) {
         // A result naming no tool span in the buffer adds nothing: the mark
@@ -1091,6 +1115,82 @@ export class TelemetryStore {
       firstMs: starts.length ? Math.min(...starts) : 0,
       lastMs: ends.length ? Math.max(...ends) : 0,
       items,
+    };
+  }
+
+  /**
+   * The request body one lane was sent at or before a moment: the whole text,
+   * not a sample of it.
+   *
+   * Returns `null` for an unknown session, the same contract `getAgents` and
+   * `getSession` have. Otherwise `{sessionId, laneId, atMs, record}`, where
+   * `record` is `null` when the lane made no API request in that bound.
+   *
+   * Selection: over the log buffer, keep every `api_request_body` record of
+   * this session with a real time at or before `atMs` (no upper bound when
+   * `atMs` is null) that reports a body length and resolves to this lane, and
+   * answer the one with the greatest `timeMs`, ties going to the greater `seq`.
+   * All of them are scanned rather than stopping at the first hit walking
+   * backwards, because arrival order is not time order — the same reason
+   * `getAgents` sorts its samples.
+   *
+   * The predicate is `requestBodyLength`, not `contentOf`: `contentOf` answers
+   * null for a record that carries neither text nor a `body_ref`, and such a
+   * record still reports `body_length` and is still drawn on the curve, so the
+   * caller must be able to show it as "this much context, text absent".
+   * Filtering on `contentOf` here would silently answer with the previous
+   * request instead of that one.
+   *
+   * `text` is uncapped on purpose: the exact body is the point, and this route
+   * is asked once per lane and moment, never on the per-ingest path the lanes
+   * payload is on.
+   *
+   * @param {string} sessionId
+   * @param {string} laneId one of `getAgents`' lane ids
+   * @param {number|null} atMs inclusive upper bound, or null for "the latest"
+   * @returns {null | {sessionId: string, laneId: string, atMs: number|null, record: object|null}}
+   */
+  getLaneContext(sessionId, laneId, atMs = null) {
+    if (!this.sessions.has(sessionId)) return null;
+    const spans = this.spans.filter((span) => span.sessionId === sessionId);
+    const { laneOfLog } = laneResolver(spans);
+
+    let best = null;
+    let bestLength = null;
+    for (const log of this.logs) {
+      if (log.sessionId !== sessionId) continue;
+      if (log.eventName !== EVENT.apiRequestBody) continue;
+      if (!(log.timeMs > 0)) continue;
+      if (atMs !== null && atMs !== undefined && log.timeMs > atMs) continue;
+      const length = requestBodyLength(log);
+      if (length === null) continue;
+      if (laneOfLog(log) !== laneId) continue;
+      if (best && (log.timeMs < best.timeMs || (log.timeMs === best.timeMs && log.seq <= best.seq))) {
+        continue;
+      }
+      best = log;
+      bestLength = length;
+    }
+
+    if (!best) return { sessionId, laneId, atMs, record: null };
+    const attrs = best.attrs ?? {};
+    const content = contentOf(best);
+    return {
+      sessionId,
+      laneId,
+      atMs,
+      record: {
+        seq: best.seq,
+        timeMs: best.timeMs,
+        spanId: best.spanId,
+        traceId: best.traceId,
+        length: bestLength,
+        truncated: content ? content.truncated : bool(attrs.body_truncated),
+        text: content?.text ?? null,
+        ref: content?.ref ?? null,
+        model: attrs.model ?? null,
+        requestId: attrs.request_id ?? null,
+      },
     };
   }
 
