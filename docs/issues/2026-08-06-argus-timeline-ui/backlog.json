@@ -563,6 +563,35 @@
             "openQuestions": [],
             "questions": []
           }
+        },
+        {
+          "label": "implement:timeline-landing.2",
+          "at": "2026-08-07T10:58:13.329Z",
+          "return": {
+            "deviations": [
+              "The plan named tools/argus-ui/test/app.test.mjs as NEW and the only file the increment adds; it was already present and committed by the preceding test-author step (commit 8bb0f3d, \"Pin opening a session on the timeline against a fake DOM (round 2)\"), so this step wrote no file at all. I ran the check command instead of re-creating it, per the instruction never to edit or rewrite a test."
+            ],
+            "commands": [
+              {
+                "command": "npm --prefix tools/argus-ui test",
+                "exitCode": 0,
+                "note": "39 cases across test/app.test.mjs, test/timeline.test.mjs, test/config.test.mjs, test/independence.test.mjs and test/server.test.mjs; 39 pass, 0 fail, 0 skipped, nothing excluded. The six planned cases A-F all pass on the unmodified tree."
+              },
+              {
+                "command": "node --test \"test/app.test.mjs\" (run from tools/argus-ui, to isolate the six planned cases)",
+                "exitCode": 0,
+                "note": "Not on the list that counts; run only to read the six planned cases separately. 6 pass, 0 fail."
+              },
+              {
+                "command": "node --test \"test/app.test.mjs\" against three mutated copies of public/app.js, in a scratchpad copy of tools/argus-ui outside the repository",
+                "exitCode": 1,
+                "note": "Not on the list that counts, and the repository tree was never modified (git status stayed empty). Run to prove the six cases are not vacuous, since the plan predicted them all green and a green test that pins nothing would pass the same way. Reviewer edit 1 (state.view = DEFAULT_VIEW -> 'overview' at app.js line 932): 3 pass, 3 fail. Edit 2 (deleting the timelineHtml line at app.js line 168): 0 pass, 6 fail. Edit 3 (deleting await loadAgents(); at app.js line 833): 1 pass, 5 fail. Each reviewer edit therefore turns cases red, as the test plan recorded."
+              }
+            ],
+            "blockers": [],
+            "questions": [],
+            "summary": "No production change was needed: the check command is green on the unmodified tree, and a mutation check on a scratch copy confirms the six new cases genuinely pin the landing wiring in public/app.js rather than passing vacuously."
+          }
         }
       ]
     },
