@@ -1636,3 +1636,358 @@ second attempt dispatches nobody). Everything else in both commands was exit 0
 in the reviewer's round-2 run — `bash test-repo.sh`, 47 cases, and `bash
 test.sh`, all 6 suites — and nothing planned here touches it. Whoever runs the
 list first reports what it says.
+
+## Round 4
+
+The reviewer filed one finding, present in both workflow scripts and in the same
+expression in each: the list of increments the run works is taken from the state
+snapshot the session read at startup whenever that snapshot holds any, even when
+the Decompose step was dispatched again in this session and returned a newer
+cut. So the planner reads the human's answer, re-cuts, rewrites `backlog.json` —
+and the run works the cut the answer replaced.
+
+The repair is one condition: the snapshot wins only over a cut that was
+*replayed*. A cut that was *dispatched* this session is newer than the snapshot,
+because the planner wrote the file after the snapshot was taken.
+
+Nothing else this round. `skills/agent-brief/assets/backlog.mjs`, every agent
+page, every `SKILL.md`, `rulebook.md` and `README.md` stay exactly as they are.
+The whole change is `workflows/loop.js`, `workflows/agile-loop.js` and
+`test-repo.sh`.
+
+The reviewer's two "facts, neither a finding" are deliberately left alone: the
+stale word "the publish" in `backlog.mjs`'s comment at line 131 stays, because
+touching that file pulls the recorder into a diff this round has no business in,
+and the non-executable mode of `test.sh` and `test-repo.sh` stays, because it
+predates the change and `chmod` would put an unrelated mode change in the diff.
+
+### Implementation plan
+
+**The fix, in both scripts.** The two files hold the identical expression —
+`workflows/loop.js` lines 543-546 and `workflows/agile-loop.js` lines 587-590 —
+and take the identical patch, differing only in `const` versus `let` (the
+incremental loop reassigns `increments` at its re-cut).
+
+Ask whether the cut is replayed *before* the step runs: `step()` writes the
+label into `recorded` the moment it dispatches, so asking afterwards always
+answers "yes".
+
+In `workflows/loop.js`, insert immediately above line 522 (`const backlog =
+await step('decompose', ...)`):
+
+```js
+// Asked before the step runs, never after: `step` writes the label into
+// `recorded` the moment it dispatches, so the answer afterwards is always yes.
+const cutWasReplayed = recorded.has('decompose')
+```
+
+and replace lines 540-546 — the comment and the `increments` binding — with:
+
+```js
+// Which of the two lists of increments the run works. A replayed cut is the
+// older of them: the decompose return is what the planner said when it opened
+// the run, and a status a later close set lives in the file, not in that
+// return. A Decompose dispatched again this session is the opposite case — the
+// planner has just rewritten the file, so its return is the newer of the two
+// and the snapshot this run read at startup is the stale one. Either side
+// falls back to the other when it is empty.
+const savedIncrements =
+  saved && Array.isArray(saved.increments) && saved.increments.length ? saved.increments : null
+const cutIncrements =
+  backlog && Array.isArray(backlog.increments) && backlog.increments.length
+    ? backlog.increments
+    : null
+const increments =
+  (cutWasReplayed ? savedIncrements || cutIncrements : cutIncrements || savedIncrements) || []
+```
+
+In `workflows/agile-loop.js`, the same two edits: the `cutWasReplayed` line
+immediately above line 567 (`const backlog = await step('decompose', ...)`), and
+lines 584-590 replaced by the same block with the last binding written as `let
+increments = ...` — line 781 assigns to it after a re-cut and `const` would
+throw.
+
+Nothing else moves in either file. `asksTheHuman('decompose', backlog)` keeps
+its position between the two, `step()`, `forgetSteps()`, `carriedQuestions` and
+the re-cut at agile-loop's lines 780-782 are untouched, and no prompt changes.
+
+**Why this is the whole fix.** There are exactly three ways a run reaches the
+`increments` binding, and the condition sorts them:
+
+1. No state, or state with no increments — `savedIncrements` is null, the cut
+   wins. Unchanged from today.
+2. State whose `run.steps` records `decompose` — `cutWasReplayed` is true, the
+   file wins. Unchanged from today, and it must stay that way: `close` sheds a
+   run step's `return` but keeps its label, so a finished run replays
+   `decompose` as `undefined` and the file is the only place the closed statuses
+   live. This is what keeps `w2`, `w3` and `w9` green.
+3. State whose `decompose` is carried as a question, or missing altogether —
+   `cutWasReplayed` is false, the fresh return wins. This is the finding.
+
+Case 3 has two routes into it and the condition covers both by construction:
+`recorded.has('decompose')` is false whether the label went into
+`carriedQuestions` (the planner asked, `loop.js` lines 481-482) or was never
+written at all (a session that died between the planner's `init` and its
+`record`). Keying the fix on `carriedQuestions.has('decompose')` instead would
+repair the first route and leave the second, which is why the test plan below
+pins both.
+
+**Why no status is lost when the fresh return wins.** In case 3 no increment can
+have been worked to a close in an earlier session: a `decompose` that asked a
+question ends its run before any increment is worked (`loop.js` line 549,
+`agile-loop.js` line 627 both gate on `blockedOnHuman.length`), and a
+`decompose` that never recorded never returned, so nothing downstream of it ran.
+And `backlog.mjs`'s `init` (lines 103-119) merges: an increment the fresh cut
+keeps arrives with the steps it already recorded, so the run replays them from
+`recorded` exactly as it should. An increment the fresh cut drops takes its
+labels out of use, and the entries left in `recorded` for it are simply never
+looked up.
+
+**The empty-return fallback is deliberate.** `cutIncrements || savedIncrements`
+in the dispatched branch means a Decompose that returns no increments at all
+falls back to the snapshot rather than to `[]`. Without it, a malformed return
+would give `loop.js` an empty backlog, no `todo` increment, and a run that logs
+"Every increment in the run state is closed" and reports itself accepted — a
+worse failure than working a stale cut. The same fallback in the other direction
+(`savedIncrements || cutIncrements`) is today's behaviour written out.
+
+Rejected: making `step()` report whether it dispatched, by returning a pair or
+by setting a flag. It would carry the fact to every call site instead of the one
+that needs it, and every other call site would have to be re-read to be sure the
+new shape did not break it. `recorded.has(label)` read one line above the call
+is local, and the comment says why the order matters.
+
+Rejected: dropping the snapshot branch entirely and always preferring the
+Decompose return. It reads simplest and it is wrong for case 2: the replayed
+return is the opening cut with every increment still `todo`, so a resumed run
+would re-work increments the file records as closed — the bug round 1 fixed by
+introducing this expression in the first place.
+
+Rejected: having the script re-read `backlog.json` after the Decompose step,
+through a second `load-state` dispatch. It would be authoritative rather than
+inferred, and it costs a dispatch on every run to repair a case that arises on
+some. The planner's return and the file it just wrote are the same cut.
+
+Rejected: keying on `carriedQuestions.has('decompose')`. It repairs the answered
+question and leaves the crashed session, and the two are one bug.
+
+### Module map
+
+| Path | What it holds | What changes this round |
+| --- | --- | --- |
+| `workflows/loop.js` | The plain chain, 726 lines. `recorded`/`carriedQuestions` load at l. 475-492, `step()` at l. 498-507, `asksTheHuman` at l. 512-520, the Decompose step at l. 522-538, the `increments` binding at l. 540-546, `task` at l. 548-552, the Close block at l. 652-683, the return at l. 725. | One `cutWasReplayed` line above l. 522; the `increments` binding at l. 540-546 replaced. Nothing else. |
+| `workflows/agile-loop.js` | The incremental chain, 863 lines. Same load at l. 508-525, `step()` at l. 531-540, `forgetSteps()` at l. 545-552, `asksTheHuman` at l. 558-565, the Decompose step at l. 567-582, the `increments` binding at l. 584-590, `scope()` at l. 457-474, the increment loop at l. 628-800, the re-cut at l. 780-791, the return at l. 851-862. | One `cutWasReplayed` line above l. 567; the `increments` binding at l. 584-590 replaced, with `let`. Nothing else. |
+| `test-repo.sh` | The repository's own suite, 50 cases. Driver heredoc l. 280-677: markers l. 304-318, fixtures l. 320-435, `contextFor` l. 437-478, `returnFor` l. 482-502, mode branches l. 530-665. `run_driver` at l. 679-687, the two-workflow loop at l. 693-706, the `w12` line at l. 710. | Three markers, one fixture function, one return fixture, two `contextFor` arms, one shared mode branch, two `run_driver` lines inside the loop. |
+| `skills/agent-brief/assets/backlog.mjs`, the agent pages, `rulebook.md`, `README.md`, `skills/*/SKILL.md` | — | Unchanged. Do not touch them. |
+
+One standing constraint for whoever edits the workflow scripts: `test-repo.sh`
+lines 136-159 grep `workflows/*.js` for the word `handoff` in any spelling and
+for the file names `researcher.md`, `test-author.md`, `implementer.md`,
+`reviewer.md`, `planner.md` and `backlog.md`. Do not write any of them into a
+comment or a prompt. The comments this round proposes are clear of both.
+
+### Environment
+
+- Repository root `/home/user/uroboros`, branch
+  `claude/structured-prompts-issues-dphlv9`, working tree clean.
+- `node` is v22.22.2 on `PATH`; `bash`, `git` and `mktemp` are present.
+- `test.sh` and `test-repo.sh` are **not executable** in this checkout (mode
+  `-rw-r--r--`), so they are invoked as `bash test.sh` and `bash test-repo.sh`.
+  Do not `chmod` them.
+- There is no linter and no formatter in this repository. Nothing to run.
+- The `tools/` suites `test.sh` runs are zero-install; no command below needs
+  network access.
+
+### Test plan
+
+Tests are needed, and the finding needs a failing test first. No fixture has
+ever put increments in `backlog.json` while leaving `decompose` unrecorded, so
+the branch the finding is about has never been executed by the suite in either
+script. Two new driver modes, `w13` and `w14`, each run against **both**
+workflow scripts — the expression is duplicated in the two files, and a fix
+applied to one only has to fail.
+
+#### What proves the finding
+
+**`w13` — the answered question.** The state a run leaves behind when its
+opening cut ended with a question: `increments` holds `i1` and `i2`, and
+`run.steps` records `decompose` with the question that stopped the run. The
+resumed run must dispatch Decompose again (round 2's fix, already green), and
+must then work the cut that Decompose returns — a single increment `i3` — and
+not the `i1`/`i2` the file still held when the run started.
+
+**`w14` — the session that died between `init` and `record`.** The same
+increments in the file, `run.steps` empty, no question anywhere. The same fresh
+cut, and the same expectation. This mode exists to rule out the wrong fix that
+keys on the carried question: `w13` alone passes with it, `w14` does not.
+
+Left untested, deliberately, each with the reason:
+
+- A re-dispatched Decompose that returns **no** increments falling back to the
+  snapshot. It is a defensive fallback against a malformed return, not a path
+  the workflow produces; a mode for it would pin a schema violation.
+- The replayed-cut branch (`decompose` recorded, the file authoritative). `w2`,
+  `w3` and `w9` already run it in both scripts, and the fix must leave all three
+  green — that is this round's regression check and it costs nothing new.
+- An increment kept across the re-cut replaying the steps it recorded before.
+  That is `backlog.mjs`'s `init` merge, pinned by the recorder suite `test.sh`
+  runs, and the workflow does nothing of its own for it.
+- The plain loop's Close step and the incremental loop's re-cut, both settled in
+  round 3 by `w11` and `w12`, which stay as they are.
+
+#### The cases
+
+All work this round is in one test file, `test-repo.sh`. The command that runs
+just it is `bash test-repo.sh`. Its conventions, unchanged: a driver case is one
+`run_driver "$wf" <mode> "<description>"` call whose description opens with
+`$wf_name` when it runs inside the two-workflow loop; inside the heredoc,
+assertions push a sentence onto `failures` via `assertTrue` /
+`assertEqualArrays` and the process exits 1 with them on stderr; `agent`, `log`
+and `phase` are the only stubs, `logs` captures every `log` call, `calls` holds
+every dispatch as `{ label, agentType, prompt }`, and the whole workflow script
+is run through `new AsyncFunction`. Every new fixture carries a comment naming
+the round and the finding it exists for, as the round-1, round-2 and round-3
+fixtures do. Assertion messages that contain an apostrophe are written in double
+quotes, the idiom the file already uses.
+
+**1. Shared driver changes** (no case of their own).
+
+- `DISJOINT_MARKERS` (l. 307-318) gains three entries:
+  `'MARKER-STALE-CUT'`, `'MARKER-FRESH-CUT'`, `'MARKER-CUT-QUESTION'`. They pass
+  the disjointness guard: no existing marker contains any of them and none
+  contains another (`MARKER-CUT-QUESTION` shares no whole marker with
+  `MARKER-HUMAN-QUESTION`, `MARKER-OPEN-QUESTION` or `MARKER-CLOSE-QUESTION`).
+
+- A new fixture, after `doneBacklog()` (l. 435):
+
+  ```js
+  // Round 4, finding 1's fixtures: a state file that holds increments while
+  // its decompose step is not replayable, which is the only case in which the
+  // Decompose is dispatched again with a populated backlog behind it.
+  // `carried` true is the run whose opening cut ended with a question for the
+  // human — the increments are in the file and the step is recorded with the
+  // question. `carried` false is the session that died between the planner's
+  // `init` and its `record` — the same increments, and no decompose step at
+  // all. Both make the resumed run work Decompose again, and both used to
+  // throw away the cut it returned.
+  function recutBacklog(carried) {
+    return {
+      version: 1,
+      issue: 'docs/issues/x',
+      workflow: isAgile ? 'agile-loop' : 'loop',
+      increments: [
+        { id: 'i1', title: 'MARKER-STALE-CUT', goal: 'Deliver i1.', criteria: ['does i1'], status: 'todo', note: '', steps: [] },
+        { id: 'i2', title: 'Deliver i2', goal: 'Deliver i2.', criteria: ['does i2'], status: 'todo', note: '', steps: [] },
+      ],
+      run: {
+        steps: carried
+          ? [{
+              label: 'decompose',
+              at: '2026-08-07T00:00:00.000Z',
+              return: Object.assign({}, decomposeReturnTwo, { questions: ['MARKER-CUT-QUESTION'] }),
+            }]
+          : [],
+      },
+    };
+  }
+
+  // The cut the human's answer bought: one increment under an id the stale
+  // file does not hold, so a run that works the superseded cut instead shows
+  // it in the labels it dispatches as well as in the prompts it sends.
+  const decomposeReturnRecut = {
+    increments: [{ id: 'i3', title: 'MARKER-FRESH-CUT', goal: 'Deliver i3.', criteria: ['does i3'], status: 'todo', note: '' }],
+    questions: [],
+    summary: 'backlog summary',
+  };
+  ```
+
+- `contextFor` (l. 437-478) gains two arms, before `default`:
+
+  ```js
+  case 'w13':
+    return { stateReturn: { exists: true, backlogJson: JSON.stringify(recutBacklog(true), null, 2) + '\n', summary: '' }, decomposeReturn: decomposeReturnRecut, researchReturn: planReturn };
+  case 'w14':
+    return { stateReturn: { exists: true, backlogJson: JSON.stringify(recutBacklog(false), null, 2) + '\n', summary: '' }, decomposeReturn: decomposeReturnRecut, researchReturn: planReturn };
+  ```
+
+  `returnFor` needs no change: every label these two modes dispatch is already
+  covered by it, and the close/replan label falls through to the fixed
+  `{ summary: 'closed' }` because neither mode sets `closeFor`.
+
+**2. `w13` and `w14` on both workflows** — one shared mode branch, inserted
+after the `w12` branch (l. 644-662) and before the closing `} else {`:
+
+```js
+  } else if (mode === 'w13' || mode === 'w14') {
+    // Round 4, finding 1: both scripts preferred the increments of the state
+    // snapshot they read at startup over the ones Decompose returned,
+    // unconditionally — including when Decompose was dispatched in this
+    // session rather than replayed. So a planner that read the human's answer,
+    // re-cut and rewrote backlog.json had its new cut thrown away, and the run
+    // worked the cut the answer had just replaced.
+    const closeLabel = isAgile ? 'replan:i3' : 'close:i3';
+    assertEqualArrays(labels,
+      ['load-state', 'decompose', 'research:i3.0', 'tests:i3.0', 'implement:i3.0', 'review:i3.0', closeLabel, 'publish'],
+      'the run worked the stale cut from the state file instead of the cut the re-dispatched Decompose returned');
+    assertTrue(!calls.some((c) => c.prompt.includes('MARKER-STALE-CUT')),
+      'a prompt of this run carries the superseded increment the state file still held');
+    const closeCall = calls.find((c) => c.label === closeLabel);
+    assertTrue(!!closeCall && closeCall.prompt.includes('MARKER-FRESH-CUT'),
+      'the closing planner was not told about the increment of the fresh cut');
+    assertTrue(!!result && Array.isArray(result.blockedOnHuman) && result.blockedOnHuman.length === 0,
+      'the run ended blocked on the human instead of working the fresh cut to a close');
+    if (mode === 'w13') {
+      const decomposeCall = calls.find((c) => c.label === 'decompose');
+      assertTrue(!!decomposeCall && decomposeCall.prompt.includes('MARKER-CUT-QUESTION'),
+        'the Decompose worked again does not carry the question that ended the last run');
+    }
+  } else {
+```
+
+The `MARKER-FRESH-CUT` assertion is what carries the plain loop: `loop.js` puts
+no increment title into the researcher's prompt, and its Close prompt is the one
+place the increment it worked is named. On `agile-loop.js` the same title also
+reaches every `scope()` block, which the same assertion covers.
+
+**3. Two `run_driver` lines**, inside the two-workflow loop (l. 693-706), after
+the `w11` line:
+
+```
+  run_driver "$wf" w13 "$wf_name: a Decompose worked again after the human's answer has its new cut worked, not the one the state file still held"
+  run_driver "$wf" w14 "$wf_name: a Decompose worked again after a session died before recording it has its new cut worked"
+```
+
+Both run on both scripts: the expression is duplicated in the two files.
+
+Nothing else in `test-repo.sh` changes. No case is written against
+`skills/agent-brief/assets/`, no grep case is added or removed, and no existing
+mode, fixture, marker or assertion is edited beyond the insertions named above.
+
+#### What counts as done
+
+Run these two, from the repository root, and nothing else:
+
+```
+bash test-repo.sh
+bash test.sh
+```
+
+`test-repo.sh` holds every case of this round and runs in seconds, so it is
+listed on its own for a diagnosable exit code; `test.sh` is the criterion the
+issue states in as many words, and it is the only run that reaches the recorder
+suite and the three `tools/` suites this round's edits cannot touch. Expect
+`test-repo.sh` to report **54 cases** when this round is done — 50 today, plus
+`w13` and `w14` on two workflows each.
+
+#### What is already red
+
+I ran neither command and state this from reading alone. Before the
+implementer's change, `w13` and `w14` are red on **both** workflow scripts:
+`loop.js` works `i1` from the stale file, so its labels are the `i1` sequence
+and its `close:i1` prompt carries `MARKER-STALE-CUT`; `agile-loop.js` works `i1`
+and then `i2`, so its label sequence is longer still. In each of the four cases
+the label assertion, the stale-marker assertion and the fresh-title assertion
+fail together, and the run exits 1. Everything else in both commands was exit 0
+in the reviewer's round-3 run — `bash test-repo.sh`, 50 cases, and `bash
+test.sh`, all 6 suites — and nothing planned here touches it. Whoever runs the
+list first reports what it says.
