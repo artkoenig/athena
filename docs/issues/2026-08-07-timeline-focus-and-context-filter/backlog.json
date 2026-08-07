@@ -19,336 +19,9 @@
         "An open dropdown survives a repaint: a live refresh that re-renders `#lane-panel` does not snap it shut, the same way `state.expanded` keeps expanded blocks open today.",
         "`npm --prefix tools/argus-ui test` passes after this increment, and each criterion above has at least one test that goes red when its behaviour is broken or removed."
       ],
-      "status": "todo",
-      "note": "",
-      "steps": [
-        {
-          "label": "research:filter-core.0",
-          "at": "2026-08-07T15:08:18.285Z",
-          "return": {
-            "needsTests": true,
-            "summary": "The context panel head gains a <details> dropdown, built by pure functions in public/context.js from the record the panel already holds, with the page-wide hidden set and the dropdown's open state wired in app.js.",
-            "plan": "Build a block filter for the context panel. All derivation and markup goes into `public/context.js` as pure functions; `public/app.js` gains two state fields and three click/change branches; `public/styles.css` gains the dropdown's looks. No new file, no dependency, no change to `src/`, `index.html`, `timeline.js`, `tools.js` or `format.js`.\n\nSCOPE FENCE. Two things this increment must NOT do, because a later increment owns them: the head line stays exactly as it is today (`fmtClock · model · N chars · N blocks`, `data-chars` and `data-blocks` still the totals of the whole record — do not make them visible counts, do not add visible-count attributes), and no placeholder is added for the all-hidden case (an all-hidden panel simply renders an empty `<div class=\"ctx-blocks\"></div>`, still `data-state=\"ready\"`). Do not touch the tabs, `renderDetailViews`, `tools.js` or `renderToolPanel`.\n\nENTRY IDENTITY. Every filterable thing is an entry with a namespaced id: a block kind is `kind:<kind>` (`kind:assistant`, `kind:system`, `kind:tool_result`, `kind:raw`, …) and a top-level body field is `field:<key>` (`field:tools`, `field:max_tokens`). The namespace is load-bearing: a body may carry a top-level key named `user` or `system`, and a bare-name id would make hiding the field hide the messages. The id is never shown; the entry is labelled with the bare kind name or the bare field key, verbatim, so `system` and `tools` read as one list.\n\nNEW EXPORTS IN public/context.js (all pure — no `document`, no `fetch`, no `location`):\n1. `export function entryIdOf(block)` — `block.kind === 'field' ? 'field:' + block.label : 'kind:' + block.kind`.\n2. `export function contextFilterEntries(blocks)` — folds a block list into `[{ id, group, label, count }]`. `group` is `'blocks'` for every kind except `field`, `'fields'` for `field` blocks. `count` is how many blocks sit behind the entry. The result is the blocks group first then the fields group, each sorted by `label` with a codepoint comparison (`a.label < b.label ? -1 : a.label > b.label ? 1 : 0`) — not `localeCompare`, whose order depends on the environment.\n3. `export function visibleBlocks(blocks, hidden = [])` — the blocks whose `entryIdOf` is not in `hidden`. `hidden` may be an array or a Set (the same freedom `expanded` already has); neither argument is mutated; each surviving block keeps its own `index`, so the expansion keys `${item.seq}:${block.index}` stay stable when the list is filtered.\n4. `export function contextEntryIds(item)` — the entry ids of the record the panel holds: `contextFilterEntries(contextBlocks(item?.body ?? '').blocks).map((entry) => entry.id)`, `[]` for no record. This is what the *all off* wiring needs and is the reason it never has to re-derive anything in `app.js`.\n5. `export function hiddenAfterAll(hidden, ids, on)` — `on ? new Set() : new Set([...hidden, ...ids])`. *All on* clears the whole hidden set (\"makes every entry visible\", unqualified); *all off* adds only what the shown request contains, which is what leaves an entry that was absent at the time visible when it later appears. Neither argument is mutated.\n6. `export function renderContextFilter({ entries = [], hidden = [], open = false })` — the dropdown's markup, `''` when `entries` is empty.\n\nTHE MARKUP, exactly:\n```\n<details class=\"ctx-filter\"${open ? ' open' : ''}>\n  <summary class=\"ctx-filter-summary\" data-ctx-filter=\"toggle\">filter</summary>\n  <div class=\"ctx-filter-menu\">\n    <div class=\"ctx-filter-actions\">\n      <button type=\"button\" class=\"ctx-filter-all\" data-ctx-all=\"on\">all on</button>\n      <button type=\"button\" class=\"ctx-filter-all\" data-ctx-all=\"off\">all off</button>\n    </div>\n    <div class=\"ctx-filter-group\" data-group=\"blocks\"><span class=\"ctx-filter-title\">Blocks</span>…entries…</div>\n    <div class=\"ctx-filter-group\" data-group=\"fields\"><span class=\"ctx-filter-title\">Fields</span>…entries…</div>\n  </div>\n</details>\n```\nand one entry:\n```\n<label class=\"ctx-filter-entry\"><input type=\"checkbox\" data-ctx-entry=\"kind:tool_result\"${isHidden ? '' : ' checked'}><span class=\"ctx-filter-name\">tool_result</span> <span class=\"ctx-filter-count\" data-count=\"12\">12</span></label>\n```\nRules that go with it: a group with no entries is left out whole, header and all; `data-ctx-entry` sits on the `<input>` and never on the `<label>`; the count is the plain integer, never `fmtNum` (a count of 1200 must not read `1.2k`); one literal space between the name span and the count span so the entry reads `tool_result 12`; every id, label and count goes through `esc`; the two buttons sit in the menu body, outside the `<summary>`, or clicking one would shut the dropdown.\n\nTHREE MARKUP TRAPS. (a) No `data-lane` attribute anywhere in the filter — the page binds `[data-lane]` to lane rows. (b) The `<summary>` carries no `data-block` — the page binds `summary[data-block]` to block expansion. (c) An existing case (`test/context.test.mjs`, 'every block is collapsed until it is asked for') asserts the default panel markup contains no ` open` substring at all, so the filter must render closed by default and no label, title or button text may contain the word \"open\" after a space.\n\nCHANGES TO renderContextPanel. Its input grows two optional keys, `hidden = []` and `filterOpen = false`. In the ready branch: compute `const { chars, blocks } = contextBlocks(item.body)` as today, build `const entries = contextFilterEntries(blocks)`, keep the head line and the `context-meta` data attributes on the *unfiltered* `chars` and `blocks.length`, append `renderContextFilter({ entries, hidden, open: filterOpen })` inside `<div class=\"context-head\">` after the `context-meta` span, and map the rows over `visibleBlocks(blocks, hidden)` instead of `blocks`. The empty and pending branches are untouched: with no record there is nothing to list, so no filter is drawn there.\n\nCHANGES TO lanePanelInput. It takes and passes through `hidden = []` and `filterOpen = false`, so `renderContextPanel`'s whole input still comes from one builder — the existing page test pins that.\n\nCHANGES TO public/app.js.\n- Two state fields in the `state` literal, next to `expanded`: `contextHidden: new Set()` — the entries the reader has hidden — and `contextFilterOpen: false`. Comment them as page-wide and lasting until reload: hiding a kind is a preference, not a position, which is why neither is reset where `expanded` is. Nothing is written to `localStorage`.\n- `selectSession()` must NOT reset either field, and the `[data-lane]` click branch must NOT reset either field. This is the whole of \"survives a lane change, a scrub, a live refresh and a session change\".\n- `renderLanePanel()` passes `hidden: state.contextHidden, filterOpen: state.contextFilterOpen` into the `lanePanelInput({ … })` call.\n- Import `contextEntryIds` and `hiddenAfterAll` alongside the existing three names from `./context.js`.\n- In the `click` delegate on `#detail`, immediately after the existing `summary[data-block]` branch and before the `[data-tab]` branch, two new branches: `event.target.closest('summary[data-ctx-filter]')` flips `state.contextFilterOpen = !state.contextFilterOpen` and returns without repainting (the browser has already opened or shut the `<details>`; this only remembers which, exactly as the block-expansion branch does); `event.target.closest('[data-ctx-all]')` sets `state.contextHidden = hiddenAfterAll(state.contextHidden, contextEntryIds(state.laneContext.item), all.dataset.ctxAll === 'on')` then calls `renderLanePanel()` and returns.\n- In the existing `change` delegate on `#detail`, a branch for `event.target.closest('input[data-ctx-entry]')`: add the id to `state.contextHidden` if absent, delete it if present, then `renderLanePanel()`.\n- No filter branch may call `loadLaneContext()`, `scheduleLaneContext()`, `api()` or `renderDetail()`: the filter acts on the record already held, and `/api/content/at` is not called again.\n\nWHY `change` FOR THE CHECKBOXES AND `click` FOR THE REST. A wrapping `<label>` fires two click events for one press — one with the label as target, one retargeted at the control — so a click-based toggle is a hazard the moment the marker moves onto the label, while `change` fires exactly once whichever was pressed. It also matches the existing `event-errors` checkbox, which is already handled in the `change` delegate. Rejected: putting all three branches in the `click` delegate (the double-fire hazard above); a `toggle` listener for the dropdown's open state (`toggle` does not bubble, so it cannot be delegated on `#detail`).\n\nOTHER REJECTED OPTIONS. Bare entry ids (`system`, `tools`) — a top-level field named like a kind would collide. Re-deriving the entry ids in `app.js` from `contextBlocks` — `contextEntryIds` keeps the derivation in the pure module. Holding the visible set instead of the hidden set — a new kind appearing in a later request would arrive hidden, which is the opposite of the criterion. Reading the ids off the DOM for *all off* — needless, since the record is already in state. Persisting the selection — ruled out by the issue.\n\nSTYLES. Add a `.ctx-filter` block to the context section of `public/styles.css` (it starts at the `/* ---- context ---- */` rule around line 1025, `.context-head` is a `display: flex` row with `justify-content: space-between`). Give `.ctx-filter` `position: relative` and `.ctx-filter-menu` `position: absolute` with a background, a border and a `z-index`, so an open dropdown floats over the block list instead of pushing it down — the reason the human chose a dropdown over a chip row. Hide the default marker on `.ctx-filter > summary` the way `.ctx-block > summary::-webkit-details-marker` does. No test reads the stylesheet; keep it small.",
-            "moduleMap": "/home/user/uroboros/tools/argus-ui/public/context.js — the panel's pure half: `contextBlocks(body)` (blocks of one request body, `kind` one of assistant/other/raw/system/thinking/tool_result/tool_use/user/field, `field` blocks labelled with the body key), `laneContentQuery`, `fetchLaneContext`, `laneContextInput`, `lanePanelInput` (line 227, builds the panel's whole input), `renderContextPanel` (line 241, head at line 270 and rows at line 276). Gains `entryIdOf`, `contextFilterEntries`, `visibleBlocks`, `contextEntryIds`, `hiddenAfterAll`, `renderContextFilter`, and two new keys on `renderContextPanel`/`lanePanelInput`.\n/home/user/uroboros/tools/argus-ui/public/app.js — the page. `state` literal at line 27 (`expanded: new Set()` at line 52); `renderDetail()` writes `#lane-panel` and calls `renderLanePanel()` at line 209; `renderLanePanel()` at line 936 sets `container.innerHTML` from `renderContextPanel(lanePanelInput({…}))` plus `renderToolPanel(…)`; `selectSession()` at line 1033 resets `expanded`; `wireEvents()` at line 1135 holds the `click` delegate on `#detail` (lane row at 1156, `summary[data-block]` at 1165) and the `change` delegate at line 1201.\n/home/user/uroboros/tools/argus-ui/public/styles.css — the stylesheet, served as written; the context section starts at line 1025.\n/home/user/uroboros/tools/argus-ui/public/format.js — `esc`, `fmtNum`, `fmtClock`, `previewOf`, `shortId`, `PREVIEW_CHARS`. Unchanged; `esc` is the only one the filter needs.\n/home/user/uroboros/tools/argus-ui/test/context.test.mjs — 778 lines, `node:test`; fixtures `requestBody`/`item`/`lane`/`agentLane`/`view`/`recorder`/`blockChunks` at lines 17-75. Gains the derivation and markup cases.\n/home/user/uroboros/tools/argus-ui/test/page.test.mjs — 632 lines, source-text pins over `public/`; helpers `functionSource`, `detailListener`, `callArguments` at lines 19-51. Gains the wiring cases.\n/home/user/uroboros/tools/argus-ui/test/independence.test.mjs — 81 lines, project-wide rules over every file. Gains the browser-global purity guard.",
-            "environment": "Node v22.22.2 is installed; the project needs ≥20.11 and has zero dependencies, so no `npm install` is needed or wanted. Every command below runs from the repository root `/home/user/uroboros`.\n\n- Whole suite (the check): `npm --prefix tools/argus-ui test` — runs `node --test \"test/*.test.mjs\"` inside `tools/argus-ui`.\n- One file: `node --test tools/argus-ui/test/context.test.mjs`, `node --test tools/argus-ui/test/page.test.mjs`, `node --test tools/argus-ui/test/independence.test.mjs`. The test files import `../public/*.js` through relative URLs, so running them from the root works.\n\nThere is no linter, no formatter and no type checker in this project, and no build step: `public/` is served as written.",
-            "testPlan": "Tests are needed. Three files get new cases: `tools/argus-ui/test/context.test.mjs` for the pure derivation and markup, `tools/argus-ui/test/page.test.mjs` for the wiring, `tools/argus-ui/test/independence.test.mjs` for the purity contract. Add no new test file. I ran nothing: the suite is green on this commit as the last review left it, so every new case below is red until the increment is implemented, and no existing case is expected to be red.\n\n=== FILE A: tools/argus-ui/test/context.test.mjs (framework: node:test + node:assert/strict) ===\nConventions of this file, follow them: `import test from 'node:test'; import assert from 'node:assert/strict';` at the top, imports from `'../public/context.js'` and `'../public/format.js'` — add the new names to the existing import list at lines 4-11. Build every input from the three factories already there: `requestBody(over)` (a JSON body with model/messages/system/tools/max_tokens/stream), `item(over)` (`seq: 12`, `timeMs: 4000`, `model: 'claude-sonnet-5'`, `body: requestBody()`), `lane(over)` (`key: 'main'`, `label: 'main session'`); the helper `blockChunks(html)` at line 75 returns each rendered `<details class=\"ctx-block\">…</details>` chunk. Test names are lowercase sentences describing the behaviour; every assertion carries a message saying what breaks if it fails; a run of related cases sits under a `// Increment 1 — …` comment. Put the new cases in one section at the end of the file headed `// Increment 1 — the context panel's block filter: what the request contains, and what the reader hid.`\n\nThe fixture's own numbers, which several cases below lean on: `contextBlocks(requestBody()).blocks` has 12 blocks — kinds system, system, user, system, thinking, assistant, tool_use, tool_result, field, field, field, field — and its entries are, in order, blocks group `assistant 1`, `system 3`, `thinking 1`, `tool_result 1`, `tool_use 1`, `user 1`, then fields group `max_tokens 1`, `model 1`, `stream 1`, `tools 1`. The body writes its fields in the order model, tools, max_tokens, stream, so an alphabetical result is proof that the sort ran.\n\nA1 — criterion: the list names every kind and every field the request contains, grouped, sorted, counted. Input `contextFilterEntries(contextBlocks(requestBody()).blocks)`. Expect a `deepEqual` against the full 10-entry array above, each entry `{ id, group, label, count }` with ids `kind:assistant`, `kind:system`, `kind:thinking`, `kind:tool_result`, `kind:tool_use`, `kind:user`, `field:max_tokens`, `field:model`, `field:stream`, `field:tools`, groups `'blocks'` then `'fields'`, `count` 3 for `kind:system` and 1 for the rest. One `deepEqual` proves membership, grouping, order and the counts at once.\n\nA2 — criterion: what the request does not contain is not listed. Input `contextFilterEntries(contextBlocks(requestBody({ messages: [{ role: 'user', content: 'hi' }], metadata: { user_id: 'u' } })).blocks)`. Expect: no entry whose id is `kind:thinking`, `kind:tool_use` or `kind:tool_result`; an entry `{ id: 'field:metadata', group: 'fields', label: 'metadata', count: 1 }` present; `kind:user` present with count 1.\n\nA3 — edge, the unparsable body: `contextFilterEntries(contextBlocks('{\"messages\":[').blocks)` deep-equals `[{ id: 'kind:raw', group: 'blocks', label: 'raw', count: 1 }]` — one entry, and no fields group at all.\n\nA4 — edge, a field named like a kind cannot collide with it. Input `contextBlocks(requestBody({ user: 'an account id' }))`. Expect entries to hold both `kind:user` (group blocks) and `field:user` (group fields); then `visibleBlocks(blocks, ['field:user'])` still holds the user *message* block (the one whose `text` is `'ping'`) and no longer holds the field block whose `label` is `'user'`.\n\nA5 — criterion: hiding removes exactly that entry's blocks. Input `blocks = contextBlocks(requestBody()).blocks`. Expect `visibleBlocks(blocks, ['kind:system'])` to have 9 entries, none of kind `system`; `visibleBlocks(blocks, [])` to hold all 12; the surviving blocks' `index` values to be the original ones (so the array is non-contiguous — assert the first survivor's `index` is 2 for the `kind:system` case), which is what keeps the expansion keys stable. Also assert the input `blocks` array still has 12 entries and a `hidden` Set passed in is unchanged in size — neither input is mutated.\n\nA6 — criterion: all off hides what is shown and keeps what was already hidden; all on clears everything. Input `const before = new Set(['kind:thinking'])` and `const ids = contextEntryIds(item({ body: requestBody({ messages: [{ role: 'user', content: 'hi' }] }) }))` (a request with no thinking). Expect `hiddenAfterAll(before, ids, false)` to be a Set holding `kind:thinking` plus every id in `ids`; `hiddenAfterAll(before, ids, true)` to be an empty Set; `before.size` still 1 after both calls.\n\nA7 — criterion: the ids of the held record, and nothing without one. `contextEntryIds(item())` deep-equals the 10 ids of A1 in the same order; `contextEntryIds(null)` deep-equals `[]`; `contextEntryIds({})` deep-equals `[]`.\n\nA8 — criterion: the dropdown sits in the head, one checkbox per entry, checked, counted, in two labelled groups with two buttons. Input `renderContextPanel({ lane: lane(), item: item() })`. Expect: exactly one `<details class=\"ctx-filter\"`; its position in the string before that of `<div class=\"ctx-blocks\">` (the head carries it); exactly 10 `data-ctx-entry=\"` occurrences; the string contains `data-ctx-entry=\"kind:tool_result\"`, `data-ctx-entry=\"field:tools\"`, `>tool_result</span> <span class=\"ctx-filter-count\" data-count=\"1\">1<`-style text such that the readable run `tool_result</span> <span class=\"ctx-filter-count\" data-count=\"1\">1` proves name and count sit side by side (assert with a regex over name then count, and separately that `data-count=\"3\"` belongs to the `kind:system` entry); the group titles `>Blocks<` and `>Fields<` both present with the index of `Blocks` lower than that of `Fields`; `data-group=\"blocks\"` and `data-group=\"fields\"` present; `data-ctx-all=\"on\"` and `data-ctx-all=\"off\"` present with the visible texts `all on` and `all off`; every one of the 10 inputs carries ` checked` (count the occurrences of `type=\"checkbox\"` and of ` checked>` and assert both are 10).\n\nA9 — criterion: unchecking removes the blocks below and only unchecks that box. Input `renderContextPanel({ lane: lane(), item: item(), hidden: ['kind:tool_result'] })`. Expect: `blockChunks(html)` has 11 chunks and none matches `data-kind=\"tool_result\"`; the markup holds `data-ctx-entry=\"kind:tool_result\"` *not* followed by ` checked` (match `/data-ctx-entry=\"kind:tool_result\"(?! checked)/`); 9 of the 10 boxes still carry ` checked`; and the head still reads the totals — `data-blocks=\"12\"` and `data-chars=\"<requestBody().length>\"` — which is the pin that stops the filter from quietly rewriting numbers a later increment owns. Then assert `renderContextPanel({ lane: lane(), item: item(), hidden: [] })` equals `renderContextPanel({ lane: lane(), item: item() })`, so checking it back restores the list byte for byte.\n\nA10 — criterion: a field entry hides its field only. Input `hidden: ['field:tools']`. Expect: `blockChunks` has 11 chunks; no chunk's label is `tools`; a chunk labelled `model` is still there; the three `data-kind=\"system\"` chunks are still there.\n\nA11 — edge, everything hidden. Input `hidden: contextEntryIds(item())` (all 10). Expect: `blockChunks(html)` is empty; the markup still matches `data-state=\"ready\"`; all 10 `data-ctx-entry` boxes are still listed and none carries ` checked`, so the reader can turn them back on. Do not assert any placeholder text — that is a later increment's criterion.\n\nA12 — criterion: an entry hidden but absent from this request changes nothing and is not listed. Let `body = requestBody({ messages: [{ role: 'user', content: 'hi' }] })` (no thinking block). Expect `renderContextPanel({ lane: lane(), item: item({ body }), hidden: ['kind:thinking'] })` to equal `renderContextPanel({ lane: lane(), item: item({ body }) })`, and neither to contain `kind:thinking`. Pair it with the memory half: with the full `requestBody()` fixture and the same `hidden`, the `kind:thinking` box is present and unchecked and no `data-kind=\"thinking\"` chunk is rendered — one hidden state, remembered across the two requests.\n\nA13 — convention, a caller may pass an array or a Set: `renderContextPanel({ lane: lane(), item: item(), hidden: ['kind:user'] })` equals the same call with `hidden: new Set(['kind:user'])`, byte for byte (mirrors the existing `expanded` case at line 339).\n\nA14 — criterion: the dropdown opens only when asked, and stays open across a repaint. Expect `renderContextPanel({ lane: lane(), item: item(), filterOpen: true })` to match `/<details class=\"ctx-filter\" open>/`, and the same call without `filterOpen` to match `/<details class=\"ctx-filter\">/` with no ` open` in that tag. Since the markup is a pure function of the flag, two renders with `filterOpen: true` are equal — that equality is what \"a repaint does not snap it shut\" means on this side; the state that feeds the flag is pinned in file B.\n\nA15 — criterion: the filter catches no click meant for a lane or a block. Take `const filter = renderContextPanel({ lane: lane(), item: item(), filterOpen: true }).match(/<details class=\"ctx-filter\"[\\s\\S]*?<\\/details>/)[0]` (no nested `<details>` lives inside it, so the lazy match is exactly the filter). Expect `filter` not to contain `data-lane=` and not to contain `data-block=`; and the `<summary…>` tag inside it to carry neither. Assert too that the whole panel markup still contains no `data-lane=`.\n\nA16 — edge, no entries at all: `renderContextPanel({ lane: lane(), item: item({ body: '{\"messages\":[]}' }) })` renders no `ctx-filter` and does not throw — with nothing in the request there is nothing to filter.\n\nA17 — criterion: the panel's whole input still comes from one builder. `lanePanelInput({ view: view(), key: 'main', held: { key: 'main', item: item() }, expanded: [], hidden: ['kind:user'], filterOpen: true })` returns an object whose `hidden` deep-equals `['kind:user']` and whose `filterOpen` is `true`; called without those two keys it returns `hidden` deep-equal to `[]` and `filterOpen` `false`.\n\n=== FILE B: tools/argus-ui/test/page.test.mjs (framework: node:test, source-text pins) ===\nConventions of this file, follow them: each case reads a file under `PUBLIC` with `fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8')` and asserts over the text; slice the source with the helpers already there — `functionSource(source, name)` for one top-level function, `detailListener(source, type)` for the body of one delegated listener on `#detail`, `callArguments(source, name)` for one call's arguments. Every assertion carries a message naming the breakage. Put the new cases at the end under `// Increment 1 — the block filter's wiring: the click paints the panel again, and never fetches.`\n\nB1 — criterion: the selection is page-wide state that starts empty, and is not persisted. Slice the `const state = {` literal the way the existing case at line 581 does. Expect it to match `/\\bcontextHidden:\\s*new Set\\(\\)/` and `/\\bcontextFilterOpen:\\s*false\\b/`. Expect the whole `app.js` not to match `/localStorage/`.\n\nB2 — criterion: the derivation lives in the pure module. Expect `app.js` to match `/import\\s*\\{[^}]*\\bcontextEntryIds\\b[^}]*\\}\\s*from\\s*['\"]\\.\\/context\\.js['\"]/` and the same for `hiddenAfterAll`, so the functions file A tests are the ones the page runs.\n\nB3 — criterion: the panel is drawn with the hidden set and the open flag. Take `callArguments(functionSource(appJs, 'renderLanePanel'), 'renderContextPanel')`; expect it to match `/hidden:\\s*state\\.contextHidden\\b/` and `/filterOpen:\\s*state\\.contextFilterOpen\\b/`.\n\nB4 — criterion: unchecking an entry repaints and fetches nothing. Take `detailListener(appJs, 'change')`; expect it to match `/input\\[data-ctx-entry\\]/`, `/state\\.contextHidden/` and `/renderLanePanel\\(/`, and not to match `/loadLaneContext\\(/`, `/scheduleLaneContext\\(/` or `/\\bapi\\(/` — the filter acts on the record already held.\n\nB5 — criterion: all on and all off go through the pure helper against the held record, and fetch nothing. Take `const click = detailListener(appJs, 'click')` and `const tail = click.slice(click.indexOf('data-ctx-all'))`; assert the index is ≥ 0 first. Expect `tail` to match `/hiddenAfterAll\\(/`, `/contextEntryIds\\(/`, `/state\\.laneContext\\.item/` and `/renderLanePanel\\(/`, and not to match `/loadLaneContext\\(/` or `/scheduleLaneContext\\(/`. (The branch is placed right after the `summary[data-block]` branch, so nothing after it fetches the context.)\n\nB6 — criterion: an open dropdown survives a repaint. Expect `detailListener(appJs, 'click')` to match `/summary\\[data-ctx-filter\\]/` and `/state\\.contextFilterOpen\\s*=\\s*!\\s*state\\.contextFilterOpen/`, and `functionSource(appJs, 'renderLanePanel')` to match `/state\\.contextFilterOpen/` — the flag is remembered the way `state.expanded` is, so the next repaint renders it open again.\n\nB7 — criterion: the selection survives a lane change and a session change. Expect `functionSource(appJs, 'selectSession')` not to match `/contextHidden/` and not to match `/contextFilterOpen/` — a new session inherits the reader's filter, unlike its lane and expansions. Expect `detailListener(appJs, 'click')` not to match `/state\\.contextHidden\\s*=\\s*new Set\\(\\)/` — the lane branch resets `state.expanded` and must leave the filter alone.\n\n=== FILE C: tools/argus-ui/test/independence.test.mjs (framework: node:test, whole-file scan) ===\nConventions: the file walks the project and asserts project-wide rules, collecting failures into a `problems` array and closing with one `assert.deepEqual(problems, [])`; every list it scans is preceded by a self-check that the scan actually covers the files it names.\n\nC1 — criterion: the pure modules touch no browser global. Add one test, `'the pure modules the tests import reach for no browser global'`. For each of `public/context.js` and `public/timeline.js`: assert the file exists, read it, and push a problem for each of `/\\bdocument\\s*\\./`, `/\\bfetch\\s*\\(/`, `/\\blocation\\s*\\./` that matches. Close with `assert.deepEqual(problems, [])`. Use those three patterns and not bare words: both files' doc comments contain the words `document`, `fetch` and `location` in prose, and `context.js` exports `fetchLaneContext`, which `\\bfetch\\s*\\(` correctly does not match. Both files are clean today, so this case is green on arrival and red the moment the filter reaches for the DOM from the pure module — that is its job.\n\n=== LEFT UNTESTED, ON PURPOSE ===\n- The dropdown's appearance and layout (`styles.css`): no test in this project reads the stylesheet and there is no browser in the suite.\n- The browser's own behaviour — that `<details>` opens on a summary click, that a click on a wrapping label ticks the checkbox and fires `change`: there is no DOM in the suite, and this project's standing convention is to pin `app.js` wiring as source text, which B4-B7 do.\n- The head's visible-of-total counts and the all-hidden placeholder: a later increment's criteria, and A9 and A11 pin that this increment leaves the head's totals and `data-state` as they are.\n- `./test.sh`: outside this increment's criteria.",
-            "checks": [
-              "npm --prefix tools/argus-ui test"
-            ],
-            "questions": []
-          }
-        },
-        {
-          "label": "tests:filter-core.0",
-          "at": "2026-08-07T15:17:11.842Z",
-          "return": {
-            "summary": "Wrote the 17 pure-module cases (A1-A17) and one lanePanelInput case in tools/argus-ui/test/context.test.mjs, the seven wiring cases (B1-B7) in tools/argus-ui/test/page.test.mjs, and the one purity-contract case (C1) in tools/argus-ui/test/independence.test.mjs, exactly as the increment-1 test plan specifies; ran node --test on each file plus npm --prefix tools/argus-ui test and confirmed the new cases fail for the right reason (a whole-file SyntaxError from the not-yet-exported context.js names for A1-A17, individual AssertionErrors naming the missing wiring for B1-B6) while every pre-existing case across the suite stays green.",
-            "cases": [
-              {
-                "case": "A1 — the list names every kind and every field the request contains, grouped, sorted, counted",
-                "file": "tools/argus-ui/test/context.test.mjs",
-                "testName": "the filter lists every kind and every field the request contains, grouped, sorted, counted",
-                "expected": "contextFilterEntries(contextBlocks(requestBody()).blocks) deep-equals the 10-entry array (6 kind entries then 4 field entries, alphabetical within each group, kind:system count 3, all others count 1)",
-                "got": "whole-file module load error: SyntaxError: The requested module '../public/context.js' does not provide an export named 'contextEntryIds' — one SyntaxError at the top of the file blocks node:test from registering any case in context.test.mjs, so this and every other A-case below fail together through that one error, the same shape every earlier round's brand-new export in this project has produced"
-              },
-              {
-                "case": "A2 — what the request does not contain is not listed",
-                "file": "tools/argus-ui/test/context.test.mjs",
-                "testName": "what the request does not contain is not listed",
-                "expected": "no entry kind:thinking/kind:tool_use/kind:tool_result; field:metadata present count 1; kind:user present count 1",
-                "got": "same whole-file SyntaxError as A1"
-              },
-              {
-                "case": "A3 — the unparsable body",
-                "file": "tools/argus-ui/test/context.test.mjs",
-                "testName": "an unparsable body lists one raw entry and no fields group at all",
-                "expected": "contextFilterEntries deep-equals [{ id:'kind:raw', group:'blocks', label:'raw', count:1 }]",
-                "got": "same whole-file SyntaxError as A1"
-              },
-              {
-                "case": "A4 — a field named like a kind cannot collide with it",
-                "file": "tools/argus-ui/test/context.test.mjs",
-                "testName": "a field named like a kind cannot collide with it",
-                "expected": "both kind:user (blocks) and field:user (fields) entries present; visibleBlocks(blocks, ['field:user']) keeps the user message block (text 'ping') and drops the field block labelled 'user'",
-                "got": "same whole-file SyntaxError as A1"
-              },
-              {
-                "case": "A5 — hiding removes exactly that entry's blocks",
-                "file": "tools/argus-ui/test/context.test.mjs",
-                "testName": "hiding an entry removes exactly that entry's blocks, and touches neither input",
-                "expected": "visibleBlocks(blocks, ['kind:system']) has 9 entries none kind system, first survivor's index is 2; visibleBlocks(blocks, []) has 12; input blocks array and a hidden Set are both left unmutated",
-                "got": "same whole-file SyntaxError as A1"
-              },
-              {
-                "case": "A6 — all off hides what is shown and keeps what was already hidden; all on clears everything",
-                "file": "tools/argus-ui/test/context.test.mjs",
-                "testName": "all off hides what is shown and keeps what was already hidden; all on clears everything",
-                "expected": "hiddenAfterAll(before, ids, false) is before ∪ ids; hiddenAfterAll(before, ids, true) is empty; before.size unchanged at 1 after both calls",
-                "got": "same whole-file SyntaxError as A1"
-              },
-              {
-                "case": "A7 — the ids of the held record, and nothing without one",
-                "file": "tools/argus-ui/test/context.test.mjs",
-                "testName": "the ids of the held record, and nothing without one",
-                "expected": "contextEntryIds(item()) deep-equals the 10 A1 ids in order; contextEntryIds(null) and contextEntryIds({}) both []",
-                "got": "same whole-file SyntaxError as A1"
-              },
-              {
-                "case": "A8 — the dropdown sits in the head, one checkbox per entry, checked, counted, two labelled groups, two buttons",
-                "file": "tools/argus-ui/test/context.test.mjs",
-                "testName": "the dropdown sits in the head, one checkbox per entry, checked, counted, in two labelled groups with two buttons",
-                "expected": "exactly one <details class=\"ctx-filter\"> before <div class=\"ctx-blocks\">; 10 data-ctx-entry occurrences; kind:tool_result/field:tools present; name-then-count run present; kind:system entry carries data-count=\"3\"; Blocks before Fields with data-group attributes; data-ctx-all on/off with visible 'all on'/'all off' text; 10 checkboxes all checked",
-                "got": "same whole-file SyntaxError as A1"
-              },
-              {
-                "case": "A9 — unchecking removes the blocks below and only unchecks that box",
-                "file": "tools/argus-ui/test/context.test.mjs",
-                "testName": "unchecking an entry removes its blocks below and only unchecks that box",
-                "expected": "hidden:['kind:tool_result'] leaves 11 block chunks none tool_result, that entry's checkbox unchecked, the other 9 still checked, data-blocks=\"12\" and data-chars=\"<body length>\" unchanged, and hidden:[] renders byte-identical to no hidden key at all",
-                "got": "same whole-file SyntaxError as A1"
-              },
-              {
-                "case": "A10 — a field entry hides its field only",
-                "file": "tools/argus-ui/test/context.test.mjs",
-                "testName": "a field entry hides its field only",
-                "expected": "hidden:['field:tools'] leaves 11 chunks, none labelled tools, one labelled model still present, all 3 system chunks still present",
-                "got": "same whole-file SyntaxError as A1"
-              },
-              {
-                "case": "A11 — everything hidden",
-                "file": "tools/argus-ui/test/context.test.mjs",
-                "testName": "everything hidden leaves an empty list but a reader can still turn entries back on",
-                "expected": "blockChunks empty, data-state=\"ready\" kept, all 10 entries still listed, none checked, no placeholder text asserted",
-                "got": "same whole-file SyntaxError as A1"
-              },
-              {
-                "case": "A12 — an entry hidden but absent from this request changes nothing and is remembered",
-                "file": "tools/argus-ui/test/context.test.mjs",
-                "testName": "an entry hidden but absent from this request changes nothing and is not listed, and its hidden state is remembered",
-                "expected": "with a thinking-less body, hidden:['kind:thinking'] renders identically to no hidden key and lists no kind:thinking; with the full fixture and the same hidden array, the kind:thinking box is present, unchecked, and its blocks are gone",
-                "got": "same whole-file SyntaxError as A1"
-              },
-              {
-                "case": "A13 — a caller may pass an array or a Set",
-                "file": "tools/argus-ui/test/context.test.mjs",
-                "testName": "a caller may pass hidden as an array or a Set",
-                "expected": "hidden: ['kind:user'] and hidden: new Set(['kind:user']) render byte-identical markup",
-                "got": "same whole-file SyntaxError as A1"
-              },
-              {
-                "case": "A14 — the dropdown opens only when asked, and stays open across a repaint",
-                "file": "tools/argus-ui/test/context.test.mjs",
-                "testName": "the dropdown opens only when asked, and stays open across a repaint",
-                "expected": "filterOpen:true renders <details class=\"ctx-filter\" open>; no filterOpen renders the bare tag with no open; two filterOpen:true renders are byte-identical",
-                "got": "same whole-file SyntaxError as A1"
-              },
-              {
-                "case": "A15 — the filter catches no click meant for a lane or a block",
-                "file": "tools/argus-ui/test/context.test.mjs",
-                "testName": "the filter catches no click meant for a lane or a block",
-                "expected": "the sliced <details class=\"ctx-filter\">...</details> chunk and its own <summary> tag carry neither data-lane= nor data-block=, and the whole panel still carries no data-lane=",
-                "got": "same whole-file SyntaxError as A1"
-              },
-              {
-                "case": "A16 — no entries at all",
-                "file": "tools/argus-ui/test/context.test.mjs",
-                "testName": "no entries at all renders no filter and does not throw",
-                "expected": "a body with no blocks (\"{\\\"messages\\\":[]}\") renders no ctx-filter markup and does not throw",
-                "got": "same whole-file SyntaxError as A1"
-              },
-              {
-                "case": "A17 — the panel's whole input still comes from one builder",
-                "file": "tools/argus-ui/test/context.test.mjs",
-                "testName": "the panel's whole input still comes from one builder",
-                "expected": "lanePanelInput({..., hidden:['kind:user'], filterOpen:true}) returns hidden ['kind:user'] and filterOpen true; called without those keys returns hidden [] and filterOpen false",
-                "got": "same whole-file SyntaxError as A1"
-              },
-              {
-                "case": "B1 — the selection is page-wide state that starts empty, and is not persisted",
-                "file": "tools/argus-ui/test/page.test.mjs",
-                "testName": "the block filter's selection is page-wide state that starts empty, and is never persisted",
-                "expected": "the state literal matches /contextHidden:\\s*new Set\\(\\)/ and /contextFilterOpen:\\s*false\\b/; app.js nowhere matches /localStorage/",
-                "got": "AssertionError: 'the hidden set must start empty, or a page load would open with something already hidden' — the state literal today declares no contextHidden field at all"
-              },
-              {
-                "case": "B2 — the derivation lives in the pure module",
-                "file": "tools/argus-ui/test/page.test.mjs",
-                "testName": "the derivation the filter uses comes from the pure module",
-                "expected": "app.js imports contextEntryIds and hiddenAfterAll from ./context.js",
-                "got": "AssertionError: app.js must import contextEntryIds from context.js, so the tested function is the one the page runs — neither import exists yet"
-              },
-              {
-                "case": "B3 — the panel is drawn with the hidden set and the open flag",
-                "file": "tools/argus-ui/test/page.test.mjs",
-                "testName": "the panel is drawn with the hidden set and the open flag",
-                "expected": "the renderContextPanel call inside renderLanePanel matches /hidden:\\s*state\\.contextHidden\\b/ and /filterOpen:\\s*state\\.contextFilterOpen\\b/",
-                "got": "AssertionError: 'without it the panel filters nothing, whatever the reader unchecked' — quoted actual is today's unfiltered lanePanelInput({ view, key: state.selectedLane, held: state.laneContext, expanded: state.expanded }) call, carrying neither key"
-              },
-              {
-                "case": "B4 — unchecking an entry repaints and fetches nothing",
-                "file": "tools/argus-ui/test/page.test.mjs",
-                "testName": "unchecking an entry repaints and fetches nothing",
-                "expected": "the change listener on #detail matches input[data-ctx-entry], state.contextHidden and renderLanePanel(, and matches none of loadLaneContext(/scheduleLaneContext(/api(",
-                "got": "AssertionError: 'the change handler must catch a filter checkbox being toggled' — today's change listener only branches on #event-filter and #event-errors"
-              },
-              {
-                "case": "B5 — all on and all off go through the pure helper against the held record, and fetch nothing",
-                "file": "tools/argus-ui/test/page.test.mjs",
-                "testName": "all on and all off go through the pure helper against the held record, and fetch nothing",
-                "expected": "the click listener contains a data-ctx-all branch matching hiddenAfterAll(, contextEntryIds(, state.laneContext.item and renderLanePanel(, and matching neither loadLaneContext( nor scheduleLaneContext(",
-                "got": "AssertionError: 'the click handler must catch the all on / all off buttons' — expected true, actual false; today's click listener carries no data-ctx-all branch at all"
-              },
-              {
-                "case": "B6 — an open dropdown survives a repaint",
-                "file": "tools/argus-ui/test/page.test.mjs",
-                "testName": "an open dropdown survives a repaint",
-                "expected": "the click listener matches summary[data-ctx-filter] and state.contextFilterOpen = !state.contextFilterOpen; renderLanePanel matches state.contextFilterOpen",
-                "got": "AssertionError: 'the click handler must catch the dropdown's own summary being clicked' — quoted actual is today's full click listener body, which has no data-ctx-filter branch"
-              },
-              {
-                "case": "B7 — the selection survives a lane change and a session change",
-                "file": "tools/argus-ui/test/page.test.mjs",
-                "testName": "the selection survives a lane change and a session change",
-                "expected": "selectSession's source matches neither /contextHidden/ nor /contextFilterOpen/; the click listener does not match /state\\.contextHidden\\s*=\\s*new Set\\(\\)/",
-                "got": "passes today (green), not red: all three are doesNotMatch assertions and neither contextHidden nor contextFilterOpen exists anywhere in app.js yet, so they are vacuously satisfied; the case only starts guarding once the implementer introduces those fields and could start wrongly touching them in selectSession or the lane-change branch — flagged in openQuestions rather than forced red"
-              },
-              {
-                "case": "C1 — the pure modules touch no browser global",
-                "file": "tools/argus-ui/test/independence.test.mjs",
-                "testName": "the pure modules the tests import reach for no browser global",
-                "expected": "public/context.js and public/timeline.js match none of /\\bdocument\\s*\\./, /\\bfetch\\s*\\(/, /\\blocation\\s*\\./",
-                "got": "passes today (green), exactly as the plan itself predicts ('Both files are clean today, so this case is green on arrival') — it turns red only if the implementer reaches for a browser global from either pure module, which is its job"
-              }
-            ],
-            "openQuestions": [
-              "B7, as the plan specifies it, is three doesNotMatch assertions against fields (contextHidden, contextFilterOpen, the reset-to-new-Set line) that do not exist anywhere in app.js today, so the case passes vacuously before the increment is implemented rather than going red like B1-B6 — noted here rather than silently reported as a normal red failure; it will only catch a regression once the implementer has introduced the fields and could wire them wrong in selectSession or the lane branch."
-            ],
-            "questions": [],
-            "recordCommand": "record docs/issues/2026-08-07-timeline-focus-and-context-filter/backlog.json filter-core tests:filter-core.0 <this file>",
-            "filesTouched": [
-              "tools/argus-ui/test/context.test.mjs",
-              "tools/argus-ui/test/page.test.mjs",
-              "tools/argus-ui/test/independence.test.mjs"
-            ],
-            "commandsRun": [
-              "node --test tools/argus-ui/test/context.test.mjs — 1 top-level failure (whole-file SyntaxError, covers A1-A17), 0 pass, 1 fail, exit 1",
-              "node --test tools/argus-ui/test/page.test.mjs — 52 tests, 46 pass, 6 fail (B1-B6), exit 1 (B7 passes vacuously, see openQuestions)",
-              "node --test tools/argus-ui/test/independence.test.mjs — 3 tests, 3 pass, 0 fail, exit 0 (C1 is green on arrival by design)",
-              "npm --prefix tools/argus-ui test — 161 tests, 154 pass, 7 fail, exit 1; the 7 failures are exactly context.test.mjs's one whole-file load error (covering A1-A17) plus B1-B6 in page.test.mjs; every pre-existing case in every other file stays green"
-            ]
-          }
-        },
-        {
-          "label": "implement:filter-core.0",
-          "at": "2026-08-07T15:21:41.335Z",
-          "return": {
-            "summary": "Added the context panel's block filter: six pure functions and two new panel input keys in public/context.js, the hidden-set/open-flag state and its three delegated branches in public/app.js, and the dropdown's styles in public/styles.css.",
-            "deviations": [],
-            "commands": [
-              {
-                "command": "npm --prefix tools/argus-ui test",
-                "exitCode": 1,
-                "note": "230 cases, 228 pass, 2 fail. All 23 planned cases (A1-A17, B1-B7, C1) are green. The two reds are the pre-existing increment-6 cases 'the panel input is built from the lane whose key the reader selected' (test/context.test.mjs:670) and 'a key no lane carries, and no key at all, leave nothing to draw' (test/context.test.mjs:694); both assert.deepEqual lanePanelInput's whole return against a four-key object, so the two keys A17 requires lanePanelInput to add (hidden, filterOpen) make them fail. Both were green before this change and neither can be reconciled with A17 without editing a test, which is not mine to do."
-              }
-            ],
-            "blockers": [
-              "test/context.test.mjs:670 and :694 (pre-existing) deepEqual lanePanelInput's whole return against {lane,item,pending,expanded}; A17 requires it to also return hidden and filterOpen, so the two contradict and both older cases are now red. Update those two expectations to include hidden: [] and filterOpen: false."
-            ],
-            "questions": []
-          }
-        },
-        {
-          "label": "review:filter-core.0",
-          "at": "2026-08-07T15:26:07.556Z",
-          "return": {
-            "findings": [
-              {
-                "claim": "The suite is red: adding `hidden` and `filterOpen` to `lanePanelInput`'s return broke two existing deep-equal cases that were green before this increment.",
-                "reproduction": "Run `npm --prefix tools/argus-ui test`: exit 1, 230 cases, 228 pass, 2 fail. `not ok 53 - the panel input is built from the lane whose key the reader selected` at tools/argus-ui/test/context.test.mjs:670 (assert.deepEqual at line 679 expects `{ lane, item, pending: false, expanded: ['12:0'] }`, actual now also carries `filterOpen: false, hidden: []`) and `not ok 54 - a key no lane carries, and no key at all, leave nothing to draw` at tools/argus-ui/test/context.test.mjs:695 (assert.deepEqual at line 704 expects `{ lane: null, item: null, pending: true, expanded: [] }`, actual now also carries `filterOpen: false, hidden: []`). Cause is tools/argus-ui/public/context.js:381 — `return { lane, ...laneContextInput(key, held), expanded, hidden, filterOpen }`. The two expectations must be widened to the builder's new shape, keeping what they pin (lane lookup by key, and the no-lane/no-key defaults).",
-                "criterion": "`npm --prefix tools/argus-ui test` passes after this increment"
-              }
-            ],
-            "reason": "The context filter itself is built and covered, but the suite does not pass: widening the lane panel's input value with the hidden set and the open flag left two older whole-object assertions on `lanePanelInput` asserting the old four-key shape, so two cases fail.",
-            "questions": [],
-            "summary": "Reviewed the whole increment-1 diff (context.js filter derivation and markup, app.js state and click/change wiring, styles.css, the new context/page/independence cases) against the ten criteria; `npm --prefix tools/argus-ui test` covered 230 cases and exited 1 with 2 failures, both caused by this change, and every other criterion is met and has a test that would go red if its behaviour were removed."
-          }
-        },
-        {
-          "label": "research:filter-core.1",
-          "at": "2026-08-07T15:28:22.586Z",
-          "return": {
-            "needsTests": true,
-            "summary": "One correction: widen the two deep-equal expectations against lanePanelInput in test/context.test.mjs to the builder's new six-key shape, with no production change.",
-            "plan": "Round 1 has exactly one finding, and it is a test-file finding. The production code delivered for increment 1 stands as committed: `lanePanelInput` in `tools/argus-ui/public/context.js` (lines 373-383) now defaults `hidden = []` and `filterOpen = false` and returns `{ lane, item, pending, expanded, hidden, filterOpen }`. That shape is correct and is deliberately pinned by the increment's own case 'the panel's whole input still comes from one builder' (test/context.test.mjs:1117). What broke is that two older cases assert the builder's *whole* return with `assert.deepEqual` against the pre-increment four-key object, so they now fail on the two added keys.\n\nSo: change no file under `tools/argus-ui/public/`. Do not narrow `lanePanelInput`'s return, do not make `hidden`/`filterOpen` conditional on being passed, and do not drop them from the builder — the wiring in `app.js` (renderLanePanel passes `hidden: state.contextHidden`, `filterOpen: state.contextFilterOpen`) and the criteria that a repaint keeps the dropdown open and the filter applies to the held record both depend on the builder carrying them through.\n\nThe fix is to widen the two expectations to the six-key shape, keeping `assert.deepEqual` rather than replacing it with per-key `assert.equal`. Rejected: converting them to property-by-property assertions, which would give up what the deep-equal actually buys — that the builder drops no key on the way to `renderContextPanel`, which is the reason increment 6 wrote them as whole-object comparisons in the first place. Also rejected: deleting either case; they pin the lane lookup by key and the no-lane/no-key defaults, both still live behaviour.\n\nThe test-author's open question from the previous round is settled and needs no work: case B7 ('the selection survives a lane change and a session change', test/page.test.mjs:733) is now a real guard, not a vacuous pass. `state.contextHidden` and `state.contextFilterOpen` exist in `app.js` (declared at lines 63-64, read at 959-960, written at 1197, 1204-1205, 1253-1254), so its three `doesNotMatch` assertions now fail the moment someone resets either field in `selectSession` or in the lane-change click branch. Its concern about the pre-implementation ordering does not survive the implementation. Leave that case exactly as it stands.\n\nAfter the edit the suite should be 230 cases, 230 passing. No other case in the suite asserts the whole return of `lanePanelInput` — `test/context.test.mjs:636` is `laneContextInput`, whose two-key shape is unchanged, and the remaining `lanePanelInput` call sites (696, 699, 702, 707, 716, 737, 1118, 1129) read single properties or feed `renderContextPanel`.",
-            "moduleMap": "/home/user/uroboros/tools/argus-ui/test/context.test.mjs — the only file this round changes; the two failing cases are 'the panel input is built from the lane whose key the reader selected' (starts line 670, deep-equal at 679) and 'a key no lane carries, and no key at all, leave nothing to draw' (starts line 695, deep-equal at 704).\n/home/user/uroboros/tools/argus-ui/public/context.js — unchanged this round; `lanePanelInput` at lines 373-383 defines the shape both expectations must match: `{ lane, item, pending, expanded, hidden, filterOpen }` with `hidden = []` and `filterOpen = false` as defaults.\n/home/user/uroboros/tools/argus-ui/public/app.js — unchanged this round; named only because it is why the builder must keep the two new keys (renderLanePanel passes `hidden: state.contextHidden` and `filterOpen: state.contextFilterOpen`).\n/home/user/uroboros/tools/argus-ui/test/page.test.mjs — unchanged this round; the settled open question concerns the case starting at line 733.",
-            "environment": "Node >= 20.11 with the built-in `node:test` runner. `tools/argus-ui` has zero runtime and zero dev dependencies, so no `npm install` is needed before running the suite. There is no linter and no build step in this project. Run from the repository root: `npm --prefix tools/argus-ui test` runs `node --test \"test/*.test.mjs\"` over every file in `tools/argus-ui/test/`. To run only the changed file: `node --test tools/argus-ui/test/context.test.mjs` from the repository root.",
-            "testPlan": "Tests are needed, and the whole of the test work this round is editing two existing expectations in one file. Write no new case, no new file, and no new fixture.\n\nFile: /home/user/uroboros/tools/argus-ui/test/context.test.mjs. Framework: `node:test` with `node:assert/strict`, imported at the top of the file as `import test from 'node:test'` and `import assert from 'node:assert/strict'`. Level: unit, against the pure module `../public/context.js`; nothing is faked, the factories `view()`, `lane()` and `item()` defined at the head of the file build every input, and cases are named as lowercase sentences describing the behaviour.\n\nCase 1 — criterion proved: `npm --prefix tools/argus-ui test` passes, while the case keeps pinning that the lane is looked up by the key the reader selected.\nTest: 'the panel input is built from the lane whose key the reader selected' (line 670).\nInput and state: unchanged — `lanePanelInput({ view: v, key: 'agent:sp-b:probe', held: { key: 'agent:sp-b:probe', item: rec }, expanded: ['12:0'] })`, with neither `hidden` nor `filterOpen` passed, so the builder's defaults apply.\nChange: at line 679 replace\n  assert.deepEqual(out, { lane: v.lanes[1], item: rec, pending: false, expanded: ['12:0'] });\nwith\n  assert.deepEqual(out, { lane: v.lanes[1], item: rec, pending: false, expanded: ['12:0'], hidden: [], filterOpen: false });\nExpected result: the case passes. Keep `assert.deepEqual` — the whole-object comparison is what proves the builder drops no key on the way to `renderContextPanel`. Leave the following `assert.equal(out.lane, v.lanes[1], …)` and the `mainOut` block that follows it untouched.\n\nCase 2 — criterion proved: the same, while the case keeps pinning the no-lane and no-key defaults.\nTest: 'a key no lane carries, and no key at all, leave nothing to draw' (line 695).\nInput and state: unchanged — `lanePanelInput()` called with no argument at all.\nChange: at line 704 replace\n  assert.deepEqual(noArgOut, { lane: null, item: null, pending: true, expanded: [] });\nwith\n  assert.deepEqual(noArgOut, { lane: null, item: null, pending: true, expanded: [], hidden: [], filterOpen: false });\nExpected result: the case passes, and it now also pins that a call with no argument defaults to nothing hidden and the dropdown closed. Leave the three `assert.equal(…lane, null)` assertions and the closing `renderContextPanel(...) === ''` assertion in that case untouched.\n\nEdges: `assert.deepEqual` from `node:assert/strict` ignores key order, so the two added keys may go last as written above. Do not pass `hidden` or `filterOpen` into these two calls — both cases exist to pin the *defaults*, and passing values would stop them proving that.\n\nLeft untested on purpose: nothing new. Every criterion of this increment already has its case from the previous round, and this round adds no behaviour. In particular, that `hidden` and `filterOpen` are carried through when they *are* passed is already pinned by 'the panel's whole input still comes from one builder' (test/context.test.mjs:1117), so do not duplicate it, and do not touch that case. The open question about test/page.test.mjs:733 ('the selection survives a lane change and a session change') is settled as needing no change: `state.contextHidden` and `state.contextFilterOpen` now exist in app.js, so its `doesNotMatch` assertions guard a real regression. Leave that file alone.\n\nAlready red: the suite is at exit 1 with 230 cases, 228 passing, and the two failures named above are the whole of it — reported by the reviewer, not run by me, and I ran no command to establish it. The first run belongs to whoever runs the check list.",
-            "checks": [
-              "npm --prefix tools/argus-ui test"
-            ],
-            "questions": []
-          }
-        },
-        {
-          "label": "tests:filter-core.1",
-          "at": "2026-08-07T15:30:21.660Z",
-          "return": {
-            "summary": "Widened the two lanePanelInput deepEqual expectations in tools/argus-ui/test/context.test.mjs to include hidden: [] and filterOpen: false, exactly as the reviewer's reproduction spec named, confirming both cases now pass and the full suite runs 230/230.",
-            "cases": [
-              {
-                "case": "Case 1 — the panel input is built from the lane whose key the reader selected: assert.deepEqual(out, ...) widened to include hidden: [], filterOpen: false",
-                "file": "/home/user/uroboros/tools/argus-ui/test/context.test.mjs",
-                "testName": "the panel input is built from the lane whose key the reader selected",
-                "expected": "lanePanelInput({ view, key: 'agent:sp-b:probe', held, expanded: ['12:0'] }) with no hidden/filterOpen passed returns { lane: v.lanes[1], item: rec, pending: false, expanded: ['12:0'], hidden: [], filterOpen: false } — the defaults for hidden and filterOpen are carried through untouched.",
-                "got": "Before the edit (reverted via git stash to confirm), assert.deepEqual failed with 'Expected values to be strictly deep-equal', diffing '+ filterOpen: false, + hidden: []' as unexpected extra keys on the actual object — the implementation already returns those keys but the old expected object omitted them. After the edit the case passes; ran via `node --test test/context.test.mjs`, this test now ok."
-              },
-              {
-                "case": "Case 2 — a key no lane carries, and no key at all, leave nothing to draw: assert.deepEqual(noArgOut, ...) widened to include hidden: [], filterOpen: false",
-                "file": "/home/user/uroboros/tools/argus-ui/test/context.test.mjs",
-                "testName": "a key no lane carries, and no key at all, leave nothing to draw",
-                "expected": "lanePanelInput() called with no argument returns { lane: null, item: null, pending: true, expanded: [], hidden: [], filterOpen: false } — a call with no argument at all defaults to nothing hidden and the dropdown closed.",
-                "got": "Before the edit, assert.deepEqual failed the same way, diffing '+ filterOpen: false, + hidden: []' as unexpected extra keys against the old expected object that only carried lane/item/pending/expanded. After the edit the case passes; ran via `node --test test/context.test.mjs`, this test now ok."
-              }
-            ],
-            "openQuestions": [],
-            "questions": []
-          }
-        },
-        {
-          "label": "implement:filter-core.1",
-          "at": "2026-08-07T15:31:40.532Z",
-          "return": {
-            "deviations": [
-              "The plan's one edit — widening the two `assert.deepEqual` expectations in tools/argus-ui/test/context.test.mjs (lines 679 and 704) to the six-key shape — was already in the tree when this step started, committed as e8c0da0 'Widen two lanePanelInput expectations for hidden/filterOpen defaults' by the round-1 test-author step (recorded in backlog.json as tests:filter-core.1). The edit is byte-for-byte what the plan describes, and it lives in a test file this role may not edit, so it was left exactly as committed rather than rewritten. This step therefore changed no source file; it verified the tree and ran the command that counts."
-            ],
-            "commands": [
-              {
-                "command": "npm --prefix tools/argus-ui test",
-                "exitCode": 0,
-                "note": "node --test over tools/argus-ui/test/*.test.mjs, all files, nothing skipped or excluded: 230 tests, 230 pass, 0 fail, 0 skipped, 0 todo. Both cases the plan named pass by name: 'the panel input is built from the lane whose key the reader selected' (ok 53) and 'a key no lane carries, and no key at all, leave nothing to draw' (ok 54)."
-              },
-              {
-                "command": "git status --porcelain",
-                "exitCode": 0,
-                "note": "Empty before this step's own backlog commit — the round-1 test edit was already committed and the branch claude/timeline-implementation-adjustments-t8s8rz was in sync with its remote."
-              }
-            ],
-            "blockers": [],
-            "questions": [],
-            "summary": "No source change was needed this round: the plan's sole edit (widening the two lanePanelInput deep-equal expectations to include hidden: [] and filterOpen: false) was already committed as e8c0da0 by the round-1 test step, no file under tools/argus-ui/public/ was touched, and npm --prefix tools/argus-ui test passes 230/230 at exit 0."
-          }
-        },
-        {
-          "label": "review:filter-core.1",
-          "at": "2026-08-07T15:37:11.485Z",
-          "return": {
-            "findings": [],
-            "reason": "",
-            "questions": [],
-            "summary": "Increment 1 accepted: `npm --prefix tools/argus-ui test` ran once over the whole suite, 230 cases, exit 0, nothing skipped; every criterion of the increment is met by public/context.js (entryIdOf, contextFilterEntries, visibleBlocks, contextEntryIds, hiddenAfterAll, renderContextFilter — all pure, no document/fetch/location, now guarded by a new case in test/independence.test.mjs) with only the click and change wiring in app.js (state.contextHidden, state.contextFilterOpen, both page-wide, never reset on a lane change, a scrub, a live refresh or a session change, never persisted, and neither branch fetches); the filter markup carries no data-lane and its summary no data-block, the dropdown is re-rendered open from the remembered flag so a repaint does not shut it, and each criterion has at least one case that goes red when its behaviour is removed; the only files this increment touches are app.js, context.js, styles.css and the three test files, no dependency was added, and the blast radius (lanePanelInput callers, blockChunks-based block assertions, the tool panel below, the existing change/input listeners) is clean."
-          }
-        }
-      ]
+      "status": "done",
+      "note": "Accepted in review round 1: the context panel's filter is built as pure functions in public/context.js with only the click and change wiring in app.js, and the whole suite runs 230 cases at exit 0.",
+      "steps": []
     },
     {
       "id": "filter-honesty",
@@ -357,10 +30,12 @@
       "criteria": [
         "With nothing hidden, the head line reads as it does today (`210.114 chars · 34 blocks`). With something hidden it names both numbers — visible of total — for blocks and for characters, so the filter can never make a context look smaller than it is. The totals stay readable off `data-chars` and `data-blocks`; the visible counts arrive in data attributes of their own.",
         "With every entry hidden the panel keeps its `data-state=\"ready\"` and shows a placeholder in place of the rows, saying every kind is hidden and where to turn them back on.",
-        "`npm --prefix tools/argus-ui test` passes after this increment, and each criterion above has at least one test that goes red when its behaviour is broken or removed."
+        "The head's new numbers and the placeholder are derived and rendered by pure functions in `public/context.js`, under the contract `test/independence.test.mjs` guards; no new wiring is needed in `app.js` for either.",
+        "The cases the previous increment wrote to pin today's behaviour — that a partly filtered panel leaves the head's totals untouched, and that an all-hidden panel renders an empty block list with no placeholder — are updated to the new behaviour in the same change, so no case is left red, skipped or asserting the superseded shape.",
+        "`npm --prefix tools/argus-ui test` passes over the whole suite after this increment, and each criterion above has at least one test that goes red when its behaviour is broken or removed."
       ],
       "status": "todo",
-      "note": "",
+      "note": "Criteria sharpened after filter-core: two of its cases deliberately pin the head's totals and the placeholder-less all-hidden panel, so updating them is part of this increment rather than a surprise red suite. Added that this increment needs no new app.js wiring, which filter-core's delivery showed.",
       "steps": []
     },
     {
@@ -372,10 +47,12 @@
         "`renderLanePanel()` paints only the context panel into `#lane-panel`.",
         "Everything else about tools on the timeline is untouched: the `data-kind=\"tool\"` tick marks on the lane track, the `data-tools` count in each lane's meta, the `tool call` legend entry, and the incremental `/api/events?event=claude_code.tool_result` poll with its `sinceSeq` watermark.",
         "`toolCallOf()` keeps only what a mark needs — `seq`, `timeMs`, `spanId` — and no longer derives or holds `name`, `preview`, `text`, `chars` or `truncated`. `TOOL_PARAM_CHARS` and the `paramText()` helper go with it. `mergeToolMarks()` keeps its contract: duplicates dropped by `seq`, the watermark returned as the highest `seq` actually held, the input array untouched.",
-        "`npm --prefix tools/argus-ui test` passes after this increment, and each criterion above has at least one test that goes red when its behaviour is broken or removed."
+        "The context panel and its filter come through unchanged: the panel is still built from one input builder, and the filter still renders, hides and reopens exactly as the earlier increments left it.",
+        "Every case outside the deleted file that asserts the old tool-mark shape or the tool panel's presence — whole-object assertions on `toolCallOf()`'s return among them — is updated or removed in the same change, so no case is left red, skipped or asserting the superseded shape.",
+        "`npm --prefix tools/argus-ui test` passes over the whole suite after this increment, and each criterion above has at least one test that goes red when its behaviour is broken or removed."
       ],
       "status": "todo",
-      "note": "",
+      "note": "Added two criteria after filter-core: that increment's one rejected round was caused entirely by older whole-object assertions left pinning a superseded shape, and this increment narrows a whole-object shape too. Also pinned that the context panel and its filter survive the deletion, since both now share `renderLanePanel()`.",
       "steps": []
     },
     {
@@ -388,12 +65,13 @@
         "Gone from the wiring in `wireEvents()`: the handlers for `[data-tab]`, `[data-trace]`, `[data-span]` and `[data-event-seq]`, the `change` handler for `event-filter` and `event-errors`, and the `event-search` branch of the `input` handler. The 15-second interval no longer repaints a tab body.",
         "`renderDetail()` no longer builds the `counts` object, and no refresh requests `/api/traces`, `/api/facets` or `/api/metrics`. The `/api/events` request that feeds the tool marks stays.",
         "No unused import or dead helper is left behind in `app.js` or `timeline.js`, and the tests that pinned the removed views are removed with them rather than left skipped.",
+        "The `change` and `input` listeners the context filter and the rest of the page still need survive the removal: the filter's checkboxes, the *all on* and *all off* buttons and the lane selection all still work.",
         "`src/server.mjs` is unchanged: it proxies `/api/*` blindly and knows no route by name.",
-        "`npm --prefix tools/argus-ui test` is green, and every criterion of the issue has at least one test that goes red when its behaviour is broken or removed.",
+        "`npm --prefix tools/argus-ui test` is green over the whole suite, and each criterion above has at least one test that goes red when its behaviour is broken or removed.",
         "`./test.sh` is green."
       ],
       "status": "todo",
-      "note": "",
+      "note": "Two changes: the suite criterion now asks for this increment's own criteria to be covered rather than the whole issue's, since every earlier increment already carries its own coverage criterion; and a criterion was added that the shared `change` and `input` listeners the filter depends on survive, because filter-core put the filter's wiring into exactly those handlers.",
       "steps": []
     }
   ],
@@ -401,74 +79,36 @@
     "steps": [
       {
         "label": "decompose",
-        "at": "2026-08-07T14:59:54.673Z",
+        "at": "2026-08-07T14:59:54.673Z"
+      },
+      {
+        "label": "replan:filter-core",
+        "at": "2026-08-07T15:40:15.809Z",
         "return": {
+          "summary": "Closed filter-core as done (accepted in review round 1, suite 230 cases exit 0) and re-cut the three open increments against what it showed. The cut and its order are unchanged — filter-honesty, then tools-box, then tabs-out — because the risky part, the filter itself, is already delivered and each remaining increment is one coherent deliverable that leaves the repository working. What changed is the criteria, and one lesson drove most of it: filter-core's only rejected round was caused entirely by older whole-object assertions still pinning a shape the increment superseded, which cost a full correction chain. So every remaining increment that narrows or changes a pinned shape now carries an explicit criterion that those cases are updated or removed in the same change rather than left red or skipped: filter-honesty for the two cases filter-core wrote to pin today's head totals and the placeholder-less all-hidden panel, tools-box for the whole-object assertions on toolCallOf's return and anything asserting the tool panel's presence. Two further additions come from where filter-core put its wiring: tools-box now pins that the context panel and its filter come through the deletion of the tool box unchanged, since both now share renderLanePanel(), and tabs-out now pins that the shared change and input listeners the filter's checkboxes and its all on/all off buttons live in survive the removal of the tab handlers. filter-honesty gained a criterion that its numbers and placeholder stay pure functions in context.js needing no new app.js wiring, which filter-core's delivery showed to be achievable. tabs-out's suite criterion was narrowed from 'every criterion of the issue' to its own criteria, because every increment now carries its own coverage criterion and asking the last one to re-verify the others gives one criterion two owners. Nothing was split, merged or dropped: filter-honesty is small but coherent and belongs to nothing else, and the two deletions are separate deliverables that each stand alone.",
           "increments": [
             {
               "id": "filter-core",
-              "title": "The context panel gets a working block filter",
-              "goal": "Give the context panel head a dropdown that lists the block kinds and top-level fields the shown request actually contains, and let the reader hide and show them, against the record the panel already holds.",
-              "criteria": [
-                "The context panel head carries a dropdown built as a `<details>` popover, with no framework and no new dependency, listing every block kind and every top-level field the currently shown request actually contains, one checkbox each, with the number of blocks behind that entry (e.g. `tool_result 12`).",
-                "The list is in two labelled groups: **Blocks** first, holding the block kinds present (`assistant`, `other`, `raw`, `system`, `thinking`, `tool_result`, `tool_use`, `user`) sorted alphabetically; then **Fields**, holding the body's remaining top-level keys (`max_tokens`, `metadata`, `model`, `tools`, …) sorted alphabetically. Entries are labelled by the kind name and the field key verbatim, so `system` and `tools` read as one list.",
-                "The dropdown holds two buttons, **all on** and **all off**. *All on* makes every entry visible. *All off* hides every entry the currently shown request contains.",
-                "Unchecking an entry removes its blocks from the list below; checking it puts them back. Neither triggers a fetch: the filter is applied to the record the panel already holds, and `/api/content/at` is not called again.",
-                "The selection is one page-wide state, held as the set of *hidden* entries. It survives a lane change, a scrub, a live refresh and a session change; it is not persisted and a page reload starts with everything visible. An entry never hidden is visible, which is what makes an entry that appears for the first time — a `thinking` block in a later request, a field an earlier body did not carry — arrive visible, including after *all off* was pressed on a request that did not contain it.",
-                "An entry the current request does not contain is not listed, and its hidden state is remembered: scrubbing to a request that carries it again shows it still unchecked and its blocks still hidden.",
-                "The derivation and the markup are pure functions in `public/context.js` — no `document`, no `fetch`, no `location`, the contract `test/independence.test.mjs` guards — and only the click wiring lives in `app.js`.",
-                "The filter's markup carries no `data-lane` attribute and its `<summary>` carries no `data-block`, so opening the dropdown neither toggles the lane selection nor a block's expansion.",
-                "An open dropdown survives a repaint: a live refresh that re-renders `#lane-panel` does not snap it shut, the same way `state.expanded` keeps expanded blocks open today.",
-                "`npm --prefix tools/argus-ui test` passes after this increment, and each criterion above has at least one test that goes red when its behaviour is broken or removed."
-              ],
-              "status": "todo",
-              "note": "Opening cut."
+              "status": "done",
+              "note": "Accepted in review round 1: the context panel's filter is built as pure functions in public/context.js with only the click and change wiring in app.js, and the whole suite runs 230 cases at exit 0."
             },
             {
               "id": "filter-honesty",
-              "title": "The panel head names visible and total, and the empty case says so",
-              "goal": "Make the filtered panel tell the truth about how much it is hiding: the head names visible-of-total blocks and characters, and a panel with everything hidden shows a placeholder instead of an empty list.",
-              "criteria": [
-                "With nothing hidden, the head line reads as it does today (`210.114 chars · 34 blocks`). With something hidden it names both numbers — visible of total — for blocks and for characters, so the filter can never make a context look smaller than it is. The totals stay readable off `data-chars` and `data-blocks`; the visible counts arrive in data attributes of their own.",
-                "With every entry hidden the panel keeps its `data-state=\"ready\"` and shows a placeholder in place of the rows, saying every kind is hidden and where to turn them back on.",
-                "`npm --prefix tools/argus-ui test` passes after this increment, and each criterion above has at least one test that goes red when its behaviour is broken or removed."
-              ],
               "status": "todo",
-              "note": "Opening cut."
+              "note": "Criteria sharpened after filter-core: two of its cases deliberately pin the head's totals and the placeholder-less all-hidden panel, so updating them is part of this increment rather than a surprise red suite. Added that this increment needs no new app.js wiring, which filter-core's delivery showed."
             },
             {
               "id": "tools-box",
-              "title": "The tools box under the timeline goes, its tick marks stay",
-              "goal": "Delete the redundant tool list panel and the per-call parameter ballast it forced into page state, while leaving every other tool signal on the timeline exactly as it is.",
-              "criteria": [
-                "`public/tools.js` and `test/tools.test.mjs` are deleted, and `app.js` imports neither `laneToolInput` nor `renderToolPanel`.",
-                "`renderLanePanel()` paints only the context panel into `#lane-panel`.",
-                "Everything else about tools on the timeline is untouched: the `data-kind=\"tool\"` tick marks on the lane track, the `data-tools` count in each lane's meta, the `tool call` legend entry, and the incremental `/api/events?event=claude_code.tool_result` poll with its `sinceSeq` watermark.",
-                "`toolCallOf()` keeps only what a mark needs — `seq`, `timeMs`, `spanId` — and no longer derives or holds `name`, `preview`, `text`, `chars` or `truncated`. `TOOL_PARAM_CHARS` and the `paramText()` helper go with it. `mergeToolMarks()` keeps its contract: duplicates dropped by `seq`, the watermark returned as the highest `seq` actually held, the input array untouched.",
-                "`npm --prefix tools/argus-ui test` passes after this increment, and each criterion above has at least one test that goes red when its behaviour is broken or removed."
-              ],
               "status": "todo",
-              "note": "Opening cut."
+              "note": "Added two criteria after filter-core: that increment's one rejected round was caused entirely by older whole-object assertions left pinning a superseded shape, and this increment narrows a whole-object shape too. Also pinned that the context panel and its filter survive the deletion, since both now share renderLanePanel()."
             },
             {
               "id": "tabs-out",
-              "title": "The six technical tabs go out of the code",
-              "goal": "Remove the pre-timeline tab interface — its views, its state, its wiring and its per-refresh fetches — and land the whole issue with both suites green.",
-              "criteria": [
-                "`DETAIL_VIEWS` and `renderDetailViews()` are gone from `public/timeline.js`, and no tab nav is rendered anywhere.",
-                "Gone from `public/app.js`: `renderTabBody()`, `renderOverviewTab()`, `renderTodosTab()`, `renderTracesTab()`, `renderWaterfall()`, `renderSpanInspector()`, `renderEventsTab()`, `renderMetricsTab()`, `renderRawTab()`, `loadTabData()`, the helpers only they used (`kpi`, `formatValue`, `spanKind`, `spanNote`, `todoStatusChip`, `SPAN_KINDS`), the `#tab-body` container, and the state fields `tab`, `trace`, `selectedTraceId`, `selectedSpanId`, `events`, `eventFilters`, `metrics`, `facets`.",
-                "Gone from the wiring in `wireEvents()`: the handlers for `[data-tab]`, `[data-trace]`, `[data-span]` and `[data-event-seq]`, the `change` handler for `event-filter` and `event-errors`, and the `event-search` branch of the `input` handler. The 15-second interval no longer repaints a tab body.",
-                "`renderDetail()` no longer builds the `counts` object, and no refresh requests `/api/traces`, `/api/facets` or `/api/metrics`. The `/api/events` request that feeds the tool marks stays.",
-                "No unused import or dead helper is left behind in `app.js` or `timeline.js`, and the tests that pinned the removed views are removed with them rather than left skipped.",
-                "`src/server.mjs` is unchanged: it proxies `/api/*` blindly and knows no route by name.",
-                "`npm --prefix tools/argus-ui test` is green, and every criterion of the issue has at least one test that goes red when its behaviour is broken or removed.",
-                "`./test.sh` is green."
-              ],
               "status": "todo",
-              "note": "Opening cut."
+              "note": "Two changes: the suite criterion now asks for this increment's own criteria to be covered rather than the whole issue's, since every earlier increment already carries its own coverage criterion; and a criterion was added that the shared change and input listeners the filter depends on survive, because filter-core put the filter's wiring into exactly those handlers."
             }
           ],
-          "questions": [],
-          "summary": "Four increments, cut by what each delivers rather than by the files it touches. The issue is three changes stapled together — a new filter and two removals — so the seam between them is obvious; the only judgement calls were how far to split the filter and what order to work them in.\n\nOrder. The context filter is the load-bearing, risky part: it is the only new behaviour, it carries a purity contract (`test/independence.test.mjs`) and a state-lifetime rule the removals do not touch. It goes first so the run learns early whether the derivation, the pure markup and the page-wide hidden set hold up. The two removals are mechanical and low-risk, and each shrinks code the earlier increments already worked beside, so they lose nothing by coming later. The tools box precedes the tabs because it is the smaller of the two and touches the same lane panel the filter just changed.\n\nWhy the filter is two increments and not one or three. `filter-core` is the filter working: the dropdown, the two groups, the counts, the two buttons, the toggle applied without a refetch, the global hidden set with its survival rules, the purity split between `context.js` and `app.js`, the attribute hygiene, and the open dropdown surviving a repaint. `filter-honesty` is the panel reporting what it hides: the visible-of-total head line and the everything-hidden placeholder. The split holds because `filter-core` leaves the repository working and honest on its own — the head simply keeps reading the totals it reads today, which is true, just less informative — and because the reviewer gets to judge the derivation before the reporting layer sits on top of it. I rejected splitting the filter further (derivation, then markup, then wiring): each of those halves is unreviewable alone and would land a repository with markup nobody renders. I also rejected folding `filter-honesty` back into `filter-core`, which would put ten criteria and the whole new feature into one build-and-review chain.\n\nWhy the removals are not split further. The tabs removal is roughly 600 lines across two files, but it is one deliverable: removing the views without their wiring, their state fields and their fetches would leave the repository half-migrated, which is the definition of not an increment. Same for the tools box: deleting the panel without shedding `toolCallOf`'s parameter ballast leaves state nobody reads, and shedding the ballast without deleting the panel breaks it.\n\nWhere each criterion went. The tabs go: all six criteria to `tabs-out`. The tools box goes, the tool marks stay: all four to `tools-box`. The context panel gets a filter: the ten criteria split nine to `filter-core` and one to `filter-honesty` — the head-line criterion — with the everything-hidden placeholder criterion also in `filter-honesty`, so eight to `filter-core` and two to `filter-honesty`. The suite: both criteria (`npm --prefix tools/argus-ui test` green with a test per criterion, and `./test.sh` green) sit on `tabs-out`, the last increment, where they are the whole-issue gate. So that no earlier increment is allowed to land red, each of the other three carries its own scoped gate: its suite passes and each of its own criteria has a test that goes red when broken. Those are per-increment restatements, not a second home for the issue's two suite criteria.\n\nNo facts about the codebase were needed beyond what the issue states, so nothing is deferred to a researcher and there are no questions for the human."
+          "questions": []
         }
       }
     ]
