@@ -30,9 +30,11 @@ flowchart LR
     MODE -->|"Direct Mode"| DIRECT["The session does it itself:<br/>read, change, test,<br/>commit, push"]
     MODE -->|"Issue Mode"| CRIT["The session settles<br/>the acceptance criteria"]
     CRIT --> ISSUE[("issue.md<br/>the record of the run")]
-    ISSUE ==> RES
+    ISSUE ==> OPEN["planner<br/>opens the run state"]
+    OPEN --> STATE[("backlog.json<br/>every step's return,<br/>and the resume point")]
+    STATE ==> RES
 
-    subgraph LOOP["uroboros:loop — one agent per step, each commits its handoff into the issue directory"]
+    subgraph LOOP["uroboros:loop — one agent per step, each returning a structured object it records into the run state"]
         direction TB
         RES["researcher<br/>writes the implementation plan<br/>and the test plan"]
         TEST["test-author<br/>turns the planned cases<br/>into failing tests"]
@@ -42,7 +44,8 @@ flowchart LR
         REV -.->|"findings: correction<br/>round, at most two"| RES
     end
 
-    REV ==>|"accepted, or<br/>two rounds spent"| PUB["Publish:<br/>push the branch,<br/>open the pull request"]
+    REV ==>|"accepted, or<br/>two rounds spent"| CLOSE["planner<br/>closes the increment"]
+    CLOSE --> PUB["Publish:<br/>push the branch,<br/>open the pull request"]
     PUB --> MERGE(["A human merges<br/>the pull request"])
     DIRECT --> MERGE
 ```
@@ -56,10 +59,10 @@ another one. Findings from the
 review open a correction round; after two the loop stops and hands back.
 
 Whether, what and how to test is decided once, by the researcher — the only
-agent that reads the codebase — in a Test Plan section of its handoff. The
-test-author writes those cases and no others, the implementer trusts the
-decision instead of judging it, and the reviewer, which reads no handoff at all,
-checks the result against the intent and so remains the check on that plan.
+agent that reads the codebase — in the test plan it returns. The test-author is
+given that plan and nothing else about the change, the implementer is given the
+implementation plan and never the test plan, and the reviewer is given neither,
+so it checks the result against the intent and remains the check on that plan.
 
 The plan also closes the list of commands the change is judged by, and the loop
 hands that list to the implementer and the reviewer. Nobody runs a suite or a
@@ -67,13 +70,15 @@ linter it leaves out, and an empty list means the review is a reading — so the
 cost of checking is a decision made once, with the codebase in view, instead of
 four agents each reaching for `test.sh` to be safe.
 
-Every agent commits its handoff into `docs/issues/<timestamp>-<slug>/`, one file
-per role for the whole run — a correction round appends its section to that file
-rather than writing a new one — so the record of a run is the issue and not
-anyone's context window. That is what makes
-unattended work possible: idea to pull request with nobody at the keyboard, and
-a session picking the work back up hours later resumes from the record rather
-than from a conversation that is gone.
+Nothing passes between the agents as prose. Each returns a structured object,
+the workflow injects the slice the next role needs into its prompt, and each
+records its own return into `docs/issues/<timestamp>-<slug>/backlog.json`, then
+commits and pushes it. That file is the whole durable state of a run: start the
+same workflow on the same issue directory again and it reads the state back,
+skips every step already recorded there and carries on from the one that never
+finished. That is what makes unattended work possible: idea to pull request with
+nobody at the keyboard, and a session picking the work back up hours later
+resumes from the state rather than from a conversation that is gone.
 
 ## An issue too big for one pass: `agile-loop`
 
@@ -95,7 +100,7 @@ arrangement, not an escape hatch in it.
 ```mermaid
 flowchart LR
     ISSUE[("issue.md")] --> PLAN["planner<br/>cuts the issue<br/>into increments"]
-    PLAN --> BACK[("backlog.md<br/>the current cut")]
+    PLAN --> BACK[("backlog.json<br/>the current cut, and<br/>every step's return")]
     BACK -->|"the first increment<br/>still open"| CHAIN["researcher → test-author<br/>→ implementer → reviewer<br/>correction rounds as before"]
     CHAIN --> REPLAN["planner<br/>closes that increment and<br/>re-cuts the rest"]
     REPLAN --> BACK
@@ -106,10 +111,10 @@ Each increment is reviewed on its own: the workflow hands the reviewer that
 increment's criteria and names the increments still to come, so unfinished work
 reads as scheduled rather than as a finding. The planner never reads the
 codebase — the researcher stays the only agent that does — so it re-cuts from
-the handoffs the run wrote, and the code facts reach it the same way they reach
-everyone else. `backlog.md` is the one file that is rewritten rather than
-appended to, because a backlog a reader has to reconstruct from its own history
-is not a backlog.
+what the run recorded, and the code facts reach it the same way they reach
+everyone else. Closing an increment sheds the step returns that got it there, so
+the state stays the size of the work still open rather than the size of the run
+so far.
 
 The run stops on its own when the backlog empties, and hands back when it will
 not: eight increments spent, one increment worked twice and handed back again

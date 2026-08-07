@@ -38,8 +38,9 @@ Anything else under `agents/` is in the tree and unreachable.
 ## What every agent shares
 
 What holds for every agent at run time — what always binds it, how it takes its
-brief, how it spends its tools, how it reports a run, how it writes and commits
-its handoff, and the check mode — lives in `skills/agent-brief/SKILL.md`, and
+brief, how it spends its tools, how it reports a run, how it records, commits
+and pushes its step return, and the check mode — lives in
+`skills/agent-brief/SKILL.md`, and
 every agent page names it in `skills:` so it is injected at startup. That skill
 ships with the plugin, so it is the only channel that reaches an agent in every
 project alike. This page is for whoever writes the agents; the shared brief is
