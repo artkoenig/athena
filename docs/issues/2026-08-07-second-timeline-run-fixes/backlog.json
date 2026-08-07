@@ -111,6 +111,129 @@
             ],
             "questions": []
           }
+        },
+        {
+          "label": "tests:signing-check.0",
+          "at": "2026-08-07T23:21:41.651Z",
+          "return": {
+            "cases": [
+              {
+                "case": "Signing off, no keys. Config: [user] name and email only. Expected: code is 0.",
+                "file": "/home/user/uroboros/test-signing.sh",
+                "testName": "an environment without commit.gpgsign passes the check",
+                "expected": "code is 0 when commit.gpgsign is not set true",
+                "got": "code=127, out=bash: /home/user/uroboros/bin/check-commit-signing: No such file or directory (bin/check-commit-signing does not exist yet)"
+              },
+              {
+                "case": "Same run, the message. Expected: $out contains SKIP: and contains commit.gpgsign.",
+                "file": "/home/user/uroboros/test-signing.sh",
+                "testName": "the skipped check says why it skipped",
+                "expected": "output contains 'SKIP:' and names 'commit.gpgsign'",
+                "got": "out=bash: /home/user/uroboros/bin/check-commit-signing: No such file or directory"
+              },
+              {
+                "case": "Same run, leftovers. Expected: ls -A \"$case/tmp\" is empty.",
+                "file": "/home/user/uroboros/test-signing.sh",
+                "testName": "the skipped check leaves no temporary directory behind",
+                "expected": "TMPDIR is empty after the run",
+                "got": "passes vacuously today (nothing runs to leave anything behind); confirmed non-tautological against a stub implementation, see summary"
+              },
+              {
+                "case": "A key present but signing switched off. Config: signing variant, but gpgsign=false and program=bad-signer. Expected: code is 0 and $out contains SKIP:.",
+                "file": "/home/user/uroboros/test-signing.sh",
+                "testName": "a signing key with commit.gpgsign false is not an environment the check fails",
+                "expected": "code=0 and output contains 'SKIP:' even though a signing key is present",
+                "got": "code=127, out=bash: /home/user/uroboros/bin/check-commit-signing: No such file or directory"
+              },
+              {
+                "case": "Configured, signer exits 1. Config: signing variant with bad-signer and gpgsign=true. Expected: code is 1.",
+                "file": "/home/user/uroboros/test-signing.sh",
+                "testName": "a configured signer that cannot sign fails the check",
+                "expected": "code is 1",
+                "got": "code=127, not 1 — out=bash: /home/user/uroboros/bin/check-commit-signing: No such file or directory"
+              },
+              {
+                "case": "Same run, the message names the misconfiguration — FAIL: substring.",
+                "file": "/home/user/uroboros/test-signing.sh",
+                "testName": "the failure says FAIL",
+                "expected": "output contains 'FAIL:'",
+                "got": "out=bash: /home/user/uroboros/bin/check-commit-signing: No such file or directory"
+              },
+              {
+                "case": "Same run, the message names the misconfiguration — user.signingkey line.",
+                "file": "/home/user/uroboros/test-signing.sh",
+                "testName": "the failure names the signing key",
+                "expected": "output contains the literal 'user.signingkey = $case/fake_key.pub'",
+                "got": "out=bash: /home/user/uroboros/bin/check-commit-signing: No such file or directory"
+              },
+              {
+                "case": "Same run, the message names the misconfiguration — gpg.ssh.program line.",
+                "file": "/home/user/uroboros/test-signing.sh",
+                "testName": "the failure names the signer program",
+                "expected": "output contains the literal 'gpg.ssh.program = $case/bad-signer'",
+                "got": "out=bash: /home/user/uroboros/bin/check-commit-signing: No such file or directory"
+              },
+              {
+                "case": "Same run, the message names the misconfiguration — git's own words.",
+                "file": "/home/user/uroboros/test-signing.sh",
+                "testName": "the failure carries what git said",
+                "expected": "output contains 'signing failed'",
+                "got": "out=bash: /home/user/uroboros/bin/check-commit-signing: No such file or directory"
+              },
+              {
+                "case": "Same run, no throwaway repository and no temporary directory left.",
+                "file": "/home/user/uroboros/test-signing.sh",
+                "testName": "the failing check leaves no throwaway repository behind",
+                "expected": "TMPDIR is empty after the failing run",
+                "got": "passes vacuously today (nothing runs to leave anything behind); confirmed non-tautological against a stub implementation, see summary"
+              },
+              {
+                "case": "Same run, no process left.",
+                "file": "/home/user/uroboros/test-signing.sh",
+                "testName": "the failing check leaves no process behind",
+                "expected": "pgrep -f \"$case\" finds nothing; reports FAIL naming pgrep as missing if the tool itself is absent",
+                "got": "passes today because nothing runs to leave a process; pgrep is present in this environment so the guard branch is not exercised by this run"
+              },
+              {
+                "case": "Same run, the repository under test is untouched.",
+                "file": "/home/user/uroboros/test-signing.sh",
+                "testName": "the failing check writes nothing into the repository under test",
+                "expected": "git -C \"$root\" status --porcelain is identical before and after the run",
+                "got": "passes today because the run never touches $root (nothing to run); it is exercised for real once bin/check-commit-signing exists, see summary"
+              },
+              {
+                "case": "Configured, signer works. Expected: code is 0 and $out contains OK: (two cases).",
+                "file": "/home/user/uroboros/test-signing.sh",
+                "testName": "a configured signer that works passes the check",
+                "expected": "code is 0",
+                "got": "code=127, not 0 — out=bash: /home/user/uroboros/bin/check-commit-signing: No such file or directory"
+              },
+              {
+                "case": "Configured, signer works — the message.",
+                "file": "/home/user/uroboros/test-signing.sh",
+                "testName": "the passing check says so",
+                "expected": "output contains 'OK:'",
+                "got": "out=bash: /home/user/uroboros/bin/check-commit-signing: No such file or directory"
+              },
+              {
+                "case": "Same run, leftovers.",
+                "file": "/home/user/uroboros/test-signing.sh",
+                "testName": "the passing check leaves no temporary directory behind",
+                "expected": "TMPDIR is empty after the passing run",
+                "got": "passes vacuously today (nothing runs to leave anything behind); confirmed non-tautological against a stub implementation, see summary"
+              },
+              {
+                "case": "Registration: test.sh runs bin/check-commit-signing.",
+                "file": "/home/user/uroboros/test-signing.sh",
+                "testName": "test.sh runs bin/check-commit-signing",
+                "expected": "grep -qF 'bin/check-commit-signing' \"$root/test.sh\" succeeds",
+                "got": "test.sh does not run bin/check-commit-signing (not yet wired in)"
+              }
+            ],
+            "openQuestions": [],
+            "questions": [],
+            "summary": "Wrote /home/user/uroboros/test-signing.sh, a hand-rolled bash suite copying test-worktree.sh's header/helpers/footer verbatim, with all 12 planned cases (16 ok/no assertions) spawning the real bin/check-commit-signing under a fabricated HOME/TMPDIR/GIT_CONFIG_GLOBAL/GIT_CONFIG_SYSTEM against fabricated bad-signer/good-signer fakes and gitconfigs, exactly as the plan specified verbatim scripts and config shapes. `bash test-signing.sh` from the repository root: 16 cases, 11 FAIL / 5 ok, exit 1 — every failure is bin/check-commit-signing not existing (exit 127, 'No such file or directory'), which is the plan's own predicted already-red state; the 5 passing cases are the three 'leaves no temporary directory/process/repository-status-change behind' assertions that hold vacuously when nothing runs, which the plan's own fixtures make true either way. I additionally built a throwaway, uncommitted stub implementation matching the research plan's spec, copied it to bin/check-commit-signing together with the two run lines in test.sh, reran test-signing.sh and got all 16 cases green (exit 0) confirming the assertions are not tautological, then deleted the stub and reverted test.sh via git checkout — git status --porcelain now shows only test-signing.sh untracked, no other file touched. I did not write or touch bin/check-commit-signing or test.sh; those are the implementer's to write. What is left untested is exactly what the plan marked out of scope: the copy of repository-local signing config into the throwaway repository, the defensive 'git reported success but no signature' branch, the live environment's own run.\"test.sh\" entry, and a gpg-agent daemon started outside the sandbox path."
+          }
         }
       ]
     },
