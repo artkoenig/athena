@@ -258,6 +258,38 @@
             ],
             "questions": []
           }
+        },
+        {
+          "label": "implement:lane-activity.0",
+          "at": "2026-08-07T11:38:16.921Z",
+          "return": {
+            "summary": "Each timeline lane now carries activity marks and a context curve: the collector joins tool/llm_request spans and api_request_body records onto the existing lane keys, and the timeline view draws them as ticks over a session-scaled SVG area with a legend naming the measure.",
+            "deviations": [
+              "The plan says the context pass should 'call contentOf(log) and skip a null', but three planned tests (A5, A6, A9) feed api_request_body records that carry only body_length with no body and no body_ref, for which contentOf returns null; I added a small store-level helper requestBodyLength(log) that uses contentOf(log).length when contentOf returns content and otherwise the reported attrs.body_length, skipping the record only when neither exists, so the reported untruncated length still wins in every case and those tests pass without editing them.",
+              "The plan leaves the mark's title and the legend's exact sentence to the implementer; the title is 'tool call: <name>' / 'API request: <name>' (kind alone when the name is null) and the legend is the plan's example wording, which satisfies the phrases the tests require.",
+              "The demo emitter's growth formula is mine: main-lane body_length is max(500, 18000 + sequence*9000 + llmCallIndex*6300 +/- jitter) and each subagent's is max(500, 6000 + sequence*3000 + i*2500 +/- jitter); a local smoke run produced a monotonically rising main curve (27404 -> 60032 over 8 samples) with eight subagent lanes each carrying one sample."
+            ],
+            "commands": [
+              {
+                "command": "npm --prefix tools/argus test",
+                "exitCode": 0,
+                "note": "186 cases across tools/argus/test/*.test.mjs, all pass, nothing skipped. Before the change the same command was 176 pass / 10 fail (the nine store cases A1-A9 and the server case B1)."
+              },
+              {
+                "command": "npm --prefix tools/argus-ui test",
+                "exitCode": 0,
+                "note": "54 cases across tools/argus-ui/test/*.test.mjs, all pass, nothing skipped. Before the change timeline.test.mjs failed at import (missing exports) and the two app cases D1/D2 were red."
+              }
+            ],
+            "blockers": [],
+            "questions": [],
+            "notes": [
+              "The test-author's open point on contextAreaPoints is resolved as they inferred: timelineHtml computes contextPeakOf(items) once and passes that session-wide peak in, never the lane's own contextPeak, so C5/C7's literal strings and C8's cross-lane comparison both hold.",
+              "A2's orphan tool span carries no tool_name, so its mark's name is null (attrs.tool_name ?? attrs.model ?? null); nothing in the markup renders a null name beyond the generic 'tool call' title.",
+              "Context samples are not filtered on atMs > 0 in contextAreaPoints, because C5's first sample sits at atMs 0 with window startMs 0 and must be drawn; only activity marks drop atMs <= 0, as C2 demands.",
+              "Not run and not touched: any command outside the two listed. The demo emitter was smoke-run by hand against a throwaway collector on port 4399 to confirm the curve exists; nothing tests scripts/."
+            ]
+          }
         }
       ]
     },

@@ -101,7 +101,11 @@ function buildTurn(sessionId, sequence, startMs) {
   const model = pick(MODELS);
   let cursor = startMs;
 
-  const record = (name, attributes, timeMs = cursor, severity = 9) => {
+  // `spanId` defaults to the interaction, which is where the CLI puts most
+  // events; a record emitted under a narrower span — an api_request_body under
+  // its llm_request — passes that span's id, since that id is the only thing
+  // tying such a record to the agent that made it.
+  const record = (name, attributes, timeMs = cursor, severity = 9, spanId = interactionId) => {
     logs.push({
       timeUnixNano: nanos(timeMs),
       observedTimeUnixNano: nanos(timeMs),
@@ -110,7 +114,7 @@ function buildTurn(sessionId, sequence, startMs) {
       eventName: name,
       body: { stringValue: name.replace('claude_code.', '') },
       traceId,
-      spanId: interactionId,
+      spanId,
       attributes: attrs({
         'session.id': sessionId,
         'event.name': name.replace('claude_code.', ''),
@@ -131,7 +135,14 @@ function buildTurn(sessionId, sequence, startMs) {
   let cacheCreation = 0;
   let cost = 0;
 
+  // The context a turn sends grows as the conversation goes on, so the drawn
+  // curve rises across a session instead of jittering around one height.
+  let llmCallIndex = 0;
+  const contextLength = (base, step) =>
+    Math.max(500, Math.round(base + sequence * step + llmCallIndex * step * 0.7 + rand(-step / 4, step / 4)));
+
   const emitLlmCall = () => {
+    const llmSpanId = hexId(8);
     const duration = rand(700, 4200);
     const ttft = rand(180, 900);
     const input = randInt(400, 2500);
@@ -148,7 +159,7 @@ function buildTurn(sessionId, sequence, startMs) {
     children.push(
       span({
         traceId,
-        spanId: hexId(8),
+        spanId: llmSpanId,
         parentSpanId: interactionId,
         name: 'claude_code.llm_request',
         startMs: cursor,
@@ -174,6 +185,22 @@ function buildTurn(sessionId, sequence, startMs) {
         },
       }),
     );
+    // What was sent to the model, as the CLI reports it with
+    // OTEL_LOG_RAW_API_BODIES=1: a truncated body plus the untruncated length.
+    record(
+      'claude_code.api_request_body',
+      {
+        model,
+        body: `{"model":"${model}","messages":[{"role":"user","content":"…`,
+        body_truncated: true,
+        body_length: contextLength(18_000, 9_000),
+        query_source: 'main',
+      },
+      cursor,
+      9,
+      llmSpanId,
+    );
+    llmCallIndex++;
     if (failed) {
       record(
         'claude_code.api_error',
@@ -239,10 +266,11 @@ function buildTurn(sessionId, sequence, startMs) {
       const agentStart = cursor + rand(80, 500);
       const llmDuration = rand(600, 2200);
       const agentModel = pick(MODELS);
+      const agentLlmSpanId = hexId(8);
       children.push(
         span({
           traceId,
-          spanId: hexId(8),
+          spanId: agentLlmSpanId,
           parentSpanId: taskSpanId,
           name: 'claude_code.llm_request',
           startMs: agentStart,
@@ -261,6 +289,22 @@ function buildTurn(sessionId, sequence, startMs) {
             ...agentAttrs,
           },
         }),
+      );
+      // The subagent's own context. It carries no agent_id — only the span it
+      // was emitted under says which instance sent it, which is the join the
+      // timeline makes.
+      record(
+        'claude_code.api_request_body',
+        {
+          model: agentModel,
+          body: `{"model":"${agentModel}","messages":[{"role":"user","content":"…`,
+          body_truncated: true,
+          body_length: Math.max(500, Math.round(6_000 + sequence * 3_000 + i * 2_500 + rand(-800, 800))),
+          query_source: 'agent:builtin:researcher',
+        },
+        agentStart,
+        9,
+        agentLlmSpanId,
       );
       const toolStart = agentStart + llmDuration;
       const toolDuration = Math.max(50, cursor + taskDuration - toolStart - rand(50, 400));

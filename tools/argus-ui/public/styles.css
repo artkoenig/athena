@@ -836,16 +836,55 @@ td.name {
 
 .lane-track {
   position: relative;
-  height: 18px;
+  height: 26px;
 }
 
+/* The context curve, behind everything else on the track. The viewBox is
+   0 0 100 100 with preserveAspectRatio="none", so the percentages the view
+   computes stretch straight over the track without measuring anything. */
+.lane-context {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.lane-context polygon {
+  fill: color-mix(in srgb, var(--violet) 22%, transparent);
+  stroke: color-mix(in srgb, var(--violet) 55%, transparent);
+  stroke-width: 0.5;
+  vector-effect: non-scaling-stroke;
+}
+
+/* The lifetime is a thin strip at the top; the room below it belongs to the
+   curve and the marks. */
 .lane-bar {
   position: absolute;
-  top: 4px;
-  height: 10px;
+  top: 2px;
+  height: 4px;
   min-width: 2px;
-  border-radius: 3px;
+  border-radius: 2px;
   background: var(--accent);
+}
+
+/* One tick per tool call and per API request, at the time it happened. */
+.activity-mark {
+  position: absolute;
+  top: 8px;
+  bottom: 2px;
+  width: 2px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: var(--text-faint);
+}
+
+.activity-mark[data-activity-kind="tool"] {
+  background: var(--accent);
+}
+
+.activity-mark[data-activity-kind="llm_request"] {
+  background: var(--violet);
 }
 
 .lane-bar[data-kind="main"] {
@@ -864,6 +903,22 @@ td.name {
   color: var(--text-faint);
   text-align: right;
   white-space: nowrap;
+}
+
+.lane-activity-count,
+.lane-context-peak {
+  flex: 0 0 auto;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+.timeline-legend {
+  margin: 8px 0 0;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--text-faint);
 }
 
 /* ------------------------------- events -------------------------------- */

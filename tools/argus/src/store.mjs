@@ -44,6 +44,65 @@ const AGENT_LANE_PREFIX = 'agent:';
 const LANE_ORDER = { main: 0, subagent: 1, unattributed: 2 };
 /** How far up a parent chain a span's lane is looked for before giving up. */
 const MAX_LANE_CHAIN_DEPTH = 64;
+/**
+ * Bounds on what one lane draws. `/api/sessions/:id/agents` is refetched on
+ * every coalesced ingest while a session is live, so an hour-long session must
+ * not grow its payload without limit.
+ */
+const MAX_LANE_ACTIVITY = 2000;
+const MAX_LANE_CONTEXT = 1000;
+
+/**
+ * Thin a list to at most `max` entries by keeping every stride-th one, plus the
+ * last. Keeping the newest `max` instead would silently cut the left half off a
+ * long lane; an even stride keeps the marks spread over the whole lifetime.
+ */
+function thinEvenly(list, max) {
+  if (list.length <= max) return list;
+  const stride = Math.ceil(list.length / max);
+  const kept = [];
+  for (let i = 0; i < list.length; i += stride) kept.push(list[i]);
+  const last = list[list.length - 1];
+  if (kept[kept.length - 1] !== last) kept.push(last);
+  return kept;
+}
+
+/**
+ * How large the request body of one `api_request_body` record was, or `null`
+ * when the record reports no size at all.
+ *
+ * This is the untruncated length the CLI reported, never the length of the
+ * string that arrived: the body is routinely truncated, and can be replaced by
+ * a file reference or left out entirely, while `body_length` keeps telling the
+ * truth about how much context was sent. `contentOf` reads it for a record that
+ * carries text or a reference; a record that carries neither is not content the
+ * content views can serve, but its reported size is still a sample.
+ */
+function requestBodyLength(log) {
+  const content = contentOf(log);
+  if (content) return content.length;
+  const reported = num(log?.attrs?.body_length, -1);
+  return reported >= 0 ? reported : null;
+}
+
+/**
+ * Thin a list of `{length}` samples to at most `max` entries by splitting it
+ * into equal buckets in order and keeping the largest sample of each, so the
+ * peak of the curve survives being drawn thinner.
+ */
+function thinByPeak(list, max) {
+  if (list.length <= max) return list;
+  const size = Math.ceil(list.length / max);
+  const kept = [];
+  for (let i = 0; i < list.length; i += size) {
+    let best = list[i];
+    for (let j = i + 1; j < i + size && j < list.length; j++) {
+      if (list[j].length > best.length) best = list[j];
+    }
+    kept.push(best);
+  }
+  return kept;
+}
 
 /** Bound on how many stray TaskCreate calls a session keeps (see #applyTodo). */
 const MAX_UNLINKED_CREATES = 200;
@@ -832,8 +891,15 @@ export class TelemetryStore {
    * and — only when something cannot be attributed — an unattributed lane.
    *
    * Returns `null` for an unknown session, the same contract `getSession` has.
-   * A known session with no spans yields `items: []`: lanes are built from
-   * spans, and none are invented.
+   * Lanes are built from this session's spans and from the request-body records
+   * that resolve to none of them, and none are invented beyond that: a known
+   * session with neither yields `items: []`.
+   *
+   * Each lane also carries what is drawn on it — `activity` (one mark per tool
+   * call and per API request, at the time it happened) and `context` (the
+   * reported API request body length over time, the size of what is being sent
+   * to the model). Both are bounded, with `activityTotal` and `contextPeak`
+   * reporting the unthinned truth.
    *
    * The join is a linear walk over the bounded span buffer, the house style of
    * every other query here. It runs across traces on purpose: a subagent's
@@ -876,8 +942,13 @@ export class TelemetryStore {
     };
 
     const lanes = new Map();
-    for (const span of spans) {
-      const key = laneKeyOf(span);
+
+    /**
+     * The lane for a key, created on first use. Content records can need a lane
+     * no span produced — an unattributed one — so this is not private to the
+     * span loop; a lane born that way keeps `spanCount: 0`.
+     */
+    const laneFor = (key) => {
       let lane = lanes.get(key);
       if (!lane) {
         const isAgent = key.startsWith(AGENT_LANE_PREFIX);
@@ -891,9 +962,18 @@ export class TelemetryStore {
           lastMs: 0,
           durationMs: 0,
           spanCount: 0,
+          activity: [],
+          activityTotal: 0,
+          context: [],
+          contextPeak: 0,
         };
         lanes.set(key, lane);
       }
+      return lane;
+    };
+
+    for (const span of spans) {
+      const lane = laneFor(laneKeyOf(span));
       lane.spanCount++;
       // A span that never started (or never decoded) carries startMs 0; letting
       // it in would drag the lane back to the epoch.
@@ -908,10 +988,57 @@ export class TelemetryStore {
           if (!lane.parentAgentId && ref.parentAgentId) lane.parentAgentId = ref.parentAgentId;
         }
       }
+      // The tool and llm_request spans are the calls this agent made. The
+      // tool.execution span is a child of the tool span, so counting it too
+      // would mark every tool call twice. A mark carries no duration: the lane
+      // bar already shows the lifetime, and what is drawn is a tick.
+      if ((span.name === SPAN.tool || span.name === SPAN.llmRequest) && span.startMs > 0) {
+        const attrs = span.attrs ?? {};
+        lane.activity.push({
+          atMs: span.startMs,
+          kind: span.name === SPAN.tool ? 'tool' : 'llm_request',
+          name: attrs.tool_name ?? attrs.model ?? null,
+        });
+      }
+    }
+
+    // The context curve. These records carry no agent_id at all, so their lane
+    // is the lane of the span they were emitted under; one that names no span
+    // in the buffer is honestly unattributed rather than dropped or folded into
+    // main. `query_source` is deliberately not used as a fallback: it names the
+    // agent type, not the instance.
+    for (const log of this.logs) {
+      if (log.sessionId !== sessionId) continue;
+      if (log.eventName !== EVENT.apiRequestBody) continue;
+      if (!(log.timeMs > 0)) continue;
+      const length = requestBodyLength(log);
+      if (length === null) continue;
+      const span = log.spanId ? byId.get(log.spanId) : null;
+      const lane = laneFor(span ? laneKeyOf(span) : UNATTRIBUTED_LANE_ID);
+      lane.context.push({ atMs: log.timeMs, length });
     }
 
     const items = [...lanes.values()];
-    for (const lane of items) lane.durationMs = Math.max(0, lane.lastMs - lane.firstMs);
+    for (const lane of items) {
+      // A mark or a sample must never sit outside the lifetime its lane claims,
+      // and a lane born from content records alone has no span to date it.
+      for (const entry of [...lane.activity, ...lane.context]) {
+        if (!(entry.atMs > 0)) continue;
+        lane.firstMs = lane.firstMs ? Math.min(lane.firstMs, entry.atMs) : entry.atMs;
+        lane.lastMs = Math.max(lane.lastMs, entry.atMs);
+      }
+      // Arrival order is not time order: spans are exported when they end, and
+      // logs can be batched out of order.
+      lane.activity.sort((a, b) => a.atMs - b.atMs);
+      lane.context.sort((a, b) => a.atMs - b.atMs);
+      // The totals report the unthinned truth, so a bounded list never lies
+      // about how much there was.
+      lane.activityTotal = lane.activity.length;
+      lane.contextPeak = lane.context.reduce((peak, sample) => Math.max(peak, sample.length), 0);
+      lane.activity = thinEvenly(lane.activity, MAX_LANE_ACTIVITY);
+      lane.context = thinByPeak(lane.context, MAX_LANE_CONTEXT);
+      lane.durationMs = Math.max(0, lane.lastMs - lane.firstMs);
+    }
     items.sort((a, b) => LANE_ORDER[a.kind] - LANE_ORDER[b.kind] ||
       a.firstMs - b.firstMs ||
       (a.agentId < b.agentId ? -1 : a.agentId > b.agentId ? 1 : 0));
