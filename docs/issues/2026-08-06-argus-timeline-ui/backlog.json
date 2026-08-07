@@ -330,6 +330,22 @@
             "questions": [],
             "summary": "The collector now carries each tool call's parameters on its lane activity entry (capped at 1000 chars, joined from the tool_result log through tool_use_id in the existing single logs walk), and the UI turns a lane row into a selectable control whose selection lists that agent's tool calls with their parameters up to the chosen time, repainted in place as the time moves."
           }
+        },
+        {
+          "label": "review:lane-select.0",
+          "at": "2026-08-07T13:05:32.512Z",
+          "return": {
+            "summary": "Reviewed the whole diff against main for increment 5 (lane selection and per-lane tool use); ran the two listed commands — `npm --prefix tools/argus test`, 192 cases, exit 0, and `npm --prefix tools/argus-ui test`, 89 cases, exit 0, nothing skipped — and found every acceptance criterion met in the code, with one gap in what the rendered-page test actually pins.",
+            "reason": "The criterion that the rendered page is what proves this increment is not met by the tests: the lane detail panel's container can vanish from the session view's markup without a single test going red, so a page that never shows the selected lane's tool calls would still ship green.",
+            "findings": [
+              {
+                "claim": "No test notices if the lane detail panel's container is missing from the rendered session view, so a page on which a lane selection never reaches the panel still passes green.",
+                "reproduction": "Delete the single line `<div id=\"lane-detail\">${laneDetailHtml(state.agents, state.atMs, state.selectedLaneId)}</div>` from renderDetail in /home/user/uroboros/tools/argus-ui/public/app.js:190, then run `npm --prefix tools/argus-ui test`: 89 of 89 cases still pass (verified in a throwaway git worktree, exit 0). The panel is then in no rendered markup at all — in a browser, selecting a lane would show nothing — yet the suite is silent, because the fake DOM's document.getElementById (/home/user/uroboros/tools/argus-ui/test/app.test.mjs:46-54) conjures an element for any id whether or not the rendered HTML contains it, and every lane-panel assertion in the new cases reads handle.el('lane-detail') rather than the detail element's own markup. Closing the gap needs the rendered detail markup itself asserted to carry the panel: after clicking a lane, `handle.el('detail').innerHTML` must contain the listing (e.g. 'Grep' and 'needle' for lane agent:agt-a), not only `handle.el('lane-detail').innerHTML`.",
+                "criterion": "What proves this increment is the rendered page: a change that stops a lane selection reaching the panel, or leaves the panel showing the previous moment after the chosen time moves, is caught, not only a builder function checked in isolation."
+              }
+            ],
+            "questions": []
+          }
         }
       ]
     },
