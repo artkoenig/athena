@@ -1,0 +1,149 @@
+{
+  "version": 1,
+  "issue": "docs/issues/2026-08-07-timeline-focus-and-context-filter",
+  "workflow": "agile-loop",
+  "increments": [
+    {
+      "id": "filter-core",
+      "title": "The context panel gets a working block filter",
+      "goal": "Give the context panel head a dropdown that lists the block kinds and top-level fields the shown request actually contains, and let the reader hide and show them, against the record the panel already holds.",
+      "criteria": [
+        "The context panel head carries a dropdown built as a `<details>` popover, with no framework and no new dependency, listing every block kind and every top-level field the currently shown request actually contains, one checkbox each, with the number of blocks behind that entry (e.g. `tool_result 12`).",
+        "The list is in two labelled groups: **Blocks** first, holding the block kinds present (`assistant`, `other`, `raw`, `system`, `thinking`, `tool_result`, `tool_use`, `user`) sorted alphabetically; then **Fields**, holding the body's remaining top-level keys (`max_tokens`, `metadata`, `model`, `tools`, …) sorted alphabetically. Entries are labelled by the kind name and the field key verbatim, so `system` and `tools` read as one list.",
+        "The dropdown holds two buttons, **all on** and **all off**. *All on* makes every entry visible. *All off* hides every entry the currently shown request contains.",
+        "Unchecking an entry removes its blocks from the list below; checking it puts them back. Neither triggers a fetch: the filter is applied to the record the panel already holds, and `/api/content/at` is not called again.",
+        "The selection is one page-wide state, held as the set of *hidden* entries. It survives a lane change, a scrub, a live refresh and a session change; it is not persisted and a page reload starts with everything visible. An entry never hidden is visible, which is what makes an entry that appears for the first time — a `thinking` block in a later request, a field an earlier body did not carry — arrive visible, including after *all off* was pressed on a request that did not contain it.",
+        "An entry the current request does not contain is not listed, and its hidden state is remembered: scrubbing to a request that carries it again shows it still unchecked and its blocks still hidden.",
+        "The derivation and the markup are pure functions in `public/context.js` — no `document`, no `fetch`, no `location`, the contract `test/independence.test.mjs` guards — and only the click wiring lives in `app.js`.",
+        "The filter's markup carries no `data-lane` attribute and its `<summary>` carries no `data-block`, so opening the dropdown neither toggles the lane selection nor a block's expansion.",
+        "An open dropdown survives a repaint: a live refresh that re-renders `#lane-panel` does not snap it shut, the same way `state.expanded` keeps expanded blocks open today.",
+        "`npm --prefix tools/argus-ui test` passes after this increment, and each criterion above has at least one test that goes red when its behaviour is broken or removed."
+      ],
+      "status": "todo",
+      "note": "",
+      "steps": []
+    },
+    {
+      "id": "filter-honesty",
+      "title": "The panel head names visible and total, and the empty case says so",
+      "goal": "Make the filtered panel tell the truth about how much it is hiding: the head names visible-of-total blocks and characters, and a panel with everything hidden shows a placeholder instead of an empty list.",
+      "criteria": [
+        "With nothing hidden, the head line reads as it does today (`210.114 chars · 34 blocks`). With something hidden it names both numbers — visible of total — for blocks and for characters, so the filter can never make a context look smaller than it is. The totals stay readable off `data-chars` and `data-blocks`; the visible counts arrive in data attributes of their own.",
+        "With every entry hidden the panel keeps its `data-state=\"ready\"` and shows a placeholder in place of the rows, saying every kind is hidden and where to turn them back on.",
+        "`npm --prefix tools/argus-ui test` passes after this increment, and each criterion above has at least one test that goes red when its behaviour is broken or removed."
+      ],
+      "status": "todo",
+      "note": "",
+      "steps": []
+    },
+    {
+      "id": "tools-box",
+      "title": "The tools box under the timeline goes, its tick marks stay",
+      "goal": "Delete the redundant tool list panel and the per-call parameter ballast it forced into page state, while leaving every other tool signal on the timeline exactly as it is.",
+      "criteria": [
+        "`public/tools.js` and `test/tools.test.mjs` are deleted, and `app.js` imports neither `laneToolInput` nor `renderToolPanel`.",
+        "`renderLanePanel()` paints only the context panel into `#lane-panel`.",
+        "Everything else about tools on the timeline is untouched: the `data-kind=\"tool\"` tick marks on the lane track, the `data-tools` count in each lane's meta, the `tool call` legend entry, and the incremental `/api/events?event=claude_code.tool_result` poll with its `sinceSeq` watermark.",
+        "`toolCallOf()` keeps only what a mark needs — `seq`, `timeMs`, `spanId` — and no longer derives or holds `name`, `preview`, `text`, `chars` or `truncated`. `TOOL_PARAM_CHARS` and the `paramText()` helper go with it. `mergeToolMarks()` keeps its contract: duplicates dropped by `seq`, the watermark returned as the highest `seq` actually held, the input array untouched.",
+        "`npm --prefix tools/argus-ui test` passes after this increment, and each criterion above has at least one test that goes red when its behaviour is broken or removed."
+      ],
+      "status": "todo",
+      "note": "",
+      "steps": []
+    },
+    {
+      "id": "tabs-out",
+      "title": "The six technical tabs go out of the code",
+      "goal": "Remove the pre-timeline tab interface — its views, its state, its wiring and its per-refresh fetches — and land the whole issue with both suites green.",
+      "criteria": [
+        "`DETAIL_VIEWS` and `renderDetailViews()` are gone from `public/timeline.js`, and no tab nav is rendered anywhere.",
+        "Gone from `public/app.js`: `renderTabBody()`, `renderOverviewTab()`, `renderTodosTab()`, `renderTracesTab()`, `renderWaterfall()`, `renderSpanInspector()`, `renderEventsTab()`, `renderMetricsTab()`, `renderRawTab()`, `loadTabData()`, the helpers only they used (`kpi`, `formatValue`, `spanKind`, `spanNote`, `todoStatusChip`, `SPAN_KINDS`), the `#tab-body` container, and the state fields `tab`, `trace`, `selectedTraceId`, `selectedSpanId`, `events`, `eventFilters`, `metrics`, `facets`.",
+        "Gone from the wiring in `wireEvents()`: the handlers for `[data-tab]`, `[data-trace]`, `[data-span]` and `[data-event-seq]`, the `change` handler for `event-filter` and `event-errors`, and the `event-search` branch of the `input` handler. The 15-second interval no longer repaints a tab body.",
+        "`renderDetail()` no longer builds the `counts` object, and no refresh requests `/api/traces`, `/api/facets` or `/api/metrics`. The `/api/events` request that feeds the tool marks stays.",
+        "No unused import or dead helper is left behind in `app.js` or `timeline.js`, and the tests that pinned the removed views are removed with them rather than left skipped.",
+        "`src/server.mjs` is unchanged: it proxies `/api/*` blindly and knows no route by name.",
+        "`npm --prefix tools/argus-ui test` is green, and every criterion of the issue has at least one test that goes red when its behaviour is broken or removed.",
+        "`./test.sh` is green."
+      ],
+      "status": "todo",
+      "note": "",
+      "steps": []
+    }
+  ],
+  "run": {
+    "steps": [
+      {
+        "label": "decompose",
+        "at": "2026-08-07T14:59:54.673Z",
+        "return": {
+          "increments": [
+            {
+              "id": "filter-core",
+              "title": "The context panel gets a working block filter",
+              "goal": "Give the context panel head a dropdown that lists the block kinds and top-level fields the shown request actually contains, and let the reader hide and show them, against the record the panel already holds.",
+              "criteria": [
+                "The context panel head carries a dropdown built as a `<details>` popover, with no framework and no new dependency, listing every block kind and every top-level field the currently shown request actually contains, one checkbox each, with the number of blocks behind that entry (e.g. `tool_result 12`).",
+                "The list is in two labelled groups: **Blocks** first, holding the block kinds present (`assistant`, `other`, `raw`, `system`, `thinking`, `tool_result`, `tool_use`, `user`) sorted alphabetically; then **Fields**, holding the body's remaining top-level keys (`max_tokens`, `metadata`, `model`, `tools`, …) sorted alphabetically. Entries are labelled by the kind name and the field key verbatim, so `system` and `tools` read as one list.",
+                "The dropdown holds two buttons, **all on** and **all off**. *All on* makes every entry visible. *All off* hides every entry the currently shown request contains.",
+                "Unchecking an entry removes its blocks from the list below; checking it puts them back. Neither triggers a fetch: the filter is applied to the record the panel already holds, and `/api/content/at` is not called again.",
+                "The selection is one page-wide state, held as the set of *hidden* entries. It survives a lane change, a scrub, a live refresh and a session change; it is not persisted and a page reload starts with everything visible. An entry never hidden is visible, which is what makes an entry that appears for the first time — a `thinking` block in a later request, a field an earlier body did not carry — arrive visible, including after *all off* was pressed on a request that did not contain it.",
+                "An entry the current request does not contain is not listed, and its hidden state is remembered: scrubbing to a request that carries it again shows it still unchecked and its blocks still hidden.",
+                "The derivation and the markup are pure functions in `public/context.js` — no `document`, no `fetch`, no `location`, the contract `test/independence.test.mjs` guards — and only the click wiring lives in `app.js`.",
+                "The filter's markup carries no `data-lane` attribute and its `<summary>` carries no `data-block`, so opening the dropdown neither toggles the lane selection nor a block's expansion.",
+                "An open dropdown survives a repaint: a live refresh that re-renders `#lane-panel` does not snap it shut, the same way `state.expanded` keeps expanded blocks open today.",
+                "`npm --prefix tools/argus-ui test` passes after this increment, and each criterion above has at least one test that goes red when its behaviour is broken or removed."
+              ],
+              "status": "todo",
+              "note": "Opening cut."
+            },
+            {
+              "id": "filter-honesty",
+              "title": "The panel head names visible and total, and the empty case says so",
+              "goal": "Make the filtered panel tell the truth about how much it is hiding: the head names visible-of-total blocks and characters, and a panel with everything hidden shows a placeholder instead of an empty list.",
+              "criteria": [
+                "With nothing hidden, the head line reads as it does today (`210.114 chars · 34 blocks`). With something hidden it names both numbers — visible of total — for blocks and for characters, so the filter can never make a context look smaller than it is. The totals stay readable off `data-chars` and `data-blocks`; the visible counts arrive in data attributes of their own.",
+                "With every entry hidden the panel keeps its `data-state=\"ready\"` and shows a placeholder in place of the rows, saying every kind is hidden and where to turn them back on.",
+                "`npm --prefix tools/argus-ui test` passes after this increment, and each criterion above has at least one test that goes red when its behaviour is broken or removed."
+              ],
+              "status": "todo",
+              "note": "Opening cut."
+            },
+            {
+              "id": "tools-box",
+              "title": "The tools box under the timeline goes, its tick marks stay",
+              "goal": "Delete the redundant tool list panel and the per-call parameter ballast it forced into page state, while leaving every other tool signal on the timeline exactly as it is.",
+              "criteria": [
+                "`public/tools.js` and `test/tools.test.mjs` are deleted, and `app.js` imports neither `laneToolInput` nor `renderToolPanel`.",
+                "`renderLanePanel()` paints only the context panel into `#lane-panel`.",
+                "Everything else about tools on the timeline is untouched: the `data-kind=\"tool\"` tick marks on the lane track, the `data-tools` count in each lane's meta, the `tool call` legend entry, and the incremental `/api/events?event=claude_code.tool_result` poll with its `sinceSeq` watermark.",
+                "`toolCallOf()` keeps only what a mark needs — `seq`, `timeMs`, `spanId` — and no longer derives or holds `name`, `preview`, `text`, `chars` or `truncated`. `TOOL_PARAM_CHARS` and the `paramText()` helper go with it. `mergeToolMarks()` keeps its contract: duplicates dropped by `seq`, the watermark returned as the highest `seq` actually held, the input array untouched.",
+                "`npm --prefix tools/argus-ui test` passes after this increment, and each criterion above has at least one test that goes red when its behaviour is broken or removed."
+              ],
+              "status": "todo",
+              "note": "Opening cut."
+            },
+            {
+              "id": "tabs-out",
+              "title": "The six technical tabs go out of the code",
+              "goal": "Remove the pre-timeline tab interface — its views, its state, its wiring and its per-refresh fetches — and land the whole issue with both suites green.",
+              "criteria": [
+                "`DETAIL_VIEWS` and `renderDetailViews()` are gone from `public/timeline.js`, and no tab nav is rendered anywhere.",
+                "Gone from `public/app.js`: `renderTabBody()`, `renderOverviewTab()`, `renderTodosTab()`, `renderTracesTab()`, `renderWaterfall()`, `renderSpanInspector()`, `renderEventsTab()`, `renderMetricsTab()`, `renderRawTab()`, `loadTabData()`, the helpers only they used (`kpi`, `formatValue`, `spanKind`, `spanNote`, `todoStatusChip`, `SPAN_KINDS`), the `#tab-body` container, and the state fields `tab`, `trace`, `selectedTraceId`, `selectedSpanId`, `events`, `eventFilters`, `metrics`, `facets`.",
+                "Gone from the wiring in `wireEvents()`: the handlers for `[data-tab]`, `[data-trace]`, `[data-span]` and `[data-event-seq]`, the `change` handler for `event-filter` and `event-errors`, and the `event-search` branch of the `input` handler. The 15-second interval no longer repaints a tab body.",
+                "`renderDetail()` no longer builds the `counts` object, and no refresh requests `/api/traces`, `/api/facets` or `/api/metrics`. The `/api/events` request that feeds the tool marks stays.",
+                "No unused import or dead helper is left behind in `app.js` or `timeline.js`, and the tests that pinned the removed views are removed with them rather than left skipped.",
+                "`src/server.mjs` is unchanged: it proxies `/api/*` blindly and knows no route by name.",
+                "`npm --prefix tools/argus-ui test` is green, and every criterion of the issue has at least one test that goes red when its behaviour is broken or removed.",
+                "`./test.sh` is green."
+              ],
+              "status": "todo",
+              "note": "Opening cut."
+            }
+          ],
+          "questions": [],
+          "summary": "Four increments, cut by what each delivers rather than by the files it touches. The issue is three changes stapled together — a new filter and two removals — so the seam between them is obvious; the only judgement calls were how far to split the filter and what order to work them in.\n\nOrder. The context filter is the load-bearing, risky part: it is the only new behaviour, it carries a purity contract (`test/independence.test.mjs`) and a state-lifetime rule the removals do not touch. It goes first so the run learns early whether the derivation, the pure markup and the page-wide hidden set hold up. The two removals are mechanical and low-risk, and each shrinks code the earlier increments already worked beside, so they lose nothing by coming later. The tools box precedes the tabs because it is the smaller of the two and touches the same lane panel the filter just changed.\n\nWhy the filter is two increments and not one or three. `filter-core` is the filter working: the dropdown, the two groups, the counts, the two buttons, the toggle applied without a refetch, the global hidden set with its survival rules, the purity split between `context.js` and `app.js`, the attribute hygiene, and the open dropdown surviving a repaint. `filter-honesty` is the panel reporting what it hides: the visible-of-total head line and the everything-hidden placeholder. The split holds because `filter-core` leaves the repository working and honest on its own — the head simply keeps reading the totals it reads today, which is true, just less informative — and because the reviewer gets to judge the derivation before the reporting layer sits on top of it. I rejected splitting the filter further (derivation, then markup, then wiring): each of those halves is unreviewable alone and would land a repository with markup nobody renders. I also rejected folding `filter-honesty` back into `filter-core`, which would put ten criteria and the whole new feature into one build-and-review chain.\n\nWhy the removals are not split further. The tabs removal is roughly 600 lines across two files, but it is one deliverable: removing the views without their wiring, their state fields and their fetches would leave the repository half-migrated, which is the definition of not an increment. Same for the tools box: deleting the panel without shedding `toolCallOf`'s parameter ballast leaves state nobody reads, and shedding the ballast without deleting the panel breaks it.\n\nWhere each criterion went. The tabs go: all six criteria to `tabs-out`. The tools box goes, the tool marks stay: all four to `tools-box`. The context panel gets a filter: the ten criteria split nine to `filter-core` and one to `filter-honesty` — the head-line criterion — with the everything-hidden placeholder criterion also in `filter-honesty`, so eight to `filter-core` and two to `filter-honesty`. The suite: both criteria (`npm --prefix tools/argus-ui test` green with a test per criterion, and `./test.sh` green) sit on `tabs-out`, the last increment, where they are the whole-issue gate. So that no earlier increment is allowed to land red, each of the other three carries its own scoped gate: its suite passes and each of its own criteria has a test that goes red when broken. Those are per-increment restatements, not a second home for the issue's two suite criteria.\n\nNo facts about the codebase were needed beyond what the issue states, so nothing is deferred to a researcher and there are no questions for the human."
+        }
+      }
+    ]
+  }
+}
