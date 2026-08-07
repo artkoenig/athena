@@ -176,6 +176,32 @@
               "bash test-repo.sh, 77 cases (4 new), exit 1: 73 pass, 4 fail (the 2 new grep cases on skills/agent-brief/SKILL.md and the 2 new w20 driver cases for loop.js and agile-loop.js; all 73 pre-existing cases stay green)."
             ]
           }
+        },
+        {
+          "label": "implement:agent-affordances.0",
+          "at": "2026-08-07T22:01:58.101Z",
+          "return": {
+            "summary": "backlog.mjs `record` now reads the step return from stdin when its payload argument is `-`, and the shared brief plus both workflow scripts' recordStep() tell agents that form.",
+            "deviations": [],
+            "commands": [
+              {
+                "command": "node --test skills/agent-brief/assets/backlog.test.mjs",
+                "exitCode": 0,
+                "note": "23 cases, all pass; the 5 that were red before the change (stdin payload, run-level dash-dash, file-vs-stdin parity, empty stdin, malformed stdin JSON) are green."
+              },
+              {
+                "command": "bash test-repo.sh",
+                "exitCode": 0,
+                "note": "PASS: 77 cases; the 4 that were red (brief's stdin command, brief names stdin, loop.js w20, agile-loop.js w20) are green."
+              }
+            ],
+            "blockers": [],
+            "questions": [],
+            "notes": [
+              "The test-author's count note holds: A4 (missing payload file) and A7 (missing payload argument) already passed against the file-path-only CLI and were kept as regression guards; the readPayload wrapper leaves readJson and therefore `init` untouched.",
+              "Outside scope, noticed and left alone: the agents/*.md record lines and the planner's init/close prompts name no payload form, so they need no edit."
+            ]
+          }
         }
       ]
     },

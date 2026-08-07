@@ -84,19 +84,23 @@ one sentence, write that sentence in the imperative, and state each thing once:
 two wordings of one rule disagree after the first edit, and the reader follows
 whichever it saw last.
 
-**Record it before you finish.** Write your return to a JSON file outside the
-repository, then run
+**Record it before you finish.** Pipe your return into the recorder on stdin,
+with a trailing `-` in place of a file:
 
 ```
-node "<base>/assets/backlog.mjs" record <issueDir>/backlog.json <incrementId> <label> <thatFile>
+node "<base>/assets/backlog.mjs" record <issueDir>/backlog.json <incrementId> <label> - <<'RETURN'
+{"summary": "your return, as JSON"}
+RETURN
 ```
 
-with the increment id and the label your prompt gives you. `<base>` is the base
-directory of the `agent-brief` skill, which your context names on its `Base
-directory for this skill:` line; where no such line is there, find the helper
-with `find "$HOME/.claude/plugins" -path '*agent-brief/assets/backlog.mjs' |
-head -1`. That helper is the only writer of `backlog.json`, so you never edit
-that file by hand.
+Quote the heredoc delimiter as `<<'RETURN'` so the shell passes your JSON
+through untouched, quotes and markup and all. Use the increment id and the
+label your prompt gives you. A path to a JSON file still works in place of the
+`-`. `<base>` is the base directory of the `agent-brief` skill, which your
+context names on its `Base directory for this skill:` line; where no such line
+is there, find the helper with `find "$HOME/.claude/plugins" -path
+'*agent-brief/assets/backlog.mjs' | head -1`. That helper is the only writer of
+`backlog.json`, so you never edit that file by hand.
 
 `backlog.json` is the whole durable state of the run: a session that dies
 resumes from it, a step it holds is never worked twice, and a step it does not

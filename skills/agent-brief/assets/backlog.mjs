@@ -23,9 +23,11 @@ const STATUSES = ['done', 'blocked', 'dropped']
 const USAGE = [
   'usage:',
   '  backlog.mjs init   <backlogPath> <payloadFile>',
-  '  backlog.mjs record <backlogPath> <incrementId|-> <label> <payloadFile>',
+  '  backlog.mjs record <backlogPath> <incrementId|-> <label> <payloadFile|->',
   '  backlog.mjs close  <backlogPath> <incrementId> <status> [note]',
   '  backlog.mjs read   <backlogPath>',
+  '',
+  'record reads the step return from stdin when its payload argument is `-`.',
 ].join('\n')
 
 // Exit 2 is "you called it wrong" — an unknown command, a missing argument,
@@ -48,6 +50,27 @@ function readJson(file, what) {
     return JSON.parse(text)
   } catch (err) {
     fail(`${what} at ${file} is not valid JSON: ${err.message}`, 2)
+  }
+}
+
+// The step return arrives either as a path to a JSON file or, with a payload
+// argument of `-`, on stdin. Stdin is the form the agents are told to use:
+// building the file first put a heredoc between an agent and its own return,
+// and a summary carrying quotes or HTML attributes did not survive it.
+function readPayload(source, what) {
+  if (source !== '-') return readJson(source, what)
+  if (process.stdin.isTTY) fail(`${what} was asked for on stdin, but stdin is a terminal`, 2)
+  let text
+  try {
+    text = fs.readFileSync(0, 'utf8')
+  } catch {
+    fail(`cannot read ${what} from stdin`, 2)
+  }
+  if (!text.trim()) fail(`${what} on stdin is empty`, 2)
+  try {
+    return JSON.parse(text)
+  } catch (err) {
+    fail(`${what} on stdin is not valid JSON: ${err.message}`, 2)
   }
 }
 
@@ -130,7 +153,7 @@ function init(backlogPath, payloadFile) {
 // the step in `run.steps`, which is where the steps that sit between increments
 // go — the opening cut, each close, the publish.
 function record(backlogPath, incrementId, label, payloadFile) {
-  const payload = readJson(payloadFile, 'the step return')
+  const payload = readPayload(payloadFile, 'the step return')
   const backlog = loadBacklog(backlogPath)
 
   let steps

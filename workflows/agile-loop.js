@@ -393,14 +393,14 @@ const noDispatch =
   'your step return, commit it with your work, then push the commit.'
 
 // Every dispatch carries the one line that turns its return into durable state.
-// The agent writes the file; this script never touches it, because the workflow
-// runtime gives a script `args`, `agent`, `log` and `phase` and no file access
-// at all.
+// The agent pipes its return to the recorder; this script never touches the
+// state file, because the workflow runtime gives a script `args`, `agent`,
+// `log` and `phase` and no file access at all.
 function recordStep(incrementId, label) {
   return (
-    `Record this step: write your whole return to a JSON file outside the repository, then ` +
-    `run the \`record\` subcommand of the backlog helper your shared brief names, as ` +
-    `\`record ${dir}/backlog.json ${incrementId} ${label} <that file>\`.\n`
+    `Record this step: pipe your whole return as JSON into the \`record\` subcommand of the ` +
+    `backlog helper your shared brief names, on stdin, as ` +
+    `\`record ${dir}/backlog.json ${incrementId} ${label} -\`, with no file in between.\n`
   )
 }
 
