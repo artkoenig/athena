@@ -1315,6 +1315,53 @@ else
 fi
 
 echo
+echo "=== an agent has a documented way to start and stop a collector"
+
+# Finding 7: an agent poking the API used to improvise a pkill. The shared
+# brief is where every agent looks first, so it has to name the fixture, not
+# just the two argus-specific pages a session may never open. -F because the
+# string carries slashes and dots. This is the case that goes red if the
+# brief stops naming the way.
+if grep -qF 'tools/argus/scripts/with-collector.mjs' "$root/skills/agent-brief/SKILL.md"; then
+  ok "the shared brief names tools/argus/scripts/with-collector.mjs"
+else
+  no "the shared brief does not name tools/argus/scripts/with-collector.mjs:"
+  grep -n 'with-collector' "$root/skills/agent-brief/SKILL.md" | sed 's/^/       /'
+fi
+
+# Naming the fixture is not enough if an agent is not also told how the
+# command it runs reaches the collector the fixture started.
+if grep -qF 'ARGUS_URL' "$root/skills/agent-brief/SKILL.md"; then
+  ok "the shared brief names ARGUS_URL, the variable the fixture hands the command"
+else
+  no "the shared brief does not name ARGUS_URL:"
+  grep -n 'ARGUS_URL' "$root/skills/agent-brief/SKILL.md" | sed 's/^/       /'
+fi
+
+# The argus package's own maintainer page has to know about it too, for an
+# agent already working inside tools/argus.
+if grep -qF 'scripts/with-collector.mjs' "$root/tools/argus/CLAUDE.md"; then
+  ok "tools/argus/CLAUDE.md names scripts/with-collector.mjs"
+else
+  no "tools/argus/CLAUDE.md does not name scripts/with-collector.mjs:"
+  grep -n 'with-collector' "$root/tools/argus/CLAUDE.md" | sed 's/^/       /'
+fi
+
+# The fixture the pages point at has to actually be there.
+if [ -f "$root/tools/argus/scripts/with-collector.mjs" ]; then
+  ok "tools/argus/scripts/with-collector.mjs exists"
+else
+  no "tools/argus/scripts/with-collector.mjs does not exist"
+fi
+
+# ...and parse, the same pair the backlog recorder gets above.
+if node --check "$root/tools/argus/scripts/with-collector.mjs" >/dev/null 2>&1; then
+  ok "tools/argus/scripts/with-collector.mjs parses"
+else
+  no "tools/argus/scripts/with-collector.mjs does not parse (or does not exist)"
+fi
+
+echo
 if [ "$failed" -eq 0 ]; then
   echo "PASS: $passed cases"
 else

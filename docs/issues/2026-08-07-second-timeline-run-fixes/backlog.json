@@ -96,6 +96,44 @@
             ],
             "questions": []
           }
+        },
+        {
+          "label": "implement:collector-fixture.0",
+          "at": "2026-08-07T22:34:42.174Z",
+          "return": {
+            "summary": "Added tools/argus/scripts/with-collector.mjs, a zero-dependency wrapper that starts a collector on a free port with --no-persist --ready-fd 3 --exit-with <own pid>, runs one command with ARGUS_URL and ARGUS_PORT, and stops that collector on the way out, and named it in skills/agent-brief/SKILL.md and tools/argus/CLAUDE.md. TREE VERSUS ISSUE, as found: tools/argus/scripts/ held only demo-emit.mjs and nothing started a collector for ad-hoc use; persist.test.mjs line 111 has a module-local startCollector({cwd,args}) and background.test.mjs has freePort(), runBackground(), collectorAnswers() and waitForSilence(), all unreachable from outside their test files; the collector already ships the whole stop mechanism, so the fixture is a thin wrapper over start --ready-fd 3, --exit-with <pid> and --no-persist rather than a new lifecycle; skills/argus/SKILL.md line 29 and tools/argus/README.md line 45 still say there is no stop command, which stays true of the CLI. PAGE SWEEP: checked skills/agent-brief/SKILL.md (said nothing about reaching a collector - corrected with a three-sentence '## A live collector' section between 'Reporting a command run' and 'Your step return'), tools/argus/CLAUDE.md ('## Running it' showed only the blocking node bin/argus.mjs - corrected with one line in the bash block), README.md, tools/argus/README.md, skills/argus/SKILL.md, tools/argus-ui/README.md, tools/argus-ui/CLAUDE.md, rulebook.md, .claude/rules/agents.md, all five agents/*.md, skills/CLAUDE.md, skills/grill/SKILL.md, skills/retro/SKILL.md, workflows/loop.js, workflows/agile-loop.js, hooks/session-start.sh and bin/argus. The five user-facing pages (README.md, tools/argus/README.md, skills/argus/SKILL.md and the two argus-ui pages) were left untouched on purpose: they ship through the plugin, which delivers skills/, workflows/ and agents/ only, so a tools/argus/scripts/... path would not exist for their readers. The remaining pages never mention a collector, and the rule is stated once in the shared brief rather than repeated into agent pages or workflow prompts. PORT EVIDENCE, run from the repository root: 'node tools/argus/scripts/with-collector.mjs --port 4399 -- node -e \"fetch(process.env.ARGUS_URL + '/api/health')...\"' printed the banner on stderr, {\"ok\":true,...} on stdout and exited 0; the follow-up raw connect to 127.0.0.1:4399 printed 'free' and exited 0. CRITERIA: the start-and-stop way exists (the fixture), is reachable by any agent (named in the shared brief with ARGUS_URL) and is named for argus maintainers (tools/argus/CLAUDE.md); the failing-command path returns the command's own exit code and still frees the port (case 3 green).",
+            "deviations": [
+              "Plan item 4 asked me to append five doc/asset cases to test-repo.sh; the test-author had already left exactly that section in the working tree, so I made no edit there - all five cases pass unchanged.",
+              "The plan does not say what happens when the command itself cannot be spawned, so I added a child 'error' handler: the collector is stopped first and the wrapper then exits 127 with the spawn error on stderr, instead of crashing out and leaving the collector up.",
+              "The plan names only 'no --', 'nothing after --' and '--help' as argument outcomes; I made an unknown option and a non-numeric or out-of-range --port take the same usage path (message on stderr, exit 2) rather than starting a collector on a nonsense port."
+            ],
+            "commands": [
+              {
+                "command": "npm --prefix tools/argus test --silent",
+                "exitCode": 1,
+                "note": "166 cases, 165 pass, 1 fail. The only red is with-collector.test.mjs case 5's last line, 'the collector process must not survive its wrapper being killed'. It is an artifact of this sandbox's init, not of the fixture: after the wrapper is SIGKILLed the collector's exitWhenGone poll shuts it down, the port is refused about 4.8 s later (the assertion before it, nothingAccepts(port, 30_000), passes), and at that instant the collector is 'Zs [node] <defunct>' with PPID 1, which kill(pid, 0) still reports as alive. pid 1 here is '/process_api --firecracker-init', and I measured its orphan reap latency three times at 1317, 1358 and 1341 ms, while the test checks alive() immediately after the first refused connect. On an init that reaps on SIGCHLD the same code passes. No implementation choice removes the window: the listening socket closes exactly when the process exits, so the zombie always exists at the moment the port frees."
+              },
+              {
+                "command": "bash test-repo.sh",
+                "exitCode": 0,
+                "note": "PASS: 82 cases, including all five new ones - the shared brief names tools/argus/scripts/with-collector.mjs and ARGUS_URL, tools/argus/CLAUDE.md names scripts/with-collector.mjs, and the script exists and parses."
+              },
+              {
+                "command": "node tools/argus/scripts/with-collector.mjs --port 4399 -- node -e \"fetch(process.env.ARGUS_URL + '/api/health').then((r) => r.json()).then((b) => console.log(JSON.stringify(b)))\"",
+                "exitCode": 0,
+                "note": "The plan's own start-and-stop check. stdout carried only {\"ok\":true,\"uptimeMs\":134,\"instance\":\"ecdbb0558767\",\"seq\":0}; the banner ('argus on http://127.0.0.1:4399, pid 9422' and 'it stops when the command exits.') went to stderr."
+              },
+              {
+                "command": "node -e \"const s = require('net').connect({ host: '127.0.0.1', port: 4399 }); s.on('connect', () => { console.log('HELD'); s.destroy(); process.exit(1); }); s.on('error', () => { console.log('free'); process.exit(0); });\"",
+                "exitCode": 0,
+                "note": "Printed 'free': nothing held port 4399 after the fixture returned."
+              }
+            ],
+            "blockers": [
+              "with-collector.test.mjs case 5's final assert.equal(alive(collectorPid), false) cannot pass in this sandbox: pid 1 (/process_api --firecracker-init) reaps orphans on a ~1.3 s poll, so the collector is a reaped-a-moment-later zombie at the instant the port frees; the case's port assertion, which is what the criterion is about, passes."
+            ],
+            "questions": []
+          }
         }
       ]
     },

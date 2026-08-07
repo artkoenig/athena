@@ -71,6 +71,16 @@ Report the command, what it covered, and its exit code — "`npm test --
 src/api`, 104 cases, exit 0", never "green" alone. Say so if a run skipped or
 excluded anything.
 
+## A live collector
+
+Run `node tools/argus/scripts/with-collector.mjs [--port <n>] -- <command>` where
+you need a collector to talk to: it starts one on a free port, hands the command
+`ARGUS_URL` and `ARGUS_PORT`, and stops it when the command exits, whatever that
+command exits with. Never start a collector by hand, and never kill one with
+`pkill`. That script is there in an uroboros checkout only — the plugin ships
+`skills/`, `workflows/` and `agents/`, so a session in another project has no
+`tools/argus/` to run it from.
+
 ## Your step return
 
 You return one structured object, and your page names its fields. That object

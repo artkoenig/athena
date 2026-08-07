@@ -29,6 +29,7 @@ file is for changing the code.
 ```bash
 node bin/argus.mjs             # collector on http://127.0.0.1:4318
 node scripts/demo-emit.mjs     # synthetic sessions, no real agent needed
+node scripts/with-collector.mjs -- <cmd>   # a collector for one command, stopped when it exits
 ```
 
 Outside a checkout the same entry is reached as `argus`: the repository's
