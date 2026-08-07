@@ -290,6 +290,16 @@
               "Not run and not touched: any command outside the two listed. The demo emitter was smoke-run by hand against a throwaway collector on port 4399 to confirm the curve exists; nothing tests scripts/."
             ]
           }
+        },
+        {
+          "label": "review:lane-activity.0",
+          "at": "2026-08-07T11:43:59.231Z",
+          "return": {
+            "findings": [],
+            "reason": "",
+            "questions": [],
+            "summary": "Ran the two listed commands in one call: `npm --prefix tools/argus test` (186 cases, exit 0) and `npm --prefix tools/argus-ui test` (54 cases, exit 0), nothing skipped or excluded; read the whole diff against main and accept increment 3 with no findings. Every criterion is met and pinned: store.getAgents joins tool/llm_request spans into per-lane `activity` and api_request_body records into per-lane `context` using the same laneKeyOf ('main' / 'agent:<id>' / 'unattributed') the endpoint already served, with the record's spanId named in code as the only join because the record carries no agent_id; records resolving to no span land on the unattributed lane (store.test.mjs covers spanId 'gone' and ''), never on main; requestBodyLength prefers the reported body_length so a truncated body still reports 120000/65000 (store and over-the-wire server test); timeline.js draws an SVG polygon before the lane bar and one tick per call over it, all scaled to one session-wide peak so a quarter-consumption lane draws a quarter as high, with a legend naming 'reported API request body length in characters' and per-lane call-count and peak numbers; and app.test.mjs boots the real public/app.js against the fake DOM and asserts the marks and a non-empty polygon in detail.innerHTML, so a break in the path to the page is caught, not only the isolated computation. Blast radius: the /agents payload grows by up to 2000 activity and 1000 context entries per lane (bounded by thinEvenly/thinByPeak, with activityTotal and contextPeak reporting the unthinned truth), lane firstMs/lastMs are widened by activity and context times before thinning so bars stay drawable for lanes born from content alone, the old lane shape without the four keys still renders cleanly (pinned), demo-emit now emits api_request_body under the llm_request span it belongs to, and no README statement is made stale by the change."
+          }
         }
       ]
     },
