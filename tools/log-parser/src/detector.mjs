@@ -102,6 +102,49 @@ function findLatestSessionTranscript(projectsDir) {
   return latestFile;
 }
 
+/**
+ * A workflow run directory is the one that holds a `journal.jsonl`, at
+ * `~/.claude/projects/<project>/<session-id>/subagents/workflows/<run-id>/`.
+ * This walk is deliberately separate from `--latest`: a session transcript
+ * must never resolve to a run directory, nor a run directory to a session.
+ */
+export function getLatestRunDir(homeDir = os.homedir()) {
+  const projectsDir = claudeProjectsDir(homeDir);
+  if (!fs.existsSync(projectsDir)) return null;
+
+  let latestDir = null;
+  let latestMtime = 0;
+
+  function walk(currentDir) {
+    let entries;
+    try {
+      entries = fs.readdirSync(currentDir, { withFileTypes: true });
+    } catch (e) {
+      // an unreadable directory is skipped, its siblings are not
+      return;
+    }
+    for (const entry of entries) {
+      const fullPath = path.join(currentDir, entry.name);
+      if (entry.isDirectory()) {
+        walk(fullPath);
+      } else if (entry.isFile() && entry.name === 'journal.jsonl') {
+        try {
+          const stat = fs.statSync(fullPath);
+          if (stat.mtimeMs > latestMtime) {
+            latestMtime = stat.mtimeMs;
+            latestDir = currentDir;
+          }
+        } catch (e) {
+          // one broken entry must not drop the rest of the directory
+        }
+      }
+    }
+  }
+
+  walk(projectsDir);
+  return latestDir;
+}
+
 export function getLatestLogPath(provider = 'auto', homeDir = os.homedir()) {
   if (provider === 'claude') {
     return findLatestSessionTranscript(claudeProjectsDir(homeDir));

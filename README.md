@@ -247,16 +247,17 @@ listed in
 
 ## tools/
 
-| Tool                              | Purpose                                                                                                                |
-| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| [`argus`](tools/argus/)           | OpenTelemetry collector for agent sessions: traces, tokens, cost, tool calls, errors. Ingests, aggregates, serves JSON. |
-| [`argus-ui`](tools/argus-ui/)     | The page that shows what a collector holds. Local only — started from a checkout, never deployed.                      |
-| [`log-parser`](tools/log-parser/) | Reads a Claude Code or Gemini/Antigravity session log into markdown and metrics. What the `retro` skill runs.           |
+| Tool                              | Purpose                                                                                                                                           |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`argus`](tools/argus/)           | OpenTelemetry collector for agent sessions: traces, tokens, cost, tool calls, errors. Ingests, aggregates, serves JSON.                           |
+| [`argus-ui`](tools/argus-ui/)     | The page that shows what a collector holds. Local only — started from a checkout, never deployed.                                                 |
+| [`log-parser`](tools/log-parser/) | Reads a Claude Code or Gemini/Antigravity session log, or a whole workflow run directory, into markdown and metrics. What the `retro` skill runs. |
 
 ```bash
 argus start --background                     # collector, http://127.0.0.1:4318
 node tools/argus-ui/bin/argus-ui.mjs         # interface, http://127.0.0.1:4319
 bin/parse-agent-log --latest auto            # the last session as markdown
+bin/parse-agent-log --latest-run             # the last workflow run, reported as one thing
 ```
 
 `argus` is on the `PATH` of every session with the plugin enabled, so any

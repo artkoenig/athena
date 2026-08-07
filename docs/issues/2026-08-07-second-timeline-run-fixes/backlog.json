@@ -213,6 +213,30 @@
             ],
             "questions": []
           }
+        },
+        {
+          "label": "implement:run-report.0",
+          "at": "2026-08-07T21:41:58.950Z",
+          "return": {
+            "deviations": [
+              "The plan's module map lists test-repo.sh as EDIT (add one section with two grep cases). The test-author had already committed that section in 317cbba — 'the retro reads a whole run, not one transcript at a time' with both cases — so I added nothing there and edited no test."
+            ],
+            "commands": [
+              {
+                "command": "npm --prefix tools/log-parser test",
+                "exitCode": 0,
+                "note": "41 cases across test/parser.test.mjs, test/claude-code.test.mjs and test/run-report.test.mjs; 41 pass, 0 fail. Before the change the same run reported the run-report file as one file-level ERR_MODULE_NOT_FOUND."
+              },
+              {
+                "command": "bash test-repo.sh",
+                "exitCode": 0,
+                "note": "PASS: 73 cases. Before the change 'the retro skill points the session at the run-directory mode' was the one FAIL; the per-transcript-loop guard was already green and stays green."
+              }
+            ],
+            "blockers": [],
+            "questions": [],
+            "summary": "Added tools/log-parser/src/run-report.mjs (collectRunReport/renderRunMarkdown/renderRunJson), getLatestRunDir in src/detector.mjs, and a run-directory branch plus --latest-run in bin/parse-agent-log.mjs, and pointed skills/retro/SKILL.md and README.md at the run mode. REPORT ON CRITERIA 5 AND 6: the pages that document the tool are README.md (the tools/ table row for log-parser and the command block under it) and skills/retro/SKILL.md (steps 1-3); tools/log-parser/ carries no README and no CLAUDE.md, so there is no third page. Both needed correcting and both were corrected: the README row now says the tool reads a session log or a whole workflow run directory, and the block gained 'bin/parse-agent-log --latest-run'; SKILL.md steps 1 and 2 now name --latest-run and the run directory ~/.claude/projects/<project>/<sessionId>/subagents/workflows/<runId>/ and say what the run report carries, and step 3 takes its two tables from the run report. THREE TREE-VERSUS-ISSUE DIVERGENCES: (1) bin/parse-agent-log is a three-line sh shim that execs tools/log-parser/bin/parse-agent-log.mjs, so all work is under tools/log-parser/; (2) no page in the repository ever instructed a per-transcript loop or a hand re-join — that looping was improvised in the session, so criterion 5 is met by adding the run mode to the two pages, not by deleting a stale instruction, and test-repo.sh's guard against those phrases was already green; (3) the journal carries only type/key/agentId/result with no timestamp, no agent type and no step label, and the agent type lives solely in the sibling agent-<agentId>.meta.json, which the issue never mentions and on which the per-agent-type totals depend. Each criterion is judged by the reporting behaviour existing: the mode runs and prints run totals, per-agent-type totals, per-agent rows in the journal's order, a tool breakdown with failures and the agents that started without returning. Note kept out of the code as scope: bin/parse-agent-log --help and the single-transcript path were left exactly as they were apart from the two added help lines."
+          }
         }
       ]
     },
