@@ -66,6 +66,153 @@
             ],
             "questions": []
           }
+        },
+        {
+          "label": "tests:run-report.0",
+          "at": "2026-08-07T21:36:47.615Z",
+          "return": {
+            "summary": "Wrote tools/log-parser/test/run-report.test.mjs (17 cases against the not-yet-existing run-report mode, importing collectRunReport/renderRunMarkdown from src/run-report.mjs and getLatestRunDir from src/detector.mjs per the researcher's plan) and added a new test-repo.sh section with two doc-drift cases (R1, R2); npm --prefix tools/log-parser test now runs 24 cases, 23 pass and 1 file-level fail (Cannot find module '.../src/run-report.mjs' — the whole new suite fails to load because the production module does not exist yet), and bash test-repo.sh runs 73 cases, 72 pass and 1 fails (the retro skill does not yet name --latest-run or 'run directory').",
+            "cases": [
+              {
+                "case": "collectRunReport: the run totals sum every agent's transcript",
+                "file": "tools/log-parser/test/run-report.test.mjs",
+                "testName": "collectRunReport: the run totals sum every agent's transcript",
+                "expected": "report.totals.tokens deep-equals the five-field sum (116/227/338/449/1130), report.totals.counts deep-equals {stepCount:4, toolCallsTotal:4, toolCallsFailed:1, errorCount:0}, report.runId === path.basename(runDir)",
+                "got": "Whole file fails to load: Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/home/user/uroboros/tools/log-parser/src/run-report.mjs' — collectRunReport does not exist yet, so this case (and every other case in the file) cannot even start."
+              },
+              {
+                "case": "collectRunReport: two agents of one type fold into one per-agent-type row, and a missing meta file is unknown",
+                "file": "tools/log-parser/test/run-report.test.mjs",
+                "testName": "collectRunReport: two agents of one type fold into one per-agent-type row, and a missing meta file is unknown",
+                "expected": "Object.keys(report.agentTypes) deep-equals ['uroboros:reviewer','uroboros:researcher','unknown'] (totalTokens descending 1000/110/20); report.agentTypes['uroboros:researcher'] deep-equals the given agents/returned/stepCount/toolCalls/errorCount/tokens object",
+                "got": "Same module-not-found failure as above; the whole file cannot load."
+              },
+              {
+                "case": "collectRunReport: per-agent rows follow the journal's order",
+                "file": "tools/log-parser/test/run-report.test.mjs",
+                "testName": "collectRunReport: per-agent rows follow the journal's order",
+                "expected": "report.agents.map(a => a.agentId) deep-equals ['aaa1','bbb2','ccc3','ddd4']; agents[0] carries agentType 'uroboros:researcher', stepCount 1, toolCallsTotal 2, toolCallsFailed 1, tokens.totalTokens 100; agents[3].agentType === 'unknown'; a shuffled journal (started c, started a, result a, result c) yields ['ccc3','aaa1']",
+                "got": "Same module-not-found failure; the whole file cannot load."
+              },
+              {
+                "case": "collectRunReport: an agent that started without a result is named",
+                "file": "tools/log-parser/test/run-report.test.mjs",
+                "testName": "collectRunReport: an agent that started without a result is named",
+                "expected": "report.startedWithoutReturning deep-equals [{agentId:'ccc3', agentType:'uroboros:reviewer'}]; agentsStarted 4, agentsReturned 3; ccc3's row returned === false, every other row returned === true",
+                "got": "Same module-not-found failure; the whole file cannot load."
+              },
+              {
+                "case": "collectRunReport: the tool breakdown shows the failures",
+                "file": "tools/log-parser/test/run-report.test.mjs",
+                "testName": "collectRunReport: the tool breakdown shows the failures",
+                "expected": "report.toolBreakdown deep-equals {Bash:{total:2,success:2,failed:0}, Grep:{total:1,success:1,failed:0}, Read:{total:1,success:0,failed:1}}, key order ['Bash','Grep','Read']",
+                "got": "Same module-not-found failure; the whole file cannot load."
+              },
+              {
+                "case": "collectRunReport: an agent whose transcript is missing is a row of zeros, not a crash",
+                "file": "tools/log-parser/test/run-report.test.mjs",
+                "testName": "collectRunReport: an agent whose transcript is missing is a row of zeros, not a crash",
+                "expected": "agents.length === 4; bbb2 row has transcript===null, stepCount 0, toolCallsTotal 0, tokens.totalTokens 0; totals.tokens.totalTokens === 1120, totals.counts.stepCount === 3, toolCallsTotal === 3",
+                "got": "Same module-not-found failure; the whole file cannot load."
+              },
+              {
+                "case": "collectRunReport: a transcript another agent's log names is still counted once",
+                "file": "tools/log-parser/test/run-report.test.mjs",
+                "testName": "collectRunReport: a transcript another agent's log names is still counted once",
+                "expected": "report.totals.tokens.totalTokens stays 1130 despite aaa1's extra invoke_subagent tool_use naming bbb2's transcript path; aaa1 row tokens 100, bbb2 row tokens 10, totals.counts.toolCallsTotal 5, toolBreakdown.invoke_subagent.total 1",
+                "got": "Same module-not-found failure; the whole file cannot load."
+              },
+              {
+                "case": "collectRunReport: an empty journal is an empty report",
+                "file": "tools/log-parser/test/run-report.test.mjs",
+                "testName": "collectRunReport: an empty journal is an empty report",
+                "expected": "agents [], agentTypes {}, toolBreakdown {}, startedWithoutReturning [], agentsStarted 0, totals.tokens.totalTokens 0",
+                "got": "Same module-not-found failure; the whole file cannot load."
+              },
+              {
+                "case": "renderRunMarkdown: every section of the report is on the page",
+                "file": "tools/log-parser/test/run-report.test.mjs",
+                "testName": "renderRunMarkdown: every section of the report is on the page",
+                "expected": "Both the base report's markdown and the empty report's markdown carry all six section headings: '# Workflow Run Report', '## Run Totals', '## Per-Agent-Type Totals', '## Agents', '## Tool Breakdown', '## Started Without Returning'",
+                "got": "Same module-not-found failure; the whole file cannot load (renderRunMarkdown does not exist either)."
+              },
+              {
+                "case": "renderRunMarkdown: the numbers reach the page",
+                "file": "tools/log-parser/test/run-report.test.mjs",
+                "testName": "renderRunMarkdown: the numbers reach the page",
+                "expected": "Exact rows '| Total Tokens | 1,130 |' and '| Tool Calls | 4 (1 failed) |'; a researcher-type row starting '| uroboros:researcher | 2 | 2 |' carrying '110' (locale-formatted); the tool row '| Read | 1 | 0 | 1 |'; the straggler bullet matching /- `ccc3` \\(uroboros:reviewer\\)/; the Agents table keeps journal order aaa1<bbb2<ccc3<ddd4",
+                "got": "Same module-not-found failure; the whole file cannot load."
+              },
+              {
+                "case": "renderRunMarkdown: a run where everyone returned says so",
+                "file": "tools/log-parser/test/run-report.test.mjs",
+                "testName": "renderRunMarkdown: a run where everyone returned says so",
+                "expected": "Markdown still carries '## Started Without Returning' and the exact line 'None — every agent that started returned.', with no '`ccc3` (' bullet",
+                "got": "Same module-not-found failure; the whole file cannot load."
+              },
+              {
+                "case": "CLI: a run directory prints the run report",
+                "file": "tools/log-parser/test/run-report.test.mjs",
+                "testName": "CLI: a run directory prints the run report",
+                "expected": "execFileSync(binPath, [runDir, '--format', 'markdown']) exits 0 and stdout contains '# Workflow Run Report' and the exact Total Tokens row",
+                "got": "Same module-not-found failure; the whole file cannot load, so the CLI case never runs."
+              },
+              {
+                "case": "CLI: --format json prints the run report object",
+                "file": "tools/log-parser/test/run-report.test.mjs",
+                "testName": "CLI: --format json prints the run report object",
+                "expected": "Parsed stdout carries totals.tokens.totalTokens 1130, agents.length 4, startedWithoutReturning.length 1, 3 tool-breakdown keys",
+                "got": "Same module-not-found failure; the whole file cannot load."
+              },
+              {
+                "case": "CLI: a directory with no journal exits 1 and says why",
+                "file": "tools/log-parser/test/run-report.test.mjs",
+                "testName": "CLI: a directory with no journal exits 1 and says why",
+                "expected": "spawnSync against the bare scratch directory (no journal.jsonl at its own root) gives status 1 and stderr containing 'journal.jsonl'",
+                "got": "Same module-not-found failure; the whole file cannot load."
+              },
+              {
+                "case": "CLI: a single transcript still reports one session",
+                "file": "tools/log-parser/test/run-report.test.mjs",
+                "testName": "CLI: a single transcript still reports one session",
+                "expected": "The existing single-file CLI path against fixtures/claude-code-session.jsonl still returns metrics.tokens.totalTokens 1110, counts.stepCount 2, counts.toolCallsFailed 1, and the parsed object carries no 'agents' key (the session shape, not the run shape) — the regression guard for criterion 3",
+                "got": "Same module-not-found failure; the whole file cannot load, so even the regression case for the existing behaviour cannot run. Note: running the CLI directly against this fixture outside the test file (bypassing the broken import) still succeeds today with the same numbers, confirming the single-transcript path itself is untouched and only the new file's import breaks the run."
+              },
+              {
+                "case": "getLatestRunDir: the newest run directory wins, and a session transcript is not one",
+                "file": "tools/log-parser/test/run-report.test.mjs",
+                "testName": "getLatestRunDir: the newest run directory wins, and a session transcript is not one",
+                "expected": "getLatestRunDir(home) with wf_old (mtime T+10), wf_new (mtime T+50) and a session.jsonl (mtime T+90) returns the wf_new directory; getLatestRunDir(emptyHome) is null",
+                "got": "Same module-not-found failure; the whole file cannot load — getLatestRunDir does not exist in src/detector.mjs yet."
+              },
+              {
+                "case": "CLI: --latest-run reports the newest run",
+                "file": "tools/log-parser/test/run-report.test.mjs",
+                "testName": "CLI: --latest-run reports the newest run",
+                "expected": "execFileSync(binPath, ['--latest-run', '--format', 'json'], {env: {HOME: fakeHome}}) parses to totals.tokens.totalTokens === 1130",
+                "got": "Same module-not-found failure; the whole file cannot load, and the CLI has no --latest-run option yet either."
+              },
+              {
+                "case": "the retro skill points the session at the run-directory mode",
+                "file": "test-repo.sh",
+                "testName": "the retro skill points the session at the run-directory mode",
+                "expected": "skills/retro/SKILL.md contains both '--latest-run' and 'run directory' (case-insensitive)",
+                "got": "FAIL — the retro skill does not point the session at the run-directory mode: neither '--latest-run' nor 'run directory' appears anywhere in skills/retro/SKILL.md today; its steps 1-2 still say to locate the log via an explicit path or `bin/parse-agent-log --latest`, and to run `bin/parse-agent-log <path> --format all`. Confirmed with `bash test-repo.sh` — reported as one FAIL under the new '=== the retro reads a whole run, not one transcript at a time' section."
+              },
+              {
+                "case": "no page documenting the parser asks for a per-transcript loop",
+                "file": "test-repo.sh",
+                "testName": "no page documenting the parser asks for a per-transcript loop",
+                "expected": "grep -inE 'each (subagent )?transcript|per transcript|transcript at a time|re-?join' over README.md and skills/*/SKILL.md is empty",
+                "got": "Passes today (reported 'ok'), not red: neither README.md nor any skills/*/SKILL.md currently contains any of those phrases, so this guard has nothing to catch yet. It stands as a regression guard for whoever writes the run-mode doc edits, and its own note anticipates this — it fails only if a future edit reintroduces the phrase, a prohibition included."
+              }
+            ],
+            "openQuestions": [
+              "The 17 run-report.test.mjs cases fail together as one file-level module-resolution error rather than as 17 individually reported case failures, because `node --test` cannot even parse the file's imports before `src/run-report.mjs` and `src/detector.mjs#getLatestRunDir` exist; this is expected for a not-yet-implemented module and each case's assertions have been verified by hand to be well-formed (node --check passes, and the numeric fixture math has been hand-verified to sum to the plan's derived totals), but the implementer will only see all 17 case names resolve individually once the two new exports exist.",
+              "The test-repo.sh case 'no page documenting the parser asks for a per-transcript loop' is already green against the current tree, since no page currently contains the guarded phrases; it only goes red if a future doc edit reintroduces one of them, so it is a standing regression guard rather than a currently-failing case — flagging this in case a reviewer expects every new case to be red today."
+            ],
+            "questions": []
+          }
         }
       ]
     },

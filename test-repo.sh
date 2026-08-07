@@ -1254,6 +1254,33 @@ else
 fi
 
 echo
+echo "=== the retro reads a whole run, not one transcript at a time"
+
+# `bin/parse-agent-log` gained a run-directory mode so a 44-agent run is one
+# report instead of 44 hand-joined ones. The retro skill must point at that
+# mode, and no page describing the tool may still tell a reader to loop it
+# over each transcript and re-join the results by hand — the exact manual
+# process this mode replaces.
+if grep -q -- '--latest-run' "$root/skills/retro/SKILL.md" && grep -qi 'run directory' "$root/skills/retro/SKILL.md"; then
+  ok "the retro skill points the session at the run-directory mode"
+else
+  no "the retro skill does not point the session at the run-directory mode:"
+  grep -n -- '--latest-run\|run directory' "$root/skills/retro/SKILL.md" | sed 's/^/       /'
+fi
+
+# This fails on the phrase however it is meant, a prohibition included — the
+# pages must simply not contain these words, whatever the sentence around
+# them says.
+doc_loop_hits="$(grep -inE 'each (subagent )?transcript|per transcript|transcript at a time|re-?join' \
+  "$root/README.md" "$root"/skills/*/SKILL.md 2>/dev/null || true)"
+if [ -z "$doc_loop_hits" ]; then
+  ok "no page documenting the parser asks for a per-transcript loop"
+else
+  no "these lines still ask for a per-transcript loop:"
+  echo "$doc_loop_hits" | sed 's/^/       /'
+fi
+
+echo
 if [ "$failed" -eq 0 ]; then
   echo "PASS: $passed cases"
 else
