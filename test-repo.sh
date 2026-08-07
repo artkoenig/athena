@@ -214,6 +214,47 @@ else
   no "the reviewer's page is missing:$missing_classification_terms"
 fi
 
+# Finding 1: the shortened round must not dispatch the test-author against
+# orders its own page forbids, so the test-author's page needs a
+# coverage-only mode that tells it the round it is in and the proof it still
+# owes.
+test_author_page="$root/agents/test-author.md"
+missing_coverage_only_terms=""
+for term in 'coverage-only' 'goes red' 'worktree'; do
+  grep -qF -- "$term" "$test_author_page" || missing_coverage_only_terms="${missing_coverage_only_terms} '$term'"
+done
+if [ -z "$missing_coverage_only_terms" ]; then
+  ok "the test-author's page carries a coverage-only mode"
+else
+  no "the test-author's page is missing:$missing_coverage_only_terms"
+fi
+
+# "The reviewer's own brief states what makes a finding a coverage gap rather
+# than a defect, so the classification is decided the same way twice" —
+# finding 2: the reviewer's page has to name the test-author-alone path where
+# it enumerates who works a correction round, not merely mention the word
+# somewhere else on the page. 'test-author' already occurs twice elsewhere on
+# the page, so a plain file-wide grep would be green today and prove nothing;
+# the -B3 window is what makes this case about the enumeration.
+if grep -B3 -F 'has these fields and' "$reviewer_page" | grep -q 'test-author'; then
+  ok "the reviewer's page names the test-author-alone path in its round-worker enumeration"
+else
+  no "the reviewer's page does not name the test-author-alone path where it enumerates who works a correction round"
+fi
+
+# Finding 1 again, on the other side of the same contradiction: the shortened
+# round's prompt must not forbid the go-red proof the test-author's page
+# requires, so the sandbox the page prescribes has to be named in both
+# workflows' coverage-only prompt.
+for f in "$root/workflows/loop.js" "$root/workflows/agile-loop.js"; do
+  name="$(basename "$f")"
+  if grep -qF 'worktree' "$f"; then
+    ok "$name's coverage-only prompt names the worktree sandbox"
+  else
+    no "$name's coverage-only prompt does not name the worktree sandbox"
+  fi
+done
+
 # Decision 5: the planner now opens and closes the plain loop too, not only
 # the incremental one.
 for f in "$root/workflows/loop.js" "$root/workflows/agile-loop.js"; do

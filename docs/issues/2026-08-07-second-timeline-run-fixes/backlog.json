@@ -172,6 +172,38 @@
             ],
             "questions": []
           }
+        },
+        {
+          "label": "tests:coverage-only-round.1",
+          "at": "2026-08-07T20:21:14.682Z",
+          "return": {
+            "summary": "Added the three planned grep cases to test-repo.sh, directly after the criterion-6 block (line 215) and before the 'Decision 5' comment, reusing reviewer_page and a new test_author_page variable; ran `bash test-repo.sh` and confirmed all three go red for the missing content while all 67 pre-existing cases stay green (71 total, exit non-zero, 4 FAIL lines because the third case loops over two files).",
+            "cases": [
+              {
+                "case": "Case A - the test-author's page carries a coverage-only mode.",
+                "file": "/home/user/uroboros/test-repo.sh",
+                "testName": "the test-author's page carries a coverage-only mode",
+                "expected": "agents/test-author.md contains all three literals 'coverage-only', 'goes red' and 'worktree'; missing ones are accumulated and reported, modelled on the loop at lines 207-215.",
+                "got": "FAIL — the test-author's page is missing: 'coverage-only' 'goes red' 'worktree' — none of the three literals are present in agents/test-author.md today."
+              },
+              {
+                "case": "Case B - the reviewer's page names the test-author-alone path where it enumerates who works a correction round.",
+                "file": "/home/user/uroboros/test-repo.sh",
+                "testName": "the reviewer's page names the test-author-alone path in its round-worker enumeration",
+                "expected": "`grep -B3 -F 'has these fields and' \"$reviewer_page\" | grep -q 'test-author'` is true, so the enumeration of who works a correction round names the test-author-alone path (not just any occurrence of the word, since it already appears twice elsewhere on the page).",
+                "got": "FAIL — the reviewer's page does not name the test-author-alone path where it enumerates who works a correction round — the three lines above 'has these fields and' currently read 'a researcher, or the builder alone', not the test-author."
+              },
+              {
+                "case": "Case C - the shortened round's prompt permits the sandbox its agent's page prescribes.",
+                "file": "/home/user/uroboros/test-repo.sh",
+                "testName": "$name's coverage-only prompt names the worktree sandbox (looped over loop.js and agile-loop.js)",
+                "expected": "Both workflows/loop.js and workflows/agile-loop.js contain the literal 'worktree' (via `grep -qF`), named per-file in the style of the loop at lines 179-186, once coverageBlock names the sandbox in both.",
+                "got": "FAIL — loop.js's coverage-only prompt does not name the worktree sandbox; FAIL — agile-loop.js's coverage-only prompt does not name the worktree sandbox — neither file contains the string today (only agents/reviewer.md:105 has it)."
+              }
+            ],
+            "openQuestions": [],
+            "questions": []
+          }
         }
       ]
     },
