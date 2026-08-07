@@ -32,15 +32,6 @@ async function collectorAnswers(port) {
   }
 }
 
-async function waitForSilence(port, timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (!(await collectorAnswers(port))) return true;
-    await delay(200);
-  }
-  return false;
-}
-
 const alive = (pid) => {
   try {
     process.kill(pid, 0);
@@ -49,6 +40,23 @@ const alive = (pid) => {
     return false;
   }
 };
+
+/**
+ * The collector gives the port back before it exits: argus.mjs closes the
+ * listening socket first and only exits from the close callback, with a 2 s
+ * unref'd fallback. A pid asserted the moment a connect is refused is
+ * therefore legitimately still alive. Polls until it is gone (true) or the
+ * deadline passes (false) — it returns as soon as the pid goes, so this is a
+ * bound and never a measured duration.
+ */
+async function waitForExit(pid, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (!alive(pid)) return true;
+    if (Date.now() >= deadline) return false;
+    await delay(100);
+  }
+}
 
 /**
  * A silent /api/health is weaker evidence than a refused connection — the
@@ -114,11 +122,12 @@ test('a command run through the fixture reaches a live collector and leaves no m
     const body = JSON.parse(fs.readFileSync(path.join(cwd, 'out.json'), 'utf8'));
     assert.equal(body.ok, true, `the command has to reach a live collector through ARGUS_URL: ${JSON.stringify(body)}`);
 
-    const stdout = result.raw.stdout ?? '';
-    assert.match(
-      stdout.trim(),
-      /^\d+$/,
-      `ARGUS_PORT has to reach the command's own stdout untouched, with the fixture's banner kept on stderr: ${JSON.stringify(stdout)}`,
+    const banner = (result.raw.stderr ?? '').match(/127\.0\.0\.1:(\d+)/);
+    assert.ok(banner, `the banner has to name the collector's address: ${result.raw.stderr}`);
+    assert.equal(
+      (result.raw.stdout ?? '').trim(),
+      banner[1],
+      'the command\'s stdout has to be exactly the port it was handed, with the fixture\'s banner kept on stderr',
     );
 
     assert.ok(
@@ -144,13 +153,10 @@ test('the port is free and the collector gone once the fixture has returned', as
     assert.ok(printed, `the banner has to name the collector's pid: ${result.out}`);
     const pid = Number(printed[1]);
 
-    const deadline = Date.now() + 5_000;
-    let stillAlive = alive(pid);
-    while (stillAlive && Date.now() < deadline) {
-      await delay(100);
-      stillAlive = alive(pid);
-    }
-    assert.equal(stillAlive, false, 'the collector process the banner named has to be gone once the fixture returns');
+    assert.ok(
+      await waitForExit(pid, 10_000),
+      'the collector process the banner named has to be gone once the fixture returns',
+    );
 
     assert.ok(
       await nothingAccepts(port, 10_000),
@@ -178,7 +184,10 @@ test('a command that fails still takes the collector down, and its exit code com
 
     const printed = result.out.match(/\bpid\b[^0-9]{0,12}(\d+)/i);
     assert.ok(printed, `the banner has to name the collector's pid: ${result.out}`);
-    assert.equal(alive(Number(printed[1])), false, 'the collector process must not survive a failing command');
+    assert.ok(
+      await waitForExit(Number(printed[1]), 10_000),
+      'the collector process must not survive a failing command',
+    );
   } finally {
     fs.rmSync(cwd, { recursive: true, force: true });
   }
@@ -220,28 +229,41 @@ test('a fixture killed outright leaves no collector on the port', async () => {
   const port = await freePort();
   const wrapper = spawn(
     process.execPath,
-    [FIXTURE, '--port', String(port), '--', process.execPath, '-e', 'setTimeout(() => {}, 120000)'],
+    [
+      FIXTURE,
+      '--port',
+      String(port),
+      '--',
+      process.execPath,
+      '-e',
+      'process.stderr.write(`COMMAND ${process.pid}\\n`); setTimeout(() => {}, 30000);',
+    ],
     { stdio: ['ignore', 'ignore', 'pipe'] },
   );
   let stderr = '';
   wrapper.stderr.on('data', (chunk) => {
     stderr += chunk;
   });
-  let collectorPid = 0;
+  let collectorPid;
+  let commandPid;
 
   try {
     const deadline = Date.now() + 25_000;
     let up = false;
+    let commandNamed = null;
     while (Date.now() < deadline) {
       up = await collectorAnswers(port);
-      if (up) break;
+      commandNamed = stderr.match(/COMMAND (\d+)/);
+      if (up && commandNamed) break;
       await delay(200);
     }
     assert.ok(up, `the collector has to come up before the wrapper can be killed out from under it: ${stderr}`);
+    assert.ok(commandNamed, `the command has to have named itself so the case can clean it up: ${stderr}`);
 
     const printed = stderr.match(/\bpid\b[^0-9]{0,12}(\d+)/i);
     assert.ok(printed, `the banner has to name the collector's pid before it can be checked: ${stderr}`);
     collectorPid = Number(printed[1]);
+    commandPid = Number(commandNamed[1]);
 
     wrapper.kill('SIGKILL');
     await once(wrapper, 'exit');
@@ -250,12 +272,22 @@ test('a fixture killed outright leaves no collector on the port', async () => {
       await nothingAccepts(port, 30_000),
       'even an outright kill of the fixture must not leave the collector holding the port — the 5 s exitWhenGone poll needs room',
     );
-    assert.equal(alive(collectorPid), false, 'the collector process must not survive its wrapper being killed');
+    assert.ok(
+      await waitForExit(collectorPid, 10_000),
+      'the collector process must not survive its wrapper being killed',
+    );
   } finally {
     try {
       wrapper.kill('SIGKILL');
     } catch {
       /* already gone */
+    }
+    if (commandPid) {
+      try {
+        process.kill(commandPid, 'SIGKILL');
+      } catch {
+        /* already gone */
+      }
     }
     if (collectorPid) {
       try {

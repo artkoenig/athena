@@ -168,6 +168,101 @@
             ],
             "questions": []
           }
+        },
+        {
+          "label": "tests:collector-fixture.1",
+          "at": "2026-08-07T22:57:09.057Z",
+          "return": {
+            "summary": "Corrected the seven cases in tools/argus/test/with-collector.test.mjs per the reviewer's reproduction: deleted the unused waitForSilence, added a polling waitForExit, tightened case 1's stdout assertion to the wrapper's own banner, swapped the racy immediate alive() checks in cases 2 and 3 for waitForExit polls, and rewrote case 5 to name the spawned command with a COMMAND marker and poll the collector pid to exit instead of asserting it dead the instant SIGKILL lands; reproduced the original case 5 failure verbatim before applying the fix, then confirmed all 166 cases pass afterward with no production file touched.",
+            "cases": [
+              {
+                "case": "a command run through the fixture reaches a live collector and leaves no measurement behind",
+                "file": "tools/argus/test/with-collector.test.mjs",
+                "testName": "a command run through the fixture reaches a live collector and leaves no measurement behind",
+                "expected": "exit 0; out.json parses with ok === true; no .uroboros-telemetry directory in cwd; stdout is exactly the port the wrapper's own stderr banner named (127.0.0.1:PORT), with the banner itself kept off stdout.",
+                "got": "Kept as the plan specified except the stdout assertion, which now compares stdout to the port captured from the banner regex on stderr instead of a bare /^\\d+$/ match. Not the round's red case: ran green both before and after the edit (node --test test/with-collector.test.mjs -> ok 1, 644ms)."
+              },
+              {
+                "case": "the port is free and the collector gone once the fixture has returned",
+                "file": "tools/argus/test/with-collector.test.mjs",
+                "testName": "the port is free and the collector gone once the fixture has returned",
+                "expected": "exit 0; the banner names a pid that goes away (polled, not asserted the instant the process returns); nothing accepts on the port afterward.",
+                "got": "Replaced the inline 5s poll at lines 147-153 with assert.ok(await waitForExit(pid, 10_000), ...); the nothingAccepts(port, 10_000) assertion kept unchanged. Not the round's red case: ran green (ok 2, 423ms)."
+              },
+              {
+                "case": "a command that fails still takes the collector down, and its exit code comes back",
+                "file": "tools/argus/test/with-collector.test.mjs",
+                "testName": "a command that fails still takes the collector down, and its exit code comes back",
+                "expected": "exit 3; nothingAccepts(port, 10_000); the banner's pid gone (polled).",
+                "got": "Replaced the bare assert.equal(alive(...), false, ...) at line 181 with assert.ok(await waitForExit(Number(printed[1]), 10_000), ...). Not the round's red case: ran green (ok 3, 467ms)."
+              },
+              {
+                "case": "two runs on the same port both get a collector",
+                "file": "tools/argus/test/with-collector.test.mjs",
+                "testName": "two runs on the same port both get a collector",
+                "expected": "each of two sequential runs on the same freePort() reaches a live collector; the port is released (nothingAccepts), not merely silenced, after the second run returns.",
+                "got": "Left verbatim as the plan required. Not the round's red case: ran green (ok 4, 815ms)."
+              },
+              {
+                "case": "a fixture killed outright leaves no collector on the port",
+                "file": "tools/argus/test/with-collector.test.mjs",
+                "testName": "a fixture killed outright leaves no collector on the port",
+                "expected": "spawning the wrapper with a command that marks itself with a COMMAND <pid> line on the inherited stderr; once the collector answers and the command has named itself, SIGKILL the wrapper; the port must refuse connections (nothingAccepts, 30s) and the collector pid named by the banner must be gone (waitForExit, 10s) rather than asserted dead the instant the wrapper's exit event fires.",
+                "got": "This was the round's red case. Reproduced the original (pre-fix) assertion's failure by running the file as it stood at HEAD in isolation: `node --test --test-name-pattern=\"a fixture killed outright leaves no collector on the port\" test/__original_check.test.mjs` (a scratch copy of the pre-edit file, removed afterward) produced `not ok 1 - a fixture killed outright leaves no collector on the port ... the collector process must not survive its wrapper being killed / true !== false`. After rewriting the case per the plan (COMMAND marker, waitForExit(collectorPid, 10_000) replacing the bare alive() check, and a finally that SIGKILLs the wrapper, then commandPid, then collectorPid, each guarded), the same case passed cleanly across repeated runs (ok 5, 7.2s and 6.6s in two separate suite runs)."
+              },
+              {
+                "case": "a port already held is reported, and the command never runs",
+                "file": "tools/argus/test/with-collector.test.mjs",
+                "testName": "a port already held is reported, and the command never runs",
+                "expected": "a squatter already listening on the port makes the fixture fail loudly (non-zero exit, the port number in its output), never runs the command, and leaves the squatter's own listener untouched.",
+                "got": "Left verbatim as the plan required. Not the round's red case: ran green (ok 6, 850ms)."
+              },
+              {
+                "case": "with no command it says how it is used",
+                "file": "tools/argus/test/with-collector.test.mjs",
+                "testName": "with no command it says how it is used",
+                "expected": "no arguments at all, and --port with no command, are both usage errors at exit 2 that name the -- separator and the fixture.",
+                "got": "Left verbatim as the plan required. Not the round's red case: ran green (ok 7, 145ms)."
+              },
+              {
+                "case": "the shared brief names tools/argus/scripts/with-collector.mjs (test-repo.sh guard)",
+                "file": "test-repo.sh",
+                "testName": "",
+                "expected": "grep -qF 'tools/argus/scripts/with-collector.mjs' on skills/agent-brief/SKILL.md succeeds, so the guard goes red if the shared brief stops naming the fixture.",
+                "got": "Not written or edited by me — the plan says keep it exactly as it stands, unchanged. Confirmed by hand it currently holds: skills/agent-brief/SKILL.md line 76 reads 'Run `node tools/argus/scripts/with-collector.mjs [--port <n>] -- <command>` where'. This increment does not touch test-repo.sh or the pages it checks."
+              },
+              {
+                "case": "the shared brief names ARGUS_URL (test-repo.sh guard)",
+                "file": "test-repo.sh",
+                "testName": "",
+                "expected": "grep -qF 'ARGUS_URL' on skills/agent-brief/SKILL.md succeeds.",
+                "got": "Not written or edited by me — unchanged per the plan. Confirmed by hand: skills/agent-brief/SKILL.md line 78 reads '...ARGUS_URL and ARGUS_PORT, and stops it when the command exits...'."
+              },
+              {
+                "case": "tools/argus/CLAUDE.md names scripts/with-collector.mjs (test-repo.sh guard)",
+                "file": "test-repo.sh",
+                "testName": "",
+                "expected": "grep -qF 'scripts/with-collector.mjs' on tools/argus/CLAUDE.md succeeds.",
+                "got": "Not written or edited by me — unchanged per the plan. Confirmed by hand: tools/argus/CLAUDE.md's Running-it section reads 'node scripts/with-collector.mjs -- <cmd>   # a collector for one command, stopped when it exits'."
+              },
+              {
+                "case": "the script exists (test-repo.sh guard)",
+                "file": "test-repo.sh",
+                "testName": "",
+                "expected": "tools/argus/scripts/with-collector.mjs is present on disk.",
+                "got": "Not written or edited by me — unchanged per the plan. Confirmed by hand: the file exists (7722 bytes)."
+              },
+              {
+                "case": "the script parses under node --check (test-repo.sh guard)",
+                "file": "test-repo.sh",
+                "testName": "",
+                "expected": "`node --check tools/argus/scripts/with-collector.mjs` exits 0.",
+                "got": "Not written or edited by me — unchanged per the plan. Confirmed by hand: `node --check tools/argus/scripts/with-collector.mjs` printed no error."
+              }
+            ],
+            "openQuestions": [],
+            "questions": []
+          }
         }
       ]
     },
