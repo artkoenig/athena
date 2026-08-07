@@ -314,6 +314,7 @@ const DISJOINT_MARKERS = [
   'MARKER-FINDING-REPRODUCTION',
   'MARKER-FINDING-CRITERION',
   'MARKER-VERDICT-REASON',
+  'MARKER-CLOSE-QUESTION',
 ];
 
 const planReturn = {
@@ -452,6 +453,25 @@ function contextFor(m) {
       return { stateReturn: { exists: true, backlogJson: JSON.stringify(questionBacklog(), null, 2) + '\n', summary: '' }, decomposeReturn: decomposeReturnOne, researchReturn: planReturn };
     case 'w10':
       return { stateReturn: { exists: false, backlogJson: '', summary: '' }, decomposeReturn: decomposeReturnOne, researchReturn: planReturn, testsReturn: testsReturnWithOpenQuestion, verdictFor: (label) => (label === 'review:i1.0' ? verdictReturnWithFinding : verdictReturnClean) };
+    case 'w11':
+      return { stateReturn: { exists: false, backlogJson: '', summary: '' }, decomposeReturn: decomposeReturnOne, researchReturn: planReturn, closeFor: () => ({ questions: ['MARKER-CLOSE-QUESTION'], summary: 'closed' }) };
+    case 'w12': {
+      // Round 3, finding 2: the planner closes the increment and hands it
+      // straight back as todo — the second chance MAX_ATTEMPTS exists for —
+      // and settles it on the second pass.
+      let replans = 0;
+      return {
+        stateReturn: { exists: false, backlogJson: '', summary: '' },
+        decomposeReturn: decomposeReturnOne,
+        researchReturn: planReturn,
+        closeFor: () => {
+          replans += 1;
+          return replans === 1
+            ? { increments: [increment('i1')], questions: [], summary: 'handed back' }
+            : { increments: [Object.assign(increment('i1'), { status: 'done' })], questions: [], summary: 'closed' };
+        },
+      };
+    }
     default:
       throw new Error('unknown mode ' + m);
   }
@@ -470,7 +490,13 @@ function returnFor(label) {
   if (label.startsWith('tests:')) return ctx.testsReturn || testsReturn;
   if (label.startsWith('implement:')) return buildReturn;
   if (label.startsWith('review:')) return ctx.verdictFor ? ctx.verdictFor(label) : verdictReturnClean;
-  if (label.startsWith('close:') || label.startsWith('replan:')) return { summary: 'closed' };
+  // Round 3, w11 and w12: the closing planner's return is a channel of its
+  // own — it can carry a question for the human (w11) and it can hand an
+  // increment back as todo (w12) — so these two labels take a per-mode
+  // override instead of the one fixed fixture.
+  if (label.startsWith('close:') || label.startsWith('replan:')) {
+    return ctx.closeFor ? ctx.closeFor(label) : { summary: 'closed' };
+  }
   if (label === 'publish') return { summary: 'published' };
   throw new Error('unexpected label ' + label);
 }
@@ -596,6 +622,44 @@ async function main() {
       "the first round's researcher prompt carries findings that do not exist yet");
     assertTrue(logs.some((l) => l.includes('MARKER-VERDICT-REASON')),
       "the reviewer's reason sentence never reached the human in the chat");
+  } else if (mode === 'w11') {
+    // Round 3, finding 1: loop.js dispatched the Close step and dropped its
+    // return, so a question the closing planner asked reached nobody — no
+    // blockedOnHuman, no log line, and a run that reported itself finished.
+    // agile-loop.js already handled the same role in the same position, so
+    // this mode runs on both and pins them to one behaviour.
+    const closeLabel = isAgile ? 'replan:i1' : 'close:i1';
+    assertEqualArrays(labels,
+      ['load-state', 'decompose', 'research:i1.0', 'tests:i1.0', 'implement:i1.0', 'review:i1.0', closeLabel, 'publish'],
+      'a question from the closing planner does not stop the run at publish');
+    assertTrue(!!result && Array.isArray(result.blockedOnHuman) && result.blockedOnHuman.length === 1,
+      "the closing planner's question did not end the run as blocked on the human");
+    const blocked = JSON.stringify((result && result.blockedOnHuman) || []);
+    assertTrue(blocked.includes('MARKER-CLOSE-QUESTION'),
+      'blockedOnHuman does not carry the question the closing planner asked');
+    assertTrue(blocked.includes(closeLabel),
+      'blockedOnHuman does not name ' + closeLabel + ' as the step that asked');
+    assertTrue(logs.some((l) => l.includes('MARKER-CLOSE-QUESTION')),
+      "the closing planner's question never reached the human in the chat");
+  } else if (mode === 'w12') {
+    // Round 3, finding 2: labels are keyed on the increment id, so the second
+    // attempt at an increment the planner handed back re-used the first
+    // attempt's labels, found them all in the in-session recorded map,
+    // dispatched nobody and re-read the first attempt's verdict and re-cut.
+    // MAX_ATTEMPTS' second chance is what that cost.
+    assertTrue(isAgile, "w12 is the incremental loop's mode: the plain loop never re-cuts");
+    assertEqualArrays(labels,
+      ['load-state', 'decompose',
+       'research:i1.0', 'tests:i1.0', 'implement:i1.0', 'review:i1.0', 'replan:i1',
+       'research:i1.0', 'tests:i1.0', 'implement:i1.0', 'review:i1.0', 'replan:i1',
+       'publish'],
+      'an increment the planner handed back as todo was not worked a second time');
+    assertTrue(calls.filter((c) => c.label === 'research:i1.0').length === 2,
+      'the researcher was not dispatched again for the second attempt');
+    assertTrue(!!result && result.stopped === '',
+      'the run stopped on the attempt backstop instead of working the increment again');
+    assertTrue(!!result && result.delivered === 1 && Array.isArray(result.increments) && result.increments.length === 2,
+      'the second attempt did not deliver the increment');
   } else {
     throw new Error('unknown mode ' + mode);
   }
@@ -638,7 +702,12 @@ for wf in "$root/workflows/loop.js" "$root/workflows/agile-loop.js"; do
   run_driver "$wf" w8 "$wf_name: every step's prompt tells the agent to record its return and push the commit"
   run_driver "$wf" w9 "$wf_name: a run resumed after a question for the human works that step again with the question in its prompt"
   run_driver "$wf" w10 "$wf_name: a correction round carries the reviewer's findings to the researcher and the reason to the human"
+  run_driver "$wf" w11 "$wf_name: a question from the closing planner ends the run and reaches the human"
 done
+
+# Round 3, finding 2: only the incremental loop re-cuts, so an increment
+# handed back is agile-loop.js's case alone.
+run_driver "$root/workflows/agile-loop.js" w12 "agile-loop.js: an increment the planner hands back is worked a second time, not skipped as recorded"
 
 rm -rf "$driver_tmp"
 

@@ -508,3 +508,131 @@ repository root; no setup beyond `git`, `node` and `mktemp`, all present.
 `bash test.sh` was not run — the plan's "What counts as done" for this round
 names it as the implementer's and the judgment's command, and `test-repo.sh`
 alone is where every case of this round lives.
+
+## Round 3
+
+The criterion this round is the reviewer's Round 2 reproduction spec, and the
+Test plan section of `researcher.md`'s `## Round 3` is my work order for it. I
+read `issue.md` and `researcher.md` (its top-level content and `## Round 3`)
+only. All work this round is in one file, `test-repo.sh`; I opened no
+production file — not `skills/agent-brief/assets/backlog.mjs`, not either
+workflow script, not any agent page.
+
+Four items were planned: one block of shared driver changes with no case of
+its own, two new driver modes (`w11` on both workflows, `w12` on
+`agile-loop.js` alone), and three new `run_driver` lines. All are written, in
+`test-repo.sh`, at the level the plan names.
+
+### A. `test-repo.sh` — the driver heredoc
+
+Run with `bash test-repo.sh`.
+
+1. **Shared driver changes** (no case of their own). Added exactly as the plan
+   specified: `DISJOINT_MARKERS` gained `'MARKER-CLOSE-QUESTION'`; `returnFor`'s
+   `close:`/`replan:` lookup now prefers `ctx.closeFor(label)` before falling
+   back to the fixed `{ summary: 'closed' }` every earlier mode used, with the
+   comment the plan gave verbatim; `contextFor` gained a `case 'w11':` arm (a
+   fresh run, one increment, `closeFor` always returning a question) and a
+   `case 'w12':` arm (a fresh run, `closeFor` closing over a `replans` counter:
+   the first call hands `i1` back as `todo`, the second closes it as `done`,
+   built from the existing `increment('i1')` helper so the two returns share no
+   object).
+2. **`w11` on both workflows** — "`$wf_name`: a question from the closing
+   planner ends the run and reaches the human". New `mode === 'w11'` branch,
+   inserted after the `w10` branch: asserts the label sequence ends
+   `[..., closeLabel, 'publish']`, that `result.blockedOnHuman` has exactly one
+   entry, that its stringified form carries `MARKER-CLOSE-QUESTION` and the
+   name of the step that asked (`close:i1` or `replan:i1`), and that `logs`
+   carries a line with `MARKER-CLOSE-QUESTION`. **Result: red on `loop.js`,
+   green on `agile-loop.js`** — exactly the divergence the plan predicted:
+
+   ```
+   FAIL — loop.js: a question from the closing planner ends the run and reaches the human:
+          the closing planner's question did not end the run as blocked on the human
+          blockedOnHuman does not carry the question the closing planner asked
+          blockedOnHuman does not name close:i1 as the step that asked
+          the closing planner's question never reached the human in the chat
+   ```
+
+   `workflows/loop.js` today dispatches the Close step and drops its return, so
+   `blockedOnHuman` stays empty and no log line carries the question;
+   `workflows/agile-loop.js` already threads `replan`'s return through
+   `asksTheHuman` in the same position and passes with no change. This is
+   finding 1's own reproduction, confirmed against the real scripts rather than
+   re-derived.
+3. **`w12` on `agile-loop.js` only** — "an increment the planner hands back is
+   worked a second time, not skipped as recorded". New `mode === 'w12'` branch,
+   inserted after `w11`, with the `assertTrue(isAgile, ...)` guard written with
+   double quotes around the message (it contains an apostrophe) as the plan's
+   own note asked. **Result: red**, exactly as the plan predicted:
+
+   ```
+   FAIL — agile-loop.js: an increment the planner hands back is worked a second time, not skipped as recorded:
+          an increment the planner handed back as todo was not worked a second time — expected ["load-state","decompose","research:i1.0","tests:i1.0","implement:i1.0","review:i1.0","replan:i1","research:i1.0","tests:i1.0","implement:i1.0","review:i1.0","replan:i1","publish"] got ["load-state","decompose","research:i1.0","tests:i1.0","implement:i1.0","review:i1.0","replan:i1","publish"]
+          the researcher was not dispatched again for the second attempt
+   ```
+
+   The other two assertions in this case — `result.stopped === ''` and
+   `result.delivered === 1 && result.increments.length === 2` — pass already
+   against the unfixed script, so only the label-sequence and
+   researcher-dispatch-count assertions are red; I report this rather than
+   silently dropping it, since it means two of the four planned assertions in
+   this case are not proof of anything yet, only guards that stay true once the
+   fix lands. `workflows/loop.js` never runs this mode, per the plan
+   (`assertTrue(isAgile, ...)` would itself fail there, but no `run_driver`
+   call ever passes it `loop.js`).
+4. **Three `run_driver` lines.** One inside the existing two-workflow
+   `for wf in ...` loop, after the `w10` line, so it runs once against
+   `loop.js` and once against `agile-loop.js` (the "two" of the plan's "three
+   run_driver lines"); one after that loop closes, before `rm -rf
+   "$driver_tmp"`, targeting `agile-loop.js` alone with the comment the plan
+   gave verbatim. All three placed exactly where the plan named.
+
+Nothing else in `test-repo.sh` changes. No case is written against
+`skills/agent-brief/assets/`, no grep case is added or removed, no existing
+mode, fixture or assertion is edited beyond the insertions named above, and no
+agent page, `rulebook.md`, `README.md` or `skills/*/SKILL.md` was opened —
+the plan said this round touches none of them, and I verified that boundary by
+not reading them.
+
+Full run: `bash test-repo.sh` → `FAIL: 2 of 50 cases` — the two failures are
+`w11` on `loop.js` (case 2 above) and `w12` on `agile-loop.js` (case 3 above),
+exactly as the researcher's "What is already red" predicted, and the 50-case
+count matches the plan's own sanity figure exactly. `w11` on `agile-loop.js`
+is green on arrival, as predicted. Every other case, from every earlier round,
+is still green.
+
+### Every case from the plan is written; none was skipped
+
+The shared driver changes and both new modes (`w11`, `w12`) and all three
+`run_driver` lines are present, in `test-repo.sh` alone, exactly as the plan
+named. `skills/agent-brief/assets/backlog.mjs`, its suite, both workflow
+scripts, every agent page, `rulebook.md` and `README.md` were not touched —
+the plan said this round changes none of them in production, and I opened
+none of them at all.
+
+### Gaps and conflicts found in the test plan
+
+None. Every case in the Round 3 plan pinned a concrete assertion and a
+concrete expected result (red or green, on which workflow), and what I
+observed matched what the plan predicted in its "What proves each finding"
+and "What is already red" sections in every instance — including the
+divergence between the two workflows in `w11`, which is the whole point of
+running that mode on both.
+
+One thing worth flagging for whoever reads the failure output next, not a
+conflict with the plan: in `w12`'s failure, two of the four assertions the
+plan specified already pass against the unfixed script (`result.stopped` is
+already `''` and `result.increments.length` is already `2` before the fix
+lands), so only the label-sequence and dispatch-count assertions carry the red
+signal this round. I wrote every assertion the plan gave verbatim regardless,
+since dropping the two that happen to pass today would leave the case
+unguarded against a future regression in exactly those two facts.
+
+### Environment
+
+`node --version` → `v22.22.2`. `bash test-repo.sh` was run from the
+repository root; no setup beyond `git`, `node` and `mktemp`, all present.
+`bash test.sh` was not run — the plan's "What counts as done" for this round
+names it as the implementer's and the judgment's command, and `test-repo.sh`
+alone is where every case of this round lives.
