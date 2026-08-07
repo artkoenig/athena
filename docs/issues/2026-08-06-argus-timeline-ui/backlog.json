@@ -454,6 +454,30 @@
             "openQuestions": [],
             "questions": []
           }
+        },
+        {
+          "label": "implement:timeline-landing.1",
+          "at": "2026-08-07T10:39:15.007Z",
+          "return": {
+            "deviations": [
+              "The plan says the implementer adds nothing and changes no production code; the three new cases it names were already present in tools/argus-ui/test/timeline.test.mjs, landed by the test-author in commit 522e68b, so this step wrote no code at all and only ran the check. Writing them a second time would have duplicated a test, which is forbidden to me anyway."
+            ],
+            "commands": [
+              {
+                "command": "npm --prefix tools/argus-ui test",
+                "exitCode": 0,
+                "note": "33 cases across test/*.test.mjs, 33 pass, 0 fail, 0 skipped, 0 todo. Includes the three new geometry cases: 'timelineHtml draws each lane at its own left and width...', 'timelineHtml clamps a lane overflowing the window...', 'timelineHtml indents each lane label by its depth...'."
+              },
+              {
+                "command": "node --test tools/argus-ui/test/timeline.test.mjs (against a temporary mutation of public/timeline.js)",
+                "exitCode": 1,
+                "note": "Not one of the commands that count; a throwaway mutation check, reverted immediately with git checkout. Replacing the .lane-bar style with the constant style=\"left:0.000%;width:100.000%\" turns the first two new cases red (17 pass, 2 fail), which confirms the round-1 finding is closed: the drawn geometry is now pinned. The third new case stays green under that mutation because it pins the label's padding-left, which the mutation does not touch."
+              }
+            ],
+            "blockers": [],
+            "questions": [],
+            "summary": "No production code changed: the three geometry cases the plan names were already in tools/argus-ui/test/timeline.test.mjs, and `npm --prefix tools/argus-ui test` is green at 33/33 while a constant .lane-bar style now makes two of them fail."
+          }
         }
       ]
     },
