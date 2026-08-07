@@ -291,6 +291,164 @@
             "questions": [],
             "summary": "Make test-signing.sh hermetic by pointing the checker at a per-case sandbox checkout reached through a symlink, stripping the ambient git environment, and adding two local-config cases that go red if the harness ever reads the checkout the suite runs from; no production change expected."
           }
+        },
+        {
+          "label": "tests:signing-check.1",
+          "at": "2026-08-07T23:47:04.264Z",
+          "return": {
+            "cases": [
+              {
+                "case": "Group A (case unconfigured): an environment without commit.gpgsign passes the check — expect code 0.",
+                "file": "/home/user/uroboros/test-signing.sh",
+                "testName": "an environment without commit.gpgsign passes the check",
+                "expected": "code is 0 when commit.gpgsign is not set true, checker run against a fresh per-case sandbox checkout",
+                "got": "passes today (code=0). Run against the round-0 harness's equivalent case under the review's reproduction (a clone with repository-local commit.gpgsign=true), it failed: code=1, 'FAIL: commit signing is configured but signing a commit failed'. The corrected harness stays green under that same reproduction because it points the checker at its own empty sandbox checkout instead of the checkout the suite runs from."
+              },
+              {
+                "case": "Group A: the skipped check says why it skipped — output contains SKIP: and commit.gpgsign.",
+                "file": "/home/user/uroboros/test-signing.sh",
+                "testName": "the skipped check says why it skipped",
+                "expected": "output contains 'SKIP:' and names 'commit.gpgsign'",
+                "got": "passes today; under the round-0 harness's equivalent case, run under the review's reproduction, this failed for the same reason as above (output carried FAIL:, not SKIP:)."
+              },
+              {
+                "case": "Group A: the skipped check leaves no temporary directory behind.",
+                "file": "/home/user/uroboros/test-signing.sh",
+                "testName": "the skipped check leaves no temporary directory behind",
+                "expected": "case/tmp is empty after the run",
+                "got": "passes today."
+              },
+              {
+                "case": "Group B (case key-present-signing-off): a signing key with commit.gpgsign false is not an environment the check fails — code 0 and SKIP: in the output.",
+                "file": "/home/user/uroboros/test-signing.sh",
+                "testName": "a signing key with commit.gpgsign false is not an environment the check fails",
+                "expected": "code=0 and output contains 'SKIP:' even though a signing key is present",
+                "got": "passes today; the equivalent round-0 case failed under the review's reproduction for the same 'checker reads the checkout's own repo-local gpgsign' reason."
+              },
+              {
+                "case": "Group C (case configured-bad): a configured signer that cannot sign fails the check — code 1 exactly.",
+                "file": "/home/user/uroboros/test-signing.sh",
+                "testName": "a configured signer that cannot sign fails the check",
+                "expected": "code is exactly 1",
+                "got": "passes today; unaffected by the review's finding (this group was already correct in round 0 since it configures gpgsign=true, matching a repo-local true either way)."
+              },
+              {
+                "case": "Group C: the failure says FAIL.",
+                "file": "/home/user/uroboros/test-signing.sh",
+                "testName": "the failure says FAIL",
+                "expected": "output contains 'FAIL:'",
+                "got": "passes today."
+              },
+              {
+                "case": "Group C: the failure names the signing key.",
+                "file": "/home/user/uroboros/test-signing.sh",
+                "testName": "the failure names the signing key",
+                "expected": "output contains the literal 'user.signingkey = <case>/fake_key.pub'",
+                "got": "passes today."
+              },
+              {
+                "case": "Group C: the failure names the signer program.",
+                "file": "/home/user/uroboros/test-signing.sh",
+                "testName": "the failure names the signer program",
+                "expected": "output contains the literal 'gpg.ssh.program = <case>/bad-signer'",
+                "got": "passes today."
+              },
+              {
+                "case": "Group C: the failure carries what git said.",
+                "file": "/home/user/uroboros/test-signing.sh",
+                "testName": "the failure carries what git said",
+                "expected": "output contains 'signing failed'",
+                "got": "passes today."
+              },
+              {
+                "case": "Group C: the failing check leaves no throwaway repository behind.",
+                "file": "/home/user/uroboros/test-signing.sh",
+                "testName": "the failing check leaves no throwaway repository behind",
+                "expected": "case/tmp is empty after the failing run",
+                "got": "passes today."
+              },
+              {
+                "case": "Group C: the failing check leaves no process behind.",
+                "file": "/home/user/uroboros/test-signing.sh",
+                "testName": "the failing check leaves no process behind",
+                "expected": "pgrep -f \"<case>\" finds nothing; reports FAIL naming pgrep as missing if the tool itself is absent",
+                "got": "passes today; pgrep is present in this environment so only the found-nothing branch is exercised, matching the plan's noted limit."
+              },
+              {
+                "case": "Group C: the failing check writes nothing into the repository it was pointed at (status before/after equal).",
+                "file": "/home/user/uroboros/test-signing.sh",
+                "testName": "the failing check writes nothing into the repository it was pointed at",
+                "expected": "git status --porcelain of the sandbox checkout is identical before and after the run",
+                "got": "passes today; now compares the sandbox checkout the checker was pointed at rather than this suite's own checkout, per the corrected harness."
+              },
+              {
+                "case": "Group C: the writes-nothing guard compares a status that is not empty.",
+                "file": "/home/user/uroboros/test-signing.sh",
+                "testName": "the writes-nothing guard compares a status that is not empty",
+                "expected": "status_before is non-empty (the seeded untracked dirty.txt), so the guard above cannot pass by comparing nothing with nothing",
+                "got": "passes today; status_before carries '?? dirty.txt', confirming the previous case is not vacuous."
+              },
+              {
+                "case": "Group C: the failing check adds no path anywhere in the repository it was pointed at, .git included (tree before/after equal).",
+                "file": "/home/user/uroboros/test-signing.sh",
+                "testName": "the failing check adds no path anywhere in the repository it was pointed at",
+                "expected": "a sorted, name-only find listing of the sandbox checkout, .git included, is identical before and after the run",
+                "got": "passes today; new case, not present in round 0."
+              },
+              {
+                "case": "Group D (case configured-good): a configured signer that works passes the check — code 0.",
+                "file": "/home/user/uroboros/test-signing.sh",
+                "testName": "a configured signer that works passes the check",
+                "expected": "code is 0",
+                "got": "passes today."
+              },
+              {
+                "case": "Group D: the passing check says so.",
+                "file": "/home/user/uroboros/test-signing.sh",
+                "testName": "the passing check says so",
+                "expected": "output contains 'OK:'",
+                "got": "passes today."
+              },
+              {
+                "case": "Group D: the passing check leaves no temporary directory behind.",
+                "file": "/home/user/uroboros/test-signing.sh",
+                "testName": "the passing check leaves no temporary directory behind",
+                "expected": "case/tmp is empty after the passing run",
+                "got": "passes today."
+              },
+              {
+                "case": "Group E1 (case local-good): signing configured only in the inspected repository's own config passes the check — code 0 and OK:.",
+                "file": "/home/user/uroboros/test-signing.sh",
+                "testName": "signing configured only in the inspected repository's own config passes the check",
+                "expected": "code=0 and output contains 'OK:', with the global gitconfig file empty and signing set entirely in the sandbox checkout's local config",
+                "got": "passes today. Confirmed not tautological by experiment: mutating run_checker to spawn the checker via \"$root/bin/check-commit-signing\" (pointed at the checkout the suite runs from) instead of the sandbox symlink turns this case red — 'code=1 out=' (empty, since the neutralised-global checkout carries no local signing config either) — proving the case only passes when the checker genuinely reads the repository it was pointed at. This mutation was run outside the committed suite and not left in the tree."
+              },
+              {
+                "case": "Group E2 (case local-off): the inspected repository's own commit.gpgsign=false wins over a global true — code 0 and SKIP:.",
+                "file": "/home/user/uroboros/test-signing.sh",
+                "testName": "the inspected repository's own commit.gpgsign=false wins over a global true",
+                "expected": "code=0 and output contains 'SKIP:', with a global file that says commit.gpgsign=true and a working signer, overridden to false in the sandbox checkout's local config",
+                "got": "passes today. Confirmed not tautological by the same run_checker-repointing experiment as E1: this case also turns red when the checker is pointed at the suite's own checkout instead of the sandbox."
+              },
+              {
+                "case": "Group F1: test.sh runs bin/check-commit-signing (registration grep, unchanged from round 0).",
+                "file": "/home/user/uroboros/test-signing.sh",
+                "testName": "test.sh runs bin/check-commit-signing",
+                "expected": "grep -qF 'bin/check-commit-signing' \"$root/test.sh\" succeeds",
+                "got": "passes today; unchanged case from round 0."
+              },
+              {
+                "case": "Group F2: the suite writes nothing into the checkout it runs from (status of $root identical from first line to last).",
+                "file": "/home/user/uroboros/test-signing.sh",
+                "testName": "the suite writes nothing into the checkout it runs from",
+                "expected": "git status --porcelain of the checkout the suite runs from, snapshotted first and last under the neutralised environment, is identical",
+                "got": "passes today; new case, not present in round 0 (round 0's equivalent guard read the checkout under test rather than the suite's own checkout, which is what this criterion asks for directly)."
+              }
+            ],
+            "openQuestions": [],
+            "questions": [],
+            "summary": "Rewrote /home/user/uroboros/test-signing.sh per the round-1 plan so every case runs bin/check-commit-signing through a symlink into a per-case sandbox checkout (never the checkout the suite runs from) under a git environment stripped of GIT_CONFIG_COUNT and friends, added the two hermeticity go-red cases (local-good, local-off) and the suite-level no-write-to-root guard; all 21 planned cases are present and bash test-signing.sh exits 0 (PASS: 21 cases) with no production file touched (git status --porcelain shows only test-signing.sh modified). Because the round's defect lived in the harness itself and the plan expects no production change, I proved the correction two ways instead of quoting a currently-red case: (1) the OLD round-0 test-signing.sh, run via the review's own reproduction (a clone with repository-local commit.gpgsign=true), reproduces the exact finding — FAIL: 3 of 16 cases, the same three the review named; (2) the NEW test-signing.sh, run under that identical reproduction, stays PASS: 21 cases, and separately, mutating run_checker to spawn the checker against $root instead of the sandbox symlink turns cases E1, E2 and D red, showing the hermeticity guards are not tautological. bash test.sh also passes clean afterward: 8 suites, exit 0 (commit signing in this environment: OK; the commit-signing check itself: 21 cases; the repository itself; worktrees; the backlog recorder; tools/argus; tools/argus-ui; tools/log-parser)."
+          }
         }
       ]
     },
