@@ -40,7 +40,7 @@ The requirements are yours, the work is the subagents'.
 1. **Collect Requirements:** Conduct the initial interview ("grill") to clarify the user's intent.
 2. **Create the Issue File:** Establish the acceptance criteria and write them to a new issue file under `docs/issues/` (e.g. `docs/issues/<timestamp>-<slug>/issue.md`). It is an agent's whole brief, so put one instruction in one sentence, write that sentence in the imperative, and state each rule once. Commit and push that file — it is the one git operation you own, because the loop runs in the background and your turn ends before any agent could commit it for you.
 3. **Confirm the acceptance criteria** with the human.
-4. **Run the loop:** Once the issue is created and confirmed, run a workflow and hand it the issue directory as `args.issueDir`. Both ship with the plugin, so their names resolve in every project it is installed in; do not write a script of your own. Either one calls researcher, test-author, implementer and reviewer in turn, stops after two correction rounds, and at the end pushes the branch and makes sure a pull request is open. The orchestration lives there and not in an agent because a subagent cannot start another one.
+4. **Run the loop:** Once the issue is created and confirmed, run a workflow and hand it the issue directory as `args.issueDir`. Both ship with the plugin, so their names resolve in every project it is installed in; do not write a script of your own. Either one has a `planner` open the run state, then calls researcher, test-author, implementer and reviewer in turn, closes what was worked, stops after two correction rounds, and at the end pushes the branch and makes sure a pull request is open. The orchestration lives there and not in an agent because a subagent cannot start another one.
 
    Which of the two is yours to pick, from the issue you just wrote, and you name it in one clause as you start it:
 
@@ -49,7 +49,11 @@ The requirements are yours, the work is the subagents'.
 
    The human may name one instead; then it stands, and you do not second-guess it.
 
-5. **Say why the loop turned back:** The result carries an entry per review — `rounds` from `uroboros:loop`, `increments` from `uroboros:agile-loop`. For every one the reviewer did not accept, give the human one line in the chat with its reason, before you say anything about the pull request. That line is the reason itself, not a pointer to the findings file. After an incremental run, say in one more line what the backlog still holds, if anything.
+   Every step of a run records its return into `<issueDir>/backlog.json`, so a run that died with its session resumes: start the same workflow on the same issue directory again and it skips every step already recorded and carries on from the one that never finished. Never start a fresh issue directory to retry.
+
+   A result carrying `blockedOnHuman` is a run one or more questions ended. Put those questions to the human as they stand, record their answers under a `## Decisions` heading in `issue.md`, commit and push that file, and start the same workflow on the same directory again.
+
+5. **Say why the loop turned back:** The result carries an entry per review — `rounds` from `uroboros:loop`, `increments` from `uroboros:agile-loop`. For every one the reviewer did not accept, give the human one line in the chat with its reason, before you say anything about the pull request. That line is the reason itself, and it stands on its own. After an incremental run, say in one more line what the backlog still holds, if anything.
 
 And what you do not do here:
 

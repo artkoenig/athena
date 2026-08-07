@@ -22,18 +22,25 @@ export const meta = {
     'agent per iteration and buys nothing when there is nothing to re-cut. Pass the issue ' +
     'directory as args.issueDir.',
   phases: [
+    { title: 'Load state', detail: 'the run state is read, so a restart resumes where it stopped' },
     { title: 'Decompose', detail: 'planner cuts the issue into a backlog of increments' },
     { title: 'Research', detail: 'researcher plans the current increment' },
     { title: 'Tests', detail: 'test-author writes failing tests' },
     { title: 'Implement', detail: 'implementer makes them pass' },
     { title: 'Review', detail: 'reviewer checks the increment against its criteria' },
-    { title: 'Replan', detail: 'planner re-cuts the increments still open' },
+    { title: 'Replan', detail: 'planner closes the increment and re-cuts the ones still open' },
     { title: 'Publish', detail: 'the branch goes to the remote and a pull request exists' },
   ],
 }
 
 // The script is the orchestrator. No agent dispatches another one — their
 // pages say so, and every prompt below repeats it.
+//
+// The channel between the agents is structured: each one returns an object,
+// this script injects the slice the next role needs into its prompt, and each
+// one records its own return into `<issueDir>/backlog.json` through the shipped
+// helper. That file is the only durable state of a run, and a fresh session
+// resumes from it alone.
 
 const MAX_CORRECTIONS = 2
 
@@ -42,6 +49,12 @@ const MAX_CORRECTIONS = 2
 // handing back an increment that never finishes (MAX_ATTEMPTS, per id), and the
 // run may be failing for a reason no re-cut will fix (MAX_BLOCKED). Each one
 // stops the loop and hands back to the human rather than burning the budget.
+//
+// MAX_BLOCKED is derived from the statuses in the run state, so it survives a
+// restart. MAX_ATTEMPTS is deliberately session-local: closing an increment
+// sheds its step returns, so nothing in the state counts attempts, and a
+// restart granting one more attempt is cheaper than a second counter in the
+// file that every writer would have to maintain.
 const MAX_INCREMENTS = 8
 const MAX_ATTEMPTS = 2
 const MAX_BLOCKED = 2
@@ -62,6 +75,21 @@ if (!dir) {
 }
 
 const maxIncrements = Number(parsed.maxIncrements) > 0 ? Number(parsed.maxIncrements) : MAX_INCREMENTS
+
+const STATE = {
+  type: 'object',
+  properties: {
+    exists: { type: 'boolean', description: 'True only when backlog.json exists and you read it.' },
+    backlogJson: {
+      type: 'string',
+      description:
+        'The exact content of backlog.json, byte for byte. Empty string when it does not exist.',
+    },
+    summary: { type: 'string' },
+  },
+  required: ['exists', 'backlogJson', 'summary'],
+  additionalProperties: false,
+}
 
 const BACKLOG = {
   type: 'object',
@@ -111,11 +139,16 @@ const BACKLOG = {
         additionalProperties: false,
       },
     },
-    backlogFile: { type: 'string', description: 'Path of the backlog file, relative to the repo root.' },
-    handoffFile: { type: 'string', description: 'Path of your handoff file, relative to the repo root.' },
+    questions: {
+      type: 'array',
+      items: { type: 'string' },
+      description:
+        'Decisions only the human can make, each answerable without opening a file. ' +
+        'A non-empty list ends the run.',
+    },
     summary: { type: 'string' },
   },
-  required: ['increments', 'backlogFile', 'handoffFile', 'summary'],
+  required: ['increments', 'questions', 'summary'],
   additionalProperties: false,
 }
 
@@ -124,25 +157,135 @@ const PLAN = {
   properties: {
     needsTests: {
       type: 'boolean',
+      description: 'False only when this increment has nothing a test could check.',
+    },
+    plan: {
+      type: 'string',
       description:
-        'What the Test Plan section of your handoff decided: false only when this ' +
-        'increment has nothing a test could check.',
+        'The implementation plan: what gets built and the decisions behind it, the ' +
+        'rejected ones included.',
+    },
+    moduleMap: {
+      type: 'string',
+      description:
+        'The files the change touches: path, what each holds, the entry points. One line ' +
+        'per file.',
+    },
+    environment: {
+      type: 'string',
+      description:
+        'Every command the test plan asks anyone to run, with its prerequisites. ' +
+        '"There is no linter" is an answer.',
+    },
+    testPlan: {
+      type: 'string',
+      description:
+        'The whole work order for the test-author and the only thing it is given: per case ' +
+        'the criterion it proves, input, state, expected result, the level, the test file by ' +
+        'path, the framework, the conventions of that file, and the command that runs just ' +
+        'it. Name what you leave untested and why.',
     },
     checks: {
       type: 'array',
       items: { type: 'string' },
       description:
-        'The closed list from your Test Plan: the commands, verbatim and runnable from ' +
-        'the repository root, whose exit codes this increment is judged by. Nobody ' +
-        'downstream runs anything else. Empty when nothing should be run at all.',
+        'The closed list of commands, verbatim, runnable from the repo root, whose exit ' +
+        'codes judge this increment. Nobody downstream runs anything else.',
     },
-    handoffFile: {
-      type: 'string',
-      description: 'Path of the handoff file you wrote, relative to the repo root.',
+    questions: {
+      type: 'array',
+      items: { type: 'string' },
+      description:
+        'Decisions only the human can make, each answerable without opening a file. ' +
+        'A non-empty list ends the run.',
     },
     summary: { type: 'string' },
   },
-  required: ['needsTests', 'checks', 'handoffFile', 'summary'],
+  required: ['needsTests', 'plan', 'moduleMap', 'environment', 'testPlan', 'checks', 'questions', 'summary'],
+  additionalProperties: false,
+}
+
+const TESTS = {
+  type: 'object',
+  properties: {
+    cases: {
+      type: 'array',
+      description: 'Every case the test plan named, written or not.',
+      items: {
+        type: 'object',
+        properties: {
+          case: { type: 'string', description: "The planned case in the plan's words, one line." },
+          file: { type: 'string', description: 'Test file by path. Empty when you did not write it.' },
+          testName: { type: 'string', description: "The test's name. Empty when you did not write it." },
+          expected: { type: 'string', description: 'What the case demands, one line.' },
+          got: {
+            type: 'string',
+            description: 'The failure it produced, one line — or why you did not write it.',
+          },
+        },
+        required: ['case', 'file', 'testName', 'expected', 'got'],
+        additionalProperties: false,
+      },
+    },
+    openQuestions: {
+      type: 'array',
+      items: { type: 'string' },
+      description:
+        'Gaps and conflicts in the test plan, one line each. The next research round picks ' +
+        'them up.',
+    },
+    questions: {
+      type: 'array',
+      items: { type: 'string' },
+      description:
+        'Decisions only the human can make, each answerable without opening a file. ' +
+        'A non-empty list ends the run.',
+    },
+    summary: { type: 'string' },
+  },
+  required: ['cases', 'openQuestions', 'questions', 'summary'],
+  additionalProperties: false,
+}
+
+const BUILD = {
+  type: 'object',
+  properties: {
+    deviations: {
+      type: 'array',
+      items: { type: 'string' },
+      description:
+        'Every place you built something other than what the plan named: what it said, ' +
+        'what you did, why.',
+    },
+    commands: {
+      type: 'array',
+      description: 'Every command you ran from the list that counts, with its exit code.',
+      items: {
+        type: 'object',
+        properties: {
+          command: { type: 'string' },
+          exitCode: { type: 'integer' },
+          note: { type: 'string' },
+        },
+        required: ['command', 'exitCode', 'note'],
+        additionalProperties: false,
+      },
+    },
+    blockers: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'What stopped you, one line each. Empty when nothing did.',
+    },
+    questions: {
+      type: 'array',
+      items: { type: 'string' },
+      description:
+        'Decisions only the human can make, each answerable without opening a file. ' +
+        'A non-empty list ends the run.',
+    },
+    summary: { type: 'string' },
+  },
+  required: ['deviations', 'commands', 'blockers', 'questions', 'summary'],
   additionalProperties: false,
 }
 
@@ -150,23 +293,42 @@ const VERDICT = {
   type: 'object',
   properties: {
     findings: {
-      type: 'integer',
-      description: 'Number of findings that require a correction. 0 means the increment is accepted.',
-    },
-    handoffFile: {
-      type: 'string',
-      description: 'Path of the findings file you wrote, relative to the repo root.',
+      type: 'array',
+      description:
+        'Every finding that requires a correction. An empty list means the increment is accepted.',
+      items: {
+        type: 'object',
+        properties: {
+          claim: { type: 'string', description: 'What is wrong, one line.' },
+          reproduction: {
+            type: 'string',
+            description: 'These inputs or this state, this wrong result, at this file and line.',
+          },
+          criterion: {
+            type: 'string',
+            description: 'The acceptance criterion it violates, or "none".',
+          },
+        },
+        required: ['claim', 'reproduction', 'criterion'],
+        additionalProperties: false,
+      },
     },
     reason: {
       type: 'string',
       description:
-        'Why another correction round is needed, in one or two sentences a human ' +
-        'reads in the chat without opening a file: what is wrong and which ' +
-        'acceptance criterion it misses. Empty string when findings is 0.',
+        'Why another correction round is needed, in one or two sentences a human reads in ' +
+        'the chat. Empty when findings is empty.',
+    },
+    questions: {
+      type: 'array',
+      items: { type: 'string' },
+      description:
+        'Decisions only the human can make, each answerable without opening a file. ' +
+        'A non-empty list ends the run.',
     },
     summary: { type: 'string' },
   },
-  required: ['findings', 'handoffFile', 'reason', 'summary'],
+  required: ['findings', 'reason', 'questions', 'summary'],
   additionalProperties: false,
 }
 
@@ -192,9 +354,10 @@ const PUSH = {
   additionalProperties: false,
 }
 
-// The reviewer reads no handoff — that is what keeps it an independent pair of
-// eyes. So the one thing it needs from the plan, the list of commands that count
-// for this increment, is handed to it here instead: what to run, never why.
+// The reviewer is handed no part of the plan — that is what keeps it an
+// independent pair of eyes. So the one thing it needs, the list of commands
+// that count for this increment, is handed to it here instead: what to run,
+// never why.
 function checkList(checks) {
   return checks && checks.length
     ? 'The commands that count for this increment, and the only ones anyone runs:\n' +
@@ -205,33 +368,71 @@ function checkList(checks) {
 
 const noDispatch =
   'You are running inside a workflow script. Do NOT dispatch any subagent and ' +
-  'do NOT hand over to anyone — the script calls the next agent itself. Write ' +
-  'your handoff file, commit it, then return.'
+  'do NOT hand over to anyone — the script calls the next agent itself. Record ' +
+  'your step return, commit it with your work, then push the commit.'
 
-// One role, one file, for the whole run — the same rule the plain loop follows,
-// with the section naming an increment and a round instead of a round alone. An
-// issue directory of a five-increment run holds five handoffs, not twenty-five,
-// and whoever is pointed at `researcher.md` reads the current plan and the
-// history that produced it in one place.
-function heading(n, round) {
-  return round === 0 ? `## Increment ${n}` : `## Increment ${n} — Round ${round}`
-}
-
-// One wording for every call, because the file exists on all of them but the
-// first — and not even reliably then, since an increment that needs no tests
-// leaves `test-author.md` unwritten for the next one to create.
-function handoff(file, n, round) {
+// Every dispatch carries the one line that turns its return into durable state.
+// The agent writes the file; this script never touches it, because the workflow
+// runtime gives a script `args`, `agent`, `log` and `phase` and no file access
+// at all.
+function recordStep(incrementId, label) {
   return (
-    `Your handoff file is ${dir}/${file}. Append a \`${heading(n, round)}\` section to it, ` +
-    `creating the file with that section if it is not there yet, and leave every earlier ` +
-    `section exactly as it stands. Do not open a second file.\n`
+    `Record this step: write your whole return to a JSON file outside the repository, then ` +
+    `run the \`record\` subcommand of the backlog helper your shared brief names, as ` +
+    `\`record ${dir}/backlog.json ${incrementId} ${label} <that file>\`.\n`
   )
 }
 
-// How to point an agent at somebody else's file: the section for this
-// increment and round is the work order, and nothing above it is.
-function section(file, n, round) {
-  return `the \`${heading(n, round)}\` section of ${file}`
+// The slice each role gets, and no more. The test-author is given the test plan
+// and nothing else about the change; the implementer the plan, the map, the
+// environment, the checks and the tests that now exist; the reviewer the checks
+// alone.
+function casesBlock(tests) {
+  if (!tests) return 'No test was written for this round — the plan asked for none.\n'
+  const cases = Array.isArray(tests.cases) ? tests.cases : []
+  const open = Array.isArray(tests.openQuestions) ? tests.openQuestions : []
+  return (
+    'The tests that already exist, one line per case — case, file, test name, what it ' +
+    'demands, what it produced:\n' +
+    cases
+      .map(
+        (c) =>
+          `  - ${c.case} | ${c.file || '(not written)'} | ${c.testName || '(not written)'} | ` +
+          `demands ${c.expected} | got ${c.got}`,
+      )
+      .join('\n') +
+    '\n' +
+    (open.length
+      ? 'The test-author left these open:\n' + open.map((q) => `  - ${q}`).join('\n') + '\n'
+      : '')
+  )
+}
+
+function findingsBlock(verdict, round) {
+  const findings = (verdict && Array.isArray(verdict.findings) && verdict.findings) || []
+  return (
+    `This is correction loop ${round} of ${MAX_CORRECTIONS} for this increment. The review ` +
+    `found:\n` +
+    findings
+      .map(
+        (f, i) =>
+          `  ${i + 1}. ${f.claim}\n     Reproduction: ${f.reproduction}\n     Criterion: ${f.criterion}`,
+      )
+      .join('\n') +
+    '\n' +
+    `Plan the corrections. Set needsTests true only if a finding needs a new failing test ` +
+    `first, and then write that test's whole work order into testPlan — nothing from an ` +
+    `earlier round carries over, the list of commands that count included.\n`
+  )
+}
+
+function openQuestionsBlock(tests) {
+  const open = (tests && Array.isArray(tests.openQuestions) && tests.openQuestions) || []
+  return open.length
+    ? `The test-author left these open in the round before, and they are yours to settle:\n` +
+        open.map((q) => `  - ${q}`).join('\n') +
+        '\n'
+    : ''
 }
 
 // What every agent working an increment is told about the shape of the run. The
@@ -239,8 +440,8 @@ function section(file, n, round) {
 // this an agent reads them as its own — the researcher plans the whole issue in
 // one go, and the reviewer files a finding for every criterion the run has not
 // reached yet.
-function scope(task, backlog, n) {
-  const open = backlog.increments.filter((t) => t.status === 'todo' && t.id !== task.id)
+function scope(task, all, n) {
+  const open = all.filter((t) => t.status === 'todo' && t.id !== task.id)
   return (
     `This run works ${dir}/issue.md one increment at a time, and increment ${n} is yours:\n` +
     `  ${task.title} — ${task.goal}\n` +
@@ -258,85 +459,102 @@ function scope(task, backlog, n) {
   )
 }
 
-function research(task, backlog, n, round) {
-  const correction =
-    round === 0
-      ? ''
-      : `This is correction loop ${round} of ${MAX_CORRECTIONS} for this increment. Read the ` +
-        `reviewer's findings file in the issue directory, its newest section first, and plan ` +
-        `the corrections. ` +
-        `Set needsTests true only if a finding needs a new failing test first, and then give ` +
-        `that test its own Test Plan section inside this section — no earlier section's plan ` +
-        `carries over, the list of commands that count included.\n`
-  return agent(
-    `Issue directory: ${dir}\n` +
-      scope(task, backlog, n) +
-      correction +
-      handoff('researcher.md', n, round) +
-      noDispatch,
-    {
-      agentType: 'uroboros:researcher',
-      phase: 'Research',
-      label: `research:${n}.${round}`,
-      schema: PLAN,
-    },
-  )
-}
-
-// The planner's sections are named for the call, not for an increment and a
-// round, because a call sits between two increments rather than inside one.
-function plannerHandoff(n) {
-  return (
-    `Your handoff file is ${dir}/planner.md. Append a ` +
-    `\`${n === 0 ? '## The cut' : `## After increment ${n}`}\` section to it, creating the ` +
-    `file with that section if it is not there yet, and leave every earlier section exactly ` +
-    `as it stands. Do not open a second file. ${dir}/backlog.md is the other file you write, ` +
-    `and that one you rewrite in full.\n`
-  )
-}
-
-// Increment 0 is the cut itself; every later call folds one finished increment
-// back into the increments still open.
-function plan(n, worked) {
-  const brief =
-    n === 0
-      ? `Cut ${dir}/issue.md into a backlog of increments and write it to ${dir}/backlog.md. ` +
-        `This run works at most ${maxIncrements} of them, so a cut that needs more than that ` +
-        `is a cut that is too fine.\n`
-      : `Increment ${n} — ${worked.task.title} — has been worked. The review ` +
-        (worked.accepted
-          ? `accepted it.\n`
-          : `did not accept it after ${MAX_CORRECTIONS} correction rounds, with ` +
-            `${worked.findings} findings open: ${worked.reason}\n`) +
-        `Close it in the backlog with the status that verdict earns, then re-cut every ` +
-        `increment still open against what this one showed, and rewrite ${dir}/backlog.md ` +
-        `in full. ${n} of at most ${maxIncrements} increments are spent.\n`
-  return agent(
-    `Issue directory: ${dir}\n` +
-      brief + plannerHandoff(n) + noDispatch,
-    {
-      agentType: 'uroboros:planner',
-      phase: n === 0 ? 'Decompose' : 'Replan',
-      label: n === 0 ? 'decompose' : `replan:${n}`,
-      schema: BACKLOG,
-    },
-  )
-}
-
-phase('Decompose')
-let backlog = await plan(0, null)
-log(
-  `Backlog written to ${backlog.backlogFile}: ` +
-    backlog.increments.map((t, i) => `${i + 1}. ${t.title}`).join(' | '),
+// Every run opens with this one cheap dispatch. It is the only read of the run
+// state the script makes, and it is never recorded — it is the read that opens
+// a run, not a step of one.
+const state = await agent(
+  `Issue directory: ${dir}\n` +
+    `Read ${dir}/backlog.json and return it. Run ` +
+    `\`node "<the agent-brief skill's assets directory>/backlog.mjs" read ${dir}/backlog.json\` ` +
+    `if you prefer; either way return its exact content in backlogJson and exists true. ` +
+    `If your context names no such skill base directory, find the helper with ` +
+    `\`find "$HOME/.claude/plugins" -path '*agent-brief/assets/backlog.mjs' | head -1\`.\n` +
+    `If the file does not exist, return exists false and backlogJson "".\n` +
+    `Read nothing else, change nothing, run no git command, and do not dispatch any subagent.`,
+  { agentType: 'general-purpose', phase: 'Load state', label: 'load-state', schema: STATE },
 )
+
+// A state file that does not parse is treated as no state: the run starts over
+// rather than dying on a half-written file no one can fix from here.
+let saved = null
+if (state && state.exists && state.backlogJson) {
+  try {
+    saved = JSON.parse(state.backlogJson)
+  } catch (err) {
+    log(`backlog.json did not parse (${err.message}) — starting this run from no state.`)
+    saved = null
+  }
+}
+
+const recorded = new Map()
+if (saved) {
+  for (const s of (saved.run && saved.run.steps) || []) recorded.set(s.label, s.return)
+  for (const increment of saved.increments || []) {
+    for (const s of increment.steps || []) recorded.set(s.label, s.return)
+  }
+}
+if (recorded.size) log(`Resuming: ${recorded.size} step(s) already recorded in the run state.`)
+
+// The whole of resume. A recorded step returns its stored payload and is never
+// dispatched again; the step in flight when a session died was never recorded,
+// so it repeats. Labels are keyed on the increment id, never on an ordinal a
+// re-cut would move.
+async function step(label, phaseName, run) {
+  if (recorded.has(label)) {
+    log(`${label}: recorded already, skipping`)
+    return recorded.get(label)
+  }
+  phase(phaseName)
+  const out = await run()
+  recorded.set(label, out)
+  return out
+}
+
+// A question only the human can answer ends the run: the loop skips to Publish
+// and hands the questions back. The question is inside the step return the agent
+// recorded, so the session that resumes finds it in the state too.
+const blockedOnHuman = []
+function asksTheHuman(label, out) {
+  const questions = out && Array.isArray(out.questions) ? out.questions.filter(Boolean) : []
+  for (const q of questions) {
+    blockedOnHuman.push({ step: label, question: q })
+    log(`${label} has a question for the human: ${q}`)
+  }
+  return questions.length > 0
+}
+
+const backlog = await step('decompose', 'Decompose', () =>
+  agent(
+    `Issue directory: ${dir}\n` +
+      `Cut ${dir}/issue.md into a backlog of increments and write it to ${dir}/backlog.json ` +
+      `with the \`init\` subcommand of the backlog helper your shared brief names, with ` +
+      `workflow "agile-loop". This run works at most ${maxIncrements} of them, so a cut that ` +
+      `needs more than that is a cut that is too fine.\n` +
+      `Read ${dir}/backlog.json with the helper's \`read\` subcommand first if it is already ` +
+      `there.\n` +
+      recordStep('-', 'decompose') +
+      noDispatch,
+    { agentType: 'uroboros:planner', phase: 'Decompose', label: 'decompose', schema: BACKLOG },
+  ),
+)
+asksTheHuman('decompose', backlog)
+
+// The recorded state is authoritative about what is still open: the decompose
+// return is what the planner said when it opened the run, and a status set by a
+// later close lives in the file, not in that return.
+let increments =
+  saved && Array.isArray(saved.increments) && saved.increments.length
+    ? saved.increments
+    : (backlog && backlog.increments) || []
+
+log(`Backlog: ${increments.map((t, i) => `${i + 1}. ${t.title}`).join(' | ')}`)
 
 // Why each increment ended the way it did, in the agents' own words. The human
 // sits in the main conversation and opens no file, so `log` puts it in front of
-// them while the run goes, and `increments` comes back with the result so the
+// them while the run goes, and `worked` comes back with the result so the
 // session can repeat it once the run is done.
-const increments = []
+const worked = []
 const attempts = new Map()
-let blocked = 0
 let stopped = ''
 
 // The reviewer sees the whole diff against main, so from the second increment
@@ -349,8 +567,8 @@ let stopped = ''
 function baseline(n) {
   if (n === 1) return ''
   const name = (ns) => (ns.length === 1 ? `Increment ${ns[0]} was` : `Increments ${ns.join(', ')} were`)
-  const ok = increments.filter((i) => i.accepted).map((i) => i.n)
-  const bad = increments.filter((i) => !i.accepted).map((i) => i.n)
+  const ok = worked.filter((i) => i.accepted).map((i) => i.n)
+  const bad = worked.filter((i) => !i.accepted).map((i) => i.n)
   return (
     (ok.length
       ? `${name(ok)} reviewed and accepted in an earlier iteration. That code is in your ` +
@@ -364,130 +582,184 @@ function baseline(n) {
   )
 }
 
-for (let n = 1; ; n++) {
-  const task = backlog.increments.find((t) => t.status === 'todo')
-  if (!task) break
+if (!blockedOnHuman.length) {
+  for (let n = 1; ; n++) {
+    const task = increments.find((t) => t.status === 'todo')
+    if (!task) break
 
-  if (n > maxIncrements) {
-    stopped = `the backlog still holds "${task.title}" after ${maxIncrements} increments`
-    break
-  }
-  const attempt = (attempts.get(task.id) || 0) + 1
-  attempts.set(task.id, attempt)
-  if (attempt > MAX_ATTEMPTS) {
-    stopped =
-      `"${task.title}" was worked ${MAX_ATTEMPTS} times and the planner handed it back ` +
-      `again without re-cutting it`
-    break
-  }
+    if (n > maxIncrements) {
+      stopped = `the backlog still holds "${task.title}" after ${maxIncrements} increments`
+      break
+    }
+    const attempt = (attempts.get(task.id) || 0) + 1
+    attempts.set(task.id, attempt)
+    if (attempt > MAX_ATTEMPTS) {
+      stopped =
+        `"${task.title}" was worked ${MAX_ATTEMPTS} times and the planner handed it back ` +
+        `again without re-cutting it`
+      break
+    }
 
-  log(`Increment ${n}: ${task.title}`)
+    log(`Increment ${n}: ${task.title}`)
 
-  let plan_ = null
-  let verdict
-  for (let round = 0; round <= MAX_CORRECTIONS; round++) {
-    phase('Research')
-    plan_ = await research(task, backlog, n, round)
-    log(
-      `Increment ${n} round ${round}: plan in ${plan_.handoffFile}; tests needed: ` +
-        `${plan_.needsTests}; checks: ${plan_.checks.length ? plan_.checks.join(', ') : 'none'}`,
-    )
-
-    if (plan_.needsTests) {
-      await agent(
-        `Issue directory: ${dir}\n` +
-          scope(task, backlog, n) +
-          `Your work order is the Test Plan of ${section(plan_.handoffFile, n, round)}: write ` +
-          `those cases, in the files and style it names, and no others.` +
-          (round === 0
-            ? '\n'
-            : ` The reviewer's reproduction spec is the criterion for this round.\n`) +
-          handoff('test-author.md', n, round) +
-          noDispatch,
-        { agentType: 'uroboros:test-author', phase: 'Tests', label: `tests:${n}.${round}` },
+    let plan = null
+    let tests = null
+    let verdict = null
+    for (let round = 0; round <= MAX_CORRECTIONS; round++) {
+      const previousTests = tests
+      const researchLabel = `research:${task.id}.${round}`
+      plan = await step(researchLabel, 'Research', () =>
+        agent(
+          `Issue directory: ${dir}\n` +
+            scope(task, increments, n) +
+            (round === 0 ? '' : findingsBlock(verdict, round)) +
+            openQuestionsBlock(previousTests) +
+            recordStep(task.id, researchLabel) +
+            noDispatch,
+          { agentType: 'uroboros:researcher', phase: 'Research', label: researchLabel, schema: PLAN },
+        ),
       )
+      if (asksTheHuman(researchLabel, plan)) break
+      log(
+        `Increment ${n} round ${round}: tests needed: ${plan.needsTests}; ` +
+          `checks: ${plan.checks && plan.checks.length ? plan.checks.join(', ') : 'none'}`,
+      )
+
+      tests = null
+      if (plan.needsTests) {
+        const testsLabel = `tests:${task.id}.${round}`
+        tests = await step(testsLabel, 'Tests', () =>
+          agent(
+            `Issue directory: ${dir}\n` +
+              scope(task, increments, n) +
+              `Your work order is the test plan below, and it is the whole of what you are ` +
+              `given about the change:\n\n${plan.testPlan}\n\n` +
+              (round === 0
+                ? ''
+                : `The reviewer's reproduction spec is the criterion for this round.\n`) +
+              recordStep(task.id, testsLabel) +
+              noDispatch,
+            { agentType: 'uroboros:test-author', phase: 'Tests', label: testsLabel, schema: TESTS },
+          ),
+        )
+        if (asksTheHuman(testsLabel, tests)) break
+      }
+
+      const buildLabel = `implement:${task.id}.${round}`
+      const build = await step(buildLabel, 'Implement', () =>
+        agent(
+          `Issue directory: ${dir}\nYour brief is the plan below.\n\n` +
+            `## Implementation plan\n${plan.plan}\n\n` +
+            `## Module map\n${plan.moduleMap}\n\n` +
+            `## Environment\n${plan.environment}\n\n` +
+            casesBlock(tests) +
+            checkList(plan.checks) +
+            recordStep(task.id, buildLabel) +
+            noDispatch,
+          { agentType: 'uroboros:implementer', phase: 'Implement', label: buildLabel, schema: BUILD },
+        ),
+      )
+      if (asksTheHuman(buildLabel, build)) break
+
+      const reviewLabel = `review:${task.id}.${round}`
+      verdict = await step(reviewLabel, 'Review', () =>
+        agent(
+          `Issue directory: ${dir}\nReview round ${round} of increment ${n}. Check the whole ` +
+            `diff against main.\n` +
+            scope(task, increments, n) +
+            baseline(n) +
+            checkList(plan.checks) +
+            recordStep(task.id, reviewLabel) +
+            noDispatch,
+          { agentType: 'uroboros:reviewer', phase: 'Review', label: reviewLabel, schema: VERDICT },
+        ),
+      )
+      if (asksTheHuman(reviewLabel, verdict)) break
+
+      const found = (verdict.findings || []).length
+      const reason = verdict.reason || verdict.summary
+      if (found === 0) {
+        log(`Increment ${n} round ${round}: accepted — ${verdict.summary}`)
+        break
+      }
+      if (round === MAX_CORRECTIONS) {
+        log(`Increment ${n} round ${round}: ${found} findings, last round used up — ${reason}`)
+        break
+      }
+      log(`Increment ${n} round ${round}: ${found} findings, correcting — ${reason}`)
     }
 
-    await agent(
-      `Issue directory: ${dir}\nYour brief is ${section(plan_.handoffFile, n, round)}.\n` +
-        checkList(plan_.checks) +
-        handoff('implementer.md', n, round) +
-        noDispatch,
-      { agentType: 'uroboros:implementer', phase: 'Implement', label: `implement:${n}.${round}` },
+    if (blockedOnHuman.length) break
+
+    const accepted = (verdict.findings || []).length === 0
+    worked.push({
+      n,
+      id: task.id,
+      title: task.title,
+      accepted,
+      findings: (verdict.findings || []).length,
+      reason: verdict.reason || verdict.summary,
+    })
+
+    // Runs whether the review accepted or not: the planner owns the answer to a
+    // blocked increment as much as to a finished one, and a state that never
+    // records the failure sends the next call in blind.
+    const replanLabel = `replan:${task.id}`
+    const recut = await step(replanLabel, 'Replan', () =>
+      agent(
+        `Issue directory: ${dir}\n` +
+          `Increment ${task.id} — ${task.title} — has been worked. The review ` +
+          (accepted
+            ? `accepted it.\n`
+            : `did not accept it after ${MAX_CORRECTIONS} correction rounds, with ` +
+              `${(verdict.findings || []).length} findings open: ` +
+              `${verdict.reason || verdict.summary}\n`) +
+          `Read ${dir}/backlog.json with the backlog helper's \`read\` subcommand. Close that ` +
+          `increment with the \`close\` subcommand and the status the verdict earns — closing ` +
+          `sheds its recorded step returns — then re-cut every increment still open against ` +
+          `what this one showed and write the new cut with the \`init\` subcommand. ${n} of at ` +
+          `most ${maxIncrements} increments are spent.\n` +
+          recordStep('-', replanLabel) +
+          noDispatch,
+        { agentType: 'uroboros:planner', phase: 'Replan', label: replanLabel, schema: BACKLOG },
+      ),
     )
 
-    verdict = await agent(
-      `Issue directory: ${dir}\nReview round ${round} of increment ${n}. Check the whole diff ` +
-        `against main.\n` +
-        scope(task, backlog, n) +
-        baseline(n) +
-        checkList(plan_.checks) +
-        handoff('reviewer.md', n, round) +
-        noDispatch,
-      { agentType: 'uroboros:reviewer', phase: 'Review', label: `review:${n}.${round}`, schema: VERDICT },
-    )
+    // The planner closed it in the file; mirror that here so the loop moves on
+    // even when the re-cut hands back no list of its own.
+    task.status = accepted ? 'done' : 'blocked'
+    if (recut && Array.isArray(recut.increments) && recut.increments.length) {
+      increments = recut.increments
+    }
+    log(`After increment ${n}: ${increments.map((t) => `${t.title} [${t.status}]`).join(' | ')}`)
+    if (asksTheHuman(replanLabel, recut)) break
 
-    const reason = verdict.reason || verdict.summary
-    if (verdict.findings === 0) {
-      log(`Increment ${n} round ${round}: accepted — ${verdict.summary}`)
+    const blocked = increments.filter((t) => t.status === 'blocked').length
+    if (blocked >= MAX_BLOCKED) {
+      stopped = `${blocked} increments ended with findings open`
       break
     }
-    if (round === MAX_CORRECTIONS) {
-      log(`Increment ${n} round ${round}: ${verdict.findings} findings, last round used up — ${reason}`)
-      break
-    }
-    log(`Increment ${n} round ${round}: ${verdict.findings} findings, correcting — ${reason}`)
-  }
-
-  const accepted = verdict.findings === 0
-  if (!accepted) blocked++
-  increments.push({
-    n,
-    id: task.id,
-    title: task.title,
-    accepted,
-    findings: verdict.findings,
-    reason: verdict.reason || verdict.summary,
-    findingsFile: verdict.handoffFile,
-  })
-
-  // Runs whether the review accepted or not: the planner owns the answer to a
-  // blocked increment as much as to a finished one, and a backlog that never
-  // records the failure sends the next call in blind.
-  phase('Replan')
-  backlog = await plan(n, {
-    task,
-    accepted,
-    findings: verdict.findings,
-    reason: verdict.reason || verdict.summary,
-  })
-  log(
-    `After increment ${n}: ` +
-      backlog.increments
-        .map((t) => `${t.title} [${t.status}]`)
-        .join(' | ') +
-      ` — ${backlog.summary}`,
-  )
-
-  if (blocked >= MAX_BLOCKED) {
-    stopped = `${blocked} increments ended with findings open`
-    break
   }
 }
 
-const open = backlog.increments.filter((t) => t.status === 'todo')
-const delivered = backlog.increments.filter((t) => t.status === 'done')
-const accepted = !stopped && open.length === 0 && blocked === 0
+const open = increments.filter((t) => t.status === 'todo')
+const delivered = increments.filter((t) => t.status === 'done')
+const blocked = increments.filter((t) => t.status === 'blocked')
+const accepted = !stopped && !blockedOnHuman.length && open.length === 0 && blocked.length === 0
 if (stopped) {
-  log(`Stopped: ${stopped}. ${open.length} increments left in the backlog. Hand back to the human.`)
+  log(`Stopped: ${stopped}. ${open.length} increments left open. Hand back to the human.`)
+}
+if (blockedOnHuman.length) {
+  log(
+    `${blockedOnHuman.length} question(s) for the human ended this run. Answer them under ` +
+      `\`## Decisions\` in ${dir}/issue.md and start this workflow on the same directory again.`,
+  )
 }
 
-// Every agent above commits, none of them pushes, and the main session is not
-// allowed to. Without this step the branch stays local and the work is lost
-// with the container. The pull request belongs here too: the human's third
-// steering point is merging it, and they cannot merge what was never opened.
-// Runs whether or not the backlog emptied — the commits exist either way, and
-// a run that stopped early is exactly the one a human needs to look at.
+// Every agent above commits and pushes its own step; this one makes sure the
+// branch has a pull request, which is the human's gate. It is dispatched every
+// time, recorded or not: a finished run re-asserting an open pull request costs
+// one cheap step, and a run whose push failed silently costs the work.
 phase('Publish')
 const push = await agent(
   `Issue directory: ${dir}\n` +
@@ -499,12 +771,12 @@ const push = await agent(
     'load them with ToolSearch first; there is no `gh` CLI. If an OPEN one exists, ' +
     'leave it alone: pushing already updated it. Report its URL.\n' +
     '3. If none is open, open one against the default branch. Title and body come ' +
-    `from the issue directory's \`issue.md\`, the planner's \`backlog.md\` and the ` +
-    "reviewer's findings file: what was asked for, which increments were delivered, " +
-    'which are still open or blocked and why, what the review said, and every open ' +
-    'finding or recorded observation the human should see before merging. This run ' +
-    'worked the issue in increments, so say plainly in the body when the backlog did ' +
-    'NOT empty and name what is left. End the body with a blank line, `---`, and ' +
+    `from the issue directory's \`issue.md\` and \`backlog.json\`: what was asked for, ` +
+    'which increments were delivered, which are still open or blocked and why, what the ' +
+    'review said, and every open finding or recorded observation the human should see ' +
+    'before merging. This run worked the issue in increments, so say plainly in the body ' +
+    'when the backlog did NOT empty and name what is left, and when a question for the ' +
+    'human ended the run. End the body with a blank line, `---`, and ' +
     '`🤖 Generated with [Claude Code](https://claude.com/claude-code)`.\n' +
     '4. If the only pull request for this branch is already MERGED, do NOT open a ' +
     'second one on top of merged history and do NOT rebase — report `prUrl` of the ' +
@@ -525,8 +797,8 @@ return {
   issueDir: dir,
   delivered: delivered.length,
   open: open.length,
-  increments,
-  backlog: backlog.increments,
-  backlogFile: backlog.backlogFile,
+  increments: worked,
+  backlog: increments,
+  blockedOnHuman,
   push,
 }
