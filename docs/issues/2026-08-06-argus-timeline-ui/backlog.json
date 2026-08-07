@@ -65,199 +65,45 @@
         "The chosen time is one shared value the session view works from, so a later per-lane detail can be answered for exactly that moment.",
         "What proves this increment is the behaviour of the page: a change that stops scrubbing moving the chosen time, or stops the live control returning to the head, is caught, not only a helper that maps a position to a time."
       ],
+      "status": "done",
+      "note": "Review accepted with no findings on the first round. What shipped: state.atMs and state.following in app.js as the one chosen time the session view works from, chosenTimePct/clampChosenTime/laneRowsHtml/scrubStateHtml in timeline.js with a third options argument on timelineHtml, a playhead per lane placed by the same window arithmetic as the activity marks and the context curve, a range control that scrubs anywhere in the session, and a Live control that returns to the head; every refresh re-pins the chosen time to the head while following and only clamps a scrubbed time into the widened window. Two facts the next increment inherits: the scrub handler repaints the lanes and the readout in place through the ids timeline-lanes and timeline-scrub-state rather than re-rendering the detail, because a full render would destroy the range input mid-drag; and app.js's formatting helpers now live in public/format.js. npm --prefix tools/argus-ui test 70 cases exit 0.",
+      "steps": []
+    },
+    {
+      "id": "lane-select",
+      "title": "Selecting a lane, and that agent's tool use up to the chosen time",
+      "goal": "Make a lane on the timeline selectable, and show for the selected lane the tools that agent has used up to the chosen time, each with its call parameters.",
+      "criteria": [
+        "Selecting a lane on the timeline records a selection the session view holds beside the chosen time, and the selected lane is visibly marked on the timeline.",
+        "The lane selected is one of the lanes the timeline already draws, named by the lane vocabulary already in place (main, agent:<agent_id>, unattributed), not a second attribution scheme.",
+        "The selection shows the tools that agent has used up to the chosen time, each entry carrying the tool name and that call's parameters.",
+        "Whether the call parameters already arrive with the per-lane tool activity or have to be exposed for the first time is established and stated, and either way the panel reads them through the attribution already in place rather than joining records to agents a second way.",
+        "The listing is bounded by the selected lane and by the chosen time and follows the chosen time as it moves, so it never carries a call from after that moment; the scrub path repaints it in place, since a full re-render of the detail would destroy the range input mid-drag.",
+        "Which tools an agent used, and what for, is answerable for any lane the timeline draws at any point of the session, the unattributed lane included, and a lane with no tool calls before the chosen time says so.",
+        "With no lane selected the session view renders as it does today.",
+        "What proves this increment is the rendered page: a change that stops a lane selection reaching the panel, or leaves the panel showing the previous moment after the chosen time moves, is caught, not only a builder function checked in isolation."
+      ],
       "status": "todo",
-      "note": "Re-cut after lane-activity. Two criteria sharpened, none added or removed in substance. Lane-activity drew the marks and the curve over one shared window with a session-wide scale, so the chosen time now has something concrete to line up with and the criterion says so; and it showed the /agents payload is refetched as ingest coalesces, which is what live mode has to keep following as the window's end moves. The provability criterion stands: it is what made lane-activity pass on the first round after timeline-landing spent two rounds on unpinned page wiring.",
-      "steps": [
-        {
-          "label": "research:scrub-live.0",
-          "at": "2026-08-07T11:53:57.306Z",
-          "return": {
-            "needsTests": true,
-            "summary": "Give the timeline a chosen time held in one app.js state value, drawn as a playhead in every lane against the shared window, moved by a range input, pinned to the head by a live mode that a Live control returns to.",
-            "plan": "GOAL\nAdd a chosen time to the session timeline: one shared value the whole session view works from, drawn against the same window the lanes are drawn against, moved by a scrub control, and pinned to the newest data by a live mode that a control returns to. Only tools/argus-ui changes; the collector (tools/argus) and its API are untouched — the window and the lanes already arrive from GET /api/sessions/:id/agents.\n\nWHERE THE VALUE LIVES\nIn `state` in /home/user/uroboros/tools/argus-ui/public/app.js, beside the existing `agentWindow`: `atMs` (number, or null when no session is loaded) and `following` (boolean, true = live). Every drawn playhead, the scrub input's value and the readout come from that one `atMs`, so the next increment (per-lane detail at the chosen time) reads `state.atMs` and nothing else. Do not put the chosen time in the URL hash — not asked for, and the hash already carries the session id alone.\n\nNEW PURE FUNCTIONS IN public/timeline.js (no document/window/location, like the rest of that module)\n1. `export function chosenTimePct(atMs, { startMs = 0, endMs = 0 } = {})` — the chosen time as a percentage of the shared window, using exactly the arithmetic `activityMarks` uses: `total = Math.max(endMs - startMs, 1)`, then `clampPct(((atMs - startMs) / total) * 100)`. A non-finite `atMs` returns 0. This shared arithmetic is what makes the playhead line up with the marks and the curve.\n2. `export function clampChosenTime(atMs, { startMs = 0, endMs = 0 } = {})` — the time forced into the window: `Math.min(Math.max(value, startMs), endMs)`; a non-finite input returns `endMs`.\n3. `export function laneRowsHtml(items = [], window = { startMs: 0, endMs: 0 }, atMs = null)` — the lane rows exactly as `timelineHtml` composes them today, with a playhead appended inside each `.lane-track` after the activity marks when `atMs` is not null: `<span class=\"lane-playhead\" style=\"left:${chosenTimePct(atMs, window).toFixed(3)}%\"></span>`. `timelineHtml` must call this function for its rows, so the in-place repaint can never drift from the full render.\n4. `export function scrubStateHtml(atMs = null, following = true)` — the clock readout plus the live control: `<span class=\"chosen-time\">${esc(fmtClock(atMs))}</span><button type=\"button\" class=\"ghost-button\" data-timeline-live aria-pressed=\"${following}\">Live</button>`. The button stays enabled while live (clicking it then is a harmless no-op); `aria-pressed` is the state.\n\nCHANGED SIGNATURE\n`timelineHtml(items, window, { atMs = null, following = true } = {})`. The third argument is optional and defaults to no chosen time, so the two-argument calls in the existing tests keep rendering exactly today's panel. With `atMs === null`, or with an empty `items` list (which still returns today's placeholder), no playhead and no scrub row are drawn.\n\nMARKUP INSIDE THE EXISTING `.timeline` DIV, IN THIS ORDER\n`<div class=\"timeline-axis\">…</div>` (unchanged), then `<div id=\"timeline-lanes\">{laneRowsHtml(...)}</div>`, then — only when `atMs !== null` — the scrub row and the state row, then the existing `<p class=\"timeline-legend\">`. The scrub row repeats the lane grid so the slider sits over the track column: `<div class=\"timeline-scrub\"><span></span><input type=\"range\" id=\"timeline-scrub\" min=\"${startMs}\" max=\"${endMs}\" step=\"1\" value=\"${atMs}\" aria-label=\"Chosen time on the timeline\"><span></span></div>`, followed by `<div class=\"scrub-state\" id=\"timeline-scrub-state\">${scrubStateHtml(atMs, following)}</div>`. The wrapper div around the rows is layout-neutral: `.lane-row` elements are their own grids stacked vertically.\n\nWHY THE IDS MATTER (the drag problem, and the decision behind it)\nA full `renderDetail()` replaces `detail.innerHTML`, which would destroy the range input the user is dragging. So the scrub `input` handler must NOT call `renderDetail()`. It repaints in place instead, through the two ids: `document.getElementById('timeline-lanes').innerHTML = laneRowsHtml(state.agents, state.agentWindow, state.atMs)` and `document.getElementById('timeline-scrub-state').innerHTML = scrubStateHtml(state.atMs, state.following)`, both guarded with a null check. Put that in one function, `renderChosenTime()`. Rejected alternatives: listening to `change` instead of `input` (no feedback while dragging, which is the whole point of a scrubber); mutating single nodes found by querySelector (unreachable from the fake-DOM harness the behavioural tests use, so the increment's provability criterion could not be met); a framework or a diff step (the project forbids both).\nAccepted limitation, worth one code comment: while the timeline is scrubbed away from the head, an SSE ingest still triggers the wholesale `refresh()`/`renderDetail()`, which replaces the slider. `refresh()` already restores focus by element id, and the slider has a stable id, so keyboard scrubbing survives it; a mouse drag interrupted by an ingest does not. Do not build machinery against that.\n\nWIRING IN app.js\n- Import `clampChosenTime`, `laneRowsHtml`, `scrubStateHtml` alongside the existing `DEFAULT_VIEW, timelineHtml, viewStripHtml`.\n- `renderDetail()` passes the chosen time through: `${timelineHtml(state.agents, state.agentWindow, { atMs: state.atMs, following: state.following })}`.\n- New `syncChosenTime()`, called at the end of `loadAgents()` on both the success and the catch path, right after `state.agentWindow` is set: `if (state.following || state.atMs === null) state.atMs = state.agentWindow.endMs; else state.atMs = clampChosenTime(state.atMs, state.agentWindow);`. That one line is live mode: every refresh re-pins the chosen time to the head while following, and a scrubbed time is only kept inside whatever window the new data spans.\n- `loadSession()`'s two no-session paths and `selectSession()` reset `state.atMs = null` and `state.following = true`, beside the existing `state.agents = []` resets, so opening a session lands live at its head.\n- The delegated `input` listener on `#detail` currently early-returns for anything but `event-search`; restructure it into two branches. The new branch: `if (event.target.id === 'timeline-scrub') { state.following = false; state.atMs = clampChosenTime(event.target.value, state.agentWindow); renderChosenTime(); return; }`. A range input fires `input` for both a drag and an arrow key, so keyboard scrubbing needs nothing extra.\n- The delegated `click` listener on `#detail` gets a branch after the `[data-copy]` one: `const live = event.target.closest('[data-timeline-live]'); if (live) { state.following = true; state.atMs = state.agentWindow.endMs; renderDetail(); return; }`. Returning to live is the one path that must re-render wholesale, because the slider's own value has to jump to the head with it — and nobody is mid-drag when they click that button.\n\nCSS in public/styles.css, in the existing `/* timeline */` section\n`.lane-playhead { position: absolute; top: 0; bottom: 0; width: 1px; margin-left: -0.5px; background: var(--text); opacity: 0.75; pointer-events: none; }` — full track height so it reads as one line across the lanes. `.timeline-scrub { display: grid; grid-template-columns: var(--label-w) 1fr 72px; align-items: center; gap: 8px; margin-top: 8px; }` with `.timeline-scrub input[type=\"range\"] { width: 100%; }`, and `.scrub-state { display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin-top: 4px; font-family: var(--mono); font-size: 10.5px; color: var(--text-faint); }`. Use the variables already in the file; add no new ones.\n\nDOCS\nExtend the Timeline bullet in /home/user/uroboros/tools/argus-ui/README.md (line 61) by one sentence: the timeline carries a chosen time that can be scrubbed anywhere in the session, and follows the newest data until it is scrubbed, with a Live control that returns it to the head. Nothing else in the docs changes.\n\nOUT OF SCOPE FOR THIS INCREMENT\nThe per-lane detail at the chosen time (context, tool use) is the next increment; expose `state.atMs` for it and build no detail pane here. No playback speed, no chosen time in the URL, no click-on-the-track scrubbing (a range input reaches every point, is keyboard-accessible, and needs no DOM measurement).",
-            "moduleMap": "/home/user/uroboros/tools/argus-ui/public/timeline.js — the DOM-free view model of the timeline; today exports SUBORDINATE_VIEWS, DEFAULT_VIEW, MIN_AREA_WIDTH_PCT, agentLabel, laneGeometry, laneRows, contextPeakOf, activityMarks, contextAreaPoints, timelineHtml, viewStripHtml. Gains chosenTimePct, clampChosenTime, laneRowsHtml, scrubStateHtml, and a third options argument on timelineHtml.\n/home/user/uroboros/tools/argus-ui/public/app.js — the page: `state` (add atMs, following), renderDetail (passes the chosen time to timelineHtml), new renderChosenTime (in-place repaint of #timeline-lanes and #timeline-scrub-state), loadAgents/loadSession/selectSession (chosen-time reset and the live re-pin via a new syncChosenTime), wireEvents (the `input` branch for #timeline-scrub and the `click` branch for [data-timeline-live]).\n/home/user/uroboros/tools/argus-ui/public/styles.css — stylesheet; the `/* timeline */` section at line 786 gains .lane-playhead, .timeline-scrub and .scrub-state.\n/home/user/uroboros/tools/argus-ui/public/format.js — unchanged; esc and fmtClock are what the readout is built from.\n/home/user/uroboros/tools/argus-ui/README.md — user-facing page; the Timeline bullet at line 61 gains one sentence on scrubbing and live mode.\n/home/user/uroboros/tools/argus-ui/test/timeline.test.mjs — node:test cases over the pure view model; gains the chosen-time cases.\n/home/user/uroboros/tools/argus-ui/test/app.test.mjs — node:test cases booting the real public/app.js against a fake DOM; gains the scrubbing and live-mode cases and two harness extensions.",
-            "environment": "Node >= 20.11, no install step: tools/argus-ui has zero dependencies and its suite is `node --test` over `test/*.test.mjs`. There is no linter and no formatter in this repository, and no build step for public/.\nRun the whole interface suite from the repository root: `npm --prefix tools/argus-ui test`.\nRun a single file from the repository root: `node --test tools/argus-ui/test/app.test.mjs` or `node --test tools/argus-ui/test/timeline.test.mjs`.",
-            "testPlan": "WHETHER: tests are needed, and the increment's own criterion decides their level — a change that stops scrubbing moving the chosen time, or stops the live control returning to the head, has to be caught by the behaviour of the page, not only by a helper. So the load-bearing cases boot the real public/app.js against the fake DOM in test/app.test.mjs; the geometry and markup cases sit in test/timeline.test.mjs beside the existing view-model cases.\n\nI ran nothing, not even a baseline. Expected state before the implementation: the new cases in both files fail (they reference exports and element ids that do not exist yet); every existing case in the argus-ui suite is expected to keep passing, because timelineHtml's new third argument is optional and defaults to today's output. The first run belongs to whoever runs it downstream.\n\n=== FILE A: /home/user/uroboros/tools/argus-ui/test/timeline.test.mjs ===\nFramework: node:test with node:assert/strict, ESM, imports the module under test from '../public/timeline.js'. Conventions of this file: one flat `test('sentence describing the fact', () => {…})` per case, no describe blocks, no setup/teardown, nothing faked — the module is pure and is called directly. Fixtures come from the local `lane({ id, kind, agentId, parentAgentId, agentType, firstMs, lastMs, activity, activityTotal, context, contextPeak })` factory at the top of the file; windows are written inline as `{ startMs: 0, endMs: 1000 }`. Markup is inspected with the local helpers `laneRow(html, id)` (the substring of one lane's row), `laneBars(html)` and `activityMarkTags(html)` (regex over the tag, attribute-order independent). Add the new exports to the existing import list, add `import { fmtClock } from '../public/format.js';` for the readout case, and add one helper in the same style: `playheads(html)` returning every `class=\"lane-playhead\"` tag's left percentage as a Number. Put the new cases under a new banner comment `/* ------- the chosen time, scrubbing and live mode ------- */` at the end of the file, matching the existing banner style.\nCommand that runs just this file, from the repository root: `node --test tools/argus-ui/test/timeline.test.mjs`.\n\nA1 — criterion: the chosen time is drawn against the same shared window as the lanes. `chosenTimePct(500, { startMs: 0, endMs: 1000 })` is 50; at `startMs` it is 0; at `endMs` it is 100.\nA2 — criterion: same, at the edges. `chosenTimePct(-50, { startMs: 0, endMs: 1000 })` is 0 and `chosenTimePct(5000, …)` is 100; `chosenTimePct(1000, { startMs: 1000, endMs: 1000 })` is finite (assert Number.isFinite), never NaN.\nA3 — criterion: scrubbing reaches any point of the recorded session and no other. `clampChosenTime(400, { startMs: 0, endMs: 1000 })` is 400; `clampChosenTime(-5, …)` is 0; `clampChosenTime(9999, …)` is 1000; `clampChosenTime('abc', …)` is 1000 (the head), so a broken input parks at the head rather than producing NaN.\nA4 — criterion: the chosen time is visible on the timeline, and is one shared value. `timelineHtml([main, subA, subB], { startMs: 0, endMs: 1000 }, { atMs: 250 })` with three lanes draws exactly three `lane-playhead` elements, all with the same left percentage, equal to `chosenTimePct(250, window).toFixed(3)`.\nA5 — criterion: the chosen time lines up with the activity marks and the context curve at that instant. One lane with `activity: [{ atMs: 250, kind: 'tool', name: 'Read' }]` and `context: [{ atMs: 250, length: 100 }]`, window `{ startMs: 0, endMs: 1000 }`, `{ atMs: 250 }`: the playhead's left equals the single `activityMarkTags` entry's leftPct (25), and equals the x coordinate of the curve's first point in the row's `<polygon points=\"…\">`.\nA6 — criterion: nothing is drawn before a chosen time exists (the two-argument call other views still make). `timelineHtml([main], window)` with no third argument contains no `lane-playhead`, no `id=\"timeline-scrub\"` and no `data-timeline-live`.\nA7 — criterion: the timeline can be scrubbed to any point, and the chosen time is visible. `timelineHtml([main], { startMs: 1000, endMs: 5000 }, { atMs: 2000 })` renders `id=\"timeline-scrub\"` with `min=\"1000\"`, `max=\"5000\"`, `value=\"2000\"` and `step=\"1\"`, and the state row contains `fmtClock(2000)`.\nA8 — criterion: a control returns to live mode, and its state is readable. `scrubStateHtml(2000, true)` contains `data-timeline-live` and `aria-pressed=\"true\"`; `scrubStateHtml(2000, false)` contains `data-timeline-live` and `aria-pressed=\"false\"`.\nA9 — edge, empty: `timelineHtml([], { startMs: 0, endMs: 1000 }, { atMs: 500 })` still returns today's placeholder mentioning spans, with no scrub control and no playhead — there is nothing to scrub against.\nA10 — criterion: the in-place repaint cannot drift from the full render. For the same lanes, window and `atMs`, the string `timelineHtml(items, window, { atMs })` contains the string `laneRowsHtml(items, window, atMs)`.\n\n=== FILE B: /home/user/uroboros/tools/argus-ui/test/app.test.mjs ===\nFramework: node:test with node:assert/strict. This file boots the real page: `installFakes(routes)` puts fake `document` (getElementById returns a fake element created on demand and remembered by id, with innerHTML/textContent/dataset/listeners), `window`, `location`, `EventSource`, `setInterval` and `fetch` on globalThis; `bootApp(routes, predicate)` imports `../public/app.js?case=n` afresh and awaits `settle(predicate)`, whose default predicate waits for `data-lane-id=` in `detail.innerHTML`. Events are delivered with `handle.fire(elementId, type, event)` and click targets are built with the local `clickOn(sel, match)`, which resolves exactly one selector and returns null for every other. Fixtures at the top: `T0 = Date.now() - 10_000`, `config`, `stats`, `sessionsList`, `sessionDetail(id, name)` (firstSeenMs `T0`, lastSeenMs `T0 + 10_000`), `agentsOne` for sess-1 (four lanes: main, agent:agt-a, agent:agt-b, unattributed; firstMs `T0`, lastMs `T0 + 10_000`), `agentsTwo` for sess-2, and `baseRoutes` mapping the API paths; a route may be a plain object, the string 'fail', or a function of the URL. The local `laneRow(html, id)` helper exists here too. Cases are flat `test('sentence', async () => {…})`, each booting its own app. Add the new cases under a banner comment `/* ------- scrubbing and live mode ------- */` at the end, and add `import { fmtClock } from '../public/format.js';` for the readout assertion and a `playheads(html)` helper like the one in file A.\nThree harness extensions are required, and they are part of this work order:\n  (i) `installFakes` must record EventSource listeners — keep a local `streamListeners = {}`, have the fake class's `addEventListener(type, fn)` push into it, and return `emit(type, event)` on the handle so a case can fire the collector's `ingest` notification the way the stream does. Existing cases never call it, so they are unaffected.\n  (ii) raise `settle`'s loop from 200 to 400 iterations (a 2s ceiling at 5ms per turn): app.js debounces its refresh by 400ms through `scheduleRefresh`, and that has to fit inside the ceiling with room to spare. The ceiling only bounds the failure case, so no passing case gets slower.\n  (iii) a case that extends the session's window declares a mutable `let headMs = T0 + 10_000` and overrides the agents route with a function: `'/api/sessions/sess-1/agents': () => ({ ...agentsOne, lastMs: headMs })`. The window's end is `Math.max(session.lastSeenMs, payload.lastMs)`, and `sessionDetail`'s lastSeenMs is fixed at `T0 + 10_000`, so only a `headMs` above that moves the head; use `T0 + 20_000`.\nWhere to read the result matters and is not interchangeable: after a full render (boot, an ingest-driven refresh, or the live click) assert on `handle.el('detail').innerHTML`; after a scrub `input` — which deliberately does not re-render the detail pane — assert on `handle.el('timeline-lanes').innerHTML` and `handle.el('timeline-scrub-state').innerHTML`.\nCommand that runs just this file, from the repository root: `node --test tools/argus-ui/test/app.test.mjs`.\n\nB1 — criterion: a live mode follows the newest data; opening a session starts there. Boot with `baseRoutes`. `detail.innerHTML` carries `id=\"timeline-scrub\"` with `value=\"${T0 + 10_000}\"` and `max=\"${T0 + 10_000}\"`, carries `aria-pressed=\"true\"` on the `data-timeline-live` control, and each of the four lane rows carries exactly one playhead, all at left `100.000%`.\nB2 — criterion: the timeline can be scrubbed backward and forward to any point, and the chosen time is visible. Boot, then `handle.fire('detail', 'input', { target: { id: 'timeline-scrub', value: String(T0 + 2_500) } })`. `el('timeline-lanes').innerHTML` now has four playheads, all at `25.000%`, and `el('timeline-scrub-state').innerHTML` contains `fmtClock(T0 + 2_500)`. Then fire the same event with `String(T0 + 1_000)`: the playheads move to `10.000%` — backward as well as forward, and to a point no fixture data sits on.\nB3 — criterion: scrubbing away from the head leaves live mode. After the first input of B2, `el('timeline-scrub-state').innerHTML` contains `aria-pressed=\"false\"`.\nB4 — criterion: live mode keeps following as later data extends the session's window. Boot with the function route of (iii), then set `headMs = T0 + 20_000` and `handle.emit('ingest')`; settle until `detail.innerHTML` includes `max=\"${T0 + 20_000}\"`. The scrub input's `value` is `T0 + 20_000`, every playhead is at `100.000%`, and `aria-pressed=\"true\"` is still there.\nB5 — criterion: a chosen time scrubbed away from the head is not dragged along by new data. Boot with the function route, scrub to `T0 + 2_500`, set `headMs = T0 + 20_000`, `emit('ingest')`, settle until `detail.innerHTML` includes `max=\"${T0 + 20_000}\"`. The input's `value` is still `T0 + 2_500`, the playheads have moved to `12.500%` (the same instant against the widened window), and `aria-pressed=\"false\"`.\nB6 — criterion: a control returns to live mode, and following actually resumes. Boot with the function route, scrub to `T0 + 2_500`, then `handle.fire('detail', 'click', clickOn('[data-timeline-live]', { dataset: {} }))`. `detail.innerHTML` now shows `value=\"${T0 + 10_000}\"`, `aria-pressed=\"true\"` and playheads at `100.000%`. Then set `headMs = T0 + 20_000`, `emit('ingest')` and settle until `detail.innerHTML` includes `max=\"${T0 + 20_000}\"`: the input's value is `T0 + 20_000` and the playheads are at `100.000%` — the control restored following, not just the position.\n\nLEFT UNTESTED, AND WHY:\n- Pixels, colours and the slider thumb's alignment with the track column: there is no rendering engine in this suite, and styles.css is not imported by any test.\n- A real pointer drag, and the slider being replaced when an ingest arrives while the timeline is scrubbed away from the head: browser-only behaviour and an accepted limitation of the wholesale re-render; pinning it would pin a workaround nobody built.\n- The collector and the HTTP API: this increment changes neither, and tools/argus is not touched.\n- Persisting the chosen time across a reload: not built, not asked for.\n- The per-lane detail at the chosen time: the next increment owns it; nothing here may test it.",
-            "checks": [
-              "npm --prefix tools/argus-ui test"
-            ],
-            "questions": []
-          }
-        },
-        {
-          "label": "tests:scrub-live.0",
-          "at": "2026-08-07T12:00:15.804Z",
-          "return": {
-            "summary": "Wrote the ten geometry/markup cases (A1-A10) for the chosen time, scrubbing and live mode into tools/argus-ui/test/timeline.test.mjs and the six page-behaviour cases (B1-B6) into tools/argus-ui/test/app.test.mjs, extending installFakes with EventSource listener recording/emit and a 400-iteration settle ceiling as required; ran both files and confirmed every new case fails for a genuine missing-behaviour reason (a missing export in timeline.js, or an absent scrub/live control in the rendered page) while all eight pre-existing app.test.mjs cases still pass.",
-            "cases": [
-              {
-                "case": "A1 — chosenTimePct(500, {0,1000}) is 50; at startMs 0; at endMs 100.",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "chosenTimePct places the chosen time against the shared window",
-                "expected": "chosenTimePct(500, window) === 50, chosenTimePct(0, window) === 0, chosenTimePct(1000, window) === 100",
-                "got": "Whole file fails to load: SyntaxError: The requested module '../public/timeline.js' does not provide an export named 'chosenTimePct' — the export does not exist yet, so this case (and every other case in the file) cannot run."
-              },
-              {
-                "case": "A2 — chosenTimePct clamps at the edges and stays finite for a zero-width window.",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "chosenTimePct clamps to the window edges and stays finite for a zero-width window",
-                "expected": "chosenTimePct(-50, window) === 0, chosenTimePct(5000, window) === 100, Number.isFinite(chosenTimePct(1000, {startMs:1000,endMs:1000}))",
-                "got": "Same file-level SyntaxError as A1 (missing 'chosenTimePct' export); the case cannot run until the module provides it."
-              },
-              {
-                "case": "A3 — clampChosenTime reaches any point of the session and no other; a broken input parks at the head.",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "clampChosenTime reaches any point of the recorded session and no other, parking a broken input at the head",
-                "expected": "clampChosenTime(400,w)=400; clampChosenTime(-5,w)=0; clampChosenTime(9999,w)=1000; clampChosenTime('abc',w)=1000",
-                "got": "Same file-level SyntaxError (missing 'clampChosenTime' export)."
-              },
-              {
-                "case": "A4 — timelineHtml draws exactly three lane-playhead elements at the same left percentage.",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "the chosen time is one shared value: every lane draws its playhead at the same left percentage",
-                "expected": "3 lane-playhead elements, all left === chosenTimePct(250, window).toFixed(3)",
-                "got": "Same file-level SyntaxError (missing exports)."
-              },
-              {
-                "case": "A5 — the playhead lines up with the activity mark and the context curve at the chosen instant.",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "the playhead lines up with the activity mark and the context curve at the chosen instant",
-                "expected": "playhead left === activityMarkTags entry leftPct (25) === x of the polygon's first point (25)",
-                "got": "Same file-level SyntaxError (missing exports); verified the regex/parsing logic itself against synthetic markup outside the module under test, so this case is not a self-inflicted typo."
-              },
-              {
-                "case": "A6 — nothing is drawn before a chosen time exists (the two-argument call).",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "nothing scrub-related is drawn before a chosen time exists",
-                "expected": "timelineHtml([main], window) contains no lane-playhead, no id=\"timeline-scrub\", no data-timeline-live",
-                "got": "Same file-level SyntaxError (missing exports)."
-              },
-              {
-                "case": "A7 — the scrub control spans the window and its value is the chosen time.",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "the scrub control spans the window and its value is the chosen time, with a readable readout",
-                "expected": "id=\"timeline-scrub\" with min=\"1000\" max=\"5000\" value=\"2000\" step=\"1\"; the rendered html includes fmtClock(2000)",
-                "got": "Same file-level SyntaxError (missing exports)."
-              },
-              {
-                "case": "A8 — scrubStateHtml is readable: data-timeline-live plus aria-pressed reflecting following.",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "scrubStateHtml renders a live control whose pressed state reflects following",
-                "expected": "scrubStateHtml(2000,true) has data-timeline-live and aria-pressed=\"true\"; scrubStateHtml(2000,false) has aria-pressed=\"false\"",
-                "got": "Same file-level SyntaxError (missing 'scrubStateHtml' export)."
-              },
-              {
-                "case": "A9 — an empty lane list still shows today's placeholder, with no scrub control and no playhead.",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "an empty lane list draws no scrub control and no playhead even with a chosen time",
-                "expected": "timelineHtml([], window, {atMs:500}) matches /span/i, has no id=\"timeline-scrub\", no lane-playhead",
-                "got": "Same file-level SyntaxError (missing exports)."
-              },
-              {
-                "case": "A10 — the in-place repaint cannot drift from the full render.",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "the in-place repaint cannot drift from the full render",
-                "expected": "timelineHtml(items, window, {atMs}) includes the string laneRowsHtml(items, window, atMs)",
-                "got": "Same file-level SyntaxError (missing 'laneRowsHtml' export)."
-              },
-              {
-                "case": "B1 — a live mode follows the newest data; opening a session starts there.",
-                "file": "tools/argus-ui/test/app.test.mjs",
-                "testName": "opening a session starts in live mode, with the scrub control at the head",
-                "expected": "detail.innerHTML carries id=\"timeline-scrub\" value/max at T0+10000, aria-pressed=\"true\" on data-timeline-live, and each of 4 lane rows has one playhead at 100.000%",
-                "got": "AssertionError: 'expected a timeline-scrub control' — the fake DOM's detail.innerHTML has no timeline-scrub element yet, so the feature is absent, not a harness bug."
-              },
-              {
-                "case": "B2 — scrubbing backward and forward to any point, chosen time visible.",
-                "file": "tools/argus-ui/test/app.test.mjs",
-                "testName": "the timeline can be scrubbed backward and forward to any point, and the chosen time is visible",
-                "expected": "after firing input on timeline-scrub, timeline-lanes shows 4 playheads at 25.000% then 10.000%, and timeline-scrub-state shows fmtClock of the chosen time",
-                "got": "AssertionError: 'Expected values to be strictly equal: 0 !== 4' — no playhead is drawn at all yet, confirming scrubbing is unimplemented rather than a typo in the test."
-              },
-              {
-                "case": "B3 — scrubbing away from the head leaves live mode.",
-                "file": "tools/argus-ui/test/app.test.mjs",
-                "testName": "scrubbing away from the head leaves live mode",
-                "expected": "timeline-scrub-state.innerHTML contains aria-pressed=\"false\" after scrubbing away from the head",
-                "got": "AssertionError: input did not match /aria-pressed=\"false\"/, actual '' — el('timeline-scrub-state') is still the blank fake element app.js never populates."
-              },
-              {
-                "case": "B4 — live mode keeps following as later data extends the session's window.",
-                "file": "tools/argus-ui/test/app.test.mjs",
-                "testName": "live mode keeps following as later data extends the session window",
-                "expected": "after emit('ingest') with a widened headMs, detail.innerHTML reaches max=\"T0+20000\", scrub value is T0+20000, playheads at 100.000%, aria-pressed=\"true\" still present",
-                "got": "settle() timed out (2s ceiling, 400 iterations) — detail.innerHTML never reaches max=\"T0+20000\" because there is no ingest listener/refresh wiring yet, confirmed by the timeout rather than an immediate assertion mismatch."
-              },
-              {
-                "case": "B5 — a chosen time scrubbed away from the head is not dragged along by new data.",
-                "file": "tools/argus-ui/test/app.test.mjs",
-                "testName": "a chosen time scrubbed away from the head is not dragged along by new data",
-                "expected": "after scrubbing to T0+2500 then widening the window via ingest, scrub value stays T0+2500, playheads move to 12.500%, aria-pressed=\"false\"",
-                "got": "settle() timed out (2s ceiling) for the same reason as B4 — no ingest-driven refresh exists yet to reach max=\"T0+20000\"."
-              },
-              {
-                "case": "B6 — a control returns to live mode, and following actually resumes.",
-                "file": "tools/argus-ui/test/app.test.mjs",
-                "testName": "the live control returns to live mode, and following actually resumes",
-                "expected": "clicking [data-timeline-live] after scrubbing away restores value=T0+10000, aria-pressed=\"true\", playheads at 100.000%; a later ingest keeps following to T0+20000",
-                "got": "AssertionError: 'The \"string\" argument must be of type string. Received type undefined' — the scrub-tag regex match is undefined because no id=\"timeline-scrub\" element is rendered, confirming the live-return control does not exist yet."
-              }
-            ],
-            "openQuestions": [
-              "A7 names 'the state row' as carrying fmtClock(2000) but gives no helper to isolate that row from the rest of timelineHtml's output (unlike A8's dedicated scrubStateHtml); I checked containment against the whole rendered html string as the safe reading, but a reviewer may want the implementer's state-row markup to be more precisely scoped by a later test.",
-              "Because file A's test module does one static `import { ... } from '../public/timeline.js'` for both existing and new exports, the whole file (all pre-existing cases too) fails to load until timeline.js exports chosenTimePct/clampChosenTime/scrubStateHtml/laneRowsHtml — this is what the plan's own 'expected state before the implementation' note anticipates, but it means the implementer will see the entire timeline.test.mjs suite red, not just the ten new cases, until all four exports land together."
-            ],
-            "questions": []
-          }
-        },
-        {
-          "label": "implement:scrub-live.0",
-          "at": "2026-08-07T12:04:26.521Z",
-          "return": {
-            "deviations": [],
-            "commands": [
-              {
-                "command": "npm --prefix tools/argus-ui test",
-                "exitCode": 0,
-                "note": "70 cases over test/*.test.mjs, nothing skipped or excluded; the 10 new timeline cases (A1-A10) and the 6 new app cases (B1-B6) all pass, and the 54 pre-existing cases stay green."
-              }
-            ],
-            "blockers": [],
-            "questions": [],
-            "summary": "Added a shared chosen time to the session timeline: chosenTimePct, clampChosenTime, laneRowsHtml and scrubStateHtml in public/timeline.js with a third options argument on timelineHtml, state.atMs/state.following plus renderChosenTime, syncChosenTime and the scrub/live event branches in public/app.js, the three new rules in the timeline section of public/styles.css, and one sentence on the README's Timeline bullet."
-          }
-        },
-        {
-          "label": "review:scrub-live.0",
-          "at": "2026-08-07T12:07:41.880Z",
-          "return": {
-            "findings": [],
-            "reason": "",
-            "questions": [],
-            "summary": "Reviewed the whole diff against main for increment 4 (a chosen time, scrubbing and live mode): `npm --prefix tools/argus-ui test` ran 70 cases, 0 failed, exit 0; every acceptance criterion of the increment is met by tools/argus-ui/public/timeline.js and public/app.js, each is pinned by a test that boots the real app.js against the fake DOM (scrub input moves all four playheads and the readout, scrubbing sets aria-pressed=false, an SSE ingest that extends lastMs re-pins the head while following and leaves a scrubbed time alone, the Live control returns to the head and following resumes), the playhead uses the same window arithmetic as the activity marks and the context curve and is pinned to line up with both, the chosen time is the single state.atMs the view reads from, and nothing outside the increment's scope was changed: app.js's formatting helpers moved unchanged into public/format.js with every identifier it still uses imported, index.html already loads app.js as a module, the added CSS is only the playhead and scrub row, and the README sentence documents the new control. No stale document or broken caller found in the blast radius."
-          }
-        }
-      ]
+      "note": "Split out of context-at-time after scrub-live. Scrub-live left the selection question untouched and added a constraint that lands squarely on this panel: scrubbing repaints the lanes in place through fixed ids instead of re-rendering the detail, so anything bound to the chosen time has to join that repaint path. That plumbing plus the selection mechanism is the load-bearing half of the old eleven-criterion increment and is worth its own review; it goes first because the context message list cannot be selected before a lane can be, and it delivers a whole acceptance criterion of the issue on its own.",
+      "steps": []
     },
     {
       "id": "context-at-time",
-      "title": "The selected agent's context and tool use as of the chosen time",
-      "goal": "Show, for the lane selected at the chosen time, that agent's or the main session's context at that moment as a structured, expandable message list, together with the tools that agent has used up to that moment.",
+      "title": "The selected lane's context at the chosen time as a structured message list",
+      "goal": "Show, in the panel the lane selection already opens, the selected agent's or the main session's context as of the chosen time, rendered as a message list whose blocks collapse to one line with a size and expand to the exact text.",
       "criteria": [
-        "Selecting a lane at the chosen time shows that agent's - or the main session's - context as of that moment.",
-        "The lane selected is one of the lanes the timeline already draws, and the records shown are chosen by that lane and the chosen time using the lane vocabulary already in place, not a second attribution scheme.",
-        "The context shown is the body of the nearest API request at or before the chosen time.",
+        "Selecting a lane at the chosen time shows that agent's - or the main session's - context as of that moment, in the same panel the selection already opens.",
+        "The context shown is the body of the nearest API request at or before the chosen time on the selected lane, chosen by the lane vocabulary already in place.",
         "It is rendered as a structured message list distinguishing system prompt, user, assistant, tool call and tool result blocks.",
         "Each block is collapsed to one line carrying its size.",
         "Each block expands to the exact full text the record carries, and a body the CLI truncated is marked as truncated instead of being presented as the whole context.",
         "A record that reports a body length but carries no body text at all is shown as its reported size with the text stated to be absent, rather than as an empty context.",
-        "The same selection also shows the tools that agent has used up to that moment, each entry carrying the tool name and that call's parameters.",
-        "The tool listing is bounded by the same chosen time and the same lane as the context, so the two halves of the panel never disagree about who did what when.",
-        "Both listings are per agent and per time, so 'which tools, and what for' is answerable for any agent at any point of the session.",
-        "What proves this increment is the rendered panel: a change that stops a selection reaching the panel, or stops an expanded block showing the full text, is caught, not only a builder function checked in isolation."
+        "A lane with no API request at or before the chosen time says so, rather than showing another lane's context or the nearest later one.",
+        "Moving the chosen time moves the context shown, and the context and the tool listing in the panel agree about lane and time bound at every moment.",
+        "What proves this increment is the rendered panel: a change that stops the context reaching the panel, or stops an expanded block showing the full text, is caught, not only a builder function checked in isolation."
       ],
       "status": "todo",
-      "note": "Re-cut after lane-activity. Kept whole and kept last; two criteria added. The first is a fact lane-activity uncovered: content records can arrive carrying only a reported body_length with no body and no body_ref, which is why the collector needed a length-preferring helper at all, so the panel has to have an answer for a block whose exact text does not exist rather than rendering nothing. The second pins that the tool listing and the context obey the same lane and the same time bound - cheap now, because lane-activity already serves each lane's tool and API activity with times and names on the /agents payload, so this increment adds the call parameters and the time bound rather than a third attribution scheme. That same reason confirms keeping the merged tools-at-time inside it.",
+      "note": "Kept its id and kept last, but reduced to the context half: the selection mechanism and the tool listing moved to lane-select, so nothing is built twice. The earlier merge of tools-at-time assumed the tool list would come second and repeat the selection work; putting the selection in the increment before it removes that reason. What stays here is the part the run still knows least about - the shape of a request body and what a truncated or text-free record can be rendered as - which is why it is worth its own research-test-build-review chain rather than eleven criteria in one.",
       "steps": []
     },
     {
@@ -266,7 +112,7 @@
       "goal": "Show, for the lane selected at the chosen time, the tools that agent has used up to that moment together with the parameters of each call.",
       "criteria": [],
       "status": "dropped",
-      "note": "Merged into context-at-time, which now carries all of its criteria. content-pipeline showed tool parameters arrive as the same content records as request bodies, retrieved through the same query with the same time bound and the same per-agent join; lane-activity then put each lane's tool calls, with names and times, on the /agents payload the panel already loads. Building this separately would repeat context-at-time's selection and attribution work for one extra list in the same panel.",
+      "note": "Dropped as its own increment and never revived under this id. Its criteria were folded into context-at-time after content-pipeline showed tool parameters arrive as the same content records as request bodies and lane-activity put each lane tool calls, with names and times, on the /agents payload; after scrub-live they moved on into lane-select, which now carries the selection plus the tool listing while context-at-time carries the context. The work happens, under those two ids.",
       "steps": []
     }
   ],
@@ -286,36 +132,121 @@
       },
       {
         "label": "replan:lane-activity",
-        "at": "2026-08-07T11:46:40.790Z",
+        "at": "2026-08-07T11:46:40.790Z"
+      },
+      {
+        "label": "replan:scrub-live",
+        "at": "2026-08-07T12:10:44.051Z",
         "return": {
-          "summary": "Closed lane-activity as done (review accepted, no findings, no correction rounds) and re-cut the two open increments against what it showed. Nothing was split, merged, dropped or reordered; the run confirmed the cut again. Three facts changed criteria. First, lane-activity drew every lane's marks and context curve over one shared window with one session-wide scale, so scrub-live's chosen time now has a concrete thing to line up with: a criterion says the chosen time is drawn against that same window, so its position agrees with the marks and the curve at that instant. Second, lane-activity confirmed the /agents payload is refetched as ingest coalesces and the window's end moves, so scrub-live's live-mode criterion now says live mode keeps following as later data extends the window. Third, lane-activity hit content records that report a body_length but carry no body and no body_ref - which is why the collector needed a length-preferring helper - so context-at-time gains a criterion that such a block is shown as its reported size with the text stated to be absent, instead of an empty context. context-at-time also gains a criterion binding its tool listing to the same lane and the same time bound as the context, which is cheap now because lane-activity already serves each lane's tool and API calls with times and names on the /agents payload; that same fact re-confirms keeping the merged tools-at-time inside it rather than re-splitting. The provability criterion stays on both open increments: it is the difference between timeline-landing's two correction rounds and lane-activity's zero. Order unchanged: scrub-live before context-at-time, because context-at-time answers for exactly the chosen time scrub-live establishes.",
           "increments": [
             {
               "id": "content-pipeline",
-              "status": "done"
+              "title": "Content-bearing telemetry is captured by default and served over the API",
+              "goal": "Turn the content flags on by default in `argus env` and make the collector store and serve what the resulting events carry, so a caller can ask for the conversation content belonging to a point in time.",
+              "criteria": [
+                "`argus env` includes the content flags by default in both output formats: user prompts, tool details, tool content, and the flag or flags the CLI requires to emit `api_request_body`/`api_response_body` events.",
+                "The exact flag names are verified against the CLI's monitoring documentation rather than assumed.",
+                "If the current CLI turns out not to emit request/response body events at all, that is reported as an explicit finding, naming the best content the available flags do provide.",
+                "What attribution actually arrives for subagent activity and for request bodies is established and reported, including any gap, so later increments know which records can be assigned to which agent.",
+                "The collector stores the content those events carry and exposes those content-bearing records over the JSON API like the existing signals, such that the content belonging to a point in time can be asked for.",
+                "Recordings made without the content flags are out of contract: no fallback rendering, no compatibility notice, and no test pins behavior for them.",
+                "`./test.sh` is green."
+              ],
+              "status": "done",
+              "note": "Review accepted with no findings: the four content flags (OTEL_LOG_USER_PROMPTS, OTEL_LOG_TOOL_DETAILS, OTEL_LOG_TOOL_CONTENT, OTEL_LOG_RAW_API_BODIES=1) are on by default in all four env formats, contentOf plus store.queryContent plus GET /api/content store and serve the content-bearing records with an inclusive 'at' bound, and the suite is green (156 argus cases exit 0; bash ./test.sh PASS all 6 suites). The attribution gap is established: body events carry query_source and span context but no agent.name or agent_id."
             },
             {
               "id": "timeline-landing",
-              "status": "done"
+              "title": "A session opens on the timeline, with a lane per agent",
+              "goal": "Make opening a session in the argus UI land on a timeline view that draws one lane for the main session and one per subagent across each agent's lifetime, with the existing technical views reachable from it but subordinate.",
+              "criteria": [
+                "Opening a session in the argus UI lands on the timeline view.",
+                "The previous technical views — event tail, traces, raw inspectors — remain reachable from the timeline view and are subordinate to it, not the other way round.",
+                "The timeline draws one lane for the main session and one lane per subagent instance, so two concurrent subagents of the same type get two lanes; `query_source` names only the agent type, and per-instance identity has to come from the span attributes the previous increment reported (`agent_id`, `parent_agent_id`).",
+                "Each agent lane spans that agent's lifetime, so any vertical slice answers which agents are running at that moment.",
+                "Where the run places the record-to-agent join — collector side or UI side — that choice is stated, and activity that cannot be attributed to an agent instance is shown as unattributed rather than dropped or silently folded into the main session."
+              ],
+              "status": "done",
+              "note": "Review accepted with no findings after two correction rounds, both of them test gaps rather than defects. What shipped: a collector-side lane join in store.getAgents behind GET /api/sessions/:id/agents, giving every span of a session a lane key of 'main', 'agent:<agent_id>' or 'unattributed' by resolving agent_id first and the parent-span chain second; a timeline module in argus-ui drawing one bar per lane over one shared window; and the six technical views (overview, todos, traces, events, metrics, raw) moved into a strip below the timeline, closed by default. npm --prefix tools/argus test 176 cases exit 0, npm --prefix tools/argus-ui test 39 cases exit 0. Both correction rounds were spent because the visible behaviour was computed by a tested pure helper but never pinned in the rendered markup or the booted page; the round-2 fake-DOM harness in tools/argus-ui/test/app.test.mjs now boots public/app.js in-process, so later UI increments have a way to pin what the human sees."
             },
             {
               "id": "lane-activity",
-              "status": "done"
+              "title": "Activity and context growth drawn on each lane",
+              "goal": "Draw each lane's activity over time and, behind it, that agent's context size over time, so where token consumption grows is visible on the timeline itself.",
+              "criteria": [
+                "Each lane shows its activity over time - tool calls and API requests - placed at the times they occurred, on the lane of the agent instance the activity belongs to.",
+                "Activity is assigned to lanes with the lane vocabulary the session's agents endpoint already serves ('main', 'agent:<agent_id>', 'unattributed'), not a second attribution scheme; the records drawn here carry no agent_id of their own, so where their lane comes from is stated.",
+                "Activity that resolves to no agent instance stays visible on the unattributed lane rather than being dropped or folded into the main lane.",
+                "Each lane carries, as a curve or area behind that activity, the context size over time for that agent.",
+                "The curve is drawn from a size the telemetry actually records - the reported untruncated request-body length survives even when the body itself was truncated - and the view names which measure it is showing.",
+                "Growth in context size is readable from the timeline alone, without opening any detail.",
+                "What proves this increment is the drawn result in the page: a change that stops the activity marks or the curve reaching the rendered timeline is caught, not only a computation checked in isolation."
+              ],
+              "status": "done",
+              "note": "Review accepted with no findings on the first round. What shipped: store.getAgents now joins claude_code.tool and claude_code.llm_request spans into a per-lane activity list and api_request_body records into a per-lane context series, both on the existing 'main' / 'agent:<agent_id>' / 'unattributed' lane keys; the content records carry no agent_id, so their lane is resolved through their spanId and a record whose span is unknown lands on unattributed, never on main; a requestBodyLength helper prefers the reported body_length over the delivered body, so a truncated or body_ref-only record still reports its true size; timeline.js draws an SVG area per lane scaled to one session-wide peak with activity ticks over it and a legend naming the measure; and app.test.mjs boots the real page and pins that marks and a non-empty polygon reach the rendered timeline. npm --prefix tools/argus test 186 cases exit 0, npm --prefix tools/argus-ui test 54 cases exit 0. The fake-DOM harness plus the provability criterion cost this increment zero correction rounds, against two for the increment before it."
             },
             {
               "id": "scrub-live",
-              "status": "todo"
+              "title": "Scrubbing the timeline, and a live mode that follows the head",
+              "goal": "Give the timeline a chosen time that can be moved to any point of the recorded session, plus a live mode that follows the newest data as it arrives.",
+              "criteria": [
+                "The timeline can be scrubbed backward and forward to any point of the recorded session, and the chosen time is visible on the timeline.",
+                "The chosen time is drawn against the same shared window the lanes are already drawn against, so its position lines up with the activity marks and the context curve at that instant.",
+                "A live mode follows the newest data as it arrives, and keeps following as later data extends the session's window.",
+                "Scrubbing away from the head leaves live mode.",
+                "A control returns to live mode.",
+                "The chosen time is one shared value the session view works from, so a later per-lane detail can be answered for exactly that moment.",
+                "What proves this increment is the behaviour of the page: a change that stops scrubbing moving the chosen time, or stops the live control returning to the head, is caught, not only a helper that maps a position to a time."
+              ],
+              "status": "done",
+              "note": "Review accepted with no findings on the first round. What shipped: state.atMs and state.following in app.js as the one chosen time the session view works from, chosenTimePct/clampChosenTime/laneRowsHtml/scrubStateHtml in timeline.js with a third options argument on timelineHtml, a playhead per lane placed by the same window arithmetic as the activity marks and the context curve, a range control that scrubs anywhere in the session, and a Live control that returns to the head; every refresh re-pins the chosen time to the head while following and only clamps a scrubbed time into the widened window. Two facts the next increment inherits: the scrub handler repaints the lanes and the readout in place through the ids timeline-lanes and timeline-scrub-state rather than re-rendering the detail, because a full render would destroy the range input mid-drag; and app.js's formatting helpers now live in public/format.js. npm --prefix tools/argus-ui test 70 cases exit 0."
+            },
+            {
+              "id": "lane-select",
+              "title": "Selecting a lane, and that agent's tool use up to the chosen time",
+              "goal": "Make a lane on the timeline selectable, and show for the selected lane the tools that agent has used up to the chosen time, each with its call parameters.",
+              "criteria": [
+                "Selecting a lane on the timeline records a selection the session view holds beside the chosen time, and the selected lane is visibly marked on the timeline.",
+                "The lane selected is one of the lanes the timeline already draws, named by the lane vocabulary already in place (main, agent:<agent_id>, unattributed), not a second attribution scheme.",
+                "The selection shows the tools that agent has used up to the chosen time, each entry carrying the tool name and that call's parameters.",
+                "Whether the call parameters already arrive with the per-lane tool activity or have to be exposed for the first time is established and stated, and either way the panel reads them through the attribution already in place rather than joining records to agents a second way.",
+                "The listing is bounded by the selected lane and by the chosen time and follows the chosen time as it moves, so it never carries a call from after that moment; the scrub path repaints it in place, since a full re-render of the detail would destroy the range input mid-drag.",
+                "Which tools an agent used, and what for, is answerable for any lane the timeline draws at any point of the session, the unattributed lane included, and a lane with no tool calls before the chosen time says so.",
+                "With no lane selected the session view renders as it does today.",
+                "What proves this increment is the rendered page: a change that stops a lane selection reaching the panel, or leaves the panel showing the previous moment after the chosen time moves, is caught, not only a builder function checked in isolation."
+              ],
+              "status": "todo",
+              "note": "Split out of context-at-time after scrub-live. Scrub-live left the selection question untouched and added a constraint that lands squarely on this panel: scrubbing repaints the lanes in place through fixed ids instead of re-rendering the detail, so anything bound to the chosen time has to join that repaint path. That plumbing plus the selection mechanism is the load-bearing half of the old eleven-criterion increment and is worth its own review; it goes first because the context message list cannot be selected before a lane can be, and it delivers a whole acceptance criterion of the issue on its own."
             },
             {
               "id": "context-at-time",
-              "status": "todo"
+              "title": "The selected lane's context at the chosen time as a structured message list",
+              "goal": "Show, in the panel the lane selection already opens, the selected agent's or the main session's context as of the chosen time, rendered as a message list whose blocks collapse to one line with a size and expand to the exact text.",
+              "criteria": [
+                "Selecting a lane at the chosen time shows that agent's - or the main session's - context as of that moment, in the same panel the selection already opens.",
+                "The context shown is the body of the nearest API request at or before the chosen time on the selected lane, chosen by the lane vocabulary already in place.",
+                "It is rendered as a structured message list distinguishing system prompt, user, assistant, tool call and tool result blocks.",
+                "Each block is collapsed to one line carrying its size.",
+                "Each block expands to the exact full text the record carries, and a body the CLI truncated is marked as truncated instead of being presented as the whole context.",
+                "A record that reports a body length but carries no body text at all is shown as its reported size with the text stated to be absent, rather than as an empty context.",
+                "A lane with no API request at or before the chosen time says so, rather than showing another lane's context or the nearest later one.",
+                "Moving the chosen time moves the context shown, and the context and the tool listing in the panel agree about lane and time bound at every moment.",
+                "What proves this increment is the rendered panel: a change that stops the context reaching the panel, or stops an expanded block showing the full text, is caught, not only a builder function checked in isolation."
+              ],
+              "status": "todo",
+              "note": "Kept its id and kept last, but reduced to the context half: the selection mechanism and the tool listing moved to lane-select, so nothing is built twice. The earlier merge of tools-at-time assumed the tool list would come second and repeat the selection work; putting the selection in the increment before it removes that reason. What stays here is the part the run still knows least about - the shape of a request body and what a truncated or text-free record can be rendered as - which is why it is worth its own research-test-build-review chain rather than eleven criteria in one."
             },
             {
               "id": "tools-at-time",
-              "status": "dropped"
+              "title": "The selected agent's tool use up to the chosen time",
+              "goal": "Show, for the lane selected at the chosen time, the tools that agent has used up to that moment together with the parameters of each call.",
+              "criteria": [],
+              "status": "dropped",
+              "note": "Dropped as its own increment and never revived under this id. Its criteria were folded into context-at-time after content-pipeline showed tool parameters arrive as the same content records as request bodies and lane-activity put each lane tool calls, with names and times, on the /agents payload; after scrub-live they moved on into lane-select, which now carries the selection plus the tool listing while context-at-time carries the context. The work happens, under those two ids."
             }
           ],
-          "questions": []
+          "questions": [],
+          "summary": "Closed scrub-live as done (review accepted, no findings, one round) and split the last open increment in two. The only substantive change to the open cut: context-at-time carried eleven criteria covering three distinct jobs - a lane selection mechanism, a tool listing per lane and time, and a structured expandable context message list - which is the largest remaining piece of the issue and larger than any increment worked so far. It is now lane-select (selection plus the tool use up to the chosen time) followed by context-at-time (the context message list in the panel that selection opens). Criteria stay disjoint: the issue bullet on tool use per agent and per time is lane-select's alone, the bullet on the context as a structured message list is context-at-time's alone, and no criterion sits in both. Selection goes first because nothing can be shown for a lane before a lane can be picked, and because scrub-live added a constraint that lands on exactly that plumbing - the scrub handler repaints the lanes and readout in place through fixed ids rather than re-rendering the detail, so any panel bound to the chosen time must join that path or go stale mid-drag; lane-select now names that as a criterion. Context-at-time keeps the part the run knows least about (request body shape, truncated bodies, records that report a length but carry no text) so that risk gets its own review round instead of sharing one. Rejected: keeping the merged eleven-criterion increment, since four of eight increments are spent and two remain spare after this split; and re-splitting the way the earlier merge feared, where the tool list would come second and repeat the selection work - putting selection in the first half removes that objection. The stale note on the dropped tools-at-time was updated to point at both successors. No questions: nothing in the remaining cut turns on a decision only a human can make, and the open data question (whether tool call parameters already reach the /agents payload or must be exposed) is written into lane-select for the researcher to answer first."
         }
       }
     ]
