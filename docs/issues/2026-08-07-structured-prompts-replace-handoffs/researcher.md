@@ -890,3 +890,364 @@ and each names above the mutation it would catch. The rest of `test.sh` (the
 three `tools/` suites and `test-worktree.sh`) was green in the reviewer's run
 and nothing this round touches it. Whoever runs the list first reports what it
 says.
+
+## Round 2
+
+The reviewer filed three findings. One is a real defect in both workflow
+scripts — a run that ended on a question for the human replays the recorded
+question on resume and makes no progress, ever. One is a hole in the guards: no
+driver mode ever reaches a correction round, so the whole findings channel and
+the reason sentence are untested. One is a missing sentence: nothing tells a
+repeated step that its interrupted first run may already have committed work.
+The recorder (`backlog.mjs`) is not touched this round.
+
+### Implementation plan
+
+**Finding 1 — a run that ended on a question can never be resumed.** The step
+that asked is recorded, so `recorded.has(label)` is true on the next run, the
+stored return is replayed, `asksTheHuman` reads the same `questions` out of it,
+and the run breaks to Publish without dispatching anyone. The fix is in the
+resume loader of both workflow scripts: a recorded step whose return carries a
+non-empty `questions` is **not** loaded as recorded — it is worked again, and
+its prompt carries the question it asked plus where the answer is.
+
+In `workflows/loop.js` (lines 456-462) and `workflows/agile-loop.js` (lines
+489-495), replace the two loading loops with one that triages each entry:
+
+```js
+// A step that ended the run with a question for the human is not replayed from
+// its recorded return: the human answered in `issue.md`, so the step is worked
+// again with the question in front of it. Replaying it instead would re-raise
+// the same question and end the resumed run at Publish without dispatching
+// anyone — the restart the rulebook promises would make no progress at all.
+const recorded = new Map()
+const carriedQuestions = new Map()
+if (saved) {
+  const load = (s) => {
+    const asked =
+      s && s.return && Array.isArray(s.return.questions) ? s.return.questions.filter(Boolean) : []
+    if (asked.length) carriedQuestions.set(s.label, asked)
+    else recorded.set(s.label, s.return)
+  }
+  for (const s of (saved.run && saved.run.steps) || []) load(s)
+  for (const increment of saved.increments || []) {
+    for (const s of increment.steps || []) load(s)
+  }
+}
+if (recorded.size) log(`Resuming: ${recorded.size} step(s) already recorded in the run state.`)
+if (carriedQuestions.size) {
+  log(`${carriedQuestions.size} step(s) ended the last run with a question and are worked again.`)
+}
+```
+
+and add, next to `recordStep()` in both files:
+
+```js
+// The question this step asked before the run stopped. The human records the
+// answer under `## Decisions` in issue.md, which is where this sends the agent;
+// the step's own recorded return is never replayed.
+function answeredBlock(label) {
+  const asked = carriedQuestions.get(label)
+  return asked && asked.length
+    ? `This step ended the previous run with a question for the human:\n` +
+        asked.map((q) => `  - ${q}`).join('\n') +
+        '\n' +
+        `The answer is under \`## Decisions\` in ${dir}/issue.md. Read it there first, then ` +
+        `work this step again; ask again only what it does not answer.\n`
+    : ''
+}
+```
+
+Then insert `answeredBlock(<that step's label>) +` immediately after the
+`` `Issue directory: ${dir}\n` `` fragment of every recorded dispatch, and
+nowhere else. That is six sites in `workflows/loop.js` — `decompose` (l. 495),
+`research` (l. 539), `tests` (l. 558), `implement` (l. 575, so the string
+splits into `` `Issue directory: ${dir}\n` + answeredBlock(buildLabel) + `Your
+brief is the plan below.\n\n` ``), `review` (l. 591), `close` (l. 622) — and
+six in `workflows/agile-loop.js`: `decompose` (l. 528), `research` (l. 613,
+before `scope(...)`), `tests` (l. 633, before `scope(...)`), `implement`
+(l. 651), `review` (l. 667), `replan` (l. 710). `load-state` and `publish` get
+none: neither is a recorded step. Do not write the word "handoff" or "hand-off"
+into any of this text — `test-repo.sh` greps the workflow scripts for it.
+
+Rejected: not recording a step whose return carries questions. Criterion 10
+asks for exactly the opposite — the question "lands in `backlog.json`" and the
+resuming session "finds the question in the state it resumes from". Rejected:
+dropping the recorded entry but adding no block to the prompt, leaving the
+agent to find `## Decisions` on its own — criterion 10's last clause ("the
+resuming researcher reads it there") needs something to send it there, and the
+prompt is the only channel that reaches every role. Rejected: a sentence on the
+agent pages instead of the prompt block — it would fire on every run rather
+than on the one that resumes a question, and it cannot name the question that
+was asked. Rejected: folding the block into `recordStep()` because that
+function already takes the label — the two say different things (bookkeeping
+versus the brief) and the record instruction belongs at the end of a prompt
+while the answer belongs at its top.
+
+Two knock-on facts, both by design and both worth stating rather than
+discovering: a re-dispatched step records under the same label and
+`backlog.mjs record` replaces an entry with a matching label, so the stale
+return with the question is overwritten and nothing duplicates; and a human who
+restarts without answering gets the same question again and the same regular
+exit, which is a no-op run and not a loop.
+
+The one path the fix does not carry an answer into is `replan:<id>` in
+`agile-loop.js`: closing the increment happened before the question, so the
+resumed run finds that increment closed and moves to the next one instead of
+re-dispatching the planner for it. That is progress, which is what the
+criterion asks for, and the answer still stands in `issue.md` for whoever reads
+it next.
+
+**Finding 1, the documentation half.** `rulebook.md` line 54 promises the
+restart makes progress, and after this fix it does. Extend that sentence so the
+session also knows what the restart does, replacing the line whole:
+
+> A result carrying `blockedOnHuman` is a run one or more questions ended. Put
+> those questions to the human as they stand, record their answers under a
+> `## Decisions` heading in `issue.md`, commit and push that file, and start the
+> same workflow on the same directory again: it works the step that asked again,
+> with the question in its prompt and your answer in `issue.md`, and skips every
+> other step it already recorded.
+
+Line 52 of the same file and `README.md` line 78 stay as they are: both
+describe the ordinary resume, and the exception is stated once, in the
+paragraph that owns questions.
+
+**Finding 2 — no test exercises a correction round.** Nothing in production
+changes; the repair is a new driver mode. See test plan case A2.
+
+**Finding 3 — nothing tells a repeated step about work its first run
+committed.** One sentence, in the one place that reaches every role in every
+installing project: `skills/agent-brief/SKILL.md`, at the end of the "Your step
+return" section, after line 104.
+
+> A step you work again may meet what its interrupted first run already
+> committed: tests that exist and fail, code that half-exists. Read the working
+> tree and `git log` before you start, then finish or correct what is there
+> instead of writing it a second time.
+
+Rejected: the same sentence on `agents/test-author.md` and
+`agents/implementer.md` — `.claude/rules/agents.md` forbids an agent page from
+restating what the shared brief says, and two wordings of one rule drift.
+Rejected: a line in the workflow prompts — it would be paid for on every step
+of every run, including the overwhelming majority that repeat nothing.
+
+### Module map
+
+| Path | What it holds | What changes |
+| --- | --- | --- |
+| `workflows/loop.js` | The plain chain. Resume loader at l. 456-463, `step()` at l. 469-478, `recordStep()` at l. 370-376, six recorded dispatches. | The triaging loader, `carriedQuestions`, `answeredBlock()`, and `answeredBlock(<label>) +` at the six dispatches. |
+| `workflows/agile-loop.js` | The incremental chain, same shapes. Loader at l. 489-496, `step()` at l. 502-511, `recordStep()` at l. 377-384, six recorded dispatches. | Identical, word for word where the two scripts already agree. |
+| `skills/agent-brief/SKILL.md` | The rules every agent preloads. "Your step return" ends at l. 104. | One paragraph appended to that section. |
+| `rulebook.md` | The session's rules. Issue Mode step 4, l. 52-54. | Line 54 replaced with the text above. |
+| `test-repo.sh` | The repository's own suite, 42 cases. Driver heredoc l. 269-497 (fixtures l. 298-368, `contextFor` l. 370-388, `returnFor` l. 392-402, mode branches l. 426-485), `run_driver` loop l. 513-523, the shared-brief greps at l. 210-228. | Two new driver modes and their fixtures, a log-capturing stub, two `run_driver` lines, one new grep case. |
+| `skills/agent-brief/assets/backlog.mjs` and its suite | The recorder. | Unchanged this round. |
+
+### Environment
+
+- Repository root `/home/user/uroboros`. `node` is v22.22.2 on `PATH`; `bash`,
+  `git` and `mktemp` are present.
+- `test.sh` and `test-repo.sh` are **not executable** in this checkout (mode
+  `-rw-r--r--`, unchanged from `origin/main`), so they are invoked as `bash
+  test.sh` and `bash test-repo.sh`. Do not `chmod` them.
+- There is no linter and no formatter in this repository. Nothing to run.
+- The `tools/` suites `test.sh` runs are zero-install; `npm` is present and no
+  network access is needed by any command below.
+
+### Test plan
+
+Tests are needed. Finding 1 needs a failing test first — a resumed run whose
+recorded step carries a question. Finding 2 *is* a missing test, and its repair
+is the new mode itself, green on arrival and named below by the mutation it
+catches. Finding 3 needs a grep, red until the sentence is written.
+
+#### What proves each finding
+
+**Finding 1.** Driver mode `w9`, run against both workflow scripts: a saved
+backlog whose `research:i1.0` return carries a question is resumed, and the
+researcher is dispatched again with the question and the pointer to
+`## Decisions` in its prompt, the chain runs to the close, and the returned
+`blockedOnHuman` is empty. Left untested, deliberately: the same resume when it
+is `decompose` or `replan` that asked — the loader triages every step by the
+same three lines, and a second mode would pin the same code twice; and the
+rulebook sentence, which no exit code can judge.
+
+**Finding 2.** Driver mode `w10`, run against both workflow scripts: the round-0
+review returns a finding, and the round-1 researcher prompt carries that
+finding's claim, reproduction and criterion, the round-0 prompt carries none of
+them, the test-author's open question from round 0 reaches the round-1
+researcher, and the reviewer's reason sentence reaches `log`. Left untested: the
+correction round's test-author prompt clause ("The reviewer's reproduction spec
+is the criterion for this round") — mode `w4` already pins what that prompt
+carries, and the round-1 wording is prose.
+
+**Finding 3.** A grep case over `skills/agent-brief/SKILL.md`. Left untested:
+that an agent actually behaves that way at run time, which no unit-level guard
+reaches.
+
+#### The cases
+
+All work this round is in one test file, `test-repo.sh`. The command that runs
+just it is `bash test-repo.sh`. Its conventions: a shell case is a grep or a
+`node -e` collecting problems into a variable, then `ok "<sentence>"` or
+`no "<sentence>:"` plus the offending lines indented by `sed 's/^/       /'`; a
+driver case is one `run_driver "$wf" <mode> "<description>"` call inside the
+`for wf in ... loop.js ... agile-loop.js` loop, whose description opens with
+`$wf_name`; inside the heredoc, assertions push a sentence onto `failures` and
+the process exits 1 with them on stderr; `agent`, `log` and `phase` are the only
+stubs and the whole workflow script is run through `new AsyncFunction`.
+
+**A. `test-repo.sh` — the driver heredoc.**
+
+1. **Shared driver changes** (no case of their own):
+   - New fixtures beside the existing ones (l. 298-328):
+
+     ```js
+     const planReturnWithMarkedQuestion = Object.assign({}, planReturn, {
+       questions: ['MARKER-HUMAN-QUESTION'],
+     });
+     const testsReturnWithOpenQuestion = Object.assign({}, testsReturn, {
+       openQuestions: ['MARKER-OPEN-QUESTION'],
+     });
+     const verdictReturnWithFinding = {
+       findings: [{
+         claim: 'MARKER-FINDING-CLAIM',
+         reproduction: 'MARKER-FINDING-REPRODUCTION',
+         criterion: 'MARKER-FINDING-CRITERION',
+       }],
+       reason: 'MARKER-VERDICT-REASON',
+       questions: [],
+       summary: 'verdict summary',
+     };
+     ```
+
+   - `DISJOINT_MARKERS` (l. 296) gains `'MARKER-HUMAN-QUESTION'`,
+     `'MARKER-OPEN-QUESTION'`, `'MARKER-FINDING-CLAIM'`,
+     `'MARKER-FINDING-REPRODUCTION'`, `'MARKER-FINDING-CRITERION'` and
+     `'MARKER-VERDICT-REASON'`, so the standing disjointness assertion covers
+     the new markers too. It passes: no one of the nine strings contains
+     another.
+   - `returnFor` (l. 392-402) takes two returns from the context when it offers
+     them: `if (label.startsWith('tests:')) return ctx.testsReturn ||
+     testsReturn;` and `if (label.startsWith('review:')) return ctx.verdictFor ?
+     ctx.verdictFor(label) : verdictReturnClean;`. Every existing mode leaves
+     both unset and is unaffected.
+   - The `log` stub (l. 423) captures instead of discarding:
+     `const logs = []; ... await fn({ issueDir: 'docs/issues/x' }, stub, (m) =>
+     logs.push(String(m)), () => {})`.
+   - A new fixture `questionBacklog()` beside `resumeBacklog()` (l. 330-346):
+     the same shape, `increments[0].steps` holding one entry
+     `{ label: 'research:i1.0', at: '2026-08-07T00:00:00.000Z', return:
+     planReturnWithMarkedQuestion }`, and `run.steps` holding the `decompose`
+     entry with `decomposeReturnOne` as its return.
+   - `contextFor` (l. 370-388) gains two arms:
+
+     ```js
+     case 'w9':
+       return { stateReturn: { exists: true, backlogJson: JSON.stringify(questionBacklog(), null, 2) + '\n', summary: '' }, decomposeReturn: decomposeReturnOne, researchReturn: planReturn };
+     case 'w10':
+       return { stateReturn: { exists: false, backlogJson: '', summary: '' }, decomposeReturn: decomposeReturnOne, researchReturn: planReturn, testsReturn: testsReturnWithOpenQuestion, verdictFor: (label) => (label === 'review:i1.0' ? verdictReturnWithFinding : verdictReturnClean) };
+     ```
+
+2. **`w9` on both workflows** — "a run resumed after a question works the step
+   that asked again". Input: the state loader returns `questionBacklog()`;
+   `research:i1.0` returns the clean `planReturn` when it is dispatched again.
+   The mode branch asserts:
+
+   ```js
+   const closeLabel = isAgile ? 'replan:i1' : 'close:i1';
+   assertEqualArrays(labels,
+     ['load-state', 'research:i1.0', 'tests:i1.0', 'implement:i1.0', 'review:i1.0', closeLabel, 'publish'],
+     'the resumed run did not work the step that asked the human again, or did not carry on past it');
+   const researchCall = calls.find((c) => c.label === 'research:i1.0');
+   assertTrue(!!researchCall && researchCall.prompt.includes('MARKER-HUMAN-QUESTION'),
+     "the repeated step's prompt does not carry the question it asked");
+   assertTrue(!!researchCall && /## Decisions/.test(researchCall.prompt) && /issue\.md/.test(researchCall.prompt),
+     "the repeated step's prompt does not send the agent to the answer under ## Decisions in issue.md");
+   assertTrue(!!result && Array.isArray(result.blockedOnHuman) && result.blockedOnHuman.length === 0,
+     'the resumed run ended on the stale recorded question instead of making progress');
+   ```
+
+   `decompose` is absent from the expected labels on purpose: it is recorded
+   without a question and stays skipped, which is the other half of the fix.
+   Expected before the change: **red** on the first assertion — today the run
+   dispatches `load-state` and `publish` and nothing else.
+
+3. **`w10` on both workflows** — "a correction round carries the reviewer's
+   findings to the researcher and the reason to the human". Input: a fresh run,
+   one increment, round 0's review dirty and round 1's clean. The mode branch
+   asserts:
+
+   ```js
+   const closeLabel = isAgile ? 'replan:i1' : 'close:i1';
+   assertEqualArrays(labels,
+     ['load-state', 'decompose', 'research:i1.0', 'tests:i1.0', 'implement:i1.0', 'review:i1.0',
+      'research:i1.1', 'tests:i1.1', 'implement:i1.1', 'review:i1.1', closeLabel, 'publish'],
+     'a review with findings does not open exactly one correction round');
+   const round1 = calls.find((c) => c.label === 'research:i1.1');
+   for (const marker of ['MARKER-FINDING-CLAIM', 'MARKER-FINDING-REPRODUCTION', 'MARKER-FINDING-CRITERION']) {
+     assertTrue(!!round1 && round1.prompt.includes(marker),
+       "the correction round's researcher prompt does not carry " + marker);
+   }
+   assertTrue(!!round1 && round1.prompt.includes('MARKER-OPEN-QUESTION'),
+     "the correction round's researcher prompt does not carry what the test-author left open");
+   const round0 = calls.find((c) => c.label === 'research:i1.0');
+   assertTrue(!!round0 && !round0.prompt.includes('MARKER-FINDING-CLAIM'),
+     "the first round's researcher prompt carries findings that do not exist yet");
+   assertTrue(logs.some((l) => l.includes('MARKER-VERDICT-REASON')),
+     "the reviewer's reason sentence never reached the human in the chat");
+   ```
+
+   Expected before and after the change: **green**. It is the guard finding 2
+   asks for, and the mutations it exists for are deleting `(round === 0 ? '' :
+   findingsBlock(verdict, round)) +` or `openQuestionsBlock(previousTests) +`
+   from either script's researcher dispatch, or dropping the `log` at
+   `loop.js` l. 612 / `agile-loop.js` l. 689 — each turns this case red in the
+   script it was made in.
+
+4. **Two `run_driver` lines** inside the existing two-workflow loop
+   (l. 513-523), after the `w8` line:
+
+   ```
+   run_driver "$wf" w9 "$wf_name: a run resumed after a question for the human works that step again with the question in its prompt"
+   run_driver "$wf" w10 "$wf_name: a correction round carries the reviewer's findings to the researcher and the reason to the human"
+   ```
+
+**B. `test-repo.sh` — the shared-brief greps** (shell level, beside the
+`push the commit` case at l. 224-228, same idiom).
+
+5. **"the shared brief tells a repeated step what its first run may have left
+   behind"** — `grep -q 'already committed' "$root/skills/agent-brief/SKILL.md"`,
+   `ok` on a hit, `no` otherwise. Expected before the change: **red** — the
+   phrase appears nowhere in that file today. Expected after: green.
+
+Nothing else in `test-repo.sh` changes, and no case is written against
+`skills/agent-brief/assets/` this round: the recorder is untouched.
+
+#### What counts as done
+
+Run these two, from the repository root, and nothing else:
+
+```
+bash test-repo.sh
+bash test.sh
+```
+
+`test-repo.sh` holds every case of this round and runs in seconds, so it is
+listed on its own for a diagnosable exit code; `test.sh` is the criterion the
+issue states in as many words, and it is the only run that reaches the recorder
+suite and the three `tools/` suites this round's edits could not touch. Expect
+`test-repo.sh` to report 47 cases when this round is done — 42 today, plus `w9`
+and `w10` on two workflows each, plus the brief grep.
+
+#### What is already red
+
+I ran neither command and state this from reading alone. Before the
+implementer's change: case 2 (`w9`) is red on both workflow scripts, because a
+recorded step carrying a question is replayed and the run reaches only
+`load-state` and `publish`; case 5 is red, because `already committed` is in no
+line of `skills/agent-brief/SKILL.md`. Case 3 (`w10`) and the widened
+disjointness assertion are green on arrival, and each names above the mutation
+it exists to catch. The rest of `test.sh` was exit 0 in the reviewer's round-1
+run and nothing here touches it. Whoever runs the list first reports what it
+says.
