@@ -34,6 +34,12 @@ function lane({ id, kind, agentId = null, parentAgentId = null, agentType = null
   };
 }
 
+/** Every lane row's id and the geometry its bar carries, in markup order. */
+function laneBars(html) {
+  return [...html.matchAll(/data-lane-id="([^"]+)"[\s\S]*?class="lane-bar"[^>]*style="left:([\d.]+)%;width:([\d.]+)%"/g)]
+    .map(([, id, left, width]) => ({ id, left: Number(left), width: Number(width) }));
+}
+
 /* ------------------------------ landing on the timeline ------------------------------ */
 
 test('DEFAULT_VIEW is null, so opening a session opens nothing but the timeline', () => {
@@ -188,4 +194,78 @@ test('a lane whose agent type contains markup is escaped in the rendered output'
   });
   const html = timelineHtml([hostile], window);
   assert.ok(!html.includes('<script'));
+});
+
+test('timelineHtml draws each lane at its own left and width, so a vertical slice tells the lanes apart', () => {
+  const window = { startMs: 0, endMs: 1000 };
+  const a = lane({
+    id: 'agent:agt-a',
+    kind: 'subagent',
+    agentId: 'agt-a',
+    agentType: 'agent:builtin:researcher',
+    firstMs: 100,
+    lastMs: 400,
+  });
+  const b = lane({
+    id: 'agent:agt-b',
+    kind: 'subagent',
+    agentId: 'agt-b',
+    agentType: 'agent:builtin:researcher',
+    firstMs: 200,
+    lastMs: 500,
+  });
+  const lanes = [a, b];
+  const html = timelineHtml(lanes, window);
+  assert.deepEqual(laneBars(html), [
+    { id: 'agent:agt-a', left: 10, width: 30 },
+    { id: 'agent:agt-b', left: 20, width: 30 },
+  ]);
+  for (const l of lanes) {
+    const { leftPct, widthPct } = laneGeometry(l, lanes, window);
+    const bar = laneBars(html).find((b) => b.id === l.id);
+    assert.equal(bar.left, leftPct);
+    assert.equal(bar.width, widthPct);
+  }
+});
+
+test('timelineHtml clamps a lane overflowing the window to the full width and keeps an instant lane visible', () => {
+  const window = { startMs: 0, endMs: 1000 };
+  const overflow = lane({ id: 'main', kind: 'main', firstMs: -500, lastMs: 5000 });
+  const instant = lane({ id: 'agent:agt-i', kind: 'subagent', agentId: 'agt-i', firstMs: 500, lastMs: 500 });
+  const html = timelineHtml([overflow, instant], window);
+  assert.deepEqual(laneBars(html), [
+    { id: 'main', left: 0, width: 100 },
+    { id: 'agent:agt-i', left: 50, width: 0.4 },
+  ]);
+});
+
+test('timelineHtml indents each lane label by its depth, so a nested subagent reads as nested', () => {
+  const window = { startMs: 0, endMs: 1000 };
+  const main = lane({ id: 'main', kind: 'main', firstMs: 0, lastMs: 1000 });
+  const subA = lane({
+    id: 'agent:agt-a',
+    kind: 'subagent',
+    agentId: 'agt-a',
+    parentAgentId: 'agt-main',
+    agentType: 'agent:builtin:researcher',
+    firstMs: 100,
+    lastMs: 900,
+  });
+  const subB = lane({
+    id: 'agent:agt-b',
+    kind: 'subagent',
+    agentId: 'agt-b',
+    parentAgentId: 'agt-a',
+    agentType: 'agent:builtin:helper',
+    firstMs: 200,
+    lastMs: 800,
+  });
+  const html = timelineHtml([main, subA, subB], window);
+  const pairs = [...html.matchAll(/data-lane-id="([^"]+)"[\s\S]*?class="lane-label" style="padding-left:(\d+)px"/g)]
+    .map(([, id, padding]) => [id, Number(padding)]);
+  assert.deepEqual(pairs, [
+    ['main', 0],
+    ['agent:agt-a', 14],
+    ['agent:agt-b', 28],
+  ]);
 });

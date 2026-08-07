@@ -422,6 +422,38 @@
             ],
             "questions": []
           }
+        },
+        {
+          "label": "tests:timeline-landing.1",
+          "at": "2026-08-07T10:38:06.805Z",
+          "return": {
+            "summary": "Added three new-test cases to tools/argus-ui/test/timeline.test.mjs pinning the reviewer's reproduction — that timelineHtml's drawn geometry (left/width) and lane-label indent reach the markup rather than staying inside laneGeometry — plus the laneBars() helper the plan named; all 19 cases in the file, including the three new ones, pass (0 fail).",
+            "cases": [
+              {
+                "case": "each agent lane spans that agent's lifetime, and the markup is what carries it (must fail against a constant style=\"left:0%;width:100%\")",
+                "file": "/home/user/uroboros/tools/argus-ui/test/timeline.test.mjs",
+                "testName": "timelineHtml draws each lane at its own left and width, so a vertical slice tells the lanes apart",
+                "expected": "laneBars(html) for two same-type subagent lanes a (100..400) and b (200..500) in window 0..1000 equals [{id:'agent:agt-a',left:10,width:30},{id:'agent:agt-b',left:20,width:30}], and each lane's parsed left/width equal laneGeometry(l, [a,b], window).leftPct/.widthPct",
+                "got": "Passes against the current tools/argus-ui/public/timeline.js: laneBars(html) deep-equals the expected array and both parsed bars match laneGeometry's leftPct/widthPct exactly. This is a regression guard, not a red-first case — it would fail against any implementation that renders a constant style=\"left:0%;width:100%\" for every lane."
+              },
+              {
+                "case": "the same, at the edges: the clamping and the minimum width reach the markup rather than staying inside laneGeometry",
+                "file": "/home/user/uroboros/tools/argus-ui/test/timeline.test.mjs",
+                "testName": "timelineHtml clamps a lane overflowing the window to the full width and keeps an instant lane visible",
+                "expected": "For window 0..1000, an overflow main lane (-500..5000) and an instant subagent lane agt-i (500..500), laneBars(html) equals [{id:'main',left:0,width:100},{id:'agent:agt-i',left:50,width:0.4}]",
+                "got": "Passes against the current implementation: the overflowing lane clamps to left 0 / width 100 and the zero-duration lane keeps the 0.4 minimum width, both in the rendered markup."
+              },
+              {
+                "case": "the depth half of the computed geometry reaches the markup, so nesting is readable on screen",
+                "file": "/home/user/uroboros/tools/argus-ui/test/timeline.test.mjs",
+                "testName": "timelineHtml indents each lane label by its depth, so a nested subagent reads as nested",
+                "expected": "For main (depth 0), subA parented to 'agt-main' (depth 1), subB parented to subA's agentId 'agt-a' (depth 2), the pairs parsed from data-lane-id + class=\"lane-label\" style=\"padding-left:Npx\" equal [['main',0],['agent:agt-a',14],['agent:agt-b',28]]",
+                "got": "Passes against the current implementation: labels are indented 14px per depth level, matching the depth laneGeometry already computes."
+              }
+            ],
+            "openQuestions": [],
+            "questions": []
+          }
         }
       ]
     },
