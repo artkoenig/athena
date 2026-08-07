@@ -448,3 +448,130 @@ Traced, and nothing further found:
 One fact, not a finding: `test.sh` and `test-repo.sh` are still not executable
 in this checkout (`-rw-r--r--`), so `./test.sh` exits 126 while `bash test.sh`
 exits 0. That predates the change and is unchanged by it.
+
+## Round 3
+
+**Status: 1 finding, correction needed.**
+
+### The commands that count
+
+- `bash test-repo.sh` — **exit 0**. 50 cases, seven sections (`the licence`, `no
+  repository-local rule reaches an agent`, `the run state is the channel, and no
+  prose handoff is left`, `a run resumes from the state it recorded`, `the two
+  workflows coexist`, `every agent page is declared`, `remote operation deploys
+  the collector alone`). Nothing skipped or excluded.
+- `bash test.sh` — **exit 0**. `PASS: all 6 suites`: `the repository itself`
+  (test-repo.sh, 50 cases), `parallel runs: worktrees`, `skills/agent-brief/
+  assets: the backlog recorder` (15 cases), `tools/argus`, `tools/argus-ui`,
+  `tools/log-parser` (23 pass, 0 fail in its TAP summary). Nothing skipped or
+  excluded.
+
+Both are green, so no red run is this change's to answer for. Both exit codes
+were taken from the scripts themselves, not from the tail of a pipe.
+
+Round 2's two findings are repaired: `workflows/loop.js` line 679 now passes the
+closing planner's return to `asksTheHuman`, pinned on both workflows by driver
+mode `w11`, and `workflows/agile-loop.js`'s `forgetSteps` (lines 545-552, called
+at line 790) drops the in-session labels of an increment handed back as `todo`,
+pinned by driver mode `w12`.
+
+The review was again taken against `origin/main` (eb13462), the default branch
+tip; the local `main` ref is stale at 57e5fd4, and diffing against it
+additionally shows six issue directories that are already on `origin/main`. The
+real diff is 20 files.
+
+### Finding 1 — a decompose worked a second time has its new cut thrown away, so the run keeps working the cut the human's answer replaced
+
+**Claim.** Both scripts prefer the increments of the state they loaded at the
+start of the run over the increments the Decompose step returns, unconditionally
+— including when Decompose was actually dispatched in this session rather than
+replayed. So the planner rewrites `backlog.json` with a new cut, the script
+ignores it, and the whole run is worked against the superseded one. That is the
+exact re-entry the human's recorded answer is supposed to change, and it changes
+nothing.
+
+**Reproduction.** State: `<issueDir>/backlog.json` written by a first run whose
+planner cut the issue into `i1` and `i2` and then ended the run with a question —
+`increments: [i1 (todo), i2 (todo)]`, `run.steps: [{ label: "decompose", …,
+return: { increments: [i1, i2], questions: ["Is the CLI in scope?"], … } }]`.
+This is the state criterion 10 asks that run to leave behind, and the planner
+must have written the file before it could `record` at all (`backlog.mjs`
+`loadBacklog`, line 57, exits 1 when the file is absent). The human answers "the
+CLI is out of scope" under `## Decisions` in `issue.md` and starts
+`uroboros:agile-loop` on the same directory.
+
+What happens: `workflows/agile-loop.js` lines 510-521 put `decompose` into
+`carriedQuestions` and not into `recorded`, so `step()` (lines 531-540)
+dispatches the planner again — correct, and what round 2's fix bought. The
+planner reads the answer, cuts again to `[i1]` alone, writes it with `init`
+(which drops `i2` from the file, `backlog.mjs` lines 117-119) and returns
+`increments: [i1]`. Lines 587-590 then read
+
+    let increments = saved && Array.isArray(saved.increments) && saved.increments.length
+      ? saved.increments
+      : (backlog && backlog.increments) || []
+
+and `saved.increments` is the pre-answer `[i1, i2]`, so the fresh return in
+`backlog` is discarded. The run works `i2` — the increment the human just ruled
+out — with the goal and criteria of the superseded cut in every `scope()` block
+(lines 457-474). When the researcher for it obeys its `recordStep` line and runs
+`record <dir>/backlog.json i2 research:i2.0 <file>`, `backlog.mjs` line 142
+fails with `no increment "i2" in <path>` and exits 1, so no step of that
+increment is ever recorded and the durable state stops advancing for the rest of
+the run. Where the planner instead keeps `i2` in the file as `dropped`, the
+`record` calls succeed and the run works a dropped increment to completion; the
+discarding of the fresh cut is the same either way.
+
+`workflows/loop.js` lines 543-546 are the identical expression and the identical
+path: a Decompose worked again there returns a re-titled, re-scoped single
+increment and the run uses the stale one.
+
+The same branch is taken with no question involved: a session that died between
+the planner's `init` and its `record` leaves `increments` populated and
+`run.steps` empty, so the repeated Decompose's return is discarded too — the
+step the criterion says "is lost and repeats" repeats without effect.
+
+No driver mode covers it. `contextFor` (`test-repo.sh` lines 437-478) has no
+fixture in which `backlog.json` holds increments while `decompose` is unrecorded
+or carried: `w2`'s and `w9`'s backlogs both carry a recorded `decompose`, and
+`w1`, `w4`-`w8` and `w10`-`w12` all start from `exists: false`.
+
+**Criterion.** "A fresh session can rebuild the next prompt from `backlog.json`
+alone" — here the next prompt is rebuilt from a cut `backlog.json` no longer
+holds. Also criterion 10, "the session that picks the run back up finds the
+question in the state it resumes from … and the resuming [agent] reads it
+there": the answer reaches the planner, and the script then drops what the
+planner did with it.
+
+### Beyond the criteria
+
+Traced, and nothing further found:
+
+- **Callers of what was touched.** `rulebook.md` steps 4-5, `README.md` (both
+  diagrams and the prose), `skills/retro/SKILL.md` and `.claude/rules/agents.md`
+  all move to the structured return and `backlog.json`; the two greps in
+  `test-repo.sh` lines 136-159 hold the file names and the word "handoff" out of
+  every prompt-bearing file, and both pass.
+- **The two new driver modes against their own scripts.** `w11` runs on both
+  workflows and asserts the closing planner's question in `blockedOnHuman`, in
+  the log the human reads, and named with its step label; `w12` runs on
+  `agile-loop.js` alone, which is right — `loop.js` never re-cuts — and it
+  asserts `isAgile`, so it cannot be pointed at the wrong script by accident.
+- **`forgetSteps` and the resume together.** It deletes only labels whose part
+  after the first `:` is the id or starts with `<id>.`, so `load-state`,
+  `decompose` and `publish` survive it; a fresh session needs no equivalent,
+  because `close` already emptied that increment's steps in the file.
+- **The reviewer's independence.** Its page still forbids reading
+  `backlog.json`, excludes it from the diff it judges, and the recorder prints
+  one confirmation line and nothing of the file. Unchanged this round.
+- **Old issue directories.** Nothing reads or migrates them, which is what the
+  out-of-scope section asks.
+
+Two facts, neither a finding:
+
+- `backlog.mjs` line 131 names "the publish" among the steps that land in
+  `run.steps`, but neither workflow records the publish step. A stale word in a
+  code comment, with no behaviour behind it.
+- `test.sh` and `test-repo.sh` are still not executable in this checkout
+  (`-rw-r--r--`), so `./test.sh` exits 126 while `bash test.sh` exits 0. That
+  predates the change and is unchanged by it.
