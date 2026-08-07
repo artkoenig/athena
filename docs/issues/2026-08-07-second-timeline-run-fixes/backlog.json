@@ -265,6 +265,16 @@
             "questions": [],
             "summary": "Qualified README.md:83-87 so the researcher-decides-testing and test-author-sees-only-the-plan clauses name the coverage-only round as the exception where the reviewer's findings replace the test plan and the test-author reads the behaviour it guards."
           }
+        },
+        {
+          "label": "review:coverage-only-round.2",
+          "at": "2026-08-07T20:37:19.325Z",
+          "return": {
+            "findings": [],
+            "reason": "",
+            "questions": [],
+            "summary": "Accepted. `bash test-repo.sh` (71 cases, exit 0) and `./test.sh` (all 6 suites, exit 0) both green, nothing skipped. All seven criteria are met and each has a case that would go red: `kind` is a required enum ('coverage-gap'|'defect') on every finding in both workflows' VERDICT schema, so the classification is a value the reviewer sets rather than prose the workflow greps; `isCoverageOnlyRound` routes a round whose findings are all coverage gaps to test-author and reviewer alone (driver mode w17 pins the exact label sequence load-state, decompose, research:i1.0, tests:i1.0, implement:i1.0, review:i1.0, tests:i1.1, review:i1.1, close, publish, and asserts the reviewer is still handed no finding it wrote); w18 pins the full four-agent chain for a mixed coverage-gap/defect round; w19 pins the conflict edge where a coverage gap also marked fix:'direct' still goes to the test-author, matching the new `f.kind !== 'coverage-gap'` guard in `isDirectFixRound`; the 'correcting coverage only' log() is asserted present in w17/w19 and absent in w18 and in w10, whose fixture carries no `kind` at all and so exercises the missing-field-is-a-defect fallback; `backlog.mjs record` stores the return verbatim and the new backlog.test.mjs case asserts both findings' `kind` survive under the round's label, which also matters for resume, since the workflow re-derives `coverageOnly` from the verdict it replays out of the recorded step; and agents/reviewer.md now states the rule (correcting it touches test files alone, and anything you hesitate over is a defect) in the same words as the schema description. Blast radius traced and nothing found: `findingsBlock` is unchanged, so agents/researcher.md's enumeration of what a correction round hands it (claim, reproduction, criterion) stays accurate; no other file consumes `verdict.findings`; both workflows' coverage branches compose the same blocks as their sibling branches (agile-loop keeps `scope()`), and the README and agents/test-author.md were updated so no page describes the chain in a way this change made false. Two observations that need no round: agents/test-author.md's frontmatter description still ends 'its caller runs the implementer next', which is not true of the coverage-only round its own body now describes; and README.md line 79 starts a paragraph mid-wrap ('A remark that leaves every criterion met and'), leaving a ragged short first line."
+          }
         }
       ]
     },
