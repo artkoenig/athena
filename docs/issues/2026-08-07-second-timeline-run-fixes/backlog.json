@@ -256,6 +256,23 @@
             "questions": [],
             "summary": "Added bin/check-commit-signing (mode 755), which skips with exit 0 when commit.gpgsign is not true and otherwise makes a signed commit in a throwaway repository seeded with the checkout's effective signing config, failing with exit 1 and a block naming commit.gpgsign, gpg.format, user.signingkey, gpg.program, gpg.ssh.program and git's own output; registered it and test-signing.sh as the first two run entries in test.sh; replaced the stale suite count in README.md's Tests section with what the command covers."
           }
+        },
+        {
+          "label": "review:signing-check.0",
+          "at": "2026-08-07T23:32:09.501Z",
+          "return": {
+            "findings": [
+              {
+                "claim": "test-signing.sh is not hermetic against the checkout's own git config: a repository-local commit.gpgsign makes three of its cases fail, so ./test.sh goes red for an environment setting rather than for a check that stopped distinguishing its two outcomes.",
+                "reproduction": "Clone the checkout to a path outside it, run `git config commit.gpgsign true` in the clone (repository-local scope, the spelling `git config commit.gpgsign true` gives by default), then run `bash test-signing.sh` in the clone: the cases 'an environment without commit.gpgsign passes the check', 'the skipped check says why it skipped' and 'a signing key with commit.gpgsign false is not an environment the check fails' all report FAIL and the suite exits 1 (verified in a sandbox clone: FAIL: 3 of 16 cases). Cause: run_checker at test-signing.sh:56-62 neutralises only global and system config through GIT_CONFIG_GLOBAL and GIT_CONFIG_SYSTEM, while bin/check-commit-signing:36 decides on `git -C \"$root\" config --get --bool commit.gpgsign` read from the checkout itself, and no environment variable overrides repository-local config.",
+                "criterion": "Both of those outcomes are exercised by the suite itself rather than argued in prose, so the check goes red when it stops distinguishing them or stops catching a configured-but-failing signer.",
+                "fix": "needs-plan"
+              }
+            ],
+            "reason": "The suite that proves the signing check tells its two outcomes apart still reads the checkout's own repository-local git config, so on a machine where commit signing is switched on per repository three of its cases fail and ./test.sh goes red although the check itself is working.",
+            "questions": [],
+            "summary": "Ran the two listed commands in one call from the repository root: `bash test-signing.sh` — 16 cases covering the skip path, the configured-but-failing path, the configured-and-working path and the test.sh wiring, exit 0; `bash test.sh` — all 8 suites including the new 'commit signing in this environment' (printed 'OK: a signed commit succeeded in a throwaway repository', this container has commit.gpgsign=true with gpg.format=ssh and gpg.ssh.program=/tmp/code-sign in global config) and 'the commit-signing check itself', exit 0. Against the criteria: bin/check-commit-signing makes a real signed commit in a throwaway repository, keys the skip on commit.gpgsign alone, prints FAIL with commit.gpgsign, gpg.format, user.signingkey, gpg.program, gpg.ssh.program and git's own output on the failing path, and cleans up through an EXIT trap; test-signing.sh exercises the skip, the configured-but-failing and the configured-and-working outcomes with fake signer programs, and pins TMPDIR emptiness on all three paths plus a process check and a before/after `git status --porcelain` of the repository under test on the failing path. One verified defect, filed above: the suite's fabricated environment does not cover repository-local config, so its outcome depends on the checkout it runs in. Blast radius otherwise: nothing found — the new files are tracked so a worktree gets them, .worktreeinclude covers gitignored files only and is unaffected, no other page states a suite count, and the historical issue documents that say 'five suites' are frozen records of past runs. Two observations that need no correction: the README Tests sentence enumerates 'that commit signing works here, the repository's own rules, what a parallel run in a worktree needs, the backlog recorder, and the three tools' and omits the commit-signing check's own suite, while its 'every suite, one command' claim stays true; and the 'git reported success but the commit carries no signature' branch at bin/check-commit-signing:95-98 has no case, which looks unreachable through git rather than untested on purpose."
+          }
         }
       ]
     },
