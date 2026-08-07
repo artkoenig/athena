@@ -307,8 +307,18 @@ const VERDICT = {
             type: 'string',
             description: 'The acceptance criterion it violates, or "none".',
           },
+          fix: {
+            type: 'string',
+            enum: ['direct', 'needs-plan'],
+            description:
+              'direct: the reproduction already names the file, the line and the right ' +
+              'result, so there is nothing left to plan — a typo, a stale reference, a ' +
+              'wrong number in prose. needs-plan: everything else, and everything you ' +
+              'hesitate over. A round in which every finding is direct skips research and ' +
+              'tests and goes straight to the fix.',
+          },
         },
-        required: ['claim', 'reproduction', 'criterion'],
+        required: ['claim', 'reproduction', 'criterion', 'fix'],
         additionalProperties: false,
       },
     },
@@ -400,8 +410,12 @@ function answeredBlock(label) {
 // and nothing else about the change; the implementer the plan, the map, the
 // environment, the checks and the tests that now exist; the reviewer the checks
 // alone.
-function casesBlock(tests) {
-  if (!tests) return 'No test was written for this round — the plan asked for none.\n'
+function casesBlock(tests, directFix) {
+  if (!tests) {
+    return directFix
+      ? 'No test was written for this round — a direct-fix round writes none.\n'
+      : 'No test was written for this round — the plan asked for none.\n'
+  }
   const cases = Array.isArray(tests.cases) ? tests.cases : []
   const open = Array.isArray(tests.openQuestions) ? tests.openQuestions : []
   return (
@@ -436,6 +450,41 @@ function findingsBlock(verdict, round) {
     `Plan the corrections. Set needsTests true only if a finding needs a new failing test ` +
     `first, and then write that test's whole work order into testPlan — nothing from an ` +
     `earlier round carries over, the list of commands that count included.\n`
+  )
+}
+
+// A correction round whose findings are all `direct` is worked without a plan.
+// The reproduction of such a finding already names the file, the line and the
+// right result, so a researcher would spend a dispatch restating it and a test
+// would have nothing to catch — a wrong word in a document is the case this
+// exists for. What it does not skip is the review: the fix lands in the diff
+// the next round judges, which is what keeps this cheap rather than unsafe, and
+// it is also why the reviewer never makes the fix itself.
+//
+// A finding with no `fix` at all counts as `needs-plan`: the fast path is
+// something a verdict opts into, never something a missing field falls into.
+function isDirectFixRound(verdict) {
+  const findings = (verdict && Array.isArray(verdict.findings) && verdict.findings) || []
+  return findings.length > 0 && findings.every((f) => f && f.fix === 'direct')
+}
+
+function directFixBlock(verdict, round) {
+  const findings = (verdict && Array.isArray(verdict.findings) && verdict.findings) || []
+  return (
+    `This is correction loop ${round} of ${MAX_CORRECTIONS} for this increment, and it is a ` +
+    `direct-fix round: every finding names the file, the line and the right result, so ` +
+    `nobody planned this round and nobody wrote a test for it. Your brief is the findings ` +
+    `themselves:\n` +
+    findings
+      .map(
+        (f, i) =>
+          `  ${i + 1}. ${f.claim}\n     Reproduction: ${f.reproduction}\n     Criterion: ${f.criterion}`,
+      )
+      .join('\n') +
+    '\n' +
+    `Make exactly these corrections and nothing else. If one of them turns out to need a ` +
+    `decision — anything beyond the wording, the reference or the value the reproduction ` +
+    `names — do not build it: report it as a blocker and leave the rest of the list done.\n`
   )
 }
 
@@ -680,44 +729,57 @@ if (!blockedOnHuman.length) {
     let verdict = null
     for (let round = 0; round <= MAX_CORRECTIONS; round++) {
       const previousTests = tests
-      const researchLabel = `research:${task.id}.${round}`
-      plan = await step(researchLabel, 'Research', () =>
-        agent(
-          `Issue directory: ${dir}\n` +
-            answeredBlock(researchLabel) +
-            scope(task, increments, n) +
-            (round === 0 ? '' : findingsBlock(verdict, round)) +
-            openQuestionsBlock(previousTests) +
-            recordStep(task.id, researchLabel) +
-            noDispatch,
-          { agentType: 'uroboros:researcher', phase: 'Research', label: researchLabel, schema: PLAN },
-        ),
-      )
-      if (asksTheHuman(researchLabel, plan)) break
-      log(
-        `Increment ${n} round ${round}: tests needed: ${plan.needsTests}; ` +
-          `checks: ${plan.checks && plan.checks.length ? plan.checks.join(', ') : 'none'}`,
-      )
+      // Decided before anything is dispatched, and only from the verdict of the
+      // round before: round 0 is never a direct-fix round, so `plan` is always
+      // the one an earlier round produced by the time this is true.
+      const directFix = round > 0 && isDirectFixRound(verdict)
 
-      tests = null
-      if (plan.needsTests) {
-        const testsLabel = `tests:${task.id}.${round}`
-        tests = await step(testsLabel, 'Tests', () =>
+      if (directFix) {
+        log(
+          `Increment ${n} round ${round}: every finding is a direct fix — research and tests ` +
+            `skipped, checks carried over from round ${round - 1}.`,
+        )
+        tests = null
+      } else {
+        const researchLabel = `research:${task.id}.${round}`
+        plan = await step(researchLabel, 'Research', () =>
           agent(
             `Issue directory: ${dir}\n` +
-              answeredBlock(testsLabel) +
+              answeredBlock(researchLabel) +
               scope(task, increments, n) +
-              `Your work order is the test plan below, and it is the whole of what you are ` +
-              `given about the change:\n\n${plan.testPlan}\n\n` +
-              (round === 0
-                ? ''
-                : `The reviewer's reproduction spec is the criterion for this round.\n`) +
-              recordStep(task.id, testsLabel) +
+              (round === 0 ? '' : findingsBlock(verdict, round)) +
+              openQuestionsBlock(previousTests) +
+              recordStep(task.id, researchLabel) +
               noDispatch,
-            { agentType: 'uroboros:test-author', phase: 'Tests', label: testsLabel, schema: TESTS },
+            { agentType: 'uroboros:researcher', phase: 'Research', label: researchLabel, schema: PLAN },
           ),
         )
-        if (asksTheHuman(testsLabel, tests)) break
+        if (asksTheHuman(researchLabel, plan)) break
+        log(
+          `Increment ${n} round ${round}: tests needed: ${plan.needsTests}; ` +
+            `checks: ${plan.checks && plan.checks.length ? plan.checks.join(', ') : 'none'}`,
+        )
+
+        tests = null
+        if (plan.needsTests) {
+          const testsLabel = `tests:${task.id}.${round}`
+          tests = await step(testsLabel, 'Tests', () =>
+            agent(
+              `Issue directory: ${dir}\n` +
+                answeredBlock(testsLabel) +
+                scope(task, increments, n) +
+                `Your work order is the test plan below, and it is the whole of what you are ` +
+                `given about the change:\n\n${plan.testPlan}\n\n` +
+                (round === 0
+                  ? ''
+                  : `The reviewer's reproduction spec is the criterion for this round.\n`) +
+                recordStep(task.id, testsLabel) +
+                noDispatch,
+              { agentType: 'uroboros:test-author', phase: 'Tests', label: testsLabel, schema: TESTS },
+            ),
+          )
+          if (asksTheHuman(testsLabel, tests)) break
+        }
       }
 
       const buildLabel = `implement:${task.id}.${round}`
@@ -725,15 +787,25 @@ if (!blockedOnHuman.length) {
         agent(
           `Issue directory: ${dir}\n` +
             answeredBlock(buildLabel) +
-            `Your brief is the plan below.\n\n` +
-            `## Implementation plan\n${plan.plan}\n\n` +
-            `## Module map\n${plan.moduleMap}\n\n` +
-            `## Environment\n${plan.environment}\n\n` +
-            casesBlock(tests) +
+            (directFix
+              ? directFixBlock(verdict, round)
+              : `Your brief is the plan below.\n\n` +
+                `## Implementation plan\n${plan.plan}\n\n` +
+                `## Module map\n${plan.moduleMap}\n\n` +
+                `## Environment\n${plan.environment}\n\n`) +
+            casesBlock(tests, directFix) +
+            // No researcher ran this round, so the list of commands that counts
+            // is the one the last round closed. It is the same code being
+            // judged.
             checkList(plan.checks) +
             recordStep(task.id, buildLabel) +
             noDispatch,
-          { agentType: 'uroboros:implementer', phase: 'Implement', label: buildLabel, schema: BUILD },
+          Object.assign(
+            { agentType: 'uroboros:implementer', phase: 'Implement', label: buildLabel, schema: BUILD },
+            // A fix whose whole brief is "this line, this word" has nothing to
+            // reason about, and the round exists to be cheap.
+            directFix ? { effort: 'low' } : {},
+          ),
         ),
       )
       if (asksTheHuman(buildLabel, build)) break

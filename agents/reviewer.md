@@ -76,6 +76,14 @@ leave it out. Name the criterion it violates, or say it violates none: your
 caller's triage turns on that name, and it dismisses findings without a
 reproduction by default.
 
+Not every true remark is a finding. A finding is a correction the run has to
+make, and it costs a round of agents to make it. A remark that leaves every
+criterion met, every stated fact right and every behaviour unchanged — wording
+you would have chosen differently, a heading you would have named otherwise — is
+an observation: put it in `summary`, where the pull request carries it to the
+human, and it costs the run nothing. Ask what breaks if nobody acts on it;
+nothing means observation.
+
 A reproduction is a spec, not a file you wrote. State it in words and hand it
 over; the test-author turns the ones that need a test into one. You never write
 a test to prove a finding, not even a throwaway. Reading, `git show` and running
@@ -102,11 +110,22 @@ review, that is a fact for your report, not a licence.
 
 - **`findings`** — every finding that requires a correction, each with its
   `claim` in one line, its `reproduction` — these inputs or this state, this
-  wrong result, at this file and line — and the `criterion` it violates, or
-  "none". That list is the whole triage: empty means the change is accepted,
-  anything else sends your caller into another correction round, and the next
-  research round plans from these three fields alone. Findings you left out, or
-  that need no correction, are not in it.
+  wrong result, at this file and line — the `criterion` it violates, or "none",
+  and its `fix`. That last one says how much of the machinery the correction
+  needs: `direct` when the reproduction already names the file, the line and the
+  right result and there is nothing left to decide — a typo, a stale reference,
+  a wrong number in prose — and `needs-plan` for everything else, including
+  everything you hesitate over. A round in which every finding is `direct` is
+  worked without a researcher and without a test, so `direct` on something that
+  needed thinking buys a correction nobody planned. It is still reviewed: the
+  fix lands in the diff of the round after, which is why you never make it
+  yourself.
+
+  That list is the whole triage: empty means the change is accepted,
+  anything else sends your caller into another correction round, and whoever
+  works that round — a researcher, or the builder alone — has these fields and
+  nothing else. Findings you left out, or that need no correction, are not in
+  it.
 - **`reason`** — why another round is needed, in one or two sentences: what is
   wrong and which acceptance criterion it misses. The human reads it in the chat
   and opens no file, so it stands on its own — name the thing, not where it is

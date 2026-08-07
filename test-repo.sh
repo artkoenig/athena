@@ -318,6 +318,8 @@ const DISJOINT_MARKERS = [
   'MARKER-STALE-CUT',
   'MARKER-FRESH-CUT',
   'MARKER-CUT-QUESTION',
+  'MARKER-DIRECT-CLAIM',
+  'MARKER-DIRECT-REPRODUCTION',
 ];
 
 const planReturn = {
@@ -365,6 +367,23 @@ const verdictReturnWithFinding = {
     claim: 'MARKER-FINDING-CLAIM',
     reproduction: 'MARKER-FINDING-REPRODUCTION',
     criterion: 'MARKER-FINDING-CRITERION',
+    fix: 'needs-plan',
+  }],
+  reason: 'MARKER-VERDICT-REASON',
+  questions: [],
+  summary: 'verdict summary',
+};
+
+// w16's fixture: a review whose every finding is a direct fix — the wording of
+// a document, with the file, the line and the right word in the reproduction.
+// Such a round is worked without a researcher and without a test, so the
+// implementer is dispatched straight off this verdict.
+const verdictReturnWithDirectFinding = {
+  findings: [{
+    claim: 'MARKER-DIRECT-CLAIM',
+    reproduction: 'MARKER-DIRECT-REPRODUCTION',
+    criterion: 'none',
+    fix: 'direct',
   }],
   reason: 'MARKER-VERDICT-REASON',
   questions: [],
@@ -543,6 +562,8 @@ function contextFor(m) {
       return { stateReturn: { exists: true, backlogJson: JSON.stringify(recutBacklog(false), null, 2) + '\n', summary: '' }, decomposeReturn: decomposeReturnRecut, researchReturn: planReturn };
     case 'w15':
       return { stateReturn: { exists: true, backlogJson: JSON.stringify(laterIncrementBacklog(), null, 2) + '\n', summary: '' }, decomposeReturn: decomposeReturnTwo, researchReturn: planReturn };
+    case 'w16':
+      return { stateReturn: { exists: false, backlogJson: '', summary: '' }, decomposeReturn: decomposeReturnOne, researchReturn: planReturn, verdictFor: (label) => (label === 'review:i1.0' ? verdictReturnWithDirectFinding : verdictReturnClean) };
     default:
       throw new Error('unknown mode ' + m);
   }
@@ -774,6 +795,31 @@ async function main() {
     assertTrue(!!result && Array.isArray(result.increments) && result.increments.length === 2
       && JSON.stringify(result.increments).includes('"i1"'),
       'the increment the earlier session closed has no line in result.increments');
+  } else if (mode === 'w16') {
+    // The direct-fix round: a review whose findings all need no plan is worked
+    // by the implementer alone, off the findings themselves, and is reviewed
+    // afterwards like any other. Without that path the same wrong word in a
+    // document costs a researcher, and with it skipping the review as well it
+    // would ship unread.
+    const closeLabel = isAgile ? 'replan:i1' : 'close:i1';
+    assertEqualArrays(labels,
+      ['load-state', 'decompose', 'research:i1.0', 'tests:i1.0', 'implement:i1.0', 'review:i1.0',
+       'implement:i1.1', 'review:i1.1', closeLabel, 'publish'],
+      'a review whose findings are all direct fixes did not skip exactly the researcher and the test-author');
+    const fixCall = calls.find((c) => c.label === 'implement:i1.1');
+    for (const marker of ['MARKER-DIRECT-CLAIM', 'MARKER-DIRECT-REPRODUCTION']) {
+      assertTrue(!!fixCall && fixCall.prompt.includes(marker),
+        "the direct-fix round's implementer prompt does not carry " + marker);
+    }
+    assertTrue(!!fixCall && fixCall.prompt.includes('CHECK-MARKER'),
+      "the direct-fix round's implementer prompt does not carry the checks the round before closed");
+    assertTrue(!!fixCall && !fixCall.prompt.includes(TESTPLAN_MARKER),
+      "the direct-fix round's implementer prompt carries a test plan");
+    const reviewCall = calls.find((c) => c.label === 'review:i1.1');
+    assertTrue(!!reviewCall && reviewCall.prompt.includes('CHECK-MARKER'),
+      'the review after a direct-fix round was handed no checks');
+    assertTrue(!!reviewCall && !reviewCall.prompt.includes('MARKER-DIRECT-CLAIM'),
+      "the review after a direct-fix round was handed the finding it wrote, and is no longer independent");
   } else {
     throw new Error('unknown mode ' + mode);
   }
@@ -819,6 +865,7 @@ for wf in "$root/workflows/loop.js" "$root/workflows/agile-loop.js"; do
   run_driver "$wf" w11 "$wf_name: a question from the closing planner ends the run and reaches the human"
   run_driver "$wf" w13 "$wf_name: a Decompose worked again after the human's answer has its new cut worked, not the one the state file still held"
   run_driver "$wf" w14 "$wf_name: a Decompose worked again after a session died before recording it has its new cut worked"
+  run_driver "$wf" w16 "$wf_name: a correction round whose findings are all direct fixes skips the researcher and the test-author, and is still reviewed"
 done
 
 # Round 3, finding 2: only the incremental loop re-cuts, so an increment
