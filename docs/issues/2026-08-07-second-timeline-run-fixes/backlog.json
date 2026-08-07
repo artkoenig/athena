@@ -48,6 +48,59 @@
             ],
             "questions": []
           }
+        },
+        {
+          "label": "tests:ui-harness-null.0",
+          "at": "2026-08-07T21:04:54.363Z",
+          "return": {
+            "summary": "Wrote tools/argus-ui/test/app.test.mjs with a DOM-faking harness (installFakes/withFakes/withPage) whose getElementById deliberately still conjures-and-caches any id (the historical defect), plus the six planned cases; node --test shows 4 of the 6 correctly red on that defect and the other 2 (the anchor and the real lane-click case) green since they never touch a missing id, and the full suite reports 240 cases (236 pass, 4 fail), the 234 pre-existing cases in the six untouched files all still passing.",
+            "cases": [
+              {
+                "case": "the fake document resolves only the ids the rendered markup carries",
+                "file": "tools/argus-ui/test/app.test.mjs",
+                "testName": "the fake document resolves only the ids the rendered markup carries",
+                "expected": "getElementById returns non-null for detail/stat-strip/session-list/setup-modal-body (present in the shell) and strictly null for lane-panel/timeline-scrub/timeline-cursor-time/no-such-container-anywhere (not yet rendered)",
+                "got": "AssertionError: 'the shell has not rendered #lane-panel yet — a real browser would have got null here' — actual was a conjured element object, expected null (installFakes' el(id) still conjures and caches any id, per the file's own header comment marking the defect)"
+              },
+              {
+                "case": "an id resolves to the same element for as long as it is in the markup",
+                "file": "tools/argus-ui/test/app.test.mjs",
+                "testName": "an id resolves to the same element for as long as it is in the markup",
+                "expected": "getElementById('detail') is reference-identical across two calls, and getElementById('empty-state') becomes null once #detail's innerHTML is overwritten and no longer carries it",
+                "got": "AssertionError: 'the id was inside the region just replaced — a real browser would have got null here, not a cached leftover' — actual was a freshly conjured element, expected null; the identity half of the case (not shown as a separate assert) already passes since caching-by-id itself is not the bug"
+              },
+              {
+                "case": "booting the page adds the ids it renders and drops the ids it overwrote",
+                "file": "tools/argus-ui/test/app.test.mjs",
+                "testName": "booting the page adds the ids it renders and drops the ids it overwrote",
+                "expected": "after withPage boots the real app.js, lane-panel/timeline-scrub are non-null, empty-state/setup-env are null (overwritten by renderDetail), and detail stays non-null",
+                "got": "AssertionError: '#empty-state sat inside #detail and was overwritten by renderDetail — a real browser would have got null here' — actual was a conjured element instead of null; the lane-panel/timeline-scrub/detail non-null assertions already pass since those ids are genuinely present"
+              },
+              {
+                "case": "the page boots against a faked collector and composes its detail markup",
+                "file": "tools/argus-ui/test/app.test.mjs",
+                "testName": "the page boots against a faked collector and composes its detail markup",
+                "expected": "#detail carries the timeline panel and #lane-panel, #stat-strip carries stat-value, #session-list carries session-card, all six boot requests were made, and page.errors is empty",
+                "got": "Passes today — this anchor case exercises only ids that are genuinely rendered, so it does not depend on the getElementById fix; it establishes the positive baseline the guard case (below) needs to be meaningful"
+              },
+              {
+                "case": "selecting a lane writes the context panel into the container the timeline rendered",
+                "file": "tools/argus-ui/test/app.test.mjs",
+                "testName": "selecting a lane writes the context panel into the container the timeline rendered",
+                "expected": "firing the recorded click on a [data-lane] row selects the lane, fetches /api/content/at through the page's own code, and assertPanelRendered(page) passes",
+                "got": "Passes today — #lane-panel is genuinely present in this case (nothing is dropped), so it does not exercise the getElementById defect either; it is the pair the guard case (below) diffs against"
+              },
+              {
+                "case": "removing the panel container from the rendered markup turns the panel case red",
+                "file": "tools/argus-ui/test/app.test.mjs",
+                "testName": "removing the panel container from the rendered markup turns the panel case red",
+                "expected": "with dropIds: ['lane-panel'] stripping <div id=\"lane-panel\"></div> from what renderDetail writes, assertPanelRendered(page) must throw an AssertionError naming lane-panel, while #detail's own markup and page.errors stay untouched",
+                "got": "AssertionError: 'Missing expected exception (AssertionError): with the old conjuring harness this same assertion stayed green after #lane-panel was removed — that is the trap this file exists to close' — assertPanelRendered did not throw, because the conjuring el() still hands renderLanePanel a live container even though lane-panel was stripped from the markup, so the panel gets written into a phantom element and the guard stays green exactly as the historical bug did"
+              }
+            ],
+            "openQuestions": [],
+            "questions": []
+          }
         }
       ]
     },
