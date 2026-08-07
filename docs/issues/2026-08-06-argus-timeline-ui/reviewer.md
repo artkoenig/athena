@@ -2190,3 +2190,145 @@ Nothing else found that breaks.
   never fetched and never appear under any lane. This is the increment-4 poll
   that already fed the activity marks; increment 7 changed neither the limit nor
   the watermark rule, so it is not this increment's to fix.
+
+## Increment 7 — Round 1
+
+**Status: 0 findings. The increment is accepted, and with it the issue.**
+Selecting a lane now paints, under that lane's context, the tools that agent had
+called by the cursor's moment, each row with the tool's name and the parameters
+of that call. Both listed commands are green, and the increment-6 pin that the
+previous round found disarmed is armed again — I re-ran the mutation myself.
+
+### Commands run
+
+- `node --test tools/argus-ui/test/page.test.mjs` — 45 cases, 45 pass, 0 fail,
+  0 cancelled, 0 skipped, 0 todo, exit 0.
+- `bash test.sh` — 5 suites (the repository itself, parallel runs: worktrees,
+  `tools/argus`, `tools/argus-ui`, `tools/log-parser`), `PASS: all 5 suites`,
+  exit 0. Nothing skipped or excluded; the transcript-parser suite reported 23
+  pass, 0 fail in the tail I captured.
+- Four extra runs in a `git worktree` sandbox on a temporary path outside the
+  checkout, one mutation each, to turn "the pins are armed" from a reading into
+  a fact (see below). The worktree was removed; `git worktree list` names only
+  the checkout and `git status --porcelain` is empty. The checkout under review
+  was never modified and I wrote no test.
+
+### Criterion 1 — the selected lane's tools up to that moment, with name and parameters
+
+Met.
+
+- **Same click, same moment, same lane.** `renderLanePanel`
+  (`tools/argus-ui/public/app.js:936-953`) computes the lane view once and
+  assigns `renderContextPanel(…) + renderToolPanel(…)` into `#lane-panel` in one
+  statement, so no repaint can paint one panel without the other. Every path
+  that moves the selection or the cursor goes through it: the lane click
+  (`app.js:1156-1163`), the scrub settling (`scrubTo` → `scheduleLaneContext` →
+  `renderLanePanel`, `app.js:1099-1103`, `:957-963`), the return to live
+  (`:1147-1154`) and the periodic refresh (`renderDetail` → `renderLanePanel`,
+  `:209`).
+- **Per agent.** `laneToolInput` (`tools/argus-ui/public/tools.js:31-46`) keeps a
+  call whose `spanId` maps to the selected agent lane and drops everything else,
+  with the main lane taking every call no agent span owns. The map is
+  `spanLaneKeys` (`timeline.js:88-95`), the same one `buildDensity` counts the
+  lane's tool badge with (`timeline.js:282-291`), so badge and rows are computed
+  from one rule.
+- **Per time.** The moment is `resolveCursor(cursor, view).timeMs` — the same
+  resolution `laneContentRequest` asks the context with (`context.js:167-172`) —
+  and the filter is `timeMs <= atMs`, so a parked cursor lists only what had
+  happened by then and a live cursor lists everything recorded.
+- **Name and parameters.** `toolCallOf` (`timeline.js:334-352`) reads
+  `attrs.tool_name` and `attrs.tool_input ?? attrs.tool_parameters` off the
+  `claude_code.tool_result` event. Those are the attribute names the collector
+  itself documents and reads (`tools/argus/src/claude.mjs:52-68`), and
+  `/api/events` ships that event's `attrs` untouched because
+  `claude_code.tool_result` is not in `CONTENT_EVENTS`
+  (`tools/argus/src/server.mjs:240-244`) — so the panel's source of truth is the
+  one the collector already serves. Each row prints the clock, the tool name in
+  `.ctx-label`, a one-line preview, the whole character count, and expands to the
+  pretty-printed parameters.
+- **Nothing selected, nothing drawn.** `renderToolPanel` returns `''` with no
+  lane, and a lane with no call by that moment keeps its panel with an explicit
+  placeholder, so "nothing yet" reads differently from "nothing selected".
+- **Escaped.** Every interpolation goes through `esc`, and the markup carries no
+  `data-lane` attribute, which would otherwise make each click inside the panel
+  toggle the lane selection (`app.js:1156`).
+
+### Criterion 2 — `./test.sh` is green
+
+Met: `bash test.sh`, 5 suites, `PASS: all 5 suites`, exit 0.
+
+### The tests against the intent
+
+Every part of the criterion has a case that goes red when the behaviour breaks,
+and I confirmed the sharpest ones by mutation rather than by reading.
+
+- Attribution: `tools/argus-ui/test/tools.test.mjs:28-49` asserts both
+  directions — the subagent's list must not show main traffic and the main list
+  must not show the subagent's call, with the span-less call landing on main.
+- The moment, including its edges: `:51-100` pins the call at exactly the cursor
+  as included, a moment before the first call as empty, a moment past the window
+  as clamped, and live vs parked as different lists.
+- Order: `:102-117`, newest first, with the tie on equal moments resolved by
+  seq.
+- Name per row: `:149-169`, over a fixture of three different tools, so one name
+  printed for all rows fails.
+- Parameters per row: `:171-189`, with the cross-check that the `Bash` row does
+  not carry the `Read` row's path.
+- Size and preview per row: `:191-218`, with the fixture asserting the sizes
+  differ so a single size printed everywhere fails.
+- The projection itself: `test/timeline.test.mjs:597-650` pins the whole row
+  shape, the pre-2.1 attribute fallback and its precedence, non-JSON parameters
+  kept verbatim, a nameless call, and the 2000-character cut reporting the full
+  size.
+- The page wiring: `test/page.test.mjs:591-632` pins the imports, the single
+  `container.innerHTML = renderContextPanel(…) + renderToolPanel(…)` assignment
+  and each argument of `laneToolInput`, reading each call's arguments by brace
+  matching so neither panel's arguments can satisfy the other's case. This is
+  source-level pinning, the level increments 5 and 6 established for the page
+  glue in a project that has no DOM and takes no dependency.
+
+Mutations run in the sandbox, all four caught:
+
+| Mutation | `page.test.mjs` | `bash test.sh` |
+| --- | --- | --- |
+| `lanePanelInput({ view, key: state.selectedLane` → `key: null` (`app.js:942`) | 44 pass, 1 fail, exit 1 | FAIL, exit 1 |
+| `calls: state.toolMarks` → `calls: []` (`app.js:948`) | 44 pass, 1 fail, exit 1 | FAIL, exit 1 |
+| `call.timeMs <= atMs` → `true` (`tools.js:41`) | 45 pass, exit 0 | FAIL, exit 1 |
+| the row's `${esc(call.name)}` → a fixed `Bash` (`tools.js:83`) | 45 pass, exit 0 | FAIL, exit 1 |
+
+The first line is the previous round's finding, dead: wiring the context panel
+to no lane is red again.
+
+### Beyond the criteria (blast radius)
+
+Nothing found that breaks.
+
+- **The index the panel reads changed shape, and its other reader still fits.**
+  `mergeToolMarks` now holds `toolCallOf` rows instead of three fields
+  (`timeline.js:376-389`); the only other consumer is `buildDensity`, which uses
+  `timeMs` and `spanId`, both still present, and `test/timeline.test.mjs` pins
+  the merged index as what the density reads.
+- **The moved preview helper leaves nothing dangling.** `PREVIEW_CHARS` and
+  `previewOf` now live in `format.js`; no file outside the issue directory names
+  them at the old address, and `previewOf` gained a non-string guard that cannot
+  change its answer for the strings `context.js` passes it.
+- **The extracted lookups changed no behaviour.** `laneByKey` is the same
+  `find` both panels had inline, and `spanLaneKeys` is `buildDensity`'s own map
+  lifted out unchanged.
+- **Documents.** `tools/argus-ui/README.md` gained one sentence describing the
+  list, which matches what the code does. `README.md` at the root and
+  `skills/argus/SKILL.md` describe the collector and its API, not the lane
+  panel, so neither goes stale. The collector is untouched by this increment.
+- **Observation, not a finding — parameters are capped at 2000 characters.**
+  A `Write` call carrying a 50 000-character file shows its first 2000 and then
+  `… 48.0k more characters, not kept in the page`. My criterion asks for "the
+  call's parameters" and not, as increment 6's does for context blocks, for "the
+  exact full text"; the cut is declared rather than silent, the JSON keys that
+  answer "what for" come first, and the untruncated size is printed on the row.
+- **Observation, not a finding — a session with more than 2000 tool results
+  loses its oldest ones.** `/api/events` is polled with `limit: 2000`
+  (`app.js:883`) and `store.queryEvents` walks newest-first
+  (`tools/argus/src/store.mjs:908-921`), so on a session that already holds more
+  than one page of tool results the oldest are never fetched and never appear
+  under any lane. That poll and that watermark are increment 3's, unchanged by
+  this diff, which is why it is recorded and not raised.
