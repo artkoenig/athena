@@ -105,6 +105,33 @@
             "questions": [],
             "summary": "Wrote driver modes w17 (case A), w18 (case B), w19 (case C) in test-repo.sh with three new verdict fixtures and DISJOINT_MARKERS entries, added a case D test to backlog.test.mjs, applied the two named fixture-maintenance edits to w16 and w10, and added the two grep cases E and F; ran both suites and confirmed every case is red except B and D, which are green for reasons recorded in openQuestions and in case D's own field."
           }
+        },
+        {
+          "label": "implement:coverage-only-round.0",
+          "at": "2026-08-07T20:08:27.336Z",
+          "return": {
+            "deviations": [],
+            "commands": [
+              {
+                "command": "bash test-repo.sh",
+                "exitCode": 0,
+                "note": "67 cases, nothing skipped. Before the change the same run was 7 of 67 red: the two verdict-schema greps, the reviewer-page grep, and w17 and w19 on both workflows."
+              },
+              {
+                "command": "node --test skills/agent-brief/assets/backlog.test.mjs",
+                "exitCode": 0,
+                "note": "16 cases. Run before the change only, to confirm case D was already green as the test plan recorded; ./test.sh runs it again as part of the full sweep."
+              },
+              {
+                "command": "./test.sh",
+                "exitCode": 0,
+                "note": "all 6 suites, nothing skipped or excluded."
+              }
+            ],
+            "blockers": [],
+            "questions": [],
+            "summary": "Both workflow scripts gained the finding's `kind` classification and the coverage-only correction round it routes, and the reviewer's page and the README document the new field."
+          }
         }
       ]
     },

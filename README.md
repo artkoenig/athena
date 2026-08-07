@@ -43,6 +43,7 @@ flowchart LR
         RES --> TEST --> IMPL --> REV
         REV -.->|"findings: correction<br/>round, at most two"| RES
         REV -.->|"every finding a direct fix:<br/>no plan, no test"| IMPL
+        REV -.->|"every finding a coverage gap:<br/>no plan, no fix"| TEST
     end
 
     REV ==>|"accepted, or<br/>two rounds spent"| CLOSE["planner<br/>closes the increment"]
@@ -67,7 +68,15 @@ off the findings themselves, with the commands the last round closed. Two agents
 instead of four, and the review still runs: the fix is in the diff the next
 round judges. That is also why the reviewer never makes the fix itself — its
 own edit would reach the pull request unread, and every later round would be
-judging a diff it had written into. A remark that leaves every criterion met and
+judging a diff it had written into.
+
+A finding also says what sort of wrong it is. A coverage gap is one where the
+behaviour a criterion asks for is already there and right, and the only thing
+wrong is that nothing goes red when it breaks; everything else is a defect. A
+round of nothing but coverage gaps is worked by the test-author and the reviewer
+— no plan and no fix, because there is nothing to fix.
+
+A remark that leaves every criterion met and
 every behaviour unchanged is no finding at all; it goes into the review's
 summary and reaches the human through the pull request, costing no round.
 

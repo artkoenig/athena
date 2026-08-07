@@ -307,6 +307,18 @@ const VERDICT = {
             type: 'string',
             description: 'The acceptance criterion it violates, or "none".',
           },
+          kind: {
+            type: 'string',
+            enum: ['coverage-gap', 'defect'],
+            description:
+              'coverage-gap: the behaviour a criterion asks for is present and right, and the ' +
+              'only thing wrong is that nothing goes red when it breaks — a criterion with no ' +
+              'test, a case that cannot fail, an assertion that reads something the code always ' +
+              'produces. Correcting it touches test files alone. defect: everything else, and ' +
+              'everything you hesitate over — the behaviour, the prose or the diff is wrong. A ' +
+              'round in which every finding is a coverage-gap is worked by the test-author ' +
+              'alone: no researcher, no implementer.',
+          },
           fix: {
             type: 'string',
             enum: ['direct', 'needs-plan'],
@@ -318,7 +330,7 @@ const VERDICT = {
               'tests and goes straight to the fix.',
           },
         },
-        required: ['claim', 'reproduction', 'criterion', 'fix'],
+        required: ['claim', 'reproduction', 'criterion', 'kind', 'fix'],
         additionalProperties: false,
       },
     },
@@ -463,9 +475,27 @@ function findingsBlock(verdict, round) {
 //
 // A finding with no `fix` at all counts as `needs-plan`: the fast path is
 // something a verdict opts into, never something a missing field falls into.
+//
+// A coverage gap is never a direct fix, whatever the verdict marked: there is
+// no line of code to correct, so an implementer-only round could not close it.
 function isDirectFixRound(verdict) {
   const findings = (verdict && Array.isArray(verdict.findings) && verdict.findings) || []
-  return findings.length > 0 && findings.every((f) => f && f.fix === 'direct')
+  return findings.length > 0 && findings.every((f) => f && f.fix === 'direct' && f.kind !== 'coverage-gap')
+}
+
+// A correction round whose findings are all coverage gaps is worked by the
+// test-author alone. Each such finding says the behaviour is already right and
+// only the guard is missing, so there is nothing to plan and nothing to build:
+// a researcher would restate the reproduction and an implementer would have no
+// code to touch. What it does not skip is the review — the new tests land in
+// the diff the next round judges, which is what keeps this cheap rather than
+// unsafe.
+//
+// A finding with no `kind` at all counts as a defect, for the same reason a
+// missing `fix` counts as `needs-plan`: the shortened path is opted into.
+function isCoverageOnlyRound(verdict) {
+  const findings = (verdict && Array.isArray(verdict.findings) && verdict.findings) || []
+  return findings.length > 0 && findings.every((f) => f && f.kind === 'coverage-gap')
 }
 
 function directFixBlock(verdict, round) {
@@ -485,6 +515,30 @@ function directFixBlock(verdict, round) {
     `Make exactly these corrections and nothing else. If one of them turns out to need a ` +
     `decision — anything beyond the wording, the reference or the value the reproduction ` +
     `names — do not build it: report it as a blocker and leave the rest of the list done.\n`
+  )
+}
+
+function coverageBlock(verdict, round) {
+  const findings = (verdict && Array.isArray(verdict.findings) && verdict.findings) || []
+  return (
+    `This is correction loop ${round} of ${MAX_CORRECTIONS} for this increment, and it is a ` +
+    `coverage-only round: every finding says the behaviour is already there and right, and the ` +
+    `only thing wrong is that nothing goes red when it breaks. Nobody planned this round and ` +
+    `nobody implements it. The findings are your whole work order, and each reproduction is the ` +
+    `spec of one case:\n` +
+    findings
+      .map(
+        (f, i) =>
+          `  ${i + 1}. ${f.claim}\n     Reproduction: ${f.reproduction}\n     Criterion: ${f.criterion}`,
+      )
+      .join('\n') +
+    '\n' +
+    `Write those cases and nothing else, in the file and the style the existing tests for that ` +
+    `behaviour use. The behaviour is already there, so each case passes against the code as it ` +
+    `stands and would fail if that behaviour were removed: confirm both and say so in \`got\` ` +
+    `for every case. This round has no implementer to turn a red test green, and a red test ` +
+    `reaching the reviewer ends the increment blocked. Touch test files only — no production ` +
+    `code. A finding you cannot turn into a case goes in \`openQuestions\`, not into a guess.\n`
   )
 }
 
@@ -730,11 +784,36 @@ if (!blockedOnHuman.length) {
     for (let round = 0; round <= MAX_CORRECTIONS; round++) {
       const previousTests = tests
       // Decided before anything is dispatched, and only from the verdict of the
-      // round before: round 0 is never a direct-fix round, so `plan` is always
-      // the one an earlier round produced by the time this is true.
-      const directFix = round > 0 && isDirectFixRound(verdict)
+      // round before: round 0 is never a direct-fix round nor a coverage-only
+      // one, so `plan` is always the one an earlier round produced by the time
+      // either is true.
+      const coverageOnly = round > 0 && isCoverageOnlyRound(verdict)
+      const directFix = round > 0 && !coverageOnly && isDirectFixRound(verdict)
 
-      if (directFix) {
+      if (coverageOnly) {
+        log(
+          `Increment ${n} round ${round}: every finding is a coverage gap — correcting coverage ` +
+            `only, research and implementation skipped, checks carried over from round ` +
+            `${round - 1}.`,
+        )
+        const testsLabel = `tests:${task.id}.${round}`
+        tests = await step(testsLabel, 'Tests', () =>
+          agent(
+            `Issue directory: ${dir}\n` +
+              answeredBlock(testsLabel) +
+              scope(task, increments, n) +
+              coverageBlock(verdict, round) +
+              // No implementer runs this round, so the commands the round before
+              // closed are what confirms the new case is green — and they are
+              // the ones the reviewer will run.
+              checkList(plan.checks) +
+              recordStep(task.id, testsLabel) +
+              noDispatch,
+            { agentType: 'uroboros:test-author', phase: 'Tests', label: testsLabel, schema: TESTS },
+          ),
+        )
+        if (asksTheHuman(testsLabel, tests)) break
+      } else if (directFix) {
         log(
           `Increment ${n} round ${round}: every finding is a direct fix — research and tests ` +
             `skipped, checks carried over from round ${round - 1}.`,
@@ -782,33 +861,37 @@ if (!blockedOnHuman.length) {
         }
       }
 
-      const buildLabel = `implement:${task.id}.${round}`
-      const build = await step(buildLabel, 'Implement', () =>
-        agent(
-          `Issue directory: ${dir}\n` +
-            answeredBlock(buildLabel) +
-            (directFix
-              ? directFixBlock(verdict, round)
-              : `Your brief is the plan below.\n\n` +
-                `## Implementation plan\n${plan.plan}\n\n` +
-                `## Module map\n${plan.moduleMap}\n\n` +
-                `## Environment\n${plan.environment}\n\n`) +
-            casesBlock(tests, directFix) +
-            // No researcher ran this round, so the list of commands that counts
-            // is the one the last round closed. It is the same code being
-            // judged.
-            checkList(plan.checks) +
-            recordStep(task.id, buildLabel) +
-            noDispatch,
-          Object.assign(
-            { agentType: 'uroboros:implementer', phase: 'Implement', label: buildLabel, schema: BUILD },
-            // A fix whose whole brief is "this line, this word" has nothing to
-            // reason about, and the round exists to be cheap.
-            directFix ? { effort: 'low' } : {},
+      // A coverage-only round has nothing for an implementer to build: the
+      // behaviour is already there, and the test-author above wrote the guard.
+      if (!coverageOnly) {
+        const buildLabel = `implement:${task.id}.${round}`
+        const build = await step(buildLabel, 'Implement', () =>
+          agent(
+            `Issue directory: ${dir}\n` +
+              answeredBlock(buildLabel) +
+              (directFix
+                ? directFixBlock(verdict, round)
+                : `Your brief is the plan below.\n\n` +
+                  `## Implementation plan\n${plan.plan}\n\n` +
+                  `## Module map\n${plan.moduleMap}\n\n` +
+                  `## Environment\n${plan.environment}\n\n`) +
+              casesBlock(tests, directFix) +
+              // No researcher ran this round, so the list of commands that counts
+              // is the one the last round closed. It is the same code being
+              // judged.
+              checkList(plan.checks) +
+              recordStep(task.id, buildLabel) +
+              noDispatch,
+            Object.assign(
+              { agentType: 'uroboros:implementer', phase: 'Implement', label: buildLabel, schema: BUILD },
+              // A fix whose whole brief is "this line, this word" has nothing to
+              // reason about, and the round exists to be cheap.
+              directFix ? { effort: 'low' } : {},
+            ),
           ),
-        ),
-      )
-      if (asksTheHuman(buildLabel, build)) break
+        )
+        if (asksTheHuman(buildLabel, build)) break
+      }
 
       const reviewLabel = `review:${task.id}.${round}`
       verdict = await step(reviewLabel, 'Review', () =>

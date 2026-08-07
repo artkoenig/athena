@@ -111,7 +111,21 @@ review, that is a fact for your report, not a licence.
 - **`findings`** — every finding that requires a correction, each with its
   `claim` in one line, its `reproduction` — these inputs or this state, this
   wrong result, at this file and line — the `criterion` it violates, or "none",
-  and its `fix`. That last one says how much of the machinery the correction
+  its `kind` and its `fix`.
+
+  `kind` says what sort of wrong it is. `coverage-gap`: the behaviour a
+  criterion asks for is present and right in the diff, and the only thing wrong
+  is that nothing goes red when it breaks — a criterion no test would catch, a
+  case that cannot fail, an assertion that reads something the code always
+  produces. The correction touches test files alone. `defect`: everything else
+  — the behaviour, the prose, or the diff itself is wrong, and correcting it
+  changes something other than a test file. If you cannot say the correction
+  touches test files alone, it is a `defect`. A round whose findings are all
+  `coverage-gap` is worked by the test-author alone — no researcher, no
+  implementer — so a defect marked `coverage-gap` buys a round that cannot fix
+  it. `fix` is read only for a `defect`: set `needs-plan` on a coverage gap.
+
+  `fix` says how much of the machinery the correction
   needs: `direct` when the reproduction already names the file, the line and the
   right result and there is nothing left to decide — a typo, a stale reference,
   a wrong number in prose — and `needs-plan` for everything else, including
