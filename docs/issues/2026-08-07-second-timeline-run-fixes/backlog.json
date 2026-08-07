@@ -130,6 +130,16 @@
             "blockers": [],
             "questions": []
           }
+        },
+        {
+          "label": "review:ui-harness-null.0",
+          "at": "2026-08-07T21:16:21.043Z",
+          "return": {
+            "findings": [],
+            "reason": "",
+            "questions": [],
+            "summary": "Increment 2 accepted. `npm --prefix tools/argus-ui test`, 240 cases, exit 0; the same command at the merge base gives 234 cases, exit 0, so the six new cases are the whole delta and no existing case was deleted, corrected or turned red. tools/argus-ui/test/app.test.mjs is a new file (main carries no app.test.mjs at all): its installFakes models the document as one mutable markup string seeded from public/index.html, and elementById tests that string with an id-attribute regex on every call before it hands back the one cached element, so an unrendered id answers null with no element conjured (criterion 1). Three cases pin that contract from different directions - unrendered ids null before boot, an id inside a region replaced by an .innerHTML write going null, and boot inverting the set by adding #lane-panel/#timeline-scrub while dropping #empty-state/#setup-env - so a regression to conjuring goes red. The guard case (line 539) drops #lane-panel through installFakes({dropIds}) from the shell and from every value written into the document, then requires the shared assertPanelRendered helper - the same helper the passing lane-select case uses - to throw an AssertionError naming lane-panel, which is a go-red proof inside the run rather than a manual mutation check (criterion 3); with a conjuring harness it fails either way, on the missing exception or on the wrong message. The panel assertion reads real composed markup: data-context-lane comes from public/context.js through renderLanePanel into the container renderDetail wrote. Blast radius traced and nothing found: node --test runs each file in its own process, installFakes restores document/window/location/fetch/EventSource/setInterval in a finally, the lane-click path calls loadLaneContext().then(renderLanePanel) directly rather than through the 250ms scheduleLaneContext debounce so no real setTimeout outlives a case's restore, and no unpaired id-bearing element (only <input id=\"session-search\"> and <input id=\"timeline-scrub\">) is ever handed .innerHTML or .textContent, so elementRange's paired-tag throw is unreachable on the tested paths. Observations, no correction needed: the nine-line paragraph added to tools/argus-ui/CLAUDE.md is prose no criterion asked for, though it keeps that file's test-layout section from going stale on a file that is not one-per-src-module, and its neighbouring sentence still enumerates only 'one test file per src/ module, plus independence.test.mjs'; the fire() helper reads its element out of the cache before consulting the markup, which is harmless for the shell ids it is used on but is the one place the null contract is not asked; and the header comment's claim that cases run in file order 'because they share the fakes installFakes rebuilds fresh each time' is loose - each case builds and restores its own fakes, what they share is globalThis."
+          }
         }
       ]
     },
