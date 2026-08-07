@@ -447,6 +447,91 @@ test('sessions without a name report null, leaving the id as the only label', ()
   assert.equal(store.listSessions().items[0].name, null);
 });
 
+/* ----------------------- queryContent(...) -------------------------- */
+
+const T = Date.now();
+
+test('content records come back oldest-first, only for the session asked for', () => {
+  const store = new TelemetryStore();
+  store.ingest('logs', [
+    log('claude_code.api_request_body', { body: '{"a":1}', body_length: '7' }, T),
+    log(
+      'claude_code.api_request_body',
+      { 'session.id': 'other-session', body: '{"b":2}', body_length: '7' },
+      T + 1000,
+    ),
+    log('claude_code.user_prompt', { prompt: 'hello', prompt_length: '5' }, T + 2000),
+    log('claude_code.api_request', { model: 'claude-opus-5' }, T + 3000),
+  ]);
+  const results = store.queryContent({ sessionId: SESSION });
+  assert.equal(results.length, 2);
+  assert.equal(results[0].content.kind, 'request_body');
+  assert.equal(results[1].content.kind, 'user_prompt');
+  assert.ok(
+    results.every((result) => result.log.attrs['session.id'] === SESSION),
+    'the other session\'s body must not come back for this session',
+  );
+});
+
+test('the kind filter narrows to one kind', () => {
+  const store = new TelemetryStore();
+  store.ingest('logs', [
+    log('claude_code.api_request_body', { body: '{"a":1}', body_length: '7' }, T),
+    log(
+      'claude_code.api_request_body',
+      { 'session.id': 'other-session', body: '{"b":2}', body_length: '7' },
+      T + 1000,
+    ),
+    log('claude_code.user_prompt', { prompt: 'hello', prompt_length: '5' }, T + 2000),
+    log('claude_code.api_request', { model: 'claude-opus-5' }, T + 3000),
+  ]);
+  const results = store.queryContent({ sessionId: SESSION, kinds: ['request_body'] });
+  assert.equal(results.length, 1);
+  assert.equal(results[0].content.kind, 'request_body');
+  assert.equal(results[0].log.timeMs, T);
+});
+
+test('atMs is an inclusive upper bound', () => {
+  const store = new TelemetryStore();
+  store.ingest('logs', [
+    log('claude_code.api_request_body', { body: '{"a":1}', body_length: '7' }, T),
+    log('claude_code.api_request_body', { body: '{"b":2}', body_length: '7' }, T + 1000),
+    log('claude_code.api_request_body', { body: '{"c":3}', body_length: '7' }, T + 2000),
+  ]);
+  const results = store.queryContent({ sessionId: SESSION, atMs: T + 1000 });
+  assert.equal(results.length, 2);
+  assert.ok(
+    results.every((result) => result.log.timeMs <= T + 1000),
+    'the record after the bound must not come back',
+  );
+});
+
+test('the nearest content at or before a time is atMs with limit: 1', () => {
+  // This is the query the later increments build the context view on, so it is
+  // pinned here: the limit keeps the newest match, not the oldest.
+  const store = new TelemetryStore();
+  store.ingest('logs', [
+    log('claude_code.api_request_body', { body: '{"a":1}', body_length: '7' }, T),
+    log('claude_code.api_request_body', { body: '{"b":2}', body_length: '7' }, T + 1000),
+    log('claude_code.api_request_body', { body: '{"c":3}', body_length: '7' }, T + 2000),
+  ]);
+  const results = store.queryContent({
+    sessionId: SESSION,
+    kinds: ['request_body'],
+    atMs: T + 1500,
+    limit: 1,
+  });
+  assert.equal(results.length, 1);
+  assert.equal(results[0].log.timeMs, T + 1000);
+});
+
+test('a session with nothing content-bearing answers with an empty list', () => {
+  const store = new TelemetryStore();
+  store.ingest('logs', [log('claude_code.api_request', { model: 'claude-opus-5' })]);
+  const results = store.queryContent({ sessionId: SESSION });
+  assert.deepEqual(results, []);
+});
+
 test('clear() empties the store but keeps subscribers attached', () => {
   const store = new TelemetryStore();
   let notified = 0;

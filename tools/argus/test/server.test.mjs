@@ -70,6 +70,38 @@ function logsPayloadJson(sessionId) {
   });
 }
 
+/** A single OTLP attribute pair, string-valued like the CLI sends every content attribute. */
+function otlpAttr(key, value) {
+  return { key, value: { stringValue: String(value) } };
+}
+
+/**
+ * An OTLP/JSON logs payload for one or more content-bearing log records, in the
+ * same shape as `logsPayloadJson` above. `records` is `[{ eventName, timeMs, attrs }]`.
+ */
+function contentLogsPayloadJson(sessionId, records) {
+  return JSON.stringify({
+    resourceLogs: [
+      {
+        resource: { attributes: [{ key: 'session.id', value: { stringValue: sessionId } }] },
+        scopeLogs: [
+          {
+            logRecords: records.map((record) => ({
+              timeUnixNano: String(BigInt(record.timeMs) * 1000000n),
+              severityNumber: 9,
+              eventName: record.eventName,
+              attributes: [
+                otlpAttr('session.id', sessionId),
+                ...Object.entries(record.attrs).map(([key, value]) => otlpAttr(key, value)),
+              ],
+            })),
+          },
+        ],
+      },
+    ],
+  });
+}
+
 async function withServer(options, run) {
   const store = new TelemetryStore();
   const server = createServer({ store, endpoint: 'http://test', log: () => {}, ...options });
@@ -236,6 +268,180 @@ test('read API exposes sessions, traces and events', async () => {
 
     assert.equal((await fetch(`${base}/api/sessions/nope`)).status, 404);
     assert.equal((await fetch(`${base}/api/nope`)).status, 404);
+  });
+});
+
+test('content-bearing records are listed over the API, without their text by default', async () => {
+  await withServer({}, async ({ base }) => {
+    const t = Date.now();
+    const payload = contentLogsPayloadJson('s-content', [
+      {
+        eventName: 'claude_code.api_request_body',
+        timeMs: t,
+        attrs: {
+          body: '{"messages":["hello there"]}',
+          body_length: '29',
+          model: 'claude-opus-5',
+          query_source: 'agent:builtin:researcher',
+        },
+      },
+      {
+        eventName: 'claude_code.api_response_body',
+        timeMs: t + 500,
+        attrs: { body: '{"id":"msg_1"}', body_length: '13' },
+      },
+      {
+        eventName: 'claude_code.user_prompt',
+        timeMs: t + 1000,
+        attrs: { prompt: 'hi', prompt_length: '2' },
+      },
+    ]);
+    // Assert the ingest itself, so a failed POST reports as a failed POST rather
+    // than a confusing empty-content assertion further down.
+    const ingested = await fetch(`${base}/v1/logs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: payload,
+    });
+    assert.equal(ingested.status, 200);
+
+    const response = await fetch(`${base}/api/content?session=s-content`);
+    assert.equal(response.status, 200);
+    const result = await response.json();
+    assert.equal(result.items.length, 3);
+    assert.deepEqual(
+      result.items.map((item) => item.kind),
+      ['request_body', 'response_body', 'user_prompt'],
+    );
+    const first = result.items[0];
+    assert.equal(typeof first.timeMs, 'number');
+    assert.equal(first.length, 29);
+    assert.equal(first.truncated, false);
+    assert.equal(first.querySource, 'agent:builtin:researcher');
+    assert.equal(first.attribution.query_source, 'agent:builtin:researcher');
+    assert.ok(!('text' in first), 'text is opt-in via ?body=1 and must be absent by default');
+  });
+});
+
+test('the content at a point in time is one request away', async () => {
+  await withServer({}, async ({ base }) => {
+    const t = Date.now();
+    const payload = contentLogsPayloadJson('s-content', [
+      {
+        eventName: 'claude_code.api_request_body',
+        timeMs: t,
+        attrs: { body: '{"messages":["first"]}', body_length: '23' },
+      },
+      {
+        eventName: 'claude_code.api_response_body',
+        timeMs: t + 500,
+        attrs: { body: '{"id":"msg_1"}', body_length: '13' },
+      },
+      {
+        eventName: 'claude_code.user_prompt',
+        timeMs: t + 1000,
+        attrs: { prompt: 'hi', prompt_length: '2' },
+      },
+      {
+        eventName: 'claude_code.api_request_body',
+        timeMs: t + 2000,
+        attrs: { body: '{"messages":["second"]}', body_length: '24' },
+      },
+    ]);
+    const ingested = await fetch(`${base}/v1/logs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: payload,
+    });
+    assert.equal(ingested.status, 200);
+
+    const response = await fetch(
+      `${base}/api/content?session=s-content&kind=request_body&at=${t + 1500}&limit=1&body=1`,
+    );
+    assert.equal(response.status, 200);
+    const result = await response.json();
+    assert.equal(result.items.length, 1);
+    assert.equal(result.items[0].kind, 'request_body');
+    assert.equal(result.items[0].text, '{"messages":["first"]}');
+  });
+});
+
+test('the event tail no longer carries whole bodies', async () => {
+  await withServer({}, async ({ base }) => {
+    const t = Date.now();
+    const payload = contentLogsPayloadJson('s-content', [
+      {
+        eventName: 'claude_code.api_request_body',
+        timeMs: t,
+        attrs: { body: '{"messages":["hello there"]}', body_length: '29' },
+      },
+      {
+        eventName: 'claude_code.api_response_body',
+        timeMs: t + 500,
+        attrs: { body: '{"id":"msg_1"}', body_length: '13' },
+      },
+      {
+        eventName: 'claude_code.user_prompt',
+        timeMs: t + 1000,
+        attrs: { prompt: 'hi', prompt_length: '2' },
+      },
+    ]);
+    const ingested = await fetch(`${base}/v1/logs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: payload,
+    });
+    assert.equal(ingested.status, 200);
+
+    const events = await (await fetch(`${base}/api/events?session=s-content`)).json();
+    const bodyEvent = events.items.find((item) => item.eventName === 'claude_code.api_request_body');
+    assert.ok(bodyEvent, 'the api_request_body event must still appear in the tail');
+    assert.equal(bodyEvent.attrs.body_length, '29');
+    assert.ok(!('body' in bodyEvent.attrs), 'the whole body must not ride along in the event tail');
+
+    const content = await (
+      await fetch(`${base}/api/content?session=s-content&kind=request_body&limit=1&body=1`)
+    ).json();
+    assert.equal(content.items.length, 1);
+    assert.equal(
+      content.items[0].text,
+      '{"messages":["hello there"]}',
+      'the stored record must still carry the full text — it was copied, not stripped',
+    );
+  });
+});
+
+test('asking without a session asks across all of them, and a bad at is ignored rather than fatal', async () => {
+  await withServer({}, async ({ base }) => {
+    const t = Date.now();
+    const payload = contentLogsPayloadJson('s-content', [
+      {
+        eventName: 'claude_code.api_request_body',
+        timeMs: t,
+        attrs: { body: '{"messages":["hi"]}', body_length: '20' },
+      },
+    ]);
+    const ingested = await fetch(`${base}/v1/logs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: payload,
+    });
+    assert.equal(ingested.status, 200);
+
+    const all = await fetch(`${base}/api/content`);
+    assert.equal(all.status, 200);
+    const allResult = await all.json();
+    assert.ok(
+      allResult.items.some((item) => item.kind === 'request_body'),
+      'a session-less query still lists this session\'s content',
+    );
+
+    // intParam already falls back on an unparseable value — the fallback is
+    // asserted here, not an error.
+    const badAt = await fetch(`${base}/api/content?session=s-content&at=nonsense`);
+    assert.equal(badAt.status, 200);
+    const badAtResult = await badAt.json();
+    assert.equal(badAtResult.items.length, 1);
   });
 });
 

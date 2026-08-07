@@ -35,6 +35,167 @@
             ],
             "questions": []
           }
+        },
+        {
+          "label": "tests:content-pipeline.0",
+          "at": "2026-08-07T09:35:41.513Z",
+          "return": {
+            "cases": [
+              {
+                "case": "A1. The env block turns the content flags on by default.",
+                "file": "/home/user/uroboros/tools/argus/test/claude.test.mjs",
+                "testName": "the env block turns the content flags on by default",
+                "expected": "otelEnvFor('http://localhost:4318') returns OTEL_LOG_USER_PROMPTS, OTEL_LOG_TOOL_DETAILS, OTEL_LOG_TOOL_CONTENT and OTEL_LOG_RAW_API_BODIES each exactly '1', and OTEL_LOG_RAW_API_BODIES is not a 'file:' value.",
+                "got": "The whole file fails at import time: SyntaxError: The requested module '../src/claude.mjs' does not provide an export named 'contentOf' (node --test tools/argus/test/claude.test.mjs, exit 1). contentOf is required by case group C in the same file, so the file cannot load until it exists; once it does, this case's own assertions will run against the still-unimplemented content flags."
+              },
+              {
+                "case": "A2. The content flags do not ride on the traces opt-in.",
+                "file": "/home/user/uroboros/tools/argus/test/claude.test.mjs",
+                "testName": "the content flags do not ride on the traces opt-in",
+                "expected": "otelEnvFor('http://localhost:4318', { traces: false }) still carries all four flags as '1' while OTEL_TRACES_EXPORTER is absent.",
+                "got": "Same file-level import failure as A1 (missing 'contentOf' export) — the case did not get to run."
+              },
+              {
+                "case": "B1 (shell format). Every format carries all four content flags — shell.",
+                "file": "/home/user/uroboros/tools/argus/test/env.test.mjs",
+                "testName": "the shell format (the default) exports all four content flags as \"1\"",
+                "expected": "argus env exits 0 and stdout contains export OTEL_LOG_USER_PROMPTS=\"1\" (and likewise for the other three flags).",
+                "got": "AssertionError: expected the shell output to contain export OTEL_LOG_USER_PROMPTS=\"1\" — exit 0, stdout does not mention any of the four flags (only CLAUDE_CODE_ENABLE_TELEMETRY, OTEL_METRICS_EXPORTER, OTEL_LOGS_EXPORTER, OTEL_EXPORTER_OTLP_PROTOCOL, OTEL_EXPORTER_OTLP_ENDPOINT, CLAUDE_CODE_ENHANCED_TELEMETRY_BETA, OTEL_TRACES_EXPORTER, UROBOROS_OBS_URL, and the export-interval variables)."
+              },
+              {
+                "case": "B1 (dotenv format). Every format carries all four content flags — dotenv.",
+                "file": "/home/user/uroboros/tools/argus/test/env.test.mjs",
+                "testName": "the dotenv format sets all four content flags to 1",
+                "expected": "argus env --format dotenv exits 0 and stdout contains OTEL_LOG_USER_PROMPTS=1 (and likewise for the other three flags).",
+                "got": "AssertionError: expected the dotenv output to contain OTEL_LOG_USER_PROMPTS=1 — exit 0, stdout carries none of the four flags."
+              },
+              {
+                "case": "B1 (json format). Every format carries all four content flags — json.",
+                "file": "/home/user/uroboros/tools/argus/test/env.test.mjs",
+                "testName": "the json format carries all four content flags as top-level keys",
+                "expected": "argus env --format json exits 0 and JSON.parse(stdout)[flag] === '1' for each of the four flags.",
+                "got": "AssertionError: expected top-level OTEL_LOG_USER_PROMPTS to be \"1\" — undefined !== '1'; the parsed object carries none of the four flags."
+              },
+              {
+                "case": "B1 (settings format). Every format carries all four content flags — settings, one level down under env.",
+                "file": "/home/user/uroboros/tools/argus/test/env.test.mjs",
+                "testName": "the settings format carries all four content flags one level down, under \"env\"",
+                "expected": "argus env --format settings exits 0 and JSON.parse(stdout).env[flag] === '1' for each of the four flags.",
+                "got": "AssertionError: expected settings.env.OTEL_LOG_USER_PROMPTS to be \"1\" — undefined !== '1'; parsed.env carries none of the four flags."
+              },
+              {
+                "case": "C1. An inline request body is classified with its untruncated length.",
+                "file": "/home/user/uroboros/tools/argus/test/claude.test.mjs",
+                "testName": "an inline request body is classified with its untruncated length",
+                "expected": "contentOf({eventName: 'claude_code.api_request_body', attrs: {body, body_length: '61440', body_truncated: 'true', model, query_source}}) returns kind 'request_body', text equal to body, length 61440 (number), truncated true, ref null.",
+                "got": "Same file-level import failure as A1 (missing 'contentOf' export) — the case did not get to run."
+              },
+              {
+                "case": "C2. A body the CLI wrote to a file is classified by its reference, with no text.",
+                "file": "/home/user/uroboros/tools/argus/test/claude.test.mjs",
+                "testName": "a body the CLI wrote to a file is classified by its reference, with no text",
+                "expected": "contentOf with body_ref and body_length but no body returns kind 'request_body', text null, ref the path, length 120000, truncated false.",
+                "got": "Same file-level import failure as A1 — the case did not get to run."
+              },
+              {
+                "case": "C3. A response body is its own kind.",
+                "file": "/home/user/uroboros/tools/argus/test/claude.test.mjs",
+                "testName": "a response body is its own kind",
+                "expected": "contentOf on claude_code.api_response_body returns kind 'response_body' and text equal to the body string.",
+                "got": "Same file-level import failure as A1 — the case did not get to run."
+              },
+              {
+                "case": "C4. Prompt, assistant response and tool input are content too.",
+                "file": "/home/user/uroboros/tools/argus/test/claude.test.mjs",
+                "testName": "prompt, assistant response and tool input are content too",
+                "expected": "user_prompt -> kind 'user_prompt', text 'hello', length 5; assistant_response -> kind 'assistant_response', text 'hi', length 2; tool_result with tool_input -> kind 'tool_input', text the JSON string, length 12. Written as one case with three inputs, per the plan's own choice of 'one case or three'.",
+                "got": "Same file-level import failure as A1 — the case did not get to run."
+              },
+              {
+                "case": "C5. The older attribute name for tool input is still read.",
+                "file": "/home/user/uroboros/tools/argus/test/claude.test.mjs",
+                "testName": "the older attribute name for tool input is still read",
+                "expected": "contentOf on a tool_result carrying tool_parameters instead of tool_input returns kind 'tool_input' with text read from tool_parameters.",
+                "got": "Same file-level import failure as A1 — the case did not get to run."
+              },
+              {
+                "case": "C6. An event that carries no content at all is not content.",
+                "file": "/home/user/uroboros/tools/argus/test/claude.test.mjs",
+                "testName": "an event that carries no content at all is not content",
+                "expected": "contentOf on claude_code.api_request (no content attributes) returns null.",
+                "got": "Same file-level import failure as A1 — the case did not get to run."
+              },
+              {
+                "case": "D1. Content records come back oldest-first, only for the session asked for.",
+                "file": "/home/user/uroboros/tools/argus/test/store.test.mjs",
+                "testName": "content records come back oldest-first, only for the session asked for",
+                "expected": "store.queryContent({sessionId: SESSION}) returns two results ({log, content} pairs, oldest-first): content.kind 'request_body' then 'user_prompt'; the other session's body and the contentless api_request are absent.",
+                "got": "TypeError: store.queryContent is not a function (node --test tools/argus/test/store.test.mjs)."
+              },
+              {
+                "case": "D2. The kind filter narrows to one kind.",
+                "file": "/home/user/uroboros/tools/argus/test/store.test.mjs",
+                "testName": "the kind filter narrows to one kind",
+                "expected": "store.queryContent({sessionId: SESSION, kinds: ['request_body']}) returns one result, the body at T.",
+                "got": "TypeError: store.queryContent is not a function."
+              },
+              {
+                "case": "D3. atMs is an inclusive upper bound.",
+                "file": "/home/user/uroboros/tools/argus/test/store.test.mjs",
+                "testName": "atMs is an inclusive upper bound",
+                "expected": "store.queryContent({sessionId: SESSION, atMs: T + 1000}) with bodies at T, T+1000, T+2000 returns two results; the record exactly at the bound is included, the later one is not.",
+                "got": "TypeError: store.queryContent is not a function."
+              },
+              {
+                "case": "D4. The nearest content at or before a time is atMs with limit: 1.",
+                "file": "/home/user/uroboros/tools/argus/test/store.test.mjs",
+                "testName": "the nearest content at or before a time is atMs with limit: 1",
+                "expected": "store.queryContent({sessionId: SESSION, kinds: ['request_body'], atMs: T + 1500, limit: 1}) returns exactly one result, the record at T + 1000.",
+                "got": "TypeError: store.queryContent is not a function."
+              },
+              {
+                "case": "D5. A session with nothing content-bearing answers with an empty list.",
+                "file": "/home/user/uroboros/tools/argus/test/store.test.mjs",
+                "testName": "a session with nothing content-bearing answers with an empty list",
+                "expected": "store.queryContent({sessionId: SESSION}) after ingesting only an api_request event returns [].",
+                "got": "TypeError: store.queryContent is not a function."
+              },
+              {
+                "case": "E1. Content-bearing records are listed over the API, without their text by default.",
+                "file": "/home/user/uroboros/tools/argus/test/server.test.mjs",
+                "testName": "content-bearing records are listed over the API, without their text by default",
+                "expected": "After POSTing an api_request_body, api_response_body and user_prompt for session s-content, GET /api/content?session=s-content returns 200, items.length 3, kinds ['request_body','response_body','user_prompt'] oldest-first, first item carries timeMs/length/truncated=false/querySource/attribution.query_source, and carries no 'text' key.",
+                "got": "AssertionError: Expected values to be strictly equal: 404 !== 200 (node --test tools/argus/test/server.test.mjs) — /api/content does not exist yet."
+              },
+              {
+                "case": "E2. The content at a point in time is one request away.",
+                "file": "/home/user/uroboros/tools/argus/test/server.test.mjs",
+                "testName": "the content at a point in time is one request away",
+                "expected": "GET /api/content?session=s-content&kind=request_body&at=<T+1500>&limit=1&body=1 returns 200, exactly one item, text equal to the earlier body string, kind 'request_body'.",
+                "got": "AssertionError: Expected values to be strictly equal: 404 !== 200 — /api/content does not exist yet."
+              },
+              {
+                "case": "E3. The event tail no longer carries whole bodies.",
+                "file": "/home/user/uroboros/tools/argus/test/server.test.mjs",
+                "testName": "the event tail no longer carries whole bodies",
+                "expected": "GET /api/events?session=s-content lists the api_request_body item with attrs.body_length intact and attrs.body absent; GET /api/content?...&body=1 afterward still returns the full text, proving the stored record was copied rather than stripped.",
+                "got": "AssertionError: the whole body must not ride along in the event tail — expected true, actual false; /api/events currently returns attrs.body unchanged (the strip has not been implemented)."
+              },
+              {
+                "case": "E4. Asking without a session asks across all of them, and a bad at is ignored rather than fatal.",
+                "file": "/home/user/uroboros/tools/argus/test/server.test.mjs",
+                "testName": "asking without a session asks across all of them, and a bad at is ignored rather than fatal",
+                "expected": "GET /api/content (no session) and GET /api/content?session=s-content&at=nonsense both return 200 and list the session's content records; the bad 'at' is ignored, not fatal.",
+                "got": "AssertionError: Expected values to be strictly equal: 404 !== 200 — /api/content does not exist yet."
+              }
+            ],
+            "openQuestions": [
+              "The test plan does not name the field shape store.queryContent(...) returns, only that each result 'carries the log record and the classification'. I aligned it to the shape the content-pipeline research step's plan already documents for the implementer — Array<{ log, content }>, where content is contentOf's own {kind, text, length, truncated, ref} — so store.test.mjs asserts result.log.timeMs and result.content.kind rather than a flat shape. If the implementer departs from that plan, these five cases will need their field names revisited, not their behaviour.",
+              "The GET /api/content item shape (kind, length, truncated, querySource, attribution, text opt-in via body=1) is likewise not named field-by-field in the test plan I was given; I used the flat shape the same research plan documents for the route, which matches the plan's own worked example almost verbatim (seq, timeMs, sessionId, kind, length, truncated, model, querySource, attribution, text). If the implementer's response shape differs, only E1/E2/E4's field names need revisiting, not the intent."
+            ],
+            "questions": [],
+            "summary": "Wrote 20 planned test cases across four files (claude.test.mjs groups A and C, the new env.test.mjs for group B, store.test.mjs group D, server.test.mjs group E) exercising the content flags, contentOf classification, TelemetryStore.queryContent, and the new GET /api/content route; ran each file individually and confirmed every new/changed case fails for the missing-behaviour reason named in its 'got' field (a missing contentOf export, absent content flags in every argus env format, a missing queryContent method, or a missing/unstripped /api/content route), while all 129 previously-passing cases in the suite (npm --prefix tools/argus test, exit 1 for the expected 14 new-related failures) stayed green."
+          }
         }
       ]
     },
