@@ -218,3 +218,87 @@ module map gives.
   first build, this one is the correction round. My prompt named the heading and
   told me to leave every earlier section as it stands, so I did not renumber the
   first.
+
+## Round 2
+
+Both judgment commands are green. Four files changed: the two workflow scripts
+(finding 1), `skills/agent-brief/SKILL.md` (finding 3) and `rulebook.md`
+(finding 1's documentation half). Finding 2 is a missing test, and its repair —
+driver mode `w10` — is the test-author's and was already green when I started.
+
+### Running the planned tests first
+
+Before any edit of mine, `bash test-repo.sh` — 47 cases, **exit 1**,
+`FAIL: 3 of 47 cases`. The three are exactly the three the plan's "What is
+already red" predicts:
+
+- `the shared brief does not tell a repeated step what its first run may have
+  left behind` — the grep case, red because `already committed` was in no line
+  of `skills/agent-brief/SKILL.md`.
+- `loop.js: a run resumed after a question for the human works that step again
+  with the question in its prompt` — mode `w9`, red on all four of its
+  assertions, the first reading
+  `expected ["load-state","research:i1.0","tests:i1.0","implement:i1.0","review:i1.0","close:i1","publish"] got ["load-state","publish"]`.
+- `agile-loop.js: …` the same mode, the same four assertions, with `replan:i1`
+  in the expected sequence.
+
+Nothing else was red. I did not run `bash test.sh` as a baseline: the plan's
+"What is already red" records it exit 0 in the reviewer's round-1 run, and my
+final run of it below confirms it.
+
+### What I changed
+
+| Path | What I did |
+| --- | --- |
+| `workflows/loop.js` | The resume loader now triages: a recorded step whose return carries a non-empty `questions` goes into a new `carriedQuestions` map instead of `recorded`, so it is worked again rather than replayed, with the plan's comment above it and a `log` line when the map is non-empty. New `answeredBlock(label)` beside `recordStep()`, returning the question the step asked and the pointer to `## Decisions` in `issue.md`, and `''` for every other label. `answeredBlock(<that step's label>) +` inserted immediately after the `Issue directory: ${dir}\n` fragment of all six recorded dispatches: `decompose`, `research`, `tests`, `implement`, `review`, `close`. `load-state` and `publish` got none. |
+| `workflows/agile-loop.js` | The same three changes, word for word, at the same six kinds of dispatch — `decompose`, `research`, `tests`, `implement`, `review`, `replan`. |
+| `skills/agent-brief/SKILL.md` | One paragraph appended to the end of "Your step return", in the plan's wording: a step worked again may meet what its interrupted first run already committed, so read the working tree and `git log` first and finish or correct what is there. |
+| `rulebook.md` | Issue Mode step 4, the `blockedOnHuman` line, replaced whole with the plan's sentence: the restart works the step that asked again, with the question in its prompt and the answer in `issue.md`, and skips every other recorded step. Line 52 and `README.md` line 78 are untouched, as the plan says. |
+
+`skills/agent-brief/assets/backlog.mjs` and its suite are unchanged this round,
+as the plan says, and I opened neither. No file outside the module map was
+edited.
+
+The word "handoff" is in none of the text I wrote; `test-repo.sh`'s word guard
+over the workflow scripts is still green.
+
+### Commands I ran
+
+The two the plan's "What counts as done" names, from the repository root, and
+nothing else. There is no linter and no formatter in this repository.
+
+- **`bash test-repo.sh` — exit 0.** `PASS: 47 cases`, the plan's own sanity
+  figure. Nothing skipped or excluded.
+- **`bash test.sh` — exit 0.** `PASS: all 6 suites`: `test-repo.sh` 47 cases,
+  `test-worktree.sh` 4 cases, the recorder suite 15 tests (15 pass, 0 fail),
+  `tools/argus` 135 tests, `tools/argus-ui` 14 tests, `tools/log-parser` 23
+  tests. Nothing skipped or excluded.
+
+Invoked as `bash …`, not `./…`: neither file is executable in this checkout,
+and the plan's Environment section says so and says not to `chmod` them.
+
+### Deviations from the plan
+
+1. **The paragraph in `skills/agent-brief/SKILL.md` is line-wrapped one word
+   earlier than the plan's own block quote.** The plan's wrapping breaks the
+   line between "already" and "committed", and the test-author's guard is
+   `grep -q 'already committed'` over that file, which a wrapped phrase does not
+   satisfy — I saw it fail that way once and rewrapped. The words are the
+   plan's, unchanged; only the line break moved.
+
+### Notes for the reviewer
+
+- The plan's implementer dispatch site was `` `Issue directory: ${dir}\nYour
+  brief is the plan below.\n\n` `` — one template literal carrying two lines. I
+  split it into `` `Issue directory: ${dir}\n` + answeredBlock(buildLabel) +
+  `Your brief is the plan below.\n\n` ``, which is what the plan asks for in as
+  many words, so the block lands above the brief rather than inside it.
+- `answeredBlock()` is declared beside `recordStep()`, above the `const
+  carriedQuestions` it reads. That is safe because it is a hoisted function
+  declaration and no dispatch happens before the loader runs; it is what the
+  plan's module map places there.
+- The two knock-on facts the plan states hold in the code and neither is tested
+  here: a re-dispatched step records under the same label, so `backlog.mjs
+  record` overwrites the stale return with the question rather than duplicating
+  it, and a human who restarts without answering gets the same question and the
+  same regular exit.

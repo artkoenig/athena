@@ -375,6 +375,20 @@ function recordStep(incrementId, label) {
   )
 }
 
+// The question this step asked before the run stopped. The human records the
+// answer under `## Decisions` in issue.md, which is where this sends the agent;
+// the step's own recorded return is never replayed.
+function answeredBlock(label) {
+  const asked = carriedQuestions.get(label)
+  return asked && asked.length
+    ? `This step ended the previous run with a question for the human:\n` +
+        asked.map((q) => `  - ${q}`).join('\n') +
+        '\n' +
+        `The answer is under \`## Decisions\` in ${dir}/issue.md. Read it there first, then ` +
+        `work this step again; ask again only what it does not answer.\n`
+    : ''
+}
+
 // The slice each role gets, and no more. The test-author is given the test plan
 // and nothing else about the change; the implementer the plan, the map, the
 // environment, the checks and the tests that now exist; the reviewer the checks
@@ -453,14 +467,29 @@ if (state && state.exists && state.backlogJson) {
   }
 }
 
+// A step that ended the run with a question for the human is not replayed from
+// its recorded return: the human answered in `issue.md`, so the step is worked
+// again with the question in front of it. Replaying it instead would re-raise
+// the same question and end the resumed run at Publish without dispatching
+// anyone — the restart the rulebook promises would make no progress at all.
 const recorded = new Map()
+const carriedQuestions = new Map()
 if (saved) {
-  for (const s of (saved.run && saved.run.steps) || []) recorded.set(s.label, s.return)
+  const load = (s) => {
+    const asked =
+      s && s.return && Array.isArray(s.return.questions) ? s.return.questions.filter(Boolean) : []
+    if (asked.length) carriedQuestions.set(s.label, asked)
+    else recorded.set(s.label, s.return)
+  }
+  for (const s of (saved.run && saved.run.steps) || []) load(s)
   for (const increment of saved.increments || []) {
-    for (const s of increment.steps || []) recorded.set(s.label, s.return)
+    for (const s of increment.steps || []) load(s)
   }
 }
 if (recorded.size) log(`Resuming: ${recorded.size} step(s) already recorded in the run state.`)
+if (carriedQuestions.size) {
+  log(`${carriedQuestions.size} step(s) ended the last run with a question and are worked again.`)
+}
 
 // The whole of resume. A recorded step returns its stored payload and is never
 // dispatched again; the step in flight when a session died was never recorded,
@@ -493,6 +522,7 @@ function asksTheHuman(label, out) {
 const backlog = await step('decompose', 'Decompose', () =>
   agent(
     `Issue directory: ${dir}\n` +
+      answeredBlock('decompose') +
       `Open the run state for this issue. Do not cut: this loop works ${dir}/issue.md as a ` +
       `single increment spanning the whole issue, and it never re-cuts. Write ` +
       `${dir}/backlog.json with the \`init\` subcommand of the backlog helper your shared ` +
@@ -537,6 +567,7 @@ if (task) {
     plan = await step(researchLabel, 'Research', () =>
       agent(
         `Issue directory: ${dir}\n` +
+          answeredBlock(researchLabel) +
           (round === 0 ? '' : findingsBlock(verdict, round)) +
           openQuestionsBlock(previousTests) +
           recordStep(task.id, researchLabel) +
@@ -556,6 +587,7 @@ if (task) {
       tests = await step(testsLabel, 'Tests', () =>
         agent(
           `Issue directory: ${dir}\n` +
+            answeredBlock(testsLabel) +
             `Your work order is the test plan below, and it is the whole of what you are ` +
             `given about the change:\n\n${plan.testPlan}\n\n` +
             (round === 0
@@ -572,7 +604,9 @@ if (task) {
     const buildLabel = `implement:${task.id}.${round}`
     const build = await step(buildLabel, 'Implement', () =>
       agent(
-        `Issue directory: ${dir}\nYour brief is the plan below.\n\n` +
+        `Issue directory: ${dir}\n` +
+          answeredBlock(buildLabel) +
+          `Your brief is the plan below.\n\n` +
           `## Implementation plan\n${plan.plan}\n\n` +
           `## Module map\n${plan.moduleMap}\n\n` +
           `## Environment\n${plan.environment}\n\n` +
@@ -588,7 +622,9 @@ if (task) {
     const reviewLabel = `review:${task.id}.${round}`
     verdict = await step(reviewLabel, 'Review', () =>
       agent(
-        `Issue directory: ${dir}\nReview round ${round}. Check the whole diff against main.\n` +
+        `Issue directory: ${dir}\n` +
+          answeredBlock(reviewLabel) +
+          `Review round ${round}. Check the whole diff against main.\n` +
           checkList(plan.checks) +
           recordStep(task.id, reviewLabel) +
           noDispatch,
@@ -620,6 +656,7 @@ if (task && verdict && !blockedOnHuman.length) {
   await step(closeLabel, 'Close', () =>
     agent(
       `Issue directory: ${dir}\n` +
+        answeredBlock(closeLabel) +
         `Increment ${task.id} — ${task.title} — has been worked. The review ` +
         (accepted
           ? `accepted it.\n`

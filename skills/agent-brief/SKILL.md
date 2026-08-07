@@ -103,6 +103,11 @@ resumes from it, a step it holds is never worked twice, and a step it does not
 hold is worked again from the start. Record your step, commit it with your
 work, and push the commit.
 
+A step you work again may meet what its interrupted first run
+already committed: tests that exist and fail, code that half-exists. Read the
+working tree and `git log` before you start, then finish or correct what is
+there instead of writing it a second time.
+
 ## You do not hand over
 
 You do not dispatch subagents and you do not call the next agent in the chain.

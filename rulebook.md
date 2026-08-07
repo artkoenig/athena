@@ -51,7 +51,7 @@ The requirements are yours, the work is the subagents'.
 
    Every step of a run records its return into `<issueDir>/backlog.json`, so a run that died with its session resumes: start the same workflow on the same issue directory again and it skips every step already recorded and carries on from the one that never finished. Never start a fresh issue directory to retry.
 
-   A result carrying `blockedOnHuman` is a run one or more questions ended. Put those questions to the human as they stand, record their answers under a `## Decisions` heading in `issue.md`, commit and push that file, and start the same workflow on the same directory again.
+   A result carrying `blockedOnHuman` is a run one or more questions ended. Put those questions to the human as they stand, record their answers under a `## Decisions` heading in `issue.md`, commit and push that file, and start the same workflow on the same directory again: it works the step that asked again, with the question in its prompt and your answer in `issue.md`, and skips every other step it already recorded.
 
 5. **Say why the loop turned back:** The result carries an entry per review — `rounds` from `uroboros:loop`, `increments` from `uroboros:agile-loop`. For every one the reviewer did not accept, give the human one line in the chat with its reason, before you say anything about the pull request. That line is the reason itself, and it stands on its own. After an incremental run, say in one more line what the backlog still holds, if anything.
 
