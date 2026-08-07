@@ -313,6 +313,30 @@
             "openQuestions": [],
             "questions": []
           }
+        },
+        {
+          "label": "implement:filter-core.1",
+          "at": "2026-08-07T15:31:40.532Z",
+          "return": {
+            "deviations": [
+              "The plan's one edit — widening the two `assert.deepEqual` expectations in tools/argus-ui/test/context.test.mjs (lines 679 and 704) to the six-key shape — was already in the tree when this step started, committed as e8c0da0 'Widen two lanePanelInput expectations for hidden/filterOpen defaults' by the round-1 test-author step (recorded in backlog.json as tests:filter-core.1). The edit is byte-for-byte what the plan describes, and it lives in a test file this role may not edit, so it was left exactly as committed rather than rewritten. This step therefore changed no source file; it verified the tree and ran the command that counts."
+            ],
+            "commands": [
+              {
+                "command": "npm --prefix tools/argus-ui test",
+                "exitCode": 0,
+                "note": "node --test over tools/argus-ui/test/*.test.mjs, all files, nothing skipped or excluded: 230 tests, 230 pass, 0 fail, 0 skipped, 0 todo. Both cases the plan named pass by name: 'the panel input is built from the lane whose key the reader selected' (ok 53) and 'a key no lane carries, and no key at all, leave nothing to draw' (ok 54)."
+              },
+              {
+                "command": "git status --porcelain",
+                "exitCode": 0,
+                "note": "Empty before this step's own backlog commit — the round-1 test edit was already committed and the branch claude/timeline-implementation-adjustments-t8s8rz was in sync with its remote."
+              }
+            ],
+            "blockers": [],
+            "questions": [],
+            "summary": "No source change was needed this round: the plan's sole edit (widening the two lanePanelInput deep-equal expectations to include hidden: [] and filterOpen: false) was already committed as e8c0da0 by the round-1 test step, no file under tools/argus-ui/public/ was touched, and npm --prefix tools/argus-ui test passes 230/230 at exit 0."
+          }
         }
       ]
     },
