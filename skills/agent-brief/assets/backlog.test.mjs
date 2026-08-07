@@ -20,16 +20,16 @@ function writeJson(dir, name, value) {
   return file;
 }
 
-function run(args) {
-  return execFileSync(process.execPath, [cli, ...args], { encoding: 'utf8' });
+function run(args, input) {
+  return execFileSync(process.execPath, [cli, ...args], { encoding: 'utf8', input });
 }
 
 // Runs the CLI expecting it to exit non-zero, and returns the error object
 // (`status`, `stdout`, `stderr`) instead of letting the throw escape. If the
 // call unexpectedly succeeds, that is itself the test failure.
-function runFails(args) {
+function runFails(args, input) {
   try {
-    run(args);
+    run(args, input);
   } catch (err) {
     if (err.status !== undefined) return err;
     throw err;
@@ -214,6 +214,125 @@ test("record keeps each finding's classification in the verdict it stores under 
   assert.equal(i1.steps[0].label, 'review:i1.1', "the round is in the step's label");
   assert.deepEqual(i1.steps[0].return.findings.map((f) => f.kind), ['coverage-gap', 'defect'],
     "the verdict's own findings keep the classification the reviewer set for each one");
+});
+
+test('record reads the step return from stdin when the payload argument is "-", quotes and markup and all', () => {
+  const dir = tmpDir();
+  const backlogPath = path.join(dir, 'backlog.json');
+  run(['init', backlogPath, writeJson(dir, 'init.json', backlogTemplate([incrementPayload('i1', 'First')]))]);
+
+  // The exact three things the criterion names: double quotes, an HTML
+  // attribute, a newline — plus a backslash and an apostrophe, free.
+  const payload = {
+    summary: 'a lane keyed by data-lane-id="main"',
+    plan: 'line one\nline two, with a backslash \\ and an apostrophe it\'s',
+    questions: [],
+  };
+  const stdout = run(['record', backlogPath, 'i1', 'research:i1.0', '-'], JSON.stringify(payload));
+
+  assert.equal(stdout.trim().split('\n').length, 1, 'record prints exactly one line');
+  assert.match(stdout, /research:i1\.0/, 'the confirmation names the label it recorded');
+
+  const backlog = JSON.parse(fs.readFileSync(backlogPath, 'utf8'));
+  const i1 = backlog.increments.find((i) => i.id === 'i1');
+  assert.equal(i1.steps.length, 1);
+  assert.equal(i1.steps[0].label, 'research:i1.0');
+  assert.match(i1.steps[0].at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/, 'at is an ISO timestamp');
+  assert.deepEqual(i1.steps[0].return, payload, 'the payload round-trips byte-for-byte through stdin, which is what "records correctly" means');
+});
+
+// The two meanings of "-" meet in one call: the increment id and the payload
+// argument are each independently "-", and only the payload one means stdin.
+test('record on stdin with an increment id of "-" lands the run-level step in run.steps', () => {
+  const dir = tmpDir();
+  const backlogPath = path.join(dir, 'backlog.json');
+  run(['init', backlogPath, writeJson(dir, 'init.json', backlogTemplate([incrementPayload('i1', 'First')]))]);
+
+  run(['record', backlogPath, '-', 'decompose', '-'], JSON.stringify({ summary: 'opened' }));
+
+  const backlog = JSON.parse(fs.readFileSync(backlogPath, 'utf8'));
+  assert.equal(backlog.run.steps.length, 1);
+  assert.equal(backlog.run.steps[0].label, 'decompose');
+  assert.deepEqual(backlog.increments[0].steps, [], "the payload dash is read as stdin and the increment dash still means run-level, in the same call");
+});
+
+test('the same return recorded from a file and recorded on stdin lands the same stored return', () => {
+  const dir = tmpDir();
+  const backlogPath = path.join(dir, 'backlog.json');
+  run(['init', backlogPath, writeJson(dir, 'init.json', backlogTemplate([
+    incrementPayload('i1', 'First'),
+    incrementPayload('i2', 'Second'),
+  ]))]);
+
+  const payload = {
+    summary: 'a lane keyed by data-lane-id="main"',
+    plan: 'line one\nline two, with a backslash \\ and an apostrophe it\'s',
+    questions: [],
+  };
+  run(['record', backlogPath, 'i1', 'research:i1.0', writeJson(dir, 'payload.json', payload)]);
+  run(['record', backlogPath, 'i2', 'research:i2.0', '-'], JSON.stringify(payload));
+
+  const backlog = JSON.parse(fs.readFileSync(backlogPath, 'utf8'));
+  const i1 = backlog.increments.find((i) => i.id === 'i1');
+  const i2 = backlog.increments.find((i) => i.id === 'i2');
+  // Compare the return only — the `at` timestamps legitimately differ.
+  assert.deepEqual(i1.steps[0].return, i2.steps[0].return, 'the file form and the stdin form must store the identical return');
+  assert.deepEqual(i1.steps[0].return, payload);
+  assert.deepEqual(i2.steps[0].return, payload);
+});
+
+test('record with a payload file that does not exist exits 2 and leaves the backlog untouched', () => {
+  const dir = tmpDir();
+  const backlogPath = path.join(dir, 'backlog.json');
+  run(['init', backlogPath, writeJson(dir, 'init.json', backlogTemplate([incrementPayload('i1', 'First')]))]);
+  const before = fs.readFileSync(backlogPath, 'utf8');
+
+  // The case that goes red if the dash branch swallows the file branch.
+  const err = runFails(['record', backlogPath, 'i1', 'research:i1.0', path.join(dir, 'nope.json')]);
+
+  assert.equal(err.status, 2);
+  assert.ok(err.stderr && err.stderr.length > 0, 'a message on stderr explains what went wrong');
+  assert.match(err.stderr, /nope\.json/, 'the message names the missing file');
+  assert.equal(fs.readFileSync(backlogPath, 'utf8'), before, 'the file is byte-identical to before the failed call');
+});
+
+test('record with "-" and nothing on stdin exits 2 and leaves the backlog untouched', () => {
+  const dir = tmpDir();
+  const backlogPath = path.join(dir, 'backlog.json');
+  run(['init', backlogPath, writeJson(dir, 'init.json', backlogTemplate([incrementPayload('i1', 'First')]))]);
+  const before = fs.readFileSync(backlogPath, 'utf8');
+
+  const err = runFails(['record', backlogPath, 'i1', 'research:i1.0', '-'], '');
+
+  assert.equal(err.status, 2);
+  assert.match(err.stderr, /stdin/, 'the message names stdin as the source that carried nothing');
+  assert.equal(fs.readFileSync(backlogPath, 'utf8'), before, 'the file is byte-identical to before the failed call');
+});
+
+test('record with malformed JSON on stdin exits 2, says so of stdin, and leaves the backlog untouched', () => {
+  const dir = tmpDir();
+  const backlogPath = path.join(dir, 'backlog.json');
+  run(['init', backlogPath, writeJson(dir, 'init.json', backlogTemplate([incrementPayload('i1', 'First')]))]);
+  const before = fs.readFileSync(backlogPath, 'utf8');
+
+  const err = runFails(['record', backlogPath, 'i1', 'research:i1.0', '-'], '{"summary": "unterminated');
+
+  assert.equal(err.status, 2);
+  assert.match(err.stderr, /stdin/, 'the message names stdin, not a file path, as the source of the malformed JSON');
+  assert.equal(fs.readFileSync(backlogPath, 'utf8'), before, 'the file is byte-identical to before the failed call');
+});
+
+// Pins that the stdin form was not implemented by making the fourth argument
+// optional: a call that omits it entirely must not sit waiting on stdin.
+test('record without a payload argument exits 2 rather than waiting for stdin', () => {
+  const dir = tmpDir();
+  const backlogPath = path.join(dir, 'backlog.json');
+  run(['init', backlogPath, writeJson(dir, 'init.json', backlogTemplate([incrementPayload('i1', 'First')]))]);
+
+  const err = runFails(['record', backlogPath, 'i1', 'research:i1.0'], '');
+
+  assert.equal(err.status, 2);
+  assert.match(err.stderr, /usage:/, 'the message names the usage rather than hanging');
 });
 
 test("close sets status and note and empties only the closed increment's steps", () => {

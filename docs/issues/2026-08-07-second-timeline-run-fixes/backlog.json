@@ -81,6 +81,101 @@
             "questions": [],
             "summary": "Give `record` a `-` payload argument that reads the step return from stdin (file-path form and `init` untouched), rewrite the record instruction in the shared brief and in both workflows' recordStep() to the stdin form, and guard it with seven new recorder cases plus two brief greps and a new per-prompt driver mode w20 in test-repo.sh."
           }
+        },
+        {
+          "label": "tests:agent-affordances.0",
+          "at": "2026-08-07T21:59:59.181Z",
+          "return": {
+            "summary": "Added 7 failing node:test cases to skills/agent-brief/assets/backlog.test.mjs proving the stdin form of `backlog.mjs record` does not exist yet while the file-path form keeps passing, and 4 failing test-repo.sh cases (2 grep guards on the shared brief, 2 behavioural driver cases on both workflow scripts) proving neither the brief nor either workflow's dispatched prompts carry the stdin instruction yet.",
+            "cases": [
+              {
+                "case": "record accepts the step return on stdin as well as from a file path, and a return containing quotes, HTML attributes and newlines records correctly through the stdin form.",
+                "file": "skills/agent-brief/assets/backlog.test.mjs",
+                "testName": "record reads the step return from stdin when the payload argument is \"-\", quotes and markup and all",
+                "expected": "with payload argument `-` and the JSON payload on stdin, record exits 0, the confirmation names the label, and i1.steps[0].return deep-equals the exact payload (double quotes, a data-lane-id=\"main\" attribute, an embedded newline, a backslash and an apostrophe) byte-for-byte.",
+                "got": "Command failed: node backlog.mjs record ... i1 research:i1.0 - / cannot read the step return at - (stdin reading not implemented)."
+              },
+              {
+                "case": "record accepts the step return on stdin as well as from a file path (the edge where the increment-id dash and the payload dash meet).",
+                "file": "skills/agent-brief/assets/backlog.test.mjs",
+                "testName": "record on stdin with an increment id of \"-\" lands the run-level step in run.steps",
+                "expected": "`record backlog.json - decompose -` with JSON on stdin lands the step in backlog.run.steps (label decompose) and leaves increments[0].steps empty, proving the payload dash is read as stdin while the increment dash still means run-level in the same call.",
+                "got": "Command failed: node backlog.mjs record ... - decompose - / cannot read the step return at - (stdin reading not implemented)."
+              },
+              {
+                "case": "The file-path form of backlog.mjs record keeps working unchanged (checked against the stdin form storing the same thing).",
+                "file": "skills/agent-brief/assets/backlog.test.mjs",
+                "testName": "the same return recorded from a file and recorded on stdin lands the same stored return",
+                "expected": "the same payload recorded to i1 via a payload file and to i2 via `-`/stdin produces deepEqual stored `return` values on both increments (timestamps aside).",
+                "got": "Command failed: node backlog.mjs record ... i2 research:i2.0 - / cannot read the step return at - (the stdin half of the comparison cannot be produced yet)."
+              },
+              {
+                "case": "The file-path form of backlog.mjs record keeps working unchanged (missing payload file still exits 2 and leaves the backlog untouched).",
+                "file": "skills/agent-brief/assets/backlog.test.mjs",
+                "testName": "record with a payload file that does not exist exits 2 and leaves the backlog untouched",
+                "expected": "record against a nonexistent payload file path exits 2, stderr names the missing file, and the backlog file is byte-identical to before. Guards against a dash-branch regression swallowing the file branch.",
+                "got": "Already passes against the current file-path implementation; no regression to report. Kept in the suite as the guard the plan asks for."
+              },
+              {
+                "case": "backlog.mjs record accepts the step return on stdin, and a return containing quotes, HTML attributes and newlines records correctly through the stdin form (failure edge: empty stdin).",
+                "file": "skills/agent-brief/assets/backlog.test.mjs",
+                "testName": "record with \"-\" and nothing on stdin exits 2 and leaves the backlog untouched",
+                "expected": "record with payload argument `-` and empty stdin exits 2, stderr matches /stdin/, and the backlog file is byte-identical to before.",
+                "got": "AssertionError: 'the message names stdin as the source that carried nothing' — actual stderr is 'cannot read the step return at -\\n', exit code was 2 but the message does not mention stdin (current message is file-path shaped, not stdin-aware)."
+              },
+              {
+                "case": "backlog.mjs record accepts the step return on stdin, and a return containing quotes, HTML attributes and newlines records correctly through the stdin form (failure edge: malformed JSON on stdin).",
+                "file": "skills/agent-brief/assets/backlog.test.mjs",
+                "testName": "record with malformed JSON on stdin exits 2, says so of stdin, and leaves the backlog untouched",
+                "expected": "record with payload argument `-` and unterminated JSON on stdin exits 2, stderr matches /stdin/ and names no file path, and the backlog file is byte-identical to before.",
+                "got": "AssertionError: 'the message names stdin, not a file path, as the source of the malformed JSON' — actual stderr is 'cannot read the step return at -\\n' (stdin form not implemented, so the dash is still treated as a literal, nonexistent file path)."
+              },
+              {
+                "case": "The file-path form of backlog.mjs record keeps working unchanged (arity: no payload argument at all exits 2 rather than hanging on stdin).",
+                "file": "skills/agent-brief/assets/backlog.test.mjs",
+                "testName": "record without a payload argument exits 2 rather than waiting for stdin",
+                "expected": "record with only backlogPath, incrementId and label (no fourth argument) exits 2 with stderr matching /usage:/, never blocking on stdin.",
+                "got": "Already passes against the current implementation, which already treats a missing fourth argument as a usage error. Kept as the arity guard the plan names."
+              },
+              {
+                "case": "The agent brief instructs agents to record their step return through the stdin form.",
+                "file": "test-repo.sh",
+                "testName": "the shared brief's record command ends in the stdin argument",
+                "expected": "`grep -qF 'record <issueDir>/backlog.json <incrementId> <label> -' skills/agent-brief/SKILL.md` succeeds — the brief's own record command example ends in the stdin argument, not a payload-file placeholder.",
+                "got": "FAIL: the shared brief does not show the record command with the stdin argument: line 91 still reads 'node \"<base>/assets/backlog.mjs\" record <issueDir>/backlog.json <incrementId> <label> <thatFile>'."
+              },
+              {
+                "case": "The agent brief instructs agents to record their step return through the stdin form (names the channel).",
+                "file": "test-repo.sh",
+                "testName": "the shared brief names stdin as the channel a step return is recorded through",
+                "expected": "`grep -qi stdin skills/agent-brief/SKILL.md` succeeds.",
+                "got": "FAIL: the shared brief never mentions stdin."
+              },
+              {
+                "case": "Every other page that tells an agent how to record a step return says the same thing as the brief (the workflow scripts' dispatched prompts, checked behaviourally through the existing driver, for loop.js).",
+                "file": "test-repo.sh",
+                "testName": "loop.js: every step's prompt tells the agent to pipe its return to the recorder on stdin (driver mode w20)",
+                "expected": "for every dispatched step but load-state and publish, the prompt matches /record \\S*backlog\\.json \\S+ \\S+ -/ and /stdin/i.",
+                "got": "FAIL: decompose, research:i1.0, tests:i1.0, implement:i1.0, review:i1.0 and close:i1 are each 'not told to record its return with the stdin argument' and 'not told that its return goes to the recorder on stdin' — the dispatched prompts still carry only the file-path instruction inherited from the current brief."
+              },
+              {
+                "case": "Every other page that tells an agent how to record a step return says the same thing as the brief (the workflow scripts' dispatched prompts, checked behaviourally through the existing driver, for agile-loop.js).",
+                "file": "test-repo.sh",
+                "testName": "agile-loop.js: every step's prompt tells the agent to pipe its return to the recorder on stdin (driver mode w20)",
+                "expected": "same as above, for agile-loop.js, with replan:i1 in place of close:i1.",
+                "got": "FAIL: decompose, research:i1.0, tests:i1.0, implement:i1.0, review:i1.0 and replan:i1 are each 'not told to record its return with the stdin argument' and 'not told that its return goes to the recorder on stdin'."
+              }
+            ],
+            "openQuestions": [
+              "The plan's expected-red predictions for A4 ('record with a payload file that does not exist exits 2...') and A7 ('record without a payload argument exits 2...') both already pass against the current file-path-only implementation — the current CLI already exits 2 with a usage message for a missing fourth argument, and already exits 2 naming the missing file for a bad payload path. That is not a defect in the test plan (both are legitimate regression guards named by the plan, criterion 2), but the run's 'what is already red' section predicted all seven new node:test cases would be red before the implementation; two of the seven are not. Flagging so the implementer and reviewer are not surprised the count is 5 red / 2 already-green rather than 7/0.",
+              "The exact wording the implementer should use for the stdin-empty (A5) and malformed-stdin (A6) error messages is left to the plan's own regex (/stdin/) rather than a literal string, so any message mentioning stdin satisfies both cases; no gap there, noted only because it is the one piece of wording this plan leaves to the implementer's judgement."
+            ],
+            "questions": [],
+            "commands": [
+              "node --test skills/agent-brief/assets/backlog.test.mjs, 23 cases (7 new), exit 1: 18 pass, 5 fail (A1, A2, A3, A5, A6 fail as expected; A4 and A7 already pass against the current file-path implementation; all 16 pre-existing cases still pass unchanged).",
+              "bash test-repo.sh, 77 cases (4 new), exit 1: 73 pass, 4 fail (the 2 new grep cases on skills/agent-brief/SKILL.md and the 2 new w20 driver cases for loop.js and agile-loop.js; all 73 pre-existing cases stay green)."
+            ]
+          }
         }
       ]
     },

@@ -663,6 +663,7 @@ function contextFor(m) {
     case 'w5':
     case 'w6':
     case 'w8':
+    case 'w20':
       return { stateReturn: { exists: false, backlogJson: '', summary: '' }, decomposeReturn: decomposeReturnOne, researchReturn: planReturn };
     case 'w7':
       return { stateReturn: { exists: false, backlogJson: '', summary: '' }, decomposeReturn: decomposeReturnOne, researchReturn: planReturnWithQuestion };
@@ -1019,6 +1020,17 @@ async function main() {
       'a coverage gap marked a direct fix was routed to the implementer alone instead of the test-author');
     assertTrue(logs.some((l) => l.includes('correcting coverage only')),
       'the workflow never logged that it is correcting coverage only');
+  } else if (mode === 'w20') {
+    // The stdin form has to reach the agent in the prompt it is actually
+    // dispatched with, not only in the brief: a `<that file>` regression in
+    // recordStep would leave both pages disagreeing with each other.
+    for (const c of calls) {
+      if (c.label === 'load-state' || c.label === 'publish') continue;
+      assertTrue(/record \S*backlog\.json \S+ \S+ -/.test(c.prompt),
+        c.label + " is not told to record its return with the stdin argument");
+      assertTrue(/stdin/i.test(c.prompt),
+        c.label + ' is not told that its return goes to the recorder on stdin');
+    }
   } else {
     throw new Error('unknown mode ' + mode);
   }
@@ -1068,6 +1080,7 @@ for wf in "$root/workflows/loop.js" "$root/workflows/agile-loop.js"; do
   run_driver "$wf" w17 "$wf_name: a correction round whose findings are all coverage gaps runs the test-author and the reviewer alone, and logs that it is correcting coverage only"
   run_driver "$wf" w18 "$wf_name: a correction round with one defect among its coverage gaps runs the full chain"
   run_driver "$wf" w19 "$wf_name: a coverage gap marked a direct fix still goes to the test-author, not to the implementer alone"
+  run_driver "$wf" w20 "$wf_name: every step's prompt tells the agent to pipe its return to the recorder on stdin"
 done
 
 # Round 3, finding 2: only the incremental loop re-cuts, so an increment
@@ -1278,6 +1291,27 @@ if [ -z "$doc_loop_hits" ]; then
 else
   no "these lines still ask for a per-transcript loop:"
   echo "$doc_loop_hits" | sed 's/^/       /'
+fi
+
+echo
+echo "=== the recorder takes the step return on stdin"
+
+# Finding 5: the shared brief's own record command has to show the stdin
+# argument, not just a payload file. -F because the string carries `<`, `>`
+# and `/`. This is the case that goes red if the brief regresses to
+# `<thatFile>`, and it asserts what the page says now rather than the
+# absence of the old phrase.
+if grep -qF 'record <issueDir>/backlog.json <incrementId> <label> -' "$root/skills/agent-brief/SKILL.md"; then
+  ok "the shared brief's record command ends in the stdin argument"
+else
+  no "the shared brief does not show the record command with the stdin argument:"
+  grep -n 'backlog.json <incrementId>' "$root/skills/agent-brief/SKILL.md" | sed 's/^/       /'
+fi
+
+if grep -qi 'stdin' "$root/skills/agent-brief/SKILL.md"; then
+  ok "the shared brief names stdin as the channel a step return is recorded through"
+else
+  no "the shared brief never mentions stdin"
 fi
 
 echo
