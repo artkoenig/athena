@@ -22,6 +22,9 @@ import {
   clampChosenTime,
   scrubStateHtml,
   laneRowsHtml,
+  toolCallsUpTo,
+  laneDetailHtml,
+  MAX_LANE_TOOL_CALLS,
 } from '../public/timeline.js';
 import { fmtClock } from '../public/format.js';
 
@@ -737,4 +740,164 @@ test('the in-place repaint cannot drift from the full render', () => {
   const atMs = 250;
   const html = timelineHtml(items, window, { atMs });
   assert.ok(html.includes(laneRowsHtml(items, window, atMs)));
+});
+
+/* ------- selecting a lane, and its tool use up to the chosen time ------- */
+
+test('toolCallsUpTo bounds the listing by the chosen time and orders newest first, never including llm_request', () => {
+  const l = lane({
+    id: 'agent:agt-a',
+    kind: 'subagent',
+    agentId: 'agt-a',
+    firstMs: 0,
+    lastMs: 300,
+    activity: [
+      { atMs: 100, kind: 'tool', name: 'Read', params: '{"a":1}' },
+      { atMs: 200, kind: 'llm_request', name: 'claude-opus-5', params: null },
+      { atMs: 300, kind: 'tool', name: 'Write', params: '{"b":2}' },
+    ],
+  });
+
+  let result = toolCallsUpTo(l, 200);
+  assert.equal(result.total, 1);
+  assert.equal(result.items.length, 1);
+  assert.equal(result.items[0].name, 'Read');
+
+  result = toolCallsUpTo(l, 300);
+  assert.equal(result.total, 2);
+  assert.equal(result.items[0].name, 'Write');
+  assert.equal(result.items[1].name, 'Read');
+  assert.ok(!result.items.some((item) => item.kind === 'llm_request'), 'an llm_request entry never appears');
+});
+
+test('toolCallsUpTo: the chosen time is an inclusive bound, and a missing lane or activity answers empty without throwing', () => {
+  const l = lane({
+    id: 'agent:agt-a',
+    kind: 'subagent',
+    agentId: 'agt-a',
+    firstMs: 0,
+    lastMs: 300,
+    activity: [
+      { atMs: 100, kind: 'tool', name: 'Read', params: '{"a":1}' },
+      { atMs: 200, kind: 'llm_request', name: 'claude-opus-5', params: null },
+      { atMs: 300, kind: 'tool', name: 'Write', params: '{"b":2}' },
+    ],
+  });
+
+  assert.equal(toolCallsUpTo(l, 100).items.length, 1, 'the call exactly at the chosen time is included');
+  assert.deepEqual(toolCallsUpTo(l, 50), { total: 0, items: [] });
+  assert.deepEqual(toolCallsUpTo(l, null), { total: 0, items: [] });
+  assert.deepEqual(toolCallsUpTo(l, NaN), { total: 0, items: [] });
+  assert.deepEqual(toolCallsUpTo({}, 1000), { total: 0, items: [] });
+  const noActivityKey = lane({ id: 'main', kind: 'main', firstMs: 0, lastMs: 1 });
+  assert.deepEqual(toolCallsUpTo(noActivityKey, 1000), { total: 0, items: [] });
+});
+
+test('toolCallsUpTo caps the returned items at MAX_LANE_TOOL_CALLS while total still counts every call', () => {
+  const count = MAX_LANE_TOOL_CALLS + 10;
+  const activity = [];
+  for (let i = 1; i <= count; i++) {
+    activity.push({ atMs: i, kind: 'tool', name: `Tool${i}`, params: null });
+  }
+  const l = lane({ id: 'main', kind: 'main', firstMs: 0, lastMs: count, activity });
+  const result = toolCallsUpTo(l, count);
+  assert.equal(result.items.length, MAX_LANE_TOOL_CALLS);
+  assert.equal(result.total, count);
+  assert.equal(result.items[0].name, `Tool${count}`, 'the newest call leads the capped list');
+});
+
+test('laneDetailHtml renders nothing with no selection, or a selection naming a lane that is not in the list', () => {
+  const items = [lane({ id: 'main', kind: 'main', firstMs: 0, lastMs: 500 })];
+  assert.equal(laneDetailHtml(items, 500, null), '');
+  assert.equal(laneDetailHtml(items, 500, 'agent:nope'), '');
+});
+
+test('laneDetailHtml names the selected lane and lists each call by name and parameters, bounded by the chosen time', () => {
+  const mainLane = lane({ id: 'main', kind: 'main', firstMs: 0, lastMs: 500 });
+  const subLane = lane({
+    id: 'agent:agt-a',
+    kind: 'subagent',
+    agentId: 'agt-a',
+    agentType: 'agent:builtin:researcher',
+    firstMs: 0,
+    lastMs: 500,
+    activity: [
+      { atMs: 100, kind: 'tool', name: 'Grep', params: '{"pattern":"needle"}' },
+      { atMs: 400, kind: 'tool', name: 'Write', params: '{"file_path":"/late.md"}' },
+    ],
+  });
+  const html = laneDetailHtml([mainLane, subLane], 300, 'agent:agt-a');
+  assert.match(html, new RegExp(agentLabel(subLane)));
+  assert.match(html, /Grep/);
+  assert.match(html, /needle/);
+  assert.ok(!html.includes('Write'), 'a call after the chosen time must not appear');
+  assert.ok(!html.includes('/late.md'), 'a call after the chosen time must not appear');
+});
+
+test('an empty lane says so and renders no tool-call entries', () => {
+  const empty = lane({ id: 'main', kind: 'main', firstMs: 0, lastMs: 500 });
+  const html = laneDetailHtml([empty], 500, 'main');
+  assert.match(html, /no tool calls/i);
+  assert.ok(!html.includes('<li class="tool-call"'));
+});
+
+test('a call with no recorded parameters renders its name with an empty-params marker, not a gap', () => {
+  const l = lane({
+    id: 'main',
+    kind: 'main',
+    firstMs: 0,
+    lastMs: 500,
+    activity: [{ atMs: 100, kind: 'tool', name: 'Read', params: null }],
+  });
+  const html = laneDetailHtml([l], 500, 'main');
+  assert.match(html, /Read/);
+  assert.match(html, /data-empty="true"/);
+});
+
+test('a truncated call is marked data-truncated', () => {
+  const l = lane({
+    id: 'main',
+    kind: 'main',
+    firstMs: 0,
+    lastMs: 500,
+    activity: [{ atMs: 100, kind: 'tool', name: 'Bash', params: 'x'.repeat(1000), paramsTruncated: true }],
+  });
+  const html = laneDetailHtml([l], 500, 'main');
+  assert.match(html, /data-truncated="true"/);
+});
+
+test('a hostile tool name or parameters text is escaped in laneDetailHtml', () => {
+  const l = lane({
+    id: 'main',
+    kind: 'main',
+    firstMs: 0,
+    lastMs: 500,
+    activity: [{ atMs: 100, kind: 'tool', name: '<script>x</script>', params: '{"a":"<script>y</script>"}' }],
+  });
+  const html = laneDetailHtml([l], 500, 'main');
+  assert.ok(!html.includes('<script'));
+});
+
+test('the selected lane is marked aria-current, and every other lane is marked aria-current="false"', () => {
+  const window = { startMs: 0, endMs: 1000 };
+  const main = lane({ id: 'main', kind: 'main', firstMs: 0, lastMs: 1000 });
+  const subA = lane({ id: 'agent:agt-a', kind: 'subagent', agentId: 'agt-a', firstMs: 100, lastMs: 900 });
+  const items = [main, subA];
+  const html = timelineHtml(items, window, { atMs: 250, selectedLaneId: 'agent:agt-a' });
+  assert.match(laneRow(html, 'agent:agt-a'), /aria-current="true"/);
+  assert.match(laneRow(html, 'main'), /aria-current="false"/);
+
+  const unselected = timelineHtml(items, window, { atMs: 250 });
+  assert.ok(!unselected.includes('aria-current="true"'), 'with no selectedLaneId, nothing is marked current');
+});
+
+test('the in-place repaint cannot drift, extended to the selected lane', () => {
+  const window = { startMs: 0, endMs: 1000 };
+  const main = lane({ id: 'main', kind: 'main', firstMs: 0, lastMs: 1000 });
+  const subA = lane({ id: 'agent:agt-a', kind: 'subagent', agentId: 'agt-a', firstMs: 100, lastMs: 900 });
+  const items = [main, subA];
+  const atMs = 250;
+  const selectedLaneId = 'agent:agt-a';
+  const html = timelineHtml(items, window, { atMs, selectedLaneId });
+  assert.ok(html.includes(laneRowsHtml(items, window, atMs, selectedLaneId)));
 });

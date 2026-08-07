@@ -102,6 +102,209 @@
             ],
             "questions": []
           }
+        },
+        {
+          "label": "tests:lane-select.0",
+          "at": "2026-08-07T12:48:49.066Z",
+          "return": {
+            "summary": "Wrote 26 failing/pinning node:test cases across tools/argus/test/store.test.mjs (collector: params on activity entries), tools/argus-ui/test/timeline.test.mjs (toolCallsUpTo/laneDetailHtml/MAX_LANE_TOOL_CALLS view-model exports and the aria-current lane marker), and tools/argus-ui/test/app.test.mjs (lane selection reaching the rendered page and the in-place repaint on scrub), and confirmed each fails or passes for the reason the plan intends by running the three single-file commands the plan names.",
+            "cases": [
+              {
+                "case": "A0 (existing case, must be updated): activity entry shape gains params/paramsTruncated",
+                "file": "tools/argus/test/store.test.mjs",
+                "testName": "activity is placed on the lane of the agent instance it belongs to, at the time it occurred",
+                "expected": "deepEqual(lane.activity, [{atMs, kind, name, params: null, paramsTruncated: false}, ...]) for both the tool and the llm_request entries",
+                "got": "AssertionError (deepStrictEqual): actual entries carry only {atMs, kind, name}; expected adds params:null, paramsTruncated:false to both entries. `node --test tools/argus/test/store.test.mjs`, test 48 of 62, fails as intended."
+              },
+              {
+                "case": "A1: the parameters are read through the attribution already in place (subagent tool call, tool_input)",
+                "file": "tools/argus/test/store.test.mjs",
+                "testName": "the parameters are read through the attribution already in place: a subagent tool call carries its params on the agent lane, not on main",
+                "expected": "agent:agt-a lane's single activity entry is {atMs: NOW+100, kind:'tool', name:'Read', params:'{\"file_path\":\"/a.md\"}', paramsTruncated:false}; main.activity stays []",
+                "got": "AssertionError (deepStrictEqual): actual entry is {atMs, kind:'tool', name:'Read'} with no params/paramsTruncated keys at all. `node --test tools/argus/test/store.test.mjs`, test 57 of 62, fails as intended."
+              },
+              {
+                "case": "A2: the older CLI attribute name tool_parameters",
+                "file": "tools/argus/test/store.test.mjs",
+                "testName": "the older CLI attribute name tool_parameters is read the same as tool_input",
+                "expected": "lane.activity[0].params === '{\"file_path\":\"/a.md\"}' when the event carries tool_parameters instead of tool_input",
+                "got": "AssertionError (strictEqual): actual is undefined (no params key exists on the entry yet). `node --test tools/argus/test/store.test.mjs`, test 58 of 62, fails as intended."
+              },
+              {
+                "case": "A3: a call whose result never arrived",
+                "file": "tools/argus/test/store.test.mjs",
+                "testName": "a tool call whose result never arrived still leaves its activity mark, with params null",
+                "expected": "the activity entry still exists with params: null, paramsTruncated: false",
+                "got": "AssertionError (deepStrictEqual): actual entry has no params/paramsTruncated keys. `node --test tools/argus/test/store.test.mjs`, test 59 of 62, fails as intended."
+              },
+              {
+                "case": "A4: the cap, the limit case (>1000 chars truncated)",
+                "file": "tools/argus/test/store.test.mjs",
+                "testName": "parameters longer than 1000 characters are truncated to the cap",
+                "expected": "paramsTruncated === true and params.length === 1000",
+                "got": "AssertionError (strictEqual): actual paramsTruncated is undefined, not true. `node --test tools/argus/test/store.test.mjs`, test 60 of 62, fails as intended."
+              },
+              {
+                "case": "A5: the unattributed lane answers too",
+                "file": "tools/argus/test/store.test.mjs",
+                "testName": "the unattributed lane answers too: an orphan tool call carries its params",
+                "expected": "unattributed lane's tool entry carries params '{\"command\":\"ls -la\"}'; main.activity stays []",
+                "got": "AssertionError (strictEqual): actual is undefined (no params key on the unattributed entry). `node --test tools/argus/test/store.test.mjs`, test 61 of 62, fails as intended."
+              },
+              {
+                "case": "A6: no second attribution path (tool_result with no matching tool span invents no entry)",
+                "file": "tools/argus/test/store.test.mjs",
+                "testName": "a tool_result with no matching tool span invents no activity entry: no second attribution path",
+                "expected": "the lane set and every lane's activity.length is exactly what the spans alone produce (just the main lane, with activity.length 0); no entry is invented",
+                "got": "Passes today: the store already never invents an activity entry from a bare tool_result, so this negative case holds before the increment lands too. `node --test tools/argus/test/store.test.mjs`, test 62 of 62, passes (not a regression to fix, a guard the implementer must keep true)."
+              },
+              {
+                "case": "A7: an llm_request activity entry keeps params: null (folded into A1's assertions if the fixture already has one)",
+                "file": "",
+                "testName": "",
+                "expected": "an llm_request activity entry carries params: null",
+                "got": "Folded into A0's updated fixture, not written as a separate case: the existing case being updated (line 753) already has an llm_request entry ({atMs: NOW+300, kind:'llm_request', name:'claude-opus-5'}), and its updated expectation now asserts params: null, paramsTruncated: false on it too, matching the plan's own instruction to fold this into the fixture that already has one."
+              },
+              {
+                "case": "B1: bounded by the chosen time, newest first, llm_request never appears",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "toolCallsUpTo bounds the listing by the chosen time and orders newest first, never including llm_request",
+                "expected": "toolCallsUpTo(lane, 200) -> {total:1, items:[Read]}; toolCallsUpTo(lane, 300) -> {total:2, items:[Write, Read]}; llm_request entry never in items",
+                "got": "The whole file fails to load: `SyntaxError: The requested module '../public/timeline.js' does not provide an export named 'MAX_LANE_TOOL_CALLS'`. `node --test tools/argus-ui/test/timeline.test.mjs` exits 1, 0 tests run — the missing export is itself proof the behaviour does not exist yet, not an import typo on the test's side (toolCallsUpTo/laneDetailHtml/MAX_LANE_TOOL_CALLS are exactly the plan's named new exports)."
+              },
+              {
+                "case": "B2: the edges (inclusive bound at exactly atMs; empty before firstMs; null/NaN atMs; missing lane/activity)",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "toolCallsUpTo: the chosen time is an inclusive bound, and a missing lane or activity answers empty without throwing",
+                "expected": "toolCallsUpTo(lane, 100) includes the call exactly at 100; toolCallsUpTo(lane, 50), (lane, null), (lane, NaN), ({}, 1000) and (laneWithNoActivityData, 1000) all return {total:0, items:[]} without throwing",
+                "got": "Same module-load SyntaxError as B1 (missing MAX_LANE_TOOL_CALLS export) prevents this file from running at all."
+              },
+              {
+                "case": "B3: the cap, the limit case (MAX_LANE_TOOL_CALLS+10 entries)",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "toolCallsUpTo caps the returned items at MAX_LANE_TOOL_CALLS while total still counts every call",
+                "expected": "items.length === MAX_LANE_TOOL_CALLS, total === MAX_LANE_TOOL_CALLS+10, items[0] is the newest call",
+                "got": "Same module-load SyntaxError as B1 prevents this file from running at all."
+              },
+              {
+                "case": "B4: no selection renders nothing",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "laneDetailHtml renders nothing with no selection, or a selection naming a lane that is not in the list",
+                "expected": "laneDetailHtml(items, 500, null) === '' and laneDetailHtml(items, 500, 'agent:nope') === ''",
+                "got": "Same module-load SyntaxError as B1 prevents this file from running at all."
+              },
+              {
+                "case": "B5: the listing names the lane and carries name plus parameters",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "laneDetailHtml names the selected lane and lists each call by name and parameters, bounded by the chosen time",
+                "expected": "the markup contains the lane's agentLabel and, for each listed call, its tool name and params text; a call after the chosen time appears nowhere",
+                "got": "Same module-load SyntaxError as B1 prevents this file from running at all."
+              },
+              {
+                "case": "B6: an empty lane says so",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "an empty lane says so and renders no tool-call entries",
+                "expected": "matches /no tool calls/i and renders no <li class=\"tool-call\"",
+                "got": "Same module-load SyntaxError as B1 prevents this file from running at all."
+              },
+              {
+                "case": "B7: a call with no recorded parameters",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "a call with no recorded parameters renders its name with an empty-params marker, not a gap",
+                "expected": "renders the tool name and a data-empty=\"true\" parameters element",
+                "got": "Same module-load SyntaxError as B1 prevents this file from running at all."
+              },
+              {
+                "case": "B8: a truncated call is marked",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "a truncated call is marked data-truncated",
+                "expected": "renders data-truncated=\"true\" on its parameters element",
+                "got": "Same module-load SyntaxError as B1 prevents this file from running at all."
+              },
+              {
+                "case": "B9: escaping, hostile tool name and params",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "a hostile tool name or parameters text is escaped in laneDetailHtml",
+                "expected": "the output of laneDetailHtml never contains the literal substring '<script'",
+                "got": "Same module-load SyntaxError as B1 prevents this file from running at all."
+              },
+              {
+                "case": "B10: the selected lane is visibly marked",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "the selected lane is marked aria-current, and every other lane is marked aria-current=\"false\"",
+                "expected": "the selected lane's row contains aria-current=\"true\", every other row aria-current=\"false\", and with no selectedLaneId no row contains aria-current=\"true\" anywhere",
+                "got": "Same module-load SyntaxError as B1 prevents this file from running at all."
+              },
+              {
+                "case": "B11: the in-place repaint cannot drift (extended to the selected lane)",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "the in-place repaint cannot drift, extended to the selected lane",
+                "expected": "timelineHtml(items, window, {atMs, selectedLaneId}) contains laneRowsHtml(items, window, atMs, selectedLaneId) verbatim",
+                "got": "Same module-load SyntaxError as B1 prevents this file from running at all."
+              },
+              {
+                "case": "C1: the resting page (with no lane selected the session view renders as it does today)",
+                "file": "tools/argus-ui/test/app.test.mjs",
+                "testName": "with no lane selected the session view renders as it does today: no lane detail, no aria-current, no tool-call listing",
+                "expected": "handle.el('lane-detail').innerHTML === '' and the detail markup contains no aria-current=\"true\" and no 'tool-call'",
+                "got": "Passes today: booting the app with no selection made already satisfies this baseline before the increment lands, since app.js does not yet touch a lane-detail element or aria-current at all. `node --test tools/argus-ui/test/app.test.mjs`, test 15 of 22, passes (a guard the implementer must keep true, not a case to make go green)."
+              },
+              {
+                "case": "C2: a lane selection reaches the panel and the timeline",
+                "file": "tools/argus-ui/test/app.test.mjs",
+                "testName": "clicking a lane row records the selection and marks it on the timeline",
+                "expected": "after clicking [data-lane-id] for agent:agt-a on 'detail', laneRow(detail html, 'agent:agt-a') contains aria-current=\"true\", laneRow(..., 'main') contains aria-current=\"false\", and lane-detail's markup contains 'Grep' and 'needle'",
+                "got": "settle() timed out after 2s waiting for lane-detail's innerHTML to include 'Grep' — the click never populates handle.el('lane-detail'), which stays '' throughout, because there is no click handling for [data-lane-id] yet. `node --test tools/argus-ui/test/app.test.mjs`, test 16 of 22, fails as intended."
+              },
+              {
+                "case": "C3: the listing is bounded by the chosen time and follows it, repainted in place",
+                "file": "tools/argus-ui/test/app.test.mjs",
+                "testName": "the listing is bounded by the chosen time and follows it as it moves, repainted in place",
+                "expected": "after selecting main and scrubbing to T0+5_000, lane-detail contains /early.md and not /late.md, and detail's outer markup still shows value=\"T0+10_000\" (the wholesale render did not run); scrubbing forward to T0+9_500 brings /late.md back",
+                "got": "settle() timed out after 2s waiting for lane-detail's innerHTML to include '/late.md' from the very first click (selecting 'main' never populates lane-detail at all). `node --test tools/argus-ui/test/app.test.mjs`, test 17 of 22, fails as intended."
+              },
+              {
+                "case": "C4: the unattributed lane answers too",
+                "file": "tools/argus-ui/test/app.test.mjs",
+                "testName": "the unattributed lane answers too: selecting it lists its tool calls",
+                "expected": "selecting the unattributed lane, the panel lists 'Bash' and its 'ls -la'",
+                "got": "settle() timed out after 2s waiting for lane-detail's innerHTML to include 'Bash'. `node --test tools/argus-ui/test/app.test.mjs`, test 18 of 22, fails as intended."
+              },
+              {
+                "case": "C5: a lane with no tool calls before the chosen time says so",
+                "file": "tools/argus-ui/test/app.test.mjs",
+                "testName": "a lane with no tool calls before the chosen time says so",
+                "expected": "selecting agent:agt-b (no activity), lane-detail matches /no tool calls/i and contains no 'tool-call-name'",
+                "got": "settle() timed out after 2s waiting for /no tool calls/i to appear in lane-detail's innerHTML. `node --test tools/argus-ui/test/app.test.mjs`, test 19 of 22, fails as intended."
+              },
+              {
+                "case": "C6: the selection survives new data",
+                "file": "tools/argus-ui/test/app.test.mjs",
+                "testName": "the selection survives new data arriving, and the panel keeps following it",
+                "expected": "selecting agent:agt-a, then emitting 'ingest' that moves lastMs and settling on the new max= reaching the detail markup, the refreshed detail still marks agent:agt-a with aria-current=\"true\" and still lists 'Grep'",
+                "got": "settle() timed out after 2s waiting for lane-detail's innerHTML to include 'Grep' from the initial selection click, before the ingest step is even reached. `node --test tools/argus-ui/test/app.test.mjs`, test 20 of 22, fails as intended."
+              },
+              {
+                "case": "C7: clicking the selected lane closes the panel again",
+                "file": "tools/argus-ui/test/app.test.mjs",
+                "testName": "clicking the selected lane a second time closes the panel",
+                "expected": "selecting agent:agt-a, then clicking it a second time, lane-detail.innerHTML === '' and no aria-current=\"true\" anywhere in the detail markup",
+                "got": "settle() timed out after 2s waiting for lane-detail's innerHTML to include 'Grep' from the first click. `node --test tools/argus-ui/test/app.test.mjs`, test 21 of 22, fails as intended."
+              },
+              {
+                "case": "C8: switching sessions drops the selection",
+                "file": "tools/argus-ui/test/app.test.mjs",
+                "testName": "switching sessions drops the selection",
+                "expected": "after selecting agent:agt-a, clicking [data-session] for sess-2 and settling on agent:agt-c reaching the page, lane-detail.innerHTML === ''",
+                "got": "settle() timed out after 2s waiting for lane-detail's innerHTML to include 'Grep' from the first click, before the session switch is reached. `node --test tools/argus-ui/test/app.test.mjs`, test 22 of 22, fails as intended."
+              }
+            ],
+            "openQuestions": [
+              "B2/plan text is internally slightly ambiguous about whether the 'payload shape with no activity key' parenthetical describes only toolCallsUpTo({}, 1000) or also the lane(...) fixture case, since the module-level `lane()` fixture always sets `activity: []` (never omits the key) — I wrote one case covering both forms (a bare {} object and a lane() built with no activity supplied, which still gets activity: [] from the fixture default) so both are exercised, but a lane with a truly absent `activity` key was not constructible from the fixture as given.",
+              "C5 asks for a substring check against a class name 'tool-call-name' while B6/B7 use 'tool-call' (li) and 'data-empty'/'data-truncated' attributes — the plan does not reconcile these two vocabularies for the empty-lane marker, so both literal strings were kept as the plan wrote them (B uses 'tool-call', C uses 'tool-call-name'); the implementer should treat both plan-given substrings as binding rather than assume they are the same token."
+            ],
+            "questions": []
+          }
         }
       ]
     },

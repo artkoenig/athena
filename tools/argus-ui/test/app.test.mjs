@@ -228,10 +228,11 @@ const agentsOne = {
       id: 'main', kind: 'main', agentId: null, parentAgentId: null, agentType: null,
       firstMs: T0, lastMs: T0 + 10_000, durationMs: 10_000, spanCount: 4,
       activity: [
-        { atMs: T0 + 500, kind: 'llm_request', name: 'claude-opus-5' },
-        { atMs: T0 + 3_000, kind: 'tool', name: 'Read' },
+        { atMs: T0 + 500, kind: 'llm_request', name: 'claude-opus-5', params: null },
+        { atMs: T0 + 3_000, kind: 'tool', name: 'Read', params: '{"file_path":"/early.md"}', paramsTruncated: false },
+        { atMs: T0 + 9_000, kind: 'tool', name: 'Write', params: '{"file_path":"/late.md"}', paramsTruncated: false },
       ],
-      activityTotal: 2,
+      activityTotal: 3,
       context: [
         { atMs: T0 + 500, length: 20_000 },
         { atMs: T0 + 8_000, length: 90_000 },
@@ -241,7 +242,7 @@ const agentsOne = {
     {
       id: 'agent:agt-a', kind: 'subagent', agentId: 'agt-a', parentAgentId: null, agentType: 'agent:builtin:researcher',
       firstMs: T0 + 1_000, lastMs: T0 + 4_000, durationMs: 3_000, spanCount: 3,
-      activity: [{ atMs: T0 + 1_500, kind: 'tool', name: 'Grep' }],
+      activity: [{ atMs: T0 + 1_500, kind: 'tool', name: 'Grep', params: '{"pattern":"needle"}', paramsTruncated: false }],
       activityTotal: 1,
       context: [{ atMs: T0 + 1_500, length: 30_000 }],
       contextPeak: 30_000,
@@ -257,7 +258,7 @@ const agentsOne = {
     {
       id: 'unattributed', kind: 'unattributed', agentId: null, parentAgentId: null, agentType: null,
       firstMs: T0 + 6_000, lastMs: T0 + 7_000, durationMs: 1_000, spanCount: 1,
-      activity: [{ atMs: T0 + 6_500, kind: 'tool', name: 'Bash' }],
+      activity: [{ atMs: T0 + 6_500, kind: 'tool', name: 'Bash', params: '{"command":"ls -la"}', paramsTruncated: false }],
       activityTotal: 1,
       context: [{ atMs: T0 + 6_500, length: 5_000 }],
       contextPeak: 5_000,
@@ -539,4 +540,108 @@ test('the live control returns to live mode, and following actually resumes', as
   marks = playheads(html);
   assert.equal(marks.length, 4);
   for (const m of marks) assert.equal(m.toFixed(3), '100.000');
+});
+
+/* ------- selecting a lane, and its tool use up to the chosen time ------- */
+
+test('with no lane selected the session view renders as it does today: no lane detail, no aria-current, no tool-call listing', async () => {
+  const handle = await bootApp({ ...baseRoutes });
+  assert.equal(handle.el('lane-detail').innerHTML, '');
+  const html = handle.el('detail').innerHTML;
+  assert.ok(!html.includes('aria-current="true"'));
+  assert.ok(!html.includes('tool-call'));
+});
+
+test('clicking a lane row records the selection and marks it on the timeline', async () => {
+  const handle = await bootApp({ ...baseRoutes });
+  handle.fire('detail', 'click', clickOn('[data-lane-id]', { dataset: { laneId: 'agent:agt-a' } }));
+  await handle.settle(() => handle.el('lane-detail').innerHTML.includes('Grep'));
+
+  const detailHtml = handle.el('detail').innerHTML;
+  assert.match(laneRow(detailHtml, 'agent:agt-a'), /aria-current="true"/);
+  assert.match(laneRow(detailHtml, 'main'), /aria-current="false"/);
+
+  const panel = handle.el('lane-detail').innerHTML;
+  assert.match(panel, /Grep/);
+  assert.match(panel, /needle/);
+});
+
+test('the listing is bounded by the chosen time and follows it as it moves, repainted in place', async () => {
+  const handle = await bootApp({ ...baseRoutes });
+  handle.fire('detail', 'click', clickOn('[data-lane-id]', { dataset: { laneId: 'main' } }));
+  await handle.settle(() => handle.el('lane-detail').innerHTML.includes('/late.md'));
+  assert.match(handle.el('lane-detail').innerHTML, /\/early\.md/);
+  assert.match(handle.el('lane-detail').innerHTML, /\/late\.md/);
+
+  handle.fire('detail', 'input', { target: { id: 'timeline-scrub', value: String(T0 + 5_000) } });
+  assert.match(handle.el('lane-detail').innerHTML, /\/early\.md/);
+  assert.ok(!handle.el('lane-detail').innerHTML.includes('/late.md'), 'a call after the chosen time must drop out');
+  assert.match(
+    handle.el('detail').innerHTML,
+    new RegExp(`value="${T0 + 10_000}"`),
+    'the wholesale render did not run, which keeps the range input alive mid-drag',
+  );
+
+  handle.fire('detail', 'input', { target: { id: 'timeline-scrub', value: String(T0 + 9_500) } });
+  assert.match(handle.el('lane-detail').innerHTML, /\/late\.md/);
+});
+
+test('the unattributed lane answers too: selecting it lists its tool calls', async () => {
+  const handle = await bootApp({ ...baseRoutes });
+  handle.fire('detail', 'click', clickOn('[data-lane-id]', { dataset: { laneId: 'unattributed' } }));
+  await handle.settle(() => handle.el('lane-detail').innerHTML.includes('Bash'));
+  const panel = handle.el('lane-detail').innerHTML;
+  assert.match(panel, /Bash/);
+  assert.match(panel, /ls -la/);
+});
+
+test('a lane with no tool calls before the chosen time says so', async () => {
+  const handle = await bootApp({ ...baseRoutes });
+  handle.fire('detail', 'click', clickOn('[data-lane-id]', { dataset: { laneId: 'agent:agt-b' } }));
+  await handle.settle(() => /no tool calls/i.test(handle.el('lane-detail').innerHTML));
+  const panel = handle.el('lane-detail').innerHTML;
+  assert.match(panel, /no tool calls/i);
+  assert.ok(!panel.includes('tool-call-name'));
+});
+
+test('the selection survives new data arriving, and the panel keeps following it', async () => {
+  let headMs = T0 + 10_000;
+  const routes = {
+    ...baseRoutes,
+    '/api/sessions/sess-1/agents': () => ({ ...agentsOne, lastMs: headMs }),
+  };
+  const handle = await bootApp(routes);
+  handle.fire('detail', 'click', clickOn('[data-lane-id]', { dataset: { laneId: 'agent:agt-a' } }));
+  await handle.settle(() => handle.el('lane-detail').innerHTML.includes('Grep'));
+
+  headMs = T0 + 20_000;
+  handle.emit('ingest');
+  await handle.settle(() => handle.el('detail').innerHTML.includes(`max="${T0 + 20_000}"`));
+
+  const detailHtml = handle.el('detail').innerHTML;
+  assert.match(laneRow(detailHtml, 'agent:agt-a'), /aria-current="true"/);
+  assert.match(handle.el('lane-detail').innerHTML, /Grep/);
+});
+
+test('clicking the selected lane a second time closes the panel', async () => {
+  const handle = await bootApp({ ...baseRoutes });
+  handle.fire('detail', 'click', clickOn('[data-lane-id]', { dataset: { laneId: 'agent:agt-a' } }));
+  await handle.settle(() => handle.el('lane-detail').innerHTML.includes('Grep'));
+
+  handle.fire('detail', 'click', clickOn('[data-lane-id]', { dataset: { laneId: 'agent:agt-a' } }));
+  await handle.settle(() => handle.el('lane-detail').innerHTML === '');
+  assert.equal(handle.el('lane-detail').innerHTML, '');
+  assert.ok(!handle.el('detail').innerHTML.includes('aria-current="true"'));
+});
+
+test('switching sessions drops the selection', async () => {
+  const handle = await bootApp({ ...baseRoutes });
+  handle.fire('detail', 'click', clickOn('[data-lane-id]', { dataset: { laneId: 'agent:agt-a' } }));
+  await handle.settle(() => handle.el('lane-detail').innerHTML.includes('Grep'));
+
+  handle.fire('session-list', 'click', clickOn('[data-session]', { dataset: { session: 'sess-2' } }));
+  await handle.settle(
+    () => handle.paths.includes('/api/sessions/sess-2/agents') && handle.el('detail').innerHTML.includes('agent:agt-c'),
+  );
+  assert.equal(handle.el('lane-detail').innerHTML, '');
 });

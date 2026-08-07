@@ -771,8 +771,8 @@ test('activity is placed on the lane of the agent instance it belongs to, at the
   const lane = items.find((item) => item.id === 'agent:agt-a');
   const main = items.find((item) => item.id === 'main');
   assert.deepEqual(lane.activity, [
-    { atMs: NOW + 100, kind: 'tool', name: 'Read' },
-    { atMs: NOW + 300, kind: 'llm_request', name: 'claude-opus-5' },
+    { atMs: NOW + 100, kind: 'tool', name: 'Read', params: null, paramsTruncated: false },
+    { atMs: NOW + 300, kind: 'llm_request', name: 'claude-opus-5', params: null, paramsTruncated: false },
   ]);
   assert.equal(lane.activityTotal, 2);
   assert.deepEqual(main.activity, [], 'an interaction span is not activity');
@@ -929,4 +929,137 @@ test('the context peak survives thinning', () => {
   assert.equal(lane.contextPeak, 999999, 'the peak must survive even though the drawn samples are thinned');
   assert.ok(lane.context.length < 1500, 'the drawn samples must be thinned below the raw count');
   assert.ok(lane.context.some((sample) => sample.length === 999999));
+});
+
+/* --------------- getAgents: tool call parameters --------------- */
+
+test('the parameters are read through the attribution already in place: a subagent tool call carries its params on the agent lane, not on main', () => {
+  const store = new TelemetryStore();
+  store.ingest('traces', [
+    span('claude_code.interaction', {}, { spanId: 'root' }),
+    subagentSpan(
+      'claude_code.tool',
+      'agt-a',
+      { tool_name: 'Read', tool_use_id: 'tu-1' },
+      { spanId: 'tool-a', parentSpanId: 'root', startMs: 100 },
+    ),
+  ]);
+  store.ingest('logs', [
+    log(
+      'claude_code.tool_result',
+      { tool_name: 'Read', tool_use_id: 'tu-1', tool_input: JSON.stringify({ file_path: '/a.md' }) },
+      NOW + 150,
+    ),
+  ]);
+  const { items } = store.getAgents(SESSION);
+  const lane = items.find((item) => item.id === 'agent:agt-a');
+  const main = items.find((item) => item.id === 'main');
+  assert.deepEqual(lane.activity, [
+    { atMs: NOW + 100, kind: 'tool', name: 'Read', params: '{"file_path":"/a.md"}', paramsTruncated: false },
+  ]);
+  assert.deepEqual(main.activity, [], 'the parameters must land on the agent lane and nowhere else');
+});
+
+test('the older CLI attribute name tool_parameters is read the same as tool_input', () => {
+  const store = new TelemetryStore();
+  store.ingest('traces', [
+    span('claude_code.interaction', {}, { spanId: 'root' }),
+    subagentSpan(
+      'claude_code.tool',
+      'agt-a',
+      { tool_name: 'Read', tool_use_id: 'tu-1' },
+      { spanId: 'tool-a', parentSpanId: 'root', startMs: 100 },
+    ),
+  ]);
+  store.ingest('logs', [
+    log(
+      'claude_code.tool_result',
+      { tool_name: 'Read', tool_use_id: 'tu-1', tool_parameters: JSON.stringify({ file_path: '/a.md' }) },
+      NOW + 150,
+    ),
+  ]);
+  const { items } = store.getAgents(SESSION);
+  const lane = items.find((item) => item.id === 'agent:agt-a');
+  assert.equal(lane.activity[0].params, '{"file_path":"/a.md"}');
+});
+
+test('a tool call whose result never arrived still leaves its activity mark, with params null', () => {
+  const store = new TelemetryStore();
+  store.ingest('traces', [
+    span('claude_code.interaction', {}, { spanId: 'root' }),
+    subagentSpan(
+      'claude_code.tool',
+      'agt-a',
+      { tool_name: 'Read', tool_use_id: 'tu-1' },
+      { spanId: 'tool-a', parentSpanId: 'root', startMs: 100 },
+    ),
+  ]);
+  const { items } = store.getAgents(SESSION);
+  const lane = items.find((item) => item.id === 'agent:agt-a');
+  assert.deepEqual(lane.activity, [
+    { atMs: NOW + 100, kind: 'tool', name: 'Read', params: null, paramsTruncated: false },
+  ]);
+});
+
+test('parameters longer than 1000 characters are truncated to the cap', () => {
+  const store = new TelemetryStore();
+  store.ingest('traces', [
+    span('claude_code.interaction', {}, { spanId: 'root' }),
+    subagentSpan(
+      'claude_code.tool',
+      'agt-a',
+      { tool_name: 'Bash', tool_use_id: 'tu-1' },
+      { spanId: 'tool-a', parentSpanId: 'root', startMs: 100 },
+    ),
+  ]);
+  store.ingest('logs', [
+    log(
+      'claude_code.tool_result',
+      { tool_name: 'Bash', tool_use_id: 'tu-1', tool_input: JSON.stringify({ command: 'x'.repeat(5000) }) },
+      NOW + 150,
+    ),
+  ]);
+  const { items } = store.getAgents(SESSION);
+  const lane = items.find((item) => item.id === 'agent:agt-a');
+  assert.equal(lane.activity[0].paramsTruncated, true);
+  assert.equal(lane.activity[0].params.length, 1000);
+});
+
+test('the unattributed lane answers too: an orphan tool call carries its params', () => {
+  const store = new TelemetryStore();
+  store.ingest('traces', [
+    span('claude_code.interaction', {}, { spanId: 'root' }),
+    span(
+      'claude_code.tool',
+      { tool_name: 'Bash', tool_use_id: 'tu-9' },
+      { spanId: 'orphan-tool', parentSpanId: 'ghost', startMs: 50 },
+    ),
+  ]);
+  store.ingest('logs', [
+    log(
+      'claude_code.tool_result',
+      { tool_name: 'Bash', tool_use_id: 'tu-9', tool_input: JSON.stringify({ command: 'ls -la' }) },
+      NOW + 100,
+    ),
+  ]);
+  const { items } = store.getAgents(SESSION);
+  const unattributed = items.find((item) => item.kind === 'unattributed');
+  const main = items.find((item) => item.id === 'main');
+  assert.equal(unattributed.activity[0].params, '{"command":"ls -la"}');
+  assert.deepEqual(main.activity, []);
+});
+
+test('a tool_result with no matching tool span invents no activity entry: no second attribution path', () => {
+  const store = new TelemetryStore();
+  store.ingest('traces', [span('claude_code.interaction', {}, { spanId: 'root' })]);
+  store.ingest('logs', [
+    log(
+      'claude_code.tool_result',
+      { tool_name: 'Bash', tool_use_id: 'tu-nothing', tool_input: JSON.stringify({ command: 'ls' }) },
+      NOW + 100,
+    ),
+  ]);
+  const { items } = store.getAgents(SESSION);
+  assert.deepEqual(items.map((item) => item.id), ['main'], 'the spans alone produce only the main lane');
+  assert.equal(items[0].activity.length, 0, 'the orphan tool_result must not invent an activity entry');
 });
