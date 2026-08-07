@@ -56,6 +56,23 @@ const span = (name, attributes = {}, extra = {}) => {
   };
 };
 
+// A subagent-shaped span: carries the per-instance identity (agent_id), its
+// parent (parent_agent_id) and its type (query_source) — the three attributes
+// the previous increment reported on llm_request and tool spans. `extraAttrs`
+// lets a case override any of them (e.g. a second instance, a different
+// session) instead of repeating the attribute literals inline.
+const subagentSpan = (name, agentId, extraAttrs = {}, extra = {}) =>
+  span(
+    name,
+    {
+      agent_id: agentId,
+      parent_agent_id: 'agt-main',
+      query_source: 'agent:builtin:researcher',
+      ...extraAttrs,
+    },
+    extra,
+  );
+
 test('token and cost metrics roll up per session and per model', () => {
   const store = new TelemetryStore();
   store.ingest('metrics', [
@@ -541,4 +558,192 @@ test('clear() empties the store but keeps subscribers attached', () => {
   assert.equal(store.sessions.size, 0);
   store.ingest('logs', [log('claude_code.user_prompt')]);
   assert.equal(notified, 2);
+});
+
+/* ----------------------------- getAgents(sessionId) ----------------------------- *
+ * The timeline draws one lane for the main session and one per subagent
+ * instance. `query_source` names only the agent type, so instance identity
+ * has to come from `agent_id`/`parent_agent_id` — never from the type alone.
+ */
+
+test('a session with only a main interaction span reports one main lane', () => {
+  const store = new TelemetryStore();
+  store.ingest('traces', [
+    span('claude_code.interaction', {}, { spanId: 'root' }),
+    span('claude_code.llm_request', {}, { spanId: 'llm', parentSpanId: 'root' }),
+  ]);
+  const { items } = store.getAgents(SESSION);
+  assert.equal(items.length, 1);
+  assert.equal(items[0].kind, 'main');
+  assert.equal(items[0].id, 'main');
+  assert.equal(items[0].spanCount, 2);
+});
+
+test('two concurrent subagents of the same type get two separate lanes', () => {
+  const store = new TelemetryStore();
+  store.ingest('traces', [
+    span('claude_code.interaction', {}, { spanId: 'root' }),
+    subagentSpan('claude_code.tool', 'agt-a', {}, { spanId: 'tool-a', parentSpanId: 'root', startMs: 100, endMs: 400 }),
+    subagentSpan('claude_code.tool', 'agt-b', {}, { spanId: 'tool-b', parentSpanId: 'root', startMs: 150, endMs: 500 }),
+  ]);
+  const { items } = store.getAgents(SESSION);
+  assert.equal(items.length, 3);
+  const subs = items.filter((item) => item.kind === 'subagent');
+  assert.equal(subs.length, 2);
+  assert.deepEqual(subs.map((item) => item.id).sort(), ['agent:agt-a', 'agent:agt-b']);
+  for (const sub of subs) {
+    assert.equal(sub.agentType, 'agent:builtin:researcher');
+    assert.equal(sub.parentAgentId, 'agt-main');
+  }
+});
+
+test('query_source alone never collapses two agent instances into one lane', () => {
+  // Pins the headline case a second time, from a different angle: even with
+  // both subagents sharing one type, the item count and the id set must stay
+  // per-instance.
+  const store = new TelemetryStore();
+  store.ingest('traces', [
+    span('claude_code.interaction', {}, { spanId: 'root' }),
+    subagentSpan('claude_code.tool', 'agt-a', {}, { spanId: 'tool-a', parentSpanId: 'root', startMs: 100, endMs: 400 }),
+    subagentSpan('claude_code.tool', 'agt-b', {}, { spanId: 'tool-b', parentSpanId: 'root', startMs: 150, endMs: 500 }),
+  ]);
+  const { items } = store.getAgents(SESSION);
+  assert.equal(items.filter((item) => item.kind === 'subagent').length, 2);
+  const [a, b] = items.filter((item) => item.kind === 'subagent');
+  assert.notEqual(a.id, b.id);
+});
+
+test('lanes come back with main first and subagents ordered by when they started', () => {
+  const store = new TelemetryStore();
+  store.ingest('traces', [
+    span('claude_code.interaction', {}, { spanId: 'root' }),
+    subagentSpan('claude_code.tool', 'agt-a', {}, { spanId: 'tool-a', parentSpanId: 'root', startMs: 100, endMs: 400 }),
+    subagentSpan('claude_code.tool', 'agt-b', {}, { spanId: 'tool-b', parentSpanId: 'root', startMs: 150, endMs: 500 }),
+  ]);
+  const { items } = store.getAgents(SESSION);
+  assert.equal(items[0].kind, 'main');
+  const subs = items.filter((item) => item.kind === 'subagent');
+  assert.equal(subs[0].id, 'agent:agt-a');
+  assert.equal(subs[1].id, 'agent:agt-b');
+  assert.ok(subs[0].firstMs < subs[1].firstMs);
+});
+
+test('a subagent span for a different session does not leak into this session\'s lanes', () => {
+  const store = new TelemetryStore();
+  store.ingest('traces', [
+    span('claude_code.interaction', {}, { spanId: 'root' }),
+    subagentSpan('claude_code.tool', 'agt-a', {}, { spanId: 'tool-a', parentSpanId: 'root' }),
+    subagentSpan('claude_code.tool', 'agt-other', { 'session.id': 'other-session' }, { spanId: 'tool-other' }),
+  ]);
+  const { items } = store.getAgents(SESSION);
+  assert.ok(!items.some((item) => item.id === 'agent:agt-other'));
+});
+
+test('getAgents for an unknown session returns null', () => {
+  const store = new TelemetryStore();
+  assert.equal(store.getAgents('nope'), null);
+});
+
+test('a session with records but no spans reports no items and firstMs 0', () => {
+  const store = new TelemetryStore();
+  store.ingest('logs', [log('claude_code.user_prompt', { prompt: 'hi' })]);
+  const result = store.getAgents(SESSION);
+  assert.deepEqual(result.items, []);
+  assert.equal(result.firstMs, 0);
+});
+
+/* ------------------------- getAgents: lane lifetime ------------------------- */
+
+test('an agent lane spans from its earliest span start to its latest span end', () => {
+  const store = new TelemetryStore();
+  store.ingest('traces', [
+    span('claude_code.interaction', {}, { spanId: 'root' }),
+    subagentSpan('claude_code.tool', 'agt-a', {}, { spanId: 's1', parentSpanId: 'root', startMs: 100, endMs: 400 }),
+    subagentSpan('claude_code.tool', 'agt-a', {}, { spanId: 's2', parentSpanId: 'root', startMs: 200, endMs: 900 }),
+    subagentSpan('claude_code.tool', 'agt-a', {}, { spanId: 's3', parentSpanId: 'root', startMs: 300, endMs: 500 }),
+  ]);
+  const { items } = store.getAgents(SESSION);
+  const lane = items.find((item) => item.id === 'agent:agt-a');
+  assert.equal(lane.firstMs, NOW + 100);
+  assert.equal(lane.lastMs, NOW + 900);
+  assert.equal(lane.durationMs, 800);
+});
+
+test('an open span (endMs: 0) contributes only its start, never the epoch, to the lane', () => {
+  const store = new TelemetryStore();
+  const open = { ...subagentSpan('claude_code.tool', 'agt-a', {}, { spanId: 'open', parentSpanId: 'root', startMs: 200 }), endMs: 0 };
+  store.ingest('traces', [span('claude_code.interaction', {}, { spanId: 'root' }), open]);
+  const { items } = store.getAgents(SESSION);
+  const lane = items.find((item) => item.id === 'agent:agt-a');
+  assert.ok(lane, 'the lane must exist despite the open span');
+  assert.equal(lane.lastMs, NOW + 200);
+  assert.ok(Number.isFinite(lane.lastMs) && lane.lastMs > 0, 'lastMs must not be NaN or the epoch');
+});
+
+test('a span with startMs: 0 does not drag the lane firstMs to the epoch', () => {
+  const store = new TelemetryStore();
+  const undecoded = {
+    ...subagentSpan('claude_code.tool', 'agt-a', {}, { spanId: 'undecoded', parentSpanId: 'root', startMs: 300, endMs: 600 }),
+    startMs: 0,
+  };
+  store.ingest('traces', [
+    span('claude_code.interaction', {}, { spanId: 'root' }),
+    subagentSpan('claude_code.tool', 'agt-a', {}, { spanId: 'normal', parentSpanId: 'root', startMs: 300, endMs: 500 }),
+    undecoded,
+  ]);
+  const { items } = store.getAgents(SESSION);
+  const lane = items.find((item) => item.id === 'agent:agt-a');
+  assert.equal(lane.firstMs, NOW + 300);
+});
+
+/* ------------------------- getAgents: unattributed activity ------------------------- */
+
+test('a span with no agent attributes inherits its lane from its subagent parent', () => {
+  const store = new TelemetryStore();
+  store.ingest('traces', [
+    span('claude_code.interaction', {}, { spanId: 'root' }),
+    subagentSpan('claude_code.tool', 'agt-a', {}, { spanId: 'tool-a', parentSpanId: 'root', startMs: 100, endMs: 500 }),
+    span('claude_code.tool.execution', {}, { spanId: 'exec-a', parentSpanId: 'tool-a', startMs: 150, endMs: 400 }),
+  ]);
+  const { items } = store.getAgents(SESSION);
+  const lane = items.find((item) => item.id === 'agent:agt-a');
+  const main = items.find((item) => item.id === 'main');
+  assert.equal(lane.spanCount, 2, 'the execution span must count on the subagent lane');
+  assert.equal(main.spanCount, 1, 'the execution span must not count on main');
+});
+
+test('a span whose parent chain resolves to nothing lands on an unattributed lane', () => {
+  const store = new TelemetryStore();
+  store.ingest('traces', [
+    span('claude_code.interaction', {}, { spanId: 'root' }),
+    span('claude_code.tool.execution', {}, { spanId: 'orphan', parentSpanId: 'ghost', startMs: 100, endMs: 200 }),
+  ]);
+  const { items } = store.getAgents(SESSION);
+  const unattributed = items.find((item) => item.kind === 'unattributed');
+  const main = items.find((item) => item.kind === 'main');
+  assert.ok(unattributed, 'a broken parent chain must produce an unattributed lane, never a drop');
+  assert.equal(unattributed.spanCount, 1);
+  assert.equal(main.spanCount, 1, 'the orphan must not be folded into main');
+});
+
+test('the unattributed lane, when present, sorts last', () => {
+  const store = new TelemetryStore();
+  store.ingest('traces', [
+    span('claude_code.interaction', {}, { spanId: 'root' }),
+    subagentSpan('claude_code.tool', 'agt-a', {}, { spanId: 'tool-a', parentSpanId: 'root' }),
+    span('claude_code.tool.execution', {}, { spanId: 'orphan', parentSpanId: 'ghost' }),
+  ]);
+  const { items } = store.getAgents(SESSION);
+  assert.equal(items.at(-1).kind, 'unattributed');
+});
+
+test('with every parent resolvable, no unattributed lane appears', () => {
+  const store = new TelemetryStore();
+  store.ingest('traces', [
+    span('claude_code.interaction', {}, { spanId: 'root' }),
+    subagentSpan('claude_code.tool', 'agt-a', {}, { spanId: 'tool-a', parentSpanId: 'root' }),
+    span('claude_code.tool.execution', {}, { spanId: 'exec', parentSpanId: 'tool-a' }),
+  ]);
+  const { items } = store.getAgents(SESSION);
+  assert.ok(!items.some((item) => item.kind === 'unattributed'));
 });

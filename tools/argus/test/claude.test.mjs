@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { otelEnvFor, sessionNameOf, contentOf } from '../src/claude.mjs';
+import { otelEnvFor, sessionNameOf, contentOf, agentRefOf } from '../src/claude.mjs';
 
 test('a session name is read from the resource, and from metric attributes', () => {
   assert.equal(sessionNameOf({ resource: { 'session.name': 'uroboros-refactor' } }), 'uroboros-refactor');
@@ -177,4 +177,35 @@ test('an event that carries no content at all is not content', () => {
     attrs: { model: 'claude-opus-5', input_tokens: 10 },
   });
   assert.equal(result, null);
+});
+
+/* --------------------------- agentRefOf(attrs) --------------------------- */
+
+test('agentRefOf reads instance identity, parent and type from span attributes', () => {
+  const ref = agentRefOf({
+    agent_id: 'agt-a',
+    parent_agent_id: 'agt-main',
+    query_source: 'agent:builtin:researcher',
+  });
+  assert.deepEqual(ref, { agentId: 'agt-a', parentAgentId: 'agt-main', agentType: 'agent:builtin:researcher' });
+});
+
+test('a main-agent span (query_source: "main") is not an agent instance', () => {
+  // A main-agent span carries no agent_id and must not become an instance of
+  // its own — it is folded into the main lane, not a subagent lane.
+  assert.equal(agentRefOf({ query_source: 'main' }), null);
+});
+
+test('an empty or missing agent_id is not an agent instance', () => {
+  assert.equal(agentRefOf({ agent_id: '' }), null);
+  assert.equal(agentRefOf({}), null);
+});
+
+test('agent.name wins over query_source as the type when both are present', () => {
+  const ref = agentRefOf({
+    agent_id: 'agt-a',
+    'agent.name': 'named-type',
+    query_source: 'agent:builtin:researcher',
+  });
+  assert.equal(ref.agentType, 'named-type');
 });

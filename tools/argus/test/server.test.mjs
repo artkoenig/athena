@@ -70,6 +70,74 @@ function logsPayloadJson(sessionId) {
   });
 }
 
+/**
+ * A trace payload for the agent-lanes route: a main interaction span plus two
+ * subagent `claude_code.tool` spans of one `query_source`, with distinct
+ * `agent_id` — the headline "two concurrent instances of one type" shape.
+ */
+function agentsTracePayload(sessionId) {
+  const rootSpanId = '22'.repeat(8);
+  const toolASpanId = '33'.repeat(8);
+  const toolBSpanId = '44'.repeat(8);
+  return encodeMessage(
+    {
+      resourceSpans: [
+        {
+          resource: {
+            attributes: [
+              { key: 'service.name', value: { stringValue: 'agent' } },
+              { key: 'session.id', value: { stringValue: sessionId } },
+            ],
+          },
+          scopeSpans: [
+            {
+              spans: [
+                {
+                  traceId: '11'.repeat(16),
+                  spanId: rootSpanId,
+                  name: 'claude_code.interaction',
+                  startTimeUnixNano: T0,
+                  endTimeUnixNano: T0 + 2000n * 1000000n,
+                  attributes: [{ key: 'session.id', value: { stringValue: sessionId } }],
+                },
+                {
+                  traceId: '11'.repeat(16),
+                  spanId: toolASpanId,
+                  parentSpanId: rootSpanId,
+                  name: 'claude_code.tool',
+                  startTimeUnixNano: T0 + 100n * 1000000n,
+                  endTimeUnixNano: T0 + 500n * 1000000n,
+                  attributes: [
+                    { key: 'session.id', value: { stringValue: sessionId } },
+                    { key: 'agent_id', value: { stringValue: 'agt-a' } },
+                    { key: 'parent_agent_id', value: { stringValue: 'agt-main' } },
+                    { key: 'query_source', value: { stringValue: 'agent:builtin:researcher' } },
+                  ],
+                },
+                {
+                  traceId: '11'.repeat(16),
+                  spanId: toolBSpanId,
+                  parentSpanId: rootSpanId,
+                  name: 'claude_code.tool',
+                  startTimeUnixNano: T0 + 150n * 1000000n,
+                  endTimeUnixNano: T0 + 700n * 1000000n,
+                  attributes: [
+                    { key: 'session.id', value: { stringValue: sessionId } },
+                    { key: 'agent_id', value: { stringValue: 'agt-b' } },
+                    { key: 'parent_agent_id', value: { stringValue: 'agt-main' } },
+                    { key: 'query_source', value: { stringValue: 'agent:builtin:researcher' } },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+    EXPORT_TRACE_REQUEST,
+  );
+}
+
 /** A single OTLP attribute pair, string-valued like the CLI sends every content attribute. */
 function otlpAttr(key, value) {
   return { key, value: { stringValue: String(value) } };
@@ -563,6 +631,42 @@ test('the collector serves no interface: every path outside the API is a JSON 40
         `${pathname} has to say where the interface actually lives`,
       );
     }
+  });
+});
+
+test('GET /api/sessions/:id/agents answers with one lane per agent instance', async () => {
+  await withServer({}, async ({ base }) => {
+    // Assert the ingest itself, so a failed POST reports as a failed POST rather
+    // than as a confusing empty-lanes assertion further down.
+    const ingested = await fetch(`${base}/v1/traces`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-protobuf' },
+      body: agentsTracePayload('s-agents'),
+    });
+    assert.equal(ingested.status, 200);
+
+    const response = await fetch(`${base}/api/sessions/s-agents/agents`);
+    assert.equal(response.status, 200);
+    const result = await response.json();
+    assert.equal(result.items.length, 3);
+    assert.deepEqual(
+      result.items.map((item) => item.kind),
+      ['main', 'subagent', 'subagent'],
+    );
+    for (const item of result.items) {
+      assert.equal(typeof item.firstMs, 'number');
+      assert.equal(typeof item.lastMs, 'number');
+      assert.equal(typeof item.durationMs, 'number');
+      assert.equal(typeof item.spanCount, 'number');
+    }
+  });
+});
+
+test('GET /api/sessions/:id/agents for an unknown session is a 404', async () => {
+  await withServer({}, async ({ base }) => {
+    const response = await fetch(`${base}/api/sessions/nope/agents`);
+    assert.equal(response.status, 404);
+    assert.deepEqual(await response.json(), { error: 'unknown session' });
   });
 });
 
