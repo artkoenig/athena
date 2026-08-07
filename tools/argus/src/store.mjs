@@ -51,6 +51,14 @@ const MAX_LANE_CHAIN_DEPTH = 64;
  */
 const MAX_LANE_ACTIVITY = 2000;
 const MAX_LANE_CONTEXT = 1000;
+/**
+ * How much of a tool call's parameters one activity entry carries. The lanes
+ * payload is refetched on every coalesced ingest, and a single `Write` call's
+ * parameters run to tens of kilobytes, so the whole text would be re-sent over
+ * and over. The untruncated text stays reachable through
+ * `GET /api/content?kind=tool_input&body=1`.
+ */
+const MAX_ACTIVITY_PARAMS_CHARS = 1000;
 
 /**
  * Thin a list to at most `max` entries by keeping every stride-th one, plus the
@@ -972,6 +980,14 @@ export class TelemetryStore {
       return lane;
     };
 
+    /**
+     * The tool activity entries by the `tool_use_id` of the span that made
+     * them, so the `tool_result` log that carries the call's parameters can
+     * decorate the mark the span already produced. A repeated id (a replayed
+     * export) leaves the last registration standing.
+     */
+    const toolCallsByUseId = new Map();
+
     for (const span of spans) {
       const lane = laneFor(laneKeyOf(span));
       lane.spanCount++;
@@ -994,11 +1010,18 @@ export class TelemetryStore {
       // bar already shows the lifetime, and what is drawn is a tick.
       if ((span.name === SPAN.tool || span.name === SPAN.llmRequest) && span.startMs > 0) {
         const attrs = span.attrs ?? {};
-        lane.activity.push({
+        const isTool = span.name === SPAN.tool;
+        // One shape for every entry: an llm_request keeps `params: null`
+        // forever, and only a tool entry can be given parameters below.
+        const entry = {
           atMs: span.startMs,
-          kind: span.name === SPAN.tool ? 'tool' : 'llm_request',
+          kind: isTool ? 'tool' : 'llm_request',
           name: attrs.tool_name ?? attrs.model ?? null,
-        });
+          params: null,
+          paramsTruncated: false,
+        };
+        lane.activity.push(entry);
+        if (isTool && attrs.tool_use_id) toolCallsByUseId.set(attrs.tool_use_id, entry);
       }
     }
 
@@ -1007,15 +1030,33 @@ export class TelemetryStore {
     // in the buffer is honestly unattributed rather than dropped or folded into
     // main. `query_source` is deliberately not used as a fallback: it names the
     // agent type, not the instance.
+    //
+    // The same walk also carries the tool call parameters: they arrive on the
+    // `tool_result` event, not on the span, and they decorate the activity
+    // entry the span already produced. One scan over the logs is what this
+    // code costs today and what it must keep costing.
     for (const log of this.logs) {
       if (log.sessionId !== sessionId) continue;
-      if (log.eventName !== EVENT.apiRequestBody) continue;
-      if (!(log.timeMs > 0)) continue;
-      const length = requestBodyLength(log);
-      if (length === null) continue;
-      const span = log.spanId ? byId.get(log.spanId) : null;
-      const lane = laneFor(span ? laneKeyOf(span) : UNATTRIBUTED_LANE_ID);
-      lane.context.push({ atMs: log.timeMs, length });
+      if (log.eventName === EVENT.apiRequestBody) {
+        if (!(log.timeMs > 0)) continue;
+        const length = requestBodyLength(log);
+        if (length === null) continue;
+        const span = log.spanId ? byId.get(log.spanId) : null;
+        const lane = laneFor(span ? laneKeyOf(span) : UNATTRIBUTED_LANE_ID);
+        lane.context.push({ atMs: log.timeMs, length });
+      } else if (log.eventName === EVENT.toolResult) {
+        // A result naming no tool span in the buffer adds nothing: the mark
+        // comes from the span, so there is nothing here to decorate.
+        const entry = toolCallsByUseId.get(log.attrs?.tool_use_id);
+        if (!entry) continue;
+        const value = toolParametersOf(log.attrs);
+        if (!value) continue;
+        // Text, never a parsed object: a truncated JSON string is not valid
+        // JSON, so nothing downstream may parse this back.
+        const text = JSON.stringify(value);
+        entry.params = text.slice(0, MAX_ACTIVITY_PARAMS_CHARS);
+        entry.paramsTruncated = text.length > MAX_ACTIVITY_PARAMS_CHARS;
+      }
     }
 
     const items = [...lanes.values()];

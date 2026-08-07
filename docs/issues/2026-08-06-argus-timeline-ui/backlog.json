@@ -305,6 +305,31 @@
             ],
             "questions": []
           }
+        },
+        {
+          "label": "implement:lane-select.0",
+          "at": "2026-08-07T12:59:13.810Z",
+          "return": {
+            "deviations": [
+              "Plan said renderDetail renders `<div id=\"lane-detail\">${laneDetailHtml(...)}</div>` inline and renderChosenTime repaints it with an inline getElementById lookup. I kept the inline template but factored the repaint into a shared `renderLaneDetail()` helper called from both renderDetail (after the innerHTML assignment) and renderChosenTime. Reason: the app-test fake DOM resolves elements by id independently of any parent's innerHTML string, so cases C2/C4-C8 only see the panel if renderDetail also writes the container by id; in a browser the second write is idempotent and the markup is identical.",
+              "Plan said the truncated params element carries `data-truncated=\"true\"` plus a trailing ellipsis marker. I put the ellipsis in a sibling `<span class=\"tool-call-cut\">…</span>` after the `<code class=\"tool-call-params\" data-truncated=\"true\">`, so the code element holds exactly the collector's characters and nothing invented."
+            ],
+            "commands": [
+              {
+                "command": "npm --prefix tools/argus test",
+                "exitCode": 0,
+                "note": "192 cases, all pass; before the change 6 failed (the A0-A5 store cases)."
+              },
+              {
+                "command": "npm --prefix tools/argus-ui test",
+                "exitCode": 0,
+                "note": "89 cases, all pass; before the change timeline.test.mjs would not load (missing MAX_LANE_TOOL_CALLS export) and 7 app cases timed out."
+              }
+            ],
+            "blockers": [],
+            "questions": [],
+            "summary": "The collector now carries each tool call's parameters on its lane activity entry (capped at 1000 chars, joined from the tool_result log through tool_use_id in the existing single logs walk), and the UI turns a lane row into a selectable control whose selection lists that agent's tool calls with their parameters up to the chosen time, repainted in place as the time moves."
+          }
         }
       ]
     },

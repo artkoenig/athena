@@ -35,6 +35,12 @@ export const MIN_AREA_WIDTH_PCT = 0.4;
 const INDENT_PX = 14;
 /** How far up the agent chain a depth is walked before it is called deep enough. */
 const MAX_DEPTH_WALK = 64;
+/**
+ * How many tool calls one lane's listing shows. A long session's lane holds
+ * hundreds; the newest are the ones a reader is looking at, and the head says
+ * how many there were in total.
+ */
+export const MAX_LANE_TOOL_CALLS = 50;
 
 const clampPct = (value) => Math.min(100, Math.max(0, value));
 
@@ -198,8 +204,14 @@ function markTitle(mark) {
  * @param {object[]} items the lanes of the `/agents` payload
  * @param {{startMs: number, endMs: number}} window
  * @param {number|null} atMs the chosen time, or null for no playhead
+ * @param {string|null} selectedLaneId the lane whose detail panel is open
  */
-export function laneRowsHtml(items = [], window = { startMs: 0, endMs: 0 }, atMs = null) {
+export function laneRowsHtml(
+  items = [],
+  window = { startMs: 0, endMs: 0 },
+  atMs = null,
+  selectedLaneId = null,
+) {
   const startMs = window?.startMs ?? 0;
   const endMs = window?.endMs ?? 0;
   // One scale for every curve on the page, computed once.
@@ -233,7 +245,10 @@ export function laneRowsHtml(items = [], window = { startMs: 0, endMs: 0 }, atMs
             style="left:${mark.leftPct.toFixed(3)}%" title="${esc(markTitle(mark))}"></span>`,
         )
         .join('');
-      return `<div class="lane-row" data-lane-id="${esc(lane.id)}">
+      // A real control, like `.trace-pill` and `.span-row`: clicking a lane
+      // opens its detail panel, and `aria-current` is what says which is open.
+      return `<button type="button" class="lane-row" data-lane-id="${esc(lane.id)}"
+        aria-current="${lane.id === selectedLaneId}">
         <span class="lane-label" style="padding-left:${lane.depth * INDENT_PX}px">
           <span class="name">${esc(agentLabel(lane))}</span>
           ${id}
@@ -249,7 +264,7 @@ export function laneRowsHtml(items = [], window = { startMs: 0, endMs: 0 }, atMs
           ${playhead}
         </span>
         <span class="lane-duration">${esc(fmtDur(lane.durationMs))}</span>
-      </div>`;
+      </button>`;
     })
     .join('');
 }
@@ -271,9 +286,13 @@ export function scrubStateHtml(atMs = null, following = true) {
  *
  * @param {object[]} items the lanes of the `/agents` payload
  * @param {{startMs: number, endMs: number}} window
- * @param {{atMs?: number|null, following?: boolean}} chosen
+ * @param {{atMs?: number|null, following?: boolean, selectedLaneId?: string|null}} chosen
  */
-export function timelineHtml(items = [], window = { startMs: 0, endMs: 0 }, { atMs = null, following = true } = {}) {
+export function timelineHtml(
+  items = [],
+  window = { startMs: 0, endMs: 0 },
+  { atMs = null, following = true, selectedLaneId = null } = {},
+) {
   if (!items.length) {
     return `<div class="placeholder">
       No spans for this session, so there are no agent lanes to draw. Spans are the beta signal —
@@ -296,7 +315,7 @@ export function timelineHtml(items = [], window = { startMs: 0, endMs: 0 }, { at
   // One scale for every curve on the page, computed once.
   const peak = contextPeakOf(items);
 
-  const rows = laneRowsHtml(items, { startMs, endMs }, atMs);
+  const rows = laneRowsHtml(items, { startMs, endMs }, atMs, selectedLaneId);
 
   // The scrub row repeats the lane grid so the slider sits over the track
   // column, exactly above the playheads it moves.
@@ -322,6 +341,88 @@ export function timelineHtml(items = [], window = { startMs: 0, endMs: 0 }, { at
       ${scrub}
       <p class="timeline-legend">${legend}</p>
     </div>
+  </div>`;
+}
+
+/**
+ * The tool calls one lane made up to the chosen time, newest first.
+ *
+ * An `llm_request` mark is never one of them: what this listing answers is
+ * "what did this agent *do*", and the request is the lane's own thinking.
+ * `total` counts every call in the bound, so a capped list never lies about
+ * how many there were.
+ *
+ * @param {object} lane one item of the `/agents` payload
+ * @param {number|null} atMs the chosen time; a non-finite one bounds to nothing
+ * @param {number} limit how many entries the list may carry
+ * @returns {{total: number, items: object[]}}
+ */
+export function toolCallsUpTo(lane, atMs, limit = MAX_LANE_TOOL_CALLS) {
+  const bound = Number(atMs);
+  if (!Number.isFinite(bound)) return { total: 0, items: [] };
+  const calls = (lane?.activity ?? []).filter((entry) => {
+    if (entry?.kind !== 'tool') return false;
+    const at = Number(entry?.atMs);
+    return Number.isFinite(at) && at > 0 && at <= bound;
+  });
+  // The payload is oldest-first; the newest calls are the ones being read.
+  const items = calls.slice(-limit).reverse();
+  return { total: calls.length, items };
+}
+
+/** One `<li>` of the listing: when the call happened, what it was, what it was given. */
+function toolCallHtml(entry) {
+  const name = entry?.name ? String(entry.name) : 'tool';
+  const params =
+    entry?.params === null || entry?.params === undefined
+      ? '<span class="tool-call-params" data-empty="true">no parameters recorded</span>'
+      : `<code class="tool-call-params"${entry.paramsTruncated ? ' data-truncated="true"' : ''}>${esc(
+          entry.params,
+        )}</code>${entry.paramsTruncated ? '<span class="tool-call-cut" title="cut to the collector\'s cap">…</span>' : ''}`;
+  return `<li class="tool-call">
+    <span class="tool-call-time">${esc(fmtClock(entry?.atMs))}</span>
+    <span class="tool-call-name">${esc(name)}</span>
+    ${params}
+  </li>`;
+}
+
+/**
+ * The panel under the timeline: what the selected lane's agent did up to the
+ * chosen time, most recent first.
+ *
+ * Nothing is selected — or the selection names a lane this session no longer
+ * has — renders as nothing at all, which is the resting page.
+ *
+ * @param {object[]} items the lanes of the `/agents` payload
+ * @param {number|null} atMs the chosen time
+ * @param {string|null} selectedLaneId
+ */
+export function laneDetailHtml(items = [], atMs = null, selectedLaneId = null) {
+  if (!selectedLaneId) return '';
+  const lane = items.find((candidate) => candidate?.id === selectedLaneId);
+  if (!lane) return '';
+
+  const { total, items: calls } = toolCallsUpTo(lane, atMs);
+  // Two instances of one agent type share a label here too, so the row's own
+  // short id rides along.
+  const id = lane.agentId ? `<span class="lane-detail-id">${esc(shortId(lane.agentId, 10))}</span>` : '';
+  const capped = total > calls.length
+    ? `<span class="lane-detail-capped">most recent ${esc(fmtNum(MAX_LANE_TOOL_CALLS))} of ${esc(fmtNum(total))}</span>`
+    : '';
+  const body = calls.length
+    ? `<ol class="tool-calls">${calls.map(toolCallHtml).join('')}</ol>`
+    : '<p class="placeholder">No tool calls were made on this lane before this moment.</p>';
+
+  return `<div class="panel lane-detail" data-lane-detail="${esc(lane.id)}">
+    <div class="lane-detail-head">
+      <span class="lane-detail-name">${esc(agentLabel(lane))}</span>
+      ${id}
+      <span class="lane-detail-count">${esc(fmtNum(total))} tool call${total === 1 ? '' : 's'} up to ${esc(
+        fmtClock(atMs),
+      )}</span>
+      ${capped}
+    </div>
+    ${body}
   </div>`;
 }
 

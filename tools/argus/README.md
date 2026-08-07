@@ -602,6 +602,11 @@ npm run demo      # emit a synthetic session
   completed task does not disappear from the table, it only gets the status
   `deleted`/`completed`. There is deliberately no aggregate counter here (unlike traces,
   events and metrics), because it could only grow monotonically.
+- **The lanes payload caps each tool call's parameters at 1000 characters.** A capped
+  call is marked (`paramsTruncated: true`), because `/api/sessions/:id/agents` is
+  refetched on every ingest while a session is live and a single `Write` call's
+  parameters run to tens of kilobytes. The untruncated text stays available through
+  `GET /api/content?kind=tool_input&body=1`.
 - The store lives in the process. For long-term retention or alerting, the telemetry
   belongs in a real backend (Honeycomb, Grafana, Datadog, Langfuse) — both work in
   parallel, `OTEL_EXPORTER_OTLP_*` variables can point each signal at a different

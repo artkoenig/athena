@@ -11,6 +11,7 @@ import { esc, fmtAgo, fmtClock, fmtCost, fmtDur, fmtNum, shortId } from './forma
 import {
   DEFAULT_VIEW,
   clampChosenTime,
+  laneDetailHtml,
   laneRowsHtml,
   scrubStateHtml,
   timelineHtml,
@@ -35,6 +36,9 @@ const state = {
   // is live mode: while it holds, every refresh re-pins `atMs` to the head.
   atMs: null,
   following: true,
+  // The selection the session view holds beside the chosen time: the lane
+  // whose tool calls are listed below the timeline, or null for none.
+  selectedLaneId: null,
   trace: null,
   selectedTraceId: null,
   selectedSpanId: null,
@@ -177,13 +181,29 @@ function renderDetail() {
       </div>
     </div>
 
-    ${timelineHtml(state.agents, state.agentWindow, { atMs: state.atMs, following: state.following })}
+    ${timelineHtml(state.agents, state.agentWindow, {
+      atMs: state.atMs,
+      following: state.following,
+      selectedLaneId: state.selectedLaneId,
+    })}
+
+    <div id="lane-detail">${laneDetailHtml(state.agents, state.atMs, state.selectedLaneId)}</div>
 
     ${viewStripHtml(state.view, counts)}
 
     <div id="view-body"></div>
   `;
+  renderLaneDetail();
   renderViewBody();
+}
+
+/**
+ * The selected lane's listing, repainted in its own container. Called from
+ * both render paths, so the panel says the same thing however it was reached.
+ */
+function renderLaneDetail() {
+  const panel = document.getElementById('lane-detail');
+  if (panel) panel.innerHTML = laneDetailHtml(state.agents, state.atMs, state.selectedLaneId);
 }
 
 /**
@@ -200,9 +220,13 @@ function renderDetail() {
  */
 function renderChosenTime() {
   const lanes = document.getElementById('timeline-lanes');
-  if (lanes) lanes.innerHTML = laneRowsHtml(state.agents, state.agentWindow, state.atMs);
+  if (lanes) {
+    lanes.innerHTML = laneRowsHtml(state.agents, state.agentWindow, state.atMs, state.selectedLaneId);
+  }
   const scrubState = document.getElementById('timeline-scrub-state');
   if (scrubState) scrubState.innerHTML = scrubStateHtml(state.atMs, state.following);
+  // The listing is read at the chosen time, so it follows it as it moves.
+  renderLaneDetail();
 }
 
 function renderViewBody() {
@@ -852,6 +876,7 @@ async function loadSession() {
     state.agentWindow = { startMs: 0, endMs: 0 };
     state.atMs = null;
     state.following = true;
+    state.selectedLaneId = null;
     return;
   }
   try {
@@ -863,6 +888,7 @@ async function loadSession() {
     state.agentWindow = { startMs: 0, endMs: 0 };
     state.atMs = null;
     state.following = true;
+    state.selectedLaneId = null;
     return;
   }
   await loadAgents();
@@ -979,6 +1005,8 @@ function selectSession(id, { render = true } = {}) {
   // Opening a session lands live at its head, however the last one was scrubbed.
   state.atMs = null;
   state.following = true;
+  // ...and with no lane selected, whichever one was open under the last.
+  state.selectedLaneId = null;
   // Opening a session lands on the timeline, whatever was open under the last one.
   state.view = DEFAULT_VIEW;
   location.hash = `#/session/${encodeURIComponent(id)}`;
@@ -1042,6 +1070,15 @@ function wireEvents() {
       // to jump to the head with it, and nobody is mid-drag when they click.
       state.following = true;
       state.atMs = state.agentWindow.endMs;
+      renderDetail();
+      return;
+    }
+    const lane = event.target.closest('[data-lane-id]');
+    if (lane) {
+      // Clicking the selected lane closes its panel again, the same toggle the
+      // view strip has. A full render is right here: nobody is mid-drag when
+      // they click a lane, and the slider keeps its value from `state.atMs`.
+      state.selectedLaneId = state.selectedLaneId === lane.dataset.laneId ? null : lane.dataset.laneId;
       renderDetail();
       return;
     }
