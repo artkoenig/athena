@@ -101,6 +101,35 @@
             "openQuestions": [],
             "questions": []
           }
+        },
+        {
+          "label": "implement:ui-harness-null.0",
+          "at": "2026-08-07T21:11:49.142Z",
+          "return": {
+            "summary": "Rewrote installFakes in tools/argus-ui/test/app.test.mjs onto the plan's single-mutable-markup-string model so getElementById resolves an id only while the rendered markup carries it, turning all six planned cases green, and documented the harness in tools/argus-ui/CLAUDE.md. Criterion 2 is answered rather than edited: no existing case was corrected and none needed to be, because the suite had no DOM harness at all before this increment — commit 1c94c20 ('The timeline is the interface…', PR #65) landed as a squash that replaced the old app.test.mjs with page.test.mjs, context.test.mjs and timeline.test.mjs, and none of those executes app.js against a document (page.test.mjs regexes app.js's source text; the other two assert on the HTML strings the pure modules return), so no assertion in the suite could have been passing against markup the page never wrote; config.test.mjs, context.test.mjs, independence.test.mjs, page.test.mjs, server.test.mjs and timeline.test.mjs are untouched, and package.json is unchanged since the test/*.test.mjs glob picks the file up on its own. One thing left deliberately open, outside this increment's scope: the fake element's querySelector returns null by design, so setLive() would throw on indicator.querySelector('.live-label') and the offline / SSE path stays untested — covering it needs a selector engine or a narrower fake, which was not this increment's decision to take.",
+            "deviations": [
+              "The plan calls tools/argus-ui/test/app.test.mjs NEW; it already existed on this branch from the test-author's step (commit 0193f95), carrying the fixtures, the six cases and a harness whose el(id) conjured and cached an element for any id — the marked red state. I rewrote the harness inside that file instead of creating it, and changed no test(...) case, no fixture, and neither assertPanelRendered nor laneClickEvent.",
+              "The existing installFakes modelled the document as a four-region map keyed by container id (stat-strip, session-list, detail, setup-modal-body) plus a fixed-id scan of the shell — the per-element ownership map the plan explicitly rejected. I replaced it with the plan's model: one mutable markup string seeded from public/index.html, elementRange(markup, id) returning {outerStart, innerStart, innerEnd, outerEnd} by walking same-name tags with a depth counter and throwing by name on a tag it cannot close, innerHTML/textContent setters that splice into that string, and dropAll() applied to the shell at install and to every innerHTML value spliced in. This also closes the hole the region map left: a region entry written for a descendant (#lane-panel) survived its parent (#detail) being overwritten, so its ids kept resolving.",
+              "page.settle() was a real 20ms setTimeout; it is now the plan's 50 setImmediate turns, and it throws the first collected unhandled rejection (the plan's requirement, since boot() is awaited by nobody). page.errors still holds the messages, so the cases that deepEqual it against [] are unchanged.",
+              "location.origin is left at 'http://127.0.0.1:4319' (the app's real default port) rather than the plan's 'http://argus.test'. The fetch stub routes on new URL(url).pathname, so the origin's value is not load-bearing.",
+              "getElementById's id-attribute regex is `\\sid=[\"']<id>[\"']` rather than the plan's literal `id=[\"']<id>[\"']`, so an attribute such as data-ctx-entry-id=\"x\" cannot answer for #x.",
+              "The fake element keeps style, closest, setAttribute, focus, showModal and querySelectorAll beyond the members the plan lists; app.js calls them on paths adjacent to the ones under test and the existing file already carried them."
+            ],
+            "commands": [
+              {
+                "command": "npm --prefix tools/argus-ui test",
+                "exitCode": 0,
+                "note": "The whole argus-ui suite: 240 cases across seven files, 240 pass, 0 fail, 0 skipped, 0 todo. Nothing excluded."
+              },
+              {
+                "command": "node --test tools/argus-ui/test/app.test.mjs",
+                "exitCode": 1,
+                "note": "Baseline run before any edit, to confirm the planned cases were red for the stated reason: 6 cases, 2 pass, 4 fail — cases 1, 2, 3 and 6 exactly as the brief recorded them (conjured element objects where null was expected; case 6 'Missing expected exception'). Cases 4 and 5 already green, as the brief recorded. After the change this same command is exit 0 with 6/6 passing; it is not one of the commands that count, and is reported here only as the red-then-green evidence."
+              }
+            ],
+            "blockers": [],
+            "questions": []
+          }
         }
       ]
     },

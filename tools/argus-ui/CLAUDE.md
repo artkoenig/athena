@@ -39,3 +39,12 @@ outside itself. Every server binds port 0 and asks the OS which port it got — 
 hard-coded port makes the suite fail against whatever else is running. The
 collector is faked with `node:http` in the test file, never imported from its
 project.
+
+`app.test.mjs` boots `public/app.js` against a fake document built from
+`public/index.html`. That document is one mutable markup string: `getElementById`
+resolves an id only while the currently rendered markup carries it, and writing
+`.innerHTML` splices the new markup in, so an id inside a replaced region stops
+resolving exactly as it would in a browser. A case must never assert against a
+container the page does not write — an assertion that reads a conjured element
+stays green after the page stops rendering it, which is the failure this file
+exists to prevent.

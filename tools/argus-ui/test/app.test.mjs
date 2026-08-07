@@ -90,37 +90,61 @@ const DEFAULT_ROUTES = {
 
 /* --------------------------------- harness -------------------------------- */
 
+/** A literal id, safe to splice into a regular expression. */
+const escapeRe = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 /**
- * The source of one id-bearing element, found by its own `id="…"` attribute,
- * balanced against tags of the same name so a `<div>` nested inside it does
- * not end the scan early. Returns null if the raw markup carries no such id.
+ * The `id="…"` attribute of one element. The leading whitespace is what keeps
+ * `data-ctx-entry-id="x"` from answering for `x`: an id attribute always
+ * follows the tag name or another attribute, so it is always preceded by space.
  */
-function findElement(html, id) {
-  const openMatch = html.match(new RegExp(`<([a-zA-Z][a-zA-Z0-9]*)\\b[^>]*\\bid="${id}"[^>]*>`));
-  if (!openMatch) return null;
-  const tag = openMatch[1];
-  const openStart = openMatch.index;
-  const innerStart = openStart + openMatch[0].length;
+const idAttrRe = (id) => new RegExp(`\\sid=["']${escapeRe(id)}["']`);
+
+/** Text as a browser would put it in the markup when handed .textContent. */
+const escapeText = (value) =>
+  String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+
+/**
+ * The offsets of one id-bearing element inside a markup string: `outerStart`
+ * to `outerEnd` spans its opening tag through its matching close, `innerStart`
+ * to `innerEnd` spans what sits between them. The close is found by walking
+ * tags of the same name forward with a depth counter, so a `<div>` nested
+ * inside the element does not end the scan early.
+ *
+ * Returns null when the markup carries no such id — that answer is the whole
+ * point of this file and is never a guess. A tag it cannot close throws and
+ * names the id, because only paired tags are supported and a silent fallback
+ * would hand a case a range over markup nobody wrote. Every container the
+ * tested paths write to (div, section, ol, pre, dialog) is paired.
+ */
+function elementRange(markup, id) {
+  const open = markup.match(
+    new RegExp(`<([a-zA-Z][a-zA-Z0-9-]*)\\b[^>]*\\sid=["']${escapeRe(id)}["'][^>]*>`),
+  );
+  if (!open) return null;
+  const tag = open[1];
+  const outerStart = open.index;
+  const innerStart = outerStart + open[0].length;
   const openRe = new RegExp(`<${tag}\\b`, 'gi');
-  const closeRe = new RegExp(`</${tag}>`, 'gi');
+  const closeRe = new RegExp(`</${tag}\\s*>`, 'gi');
   let depth = 1;
   let pos = innerStart;
   while (depth > 0) {
     openRe.lastIndex = pos;
     closeRe.lastIndex = pos;
-    const nextOpen = openRe.exec(html);
-    const nextClose = closeRe.exec(html);
-    if (!nextClose) throw new Error(`unbalanced <${tag}> for id="${id}"`);
+    const nextOpen = openRe.exec(markup);
+    const nextClose = closeRe.exec(markup);
+    if (!nextClose) {
+      throw new Error(`the fake document cannot close <${tag}> for id="${id}" — it only supports paired tags`);
+    }
     if (nextOpen && nextOpen.index < nextClose.index) {
       depth += 1;
       pos = nextOpen.index + nextOpen[0].length;
-    } else {
-      depth -= 1;
-      pos = nextClose.index + nextClose[0].length;
-      if (depth === 0) {
-        return { inner: html.slice(innerStart, nextClose.index), openStart, innerStart, innerEnd: nextClose.index, outerEnd: pos };
-      }
+      continue;
     }
+    depth -= 1;
+    pos = nextClose.index + nextClose[0].length;
+    if (depth === 0) return { outerStart, innerStart, innerEnd: nextClose.index, outerEnd: pos };
   }
   return null;
 }
@@ -131,80 +155,75 @@ function findElement(html, id) {
  * and every helper below acts through. `restore()` puts the real globals back
  * — nothing else in this file may call restore twice or skip it.
  *
- * The four regions below (stat-strip, session-list, detail, setup-modal-body)
- * are the only elements app.js ever assigns .innerHTML to directly; every
- * other id a case cares about (lane-panel, timeline-scrub, …) is one the
- * detail region's own markup carries once it is written, and is discovered
- * the same way a real querySelector would find it — by being textually
- * present in currently-rendered markup, not by a fixed list.
+ * One mutable string is the document. It is seeded from public/index.html read
+ * off disk, and everything else is derived from it: getElementById resolves an
+ * id only while that string carries it, and writing .innerHTML or .textContent
+ * splices the new markup between the element's opening tag and its matching
+ * close. So ids inside written markup start resolving and ids inside the
+ * replaced region stop — #empty-state and #setup-env, which index.html ships
+ * inside #detail, are gone the moment renderDetail overwrites #detail, exactly
+ * as in a browser. No id is ever conjured: a container the page never wrote
+ * answers null, which is the whole reason this file exists.
+ *
+ * `dropIds` removes each named element, opening tag through matching close,
+ * from every piece of markup before it enters the model — from the shell at
+ * install and from each .innerHTML value as it is spliced in. That is what
+ * makes "the page never rendered this container" a test parameter instead of
+ * an edit to app.js.
  */
 function installFakes({ routes = DEFAULT_ROUTES, dropIds = [] } = {}) {
-  const raw = fs.readFileSync(INDEX_HTML, 'utf8');
-  const containerIds = ['stat-strip', 'session-list', 'detail', 'setup-modal-body'];
-  const regions = new Map();
-  for (const id of containerIds) {
-    const found = findElement(raw, id);
-    regions.set(id, found ? found.inner : '');
-  }
-
-  // Ids the static shell carries outside the four swappable regions: each
-  // region's own inner span is cut out of a scratch copy first, so an id that
-  // only exists because a region happens to still hold its original markup is
-  // not counted as fixed — booting and overwriting that region must be able to
-  // drop it (Case 3). Cut from the end backwards so an earlier region's span
-  // does not shift a later region's own recorded offsets.
-  const innerSpans = containerIds
-    .map((id) => findElement(raw, id))
-    .filter(Boolean)
-    .map((found) => [found.innerStart, found.innerEnd])
-    .sort((a, b) => b[0] - a[0]);
-  let scrubbed = raw;
-  for (const [start, end] of innerSpans) scrubbed = scrubbed.slice(0, start) + scrubbed.slice(end);
-  const fixedIds = new Set([...scrubbed.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]));
-
-  /** Strips a dropped id's whole element out of a markup string, tag and all. */
-  function stripDropped(html) {
+  /** Strips every dropped id's whole element out of a markup string, tag and all. */
+  function dropAll(html) {
     let out = html;
     for (const id of dropIds) {
-      const found = findElement(out, id);
-      if (found) out = out.slice(0, found.openStart) + out.slice(found.outerEnd);
+      const range = elementRange(out, id);
+      if (range) out = out.slice(0, range.outerStart) + out.slice(range.outerEnd);
     }
     return out;
   }
-  for (const id of containerIds) regions.set(id, stripDropped(regions.get(id)));
 
-  /** Every id currently reachable by getElementById, computed fresh each call. */
-  function visibleIds() {
-    const ids = new Set(fixedIds);
-    for (const content of regions.values()) {
-      for (const m of content.matchAll(/\bid="([^"]+)"/g)) ids.add(m[1]);
-    }
-    for (const id of dropIds) ids.delete(id);
-    return ids;
+  let markup = dropAll(fs.readFileSync(INDEX_HTML, 'utf8'));
+
+  /** What sits between an id's opening tag and its matching close, right now. */
+  function innerOf(id) {
+    const range = elementRange(markup, id);
+    return range ? markup.slice(range.innerStart, range.innerEnd) : '';
   }
 
-  const cache = new Map();
+  /** Replaces what sits between an id's opening tag and its matching close. */
+  function splice(id, html) {
+    const range = elementRange(markup, id);
+    if (!range) return;
+    markup = markup.slice(0, range.innerStart) + html + markup.slice(range.innerEnd);
+  }
+
   function makeElement(id) {
     const listeners = new Map();
-    const node = {
+    return {
       id,
       dataset: {},
       style: {},
+      scrollTop: 0,
       _listeners: listeners,
       get innerHTML() {
-        return regions.get(id) ?? '';
+        return innerOf(id);
       },
       set innerHTML(value) {
-        regions.set(id, stripDropped(String(value)));
+        splice(id, dropAll(String(value)));
+      },
+      get textContent() {
+        return innerOf(id);
+      },
+      set textContent(value) {
+        splice(id, escapeText(value));
       },
       addEventListener(type, handler) {
         if (!listeners.has(type)) listeners.set(type, []);
         listeners.get(type).push(handler);
       },
       removeEventListener() {},
-      // Deliberately dumb: a real selector engine here would rebuild the same
-      // conjuring sin over a nested query instead of over an id — this
-      // increment does not carry that weight (see the file's own header).
+      // Deliberately dumb: conjuring a child here would be the same sin in a
+      // second place, one nesting level down from the id it was fixed at.
       querySelector: () => null,
       querySelectorAll: () => [],
       closest: () => null,
@@ -212,27 +231,25 @@ function installFakes({ routes = DEFAULT_ROUTES, dropIds = [] } = {}) {
       focus() {},
       showModal() {},
     };
-    return node;
   }
 
-  // THE DEFECT UNDER TEST — installFakes resolves getElementById through this
-  // el(id) helper, which creates and caches a fake element for *any* id it is
-  // handed and never returns null: a container the rendered markup does not
-  // carry still comes back as a live, writable object. A browser reading that
-  // same id would have got null. Fixing this is the whole of Criterion 1: gate
-  // the conjure-and-cache below on `visibleIds().has(id)`, as every case in
-  // this file already assumes it does.
-  function el(id) {
+  // getElementById, in full: the current markup is asked whether it carries
+  // the id, every single call and with no cache in front of that question. A
+  // miss is null. A hit is the one element kept under that id, so page code
+  // that stores an element and writes to it twice gets the same object back.
+  const cache = new Map();
+  function elementById(id) {
+    if (!idAttrRe(id).test(markup)) return null;
     if (!cache.has(id)) cache.set(id, makeElement(id));
     return cache.get(id);
   }
 
   const docListeners = new Map();
   const fakeDocument = {
-    getElementById: el,
+    getElementById: elementById,
     querySelector: () => null,
     querySelectorAll: () => [],
-    activeElement: null,
+    activeElement: undefined,
     addEventListener(type, handler) {
       if (!docListeners.has(type)) docListeners.set(type, []);
       docListeners.get(type).push(handler);
@@ -260,6 +277,7 @@ function installFakes({ routes = DEFAULT_ROUTES, dropIds = [] } = {}) {
 
   const requests = [];
   const errors = [];
+  const reasons = [];
 
   async function fakeFetch(url) {
     const pathname = new URL(String(url), fakeLocation.origin).pathname;
@@ -308,7 +326,10 @@ function installFakes({ routes = DEFAULT_ROUTES, dropIds = [] } = {}) {
   globalThis.EventSource = FakeEventSource;
   globalThis.setInterval = fakeSetInterval;
 
+  // boot() is awaited by nobody, so without this a broken fake surfaces as a
+  // process-level crash with no case attached to it.
   const onUnhandledRejection = (reason) => {
+    reasons.push(reason);
     errors.push(reason instanceof Error ? reason.message : String(reason));
   };
   process.on('unhandledRejection', onUnhandledRejection);
@@ -319,6 +340,8 @@ function installFakes({ routes = DEFAULT_ROUTES, dropIds = [] } = {}) {
     location: fakeLocation,
     requests,
     errors,
+    /** The whole document as it currently stands, for a case that needs to read across containers. */
+    markup: () => markup,
     /** The current inner markup of an id, or null if getElementById itself would answer null. */
     innerHtmlOf(id) {
       const node = fakeDocument.getElementById(id);
@@ -330,9 +353,17 @@ function installFakes({ routes = DEFAULT_ROUTES, dropIds = [] } = {}) {
       const handlers = node?._listeners?.get(type) ?? [];
       for (const handler of handlers) handler(event);
     },
-    /** Lets whatever chain of real promises and real setTimeouts a boot or a click started finish. */
+    /**
+     * Lets whatever chain of promises a boot or a click started run out. Every
+     * faked answer resolves immediately, so the whole chain settles in far
+     * fewer turns than this, and a turn costs microseconds. Anything that
+     * rejected along the way is thrown here, where a case is watching.
+     */
     async settle() {
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      for (let turn = 0; turn < 50; turn += 1) {
+        await new Promise((done) => setImmediate(done));
+      }
+      if (reasons.length) throw reasons[0];
     },
     restore() {
       process.removeListener('unhandledRejection', onUnhandledRejection);
