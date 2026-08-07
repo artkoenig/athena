@@ -432,6 +432,36 @@
             ],
             "questions": []
           }
+        },
+        {
+          "label": "implement:lane-select.1",
+          "at": "2026-08-07T13:15:09.755Z",
+          "return": {
+            "deviations": [
+              "The plan names this correction round test-only and forbids edits to public/app.js and public/timeline.js; the test-author's commit 14239bd had already landed every case A1-A8 in test/app.test.mjs, so there was no code left for me to write and I changed no file. My work was verification: I confirmed the planned cases pass for the right reason and that the new guards actually bite.",
+              "The plan describes the suite as 89 cases; it now runs 90, because case A1 is a net-new test the test-author added to app.test.mjs (23 cases in that file, up from 22). No case was removed or renamed."
+            ],
+            "commands": [
+              {
+                "command": "npm --prefix tools/argus-ui test",
+                "exitCode": 0,
+                "note": "The full project suite, 90 cases across app/timeline/server/config/independence, all passing, nothing skipped or excluded. The plan says 89; the extra one is the new regression guard A1."
+              },
+              {
+                "command": "node --test tools/argus-ui/test/app.test.mjs",
+                "exitCode": 0,
+                "note": "The single file this round touches, 23 of 23 passing. Run first, before any change, to establish the starting state the test-author declared ('Already red: nothing')."
+              },
+              {
+                "command": "node --test tools/argus-ui/test/app.test.mjs (with the `<div id=\"lane-detail\">` line temporarily deleted from public/app.js, then reverted with git checkout)",
+                "exitCode": 1,
+                "note": "Mutation check, not a change I landed. The review's finding was that deleting app.js:190 left the whole suite green; with the new composed-markup assertions in place that same deletion fails 8 of 23 cases in app.test.mjs. This is the evidence that the round's purpose is met and that the all-green run is not a vacuous pass. public/app.js was restored immediately and `git status` is clean."
+              }
+            ],
+            "blockers": [],
+            "questions": [],
+            "summary": "No production or test file changed this round: the test-author's guards had already landed and the production code was already right, so I verified the planned cases pass for the right reason (90 of 90, exit 0) and proved the new assertions catch the deleted lane-detail container that previously slipped through."
+          }
         }
       ]
     },
