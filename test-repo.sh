@@ -123,37 +123,349 @@ else
 fi
 
 echo
-echo "=== a correction round reuses the handoff it already has"
+echo "=== the run state is the channel, and no prose handoff is left"
 
-# The loop used to hand every round its own file — `researcher-1.md`,
-# `implementer-2.md` — so an issue directory of a three-round run held twelve
-# handoffs and a reader had to work out which copy was current. One role now
-# writes one file for the whole run and a later round appends a section to it,
-# so no prompt in the loop may build a round-suffixed handoff name again.
-suffixed="$(grep -n -- '-\${round}\.md\|-<X>\.md' \
-  "$root"/workflows/*.js "$root"/agents/*.md "$root"/skills/agent-brief/SKILL.md 2>/dev/null || true)"
-if [ -z "$suffixed" ]; then
-  ok "no round-suffixed handoff file name is left in the loop or the agent pages"
+# The five handoff files used to be the channel between agents and the record
+# of the run at once. A prompt or a page that still names one is a channel
+# nobody deleted, so a grep across every prompt-bearing file catches a
+# straggler before an agent goes looking for a file that no longer exists.
+# The [^/] guard is load-bearing: README.md links agents/researcher.md as an
+# agent page, which is not a handoff, and the regex must not flag it.
+# .claude/rules/agents.md is deliberately outside the file set below — it
+# names agent pages as examples for whoever writes them, not a channel.
+handoff_refs="$(grep -nE '(^|[^/])(researcher|test-author|implementer|reviewer|planner)\.md|backlog\.md' \
+  "$root"/workflows/*.js "$root"/agents/*.md "$root"/skills/*/SKILL.md "$root/rulebook.md" "$root/README.md" 2>/dev/null || true)"
+if [ -z "$handoff_refs" ]; then
+  ok "no prompt, agent page or skill still names a prose handoff file"
 else
-  no "these lines still name a per-round handoff file:"
-  echo "$suffixed" | sed 's/^/       /'
+  no "these lines still name a prose handoff file:"
+  echo "$handoff_refs" | sed 's/^/       /'
 fi
 
-# The other direction: the loop has to say what a correction round does with
-# the file instead, or every agent decides for itself and some overwrite it.
-if grep -q 'Append a .*## Round' "$root/workflows/loop.js"; then
-  ok "the loop tells a correction round to append its section"
+# Both workflows open every run with the same cheap dispatch, so a diverging
+# script would be a second re-entry mechanism no one asked for.
+for f in "$root/workflows/loop.js" "$root/workflows/agile-loop.js"; do
+  name="$(basename "$f")"
+  if grep -q 'backlog.json' "$f" && grep -q 'load-state' "$f"; then
+    ok "$name carries the state loader and the file it loads"
+  else
+    no "$name is missing backlog.json or load-state"
+  fi
+done
+
+# The reviewer's independence is the one boundary a channel change could
+# quietly erase: recording through the same file it must not read is only
+# safe if its own page says so twice — once as a rule, once as a diff
+# exclusion.
+reviewer_page="$root/agents/reviewer.md"
+if grep -i 'backlog.json' "$reviewer_page" | grep -Eiq 'not read|never read|without reading'; then
+  ok "the reviewer's page forbids reading backlog.json"
 else
-  no "the loop no longer tells a correction round to append its section"
+  no "the reviewer's page does not forbid reading backlog.json"
+fi
+if grep -i 'backlog.json' "$reviewer_page" | grep -qi 'diff'; then
+  ok "the reviewer's page excludes backlog.json from the diff it judges"
+else
+  no "the reviewer's page does not exclude backlog.json from its diff judgment"
 fi
 
-# Same bargain in the incremental loop, where the section names an increment
-# as well as a round.
-if grep -q 'Append a .*## Increment\|Append a .*heading(' "$root/workflows/agile-loop.js"; then
-  ok "the incremental loop tells every dispatch to append its section"
+# Decision 5: the planner now opens and closes the plain loop too, not only
+# the incremental one.
+for f in "$root/workflows/loop.js" "$root/workflows/agile-loop.js"; do
+  name="$(basename "$f")"
+  if grep -q 'uroboros:planner' "$f"; then
+    ok "$name dispatches the planner"
+  else
+    no "$name does not dispatch the planner"
+  fi
+done
+
+# Every agent records its own step now — the planner's exclusive backlog
+# ownership is what this change ends.
+missing_backlog_ref=""
+for page in "$root"/agents/*.md; do
+  grep -q 'backlog.json' "$page" || missing_backlog_ref="$missing_backlog_ref $(basename "$page")"
+done
+if [ -z "$missing_backlog_ref" ]; then
+  ok "every agent page names backlog.json, the file it records its step into"
 else
-  no "the incremental loop no longer tells a dispatch to append its section"
+  no "these agent pages do not mention backlog.json:$missing_backlog_ref"
 fi
+if grep -q 'backlog.mjs' "$root/skills/agent-brief/SKILL.md"; then
+  ok "the shared brief names the helper that records a step"
+else
+  no "the shared brief does not name backlog.mjs"
+fi
+
+# Step-level granularity is theater without a push per step: an unpushed
+# commit takes the state with it on a container reset.
+for f in "$root/skills/agent-brief/SKILL.md" "$root/workflows/loop.js" "$root/workflows/agile-loop.js"; do
+  name="$(basename "$f")"
+  if grep -qi 'push' "$f"; then
+    ok "$name instructs pushing the step's commit"
+  else
+    no "$name does not instruct pushing"
+  fi
+done
+
+# The plain loop's one-increment shape is enforced in the schema, not just
+# asked for in a prompt an agent could misread.
+if grep -q 'maxItems: 1' "$root/workflows/loop.js"; then
+  ok "the plain loop's backlog schema is pinned to exactly one increment"
+else
+  no "the plain loop's schema does not pin maxItems: 1"
+fi
+
+# The helper is the only writer of backlog.json, so it has to exist, parse,
+# and be in the one command that proves the suite green.
+if [ -f "$root/skills/agent-brief/assets/backlog.mjs" ]; then
+  ok "skills/agent-brief/assets/backlog.mjs exists"
+else
+  no "skills/agent-brief/assets/backlog.mjs does not exist"
+fi
+if node --check "$root/skills/agent-brief/assets/backlog.mjs" >/dev/null 2>&1; then
+  ok "the backlog helper parses"
+else
+  no "the backlog helper does not parse (or does not exist)"
+fi
+if grep -q 'skills/agent-brief/assets' "$root/test.sh"; then
+  ok "test.sh lists the recorder suite"
+else
+  no "test.sh does not list the recorder suite"
+fi
+
+echo
+echo "=== a run resumes from the state it recorded"
+
+# A workflow script is only ever compiled at dispatch, minutes into a real
+# run — the same reason the compile check below exists. Here the same
+# AsyncFunction trick runs the whole script with a stubbed agent(), so the
+# resume mechanics (a recorded step is skipped, a finished backlog dispatches
+# only the state loader and publish, each role's prompt carries only its own
+# slice) are proven without ever paying for a live dispatch. `args`, `agent`,
+# `log` and `phase` are the whole runtime the scripts may use, so running them
+# this way also proves they use nothing else — no `require`, no ambient file
+# access.
+driver_tmp="$(mktemp -d)"
+cat >"$driver_tmp/driver.js" <<'JS'
+const fs = require('fs');
+const path = require('path');
+
+const file = process.argv[2];
+const mode = process.argv[3];
+const failures = [];
+
+function fail(msg) { failures.push(msg); }
+function assertTrue(cond, msg) { if (!cond) fail(msg); }
+function assertEqualArrays(actual, expected, msg) {
+  const a = JSON.stringify(actual);
+  const e = JSON.stringify(expected);
+  if (a !== e) fail(msg + ' — expected ' + e + ' got ' + a);
+}
+
+const isAgile = path.basename(file) === 'agile-loop.js';
+
+const PLAN_MARKER = 'PLAN-MARKER';
+const TESTPLAN_MARKER = 'TESTPLAN-MARKER';
+const CHECK_MARKER = 'echo CHECK-MARKER';
+
+const planReturn = {
+  needsTests: true,
+  plan: PLAN_MARKER,
+  moduleMap: 'module map',
+  environment: 'environment',
+  testPlan: TESTPLAN_MARKER,
+  checks: [CHECK_MARKER],
+  questions: [],
+  summary: 'plan summary',
+};
+const planReturnWithQuestion = Object.assign({}, planReturn, { questions: ['ask the human'] });
+const testsReturn = {
+  cases: [{ case: 'a case', file: 'x.test.mjs', testName: 'it works', expected: 'x', got: 'y' }],
+  openQuestions: [],
+  questions: [],
+  summary: 'tests summary',
+};
+const buildReturn = {
+  deviations: [],
+  commands: [{ command: 'echo hi', exitCode: 0, note: '' }],
+  blockers: [],
+  questions: [],
+  summary: 'build summary',
+};
+const verdictReturnClean = { findings: [], reason: '', questions: [], summary: 'verdict summary' };
+
+function increment(id) {
+  return { id, title: 'Deliver ' + id, goal: 'Deliver ' + id + '.', criteria: ['does ' + id], status: 'todo', note: '' };
+}
+const decomposeReturnOne = { increments: [increment('i1')], questions: [], summary: 'backlog summary' };
+const decomposeReturnTwo = { increments: [increment('i1'), increment('i2')], questions: [], summary: 'backlog summary' };
+
+function resumeBacklog() {
+  return {
+    version: 1,
+    issue: 'docs/issues/x',
+    workflow: isAgile ? 'agile-loop' : 'loop',
+    increments: [
+      {
+        id: 'i1', title: 'Deliver i1', goal: 'Deliver i1.', criteria: ['does i1'], status: 'todo', note: '',
+        steps: [
+          { label: 'research:i1.0', at: '2026-08-07T00:00:00.000Z', return: planReturn },
+          { label: 'tests:i1.0', at: '2026-08-07T00:00:01.000Z', return: testsReturn },
+        ],
+      },
+    ],
+    run: { steps: [{ label: 'decompose', at: '2026-08-07T00:00:00.000Z', return: decomposeReturnOne }] },
+  };
+}
+
+function doneBacklog() {
+  const closeLabel = isAgile ? 'replan:i1' : 'close:i1';
+  return {
+    version: 1,
+    issue: 'docs/issues/x',
+    workflow: isAgile ? 'agile-loop' : 'loop',
+    increments: [
+      { id: 'i1', title: 'Deliver i1', goal: 'Deliver i1.', criteria: ['does i1'], status: 'done', note: 'accepted', steps: [] },
+    ],
+    run: {
+      steps: [
+        { label: 'decompose', at: '2026-08-07T00:00:00.000Z', return: decomposeReturnOne },
+        { label: closeLabel, at: '2026-08-07T00:00:02.000Z', return: { summary: 'closed' } },
+      ],
+    },
+  };
+}
+
+function contextFor(m) {
+  switch (m) {
+    case 'w1':
+      return { stateReturn: { exists: false, backlogJson: '', summary: '' }, decomposeReturn: isAgile ? decomposeReturnTwo : decomposeReturnOne, researchReturn: planReturn };
+    case 'w2':
+      return { stateReturn: { exists: true, backlogJson: JSON.stringify(resumeBacklog(), null, 2) + '\n', summary: '' }, decomposeReturn: decomposeReturnOne, researchReturn: planReturn };
+    case 'w3':
+      return { stateReturn: { exists: true, backlogJson: JSON.stringify(doneBacklog(), null, 2) + '\n', summary: '' }, decomposeReturn: decomposeReturnOne, researchReturn: planReturn };
+    case 'w4':
+    case 'w5':
+    case 'w6':
+      return { stateReturn: { exists: false, backlogJson: '', summary: '' }, decomposeReturn: decomposeReturnOne, researchReturn: planReturn };
+    case 'w7':
+      return { stateReturn: { exists: false, backlogJson: '', summary: '' }, decomposeReturn: decomposeReturnOne, researchReturn: planReturnWithQuestion };
+    default:
+      throw new Error('unknown mode ' + m);
+  }
+}
+
+const ctx = contextFor(mode);
+
+function returnFor(label) {
+  if (label === 'load-state') return ctx.stateReturn;
+  if (label === 'decompose') return ctx.decomposeReturn;
+  if (label.startsWith('research:')) return ctx.researchReturn;
+  if (label.startsWith('tests:')) return testsReturn;
+  if (label.startsWith('implement:')) return buildReturn;
+  if (label.startsWith('review:')) return verdictReturnClean;
+  if (label.startsWith('close:') || label.startsWith('replan:')) return { summary: 'closed' };
+  if (label === 'publish') return { summary: 'published' };
+  throw new Error('unexpected label ' + label);
+}
+
+async function main() {
+  const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+  const src = fs.readFileSync(file, 'utf8').replace(/^export const meta =/m, 'const meta =');
+  const fn = new AsyncFunction('args', 'agent', 'log', 'phase', src);
+  const calls = [];
+  const stub = async (prompt, opts) => {
+    calls.push({ label: opts.label, agentType: opts.agentType, prompt });
+    return returnFor(opts.label);
+  };
+  const result = await fn({ issueDir: 'docs/issues/x' }, stub, () => {}, () => {});
+  const labels = calls.map((c) => c.label);
+
+  if (mode === 'w1') {
+    const closeLabel = isAgile ? 'replan:i1' : 'close:i1';
+    let expected = ['load-state', 'decompose', 'research:i1.0', 'tests:i1.0', 'implement:i1.0', 'review:i1.0', closeLabel];
+    if (isAgile) {
+      expected = expected.concat(['research:i2.0', 'tests:i2.0', 'implement:i2.0', 'review:i2.0', 'replan:i2']);
+    }
+    expected.push('publish');
+    assertEqualArrays(labels, expected, 'the labels dispatched are not the expected fresh-run sequence');
+    const byLabel = (l) => calls.find((c) => c.label === l);
+    assertTrue(!!byLabel('decompose') && byLabel('decompose').agentType === 'uroboros:planner', 'decompose is not dispatched as uroboros:planner');
+    assertTrue(!!byLabel(closeLabel) && byLabel(closeLabel).agentType === 'uroboros:planner', closeLabel + ' is not dispatched as uroboros:planner');
+    assertTrue(!!byLabel('load-state') && byLabel('load-state').agentType === 'general-purpose', 'load-state is not dispatched as general-purpose');
+    assertTrue(!!byLabel('publish') && byLabel('publish').agentType === 'general-purpose', 'publish is not dispatched as general-purpose');
+    if (isAgile) {
+      assertTrue(!!byLabel('replan:i2') && byLabel('replan:i2').agentType === 'uroboros:planner', 'replan:i2 is not dispatched as uroboros:planner');
+    }
+  } else if (mode === 'w2') {
+    assertTrue(!labels.some((l) => l.startsWith('research:')), 'the researcher was dispatched even though its step was already recorded');
+    assertTrue(!labels.some((l) => l.startsWith('tests:')), 'the test-author was dispatched even though its step was already recorded');
+    const afterLoadState = calls[1];
+    assertTrue(!!afterLoadState && afterLoadState.label.startsWith('implement:'), 'the first dispatch after load-state is not the implementer');
+    assertTrue(!!afterLoadState && afterLoadState.prompt.includes(PLAN_MARKER), "the implementer's prompt does not carry the recorded plan's marker");
+  } else if (mode === 'w3') {
+    assertEqualArrays(labels, ['load-state', 'publish'], 'a fully-closed backlog dispatches more than the state loader and publish');
+  } else if (mode === 'w4') {
+    const testsCall = calls.find((c) => c.label.startsWith('tests:'));
+    assertTrue(!!testsCall, 'the test-author was never dispatched');
+    assertTrue(!!testsCall && testsCall.prompt.includes(TESTPLAN_MARKER), "the test-author's prompt does not carry the test plan");
+    assertTrue(!!testsCall && !testsCall.prompt.includes(PLAN_MARKER), "the test-author's prompt carries the implementation plan");
+  } else if (mode === 'w5') {
+    const implCall = calls.find((c) => c.label.startsWith('implement:'));
+    assertTrue(!!implCall, 'the implementer was never dispatched');
+    assertTrue(!!implCall && implCall.prompt.includes(PLAN_MARKER), "the implementer's prompt does not carry the plan");
+    assertTrue(!!implCall && implCall.prompt.includes('CHECK-MARKER'), "the implementer's prompt does not carry the checks");
+    assertTrue(!!implCall && !implCall.prompt.includes(TESTPLAN_MARKER), "the implementer's prompt carries the test plan");
+  } else if (mode === 'w6') {
+    const reviewCall = calls.find((c) => c.label.startsWith('review:'));
+    assertTrue(!!reviewCall, 'the reviewer was never dispatched');
+    assertTrue(!!reviewCall && reviewCall.prompt.includes('CHECK-MARKER'), "the reviewer's prompt does not carry the checks");
+    assertTrue(!!reviewCall && !reviewCall.prompt.includes(PLAN_MARKER), "the reviewer's prompt carries the implementation plan");
+    assertTrue(!!reviewCall && !reviewCall.prompt.includes(TESTPLAN_MARKER), "the reviewer's prompt carries the test plan");
+  } else if (mode === 'w7') {
+    assertEqualArrays(labels, ['load-state', 'decompose', 'research:i1.0', 'publish'], 'a question from the researcher does not stop the run at publish');
+    assertTrue(!!result && !!result.blockedOnHuman, 'the returned result does not carry blockedOnHuman');
+    assertTrue(!!result && JSON.stringify(result.blockedOnHuman).includes('ask the human'), 'blockedOnHuman does not carry the question');
+  } else {
+    throw new Error('unknown mode ' + mode);
+  }
+
+  if (failures.length) {
+    process.stderr.write(failures.join('\n') + '\n');
+    process.exit(1);
+  }
+}
+
+main().catch((e) => {
+  process.stderr.write(String((e && e.stack) || e) + '\n');
+  process.exit(1);
+});
+JS
+
+run_driver() {
+  # $1 = workflow file, $2 = mode, $3 = human-readable case description
+  if node "$driver_tmp/driver.js" "$1" "$2" 2>"$driver_tmp/err"; then
+    ok "$3"
+  else
+    no "$3:"
+    sed 's/^/       /' "$driver_tmp/err"
+  fi
+}
+
+for wf in "$root/workflows/loop.js" "$root/workflows/agile-loop.js"; do
+  wf_name="$(basename "$wf")"
+  run_driver "$wf" w1 "$wf_name: a fresh run dispatches load-state, decompose, the chain, the close and publish, in order"
+  run_driver "$wf" w2 "$wf_name: a resumed run skips the recorded researcher and test-author and starts at the implementer"
+  run_driver "$wf" w3 "$wf_name: a backlog whose increments are all closed dispatches only the state loader and publish"
+done
+
+run_driver "$root/workflows/loop.js" w4 "loop.js: the test-author's prompt carries the test plan and not the implementation plan"
+run_driver "$root/workflows/loop.js" w5 "loop.js: the implementer's prompt carries the plan and the checks and not the test plan"
+run_driver "$root/workflows/loop.js" w6 "loop.js: the reviewer's prompt carries the checks alone"
+run_driver "$root/workflows/loop.js" w7 "loop.js: a question from the researcher ends the run at publish"
+
+rm -rf "$driver_tmp"
 
 echo
 echo "=== the two workflows coexist"
