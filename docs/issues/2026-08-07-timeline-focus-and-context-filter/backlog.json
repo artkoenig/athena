@@ -51,341 +51,29 @@
         "Every case outside the deleted file that asserts the old tool-mark shape or the tool panel's presence — whole-object assertions on `toolCallOf()`'s return among them — is updated or removed in the same change, so no case is left red, skipped or asserting the superseded shape.",
         "`npm --prefix tools/argus-ui test` passes over the whole suite after this increment, and each criterion above has at least one test that goes red when its behaviour is broken or removed."
       ],
-      "status": "todo",
-      "note": "Criterion 5 sharpened after filter-honesty: the panel that must survive this deletion now also carries the visible-of-total head and the all-hidden placeholder, and both ride on the input builder that renderLanePanel feeds, so they are named among what must come through unchanged.",
-      "steps": [
-        {
-          "label": "research:tools-box.0",
-          "at": "2026-08-07T16:06:46.637Z",
-          "return": {
-            "needsTests": true,
-            "summary": "Delete public/tools.js and test/tools.test.mjs, strip the tool panel out of renderLanePanel(), and cut toolCallOf() back to seq/timeMs/spanId — leaving the tick marks, the data-tools count, the legend and the incremental tool poll exactly as they are.",
-            "plan": "Delete the tool list panel and the per-call parameter ballast it forced into page state. Six files change; two of them are deleted.\n\n## 1. Delete two files\n\n- `tools/argus-ui/public/tools.js` — the whole file (`laneToolInput`, `renderToolPanel`).\n- `tools/argus-ui/test/tools.test.mjs` — the whole file.\n\n## 2. `tools/argus-ui/public/app.js`\n\n- Delete line 18, `import { laneToolInput, renderToolPanel } from './tools.js';`. No other import line changes: `fmtClock`, `resolveCursor`, `mergeToolMarks` and `TOOL_EVENT` all still have callers here.\n- `renderLanePanel()` (line 948) loses the `+ renderToolPanel(laneToolInput({ … }))` term. The assignment becomes exactly `container.innerHTML = renderContextPanel(lanePanelInput({ view, key: state.selectedLane, held: state.laneContext, expanded: state.expanded, hidden: state.contextHidden, filterOpen: state.contextFilterOpen }));`. Keep `const view = laneView();` and keep passing all six of those fields — `test/page.test.mjs` pins each by name, and `filterOpen`/`hidden` are what increments 1 and 2 built.\n- Rewrite the `toolMarks` state comment (lines 43-46), which today describes the cap that is going: a mark is now seq, moment and span, and nothing else — enough for the lane's tick marks and its count.\n- Nothing else in `app.js` reads a mark's `name`, `preview`, `text`, `chars` or `truncated`. The only other consumers of `state.toolMarks` are `buildDensity(…, { tools: state.toolMarks })` at line 208, `mergeToolMarks` at line 903 and the resets at lines 877 and 1063; all keep working unchanged.\n- Leave the poll at line 895 untouched — `api('/api/events', { session: id, event: TOOL_EVENT, sinceSeq: state.toolSeq, limit: 2000 })` — and leave the `summary[data-block]` expansion wiring alone. The `tool:`-prefixed expansion keys simply stop being produced; `state.expanded` needs no migration, since it is a page-lifetime Set that can no longer gain such a key.\n\n## 3. `tools/argus-ui/public/timeline.js`\n\n- Delete `TOOL_PARAM_CHARS` (lines 23-24) and the `paramText()` helper (lines 316-327).\n- `toolCallOf(item)` returns `{ seq: item.seq, timeMs: item.timeMs, spanId: item?.spanId ?? null }` and nothing else. Keep the `?? null` normalisation: `mergeToolMarks`'s cases pin `spanId: null` for an item that carries none. Rewrite its doc comment to say a mark answers *when* a call happened and *whose lane* it belongs to, and that the call's parameters are deliberately not held in page state.\n- `mergeToolMarks`'s body is untouched. Delete only the sentence in its doc comment that names `TOOL_PARAM_CHARS`. Its contract stands: duplicates dropped by `seq`, the watermark returned as the highest `seq` actually held, non-finite `seq` dropped, the input array copied and never mutated.\n- Prune `previewOf` from the `./format.js` import on line 15 — line 355 was its only use in this file, so leaving it is a dead import. `esc`, `fmtClock`, `fmtDur` and `fmtNum` all stay.\n- Reword the `spanLaneKeys` doc comment (lines 83-86), which says the map is \"the one the density counts with and the one the tool list is filtered by\": the density counts are now its only consumer.\n- Everything else stays byte-for-byte: `TOOL_EVENT`, `activityMarks`, the `data-kind=\"tool\"` marks on the lane track, `data-tools` in the lane meta, and the legend span at line 521 that reads `<span data-kind=\"tool\">tool call</span>`.\n\n## 4. `tools/argus-ui/public/styles.css`\n\nDelete the `/* tools */` section — the section header comment plus `.tools-panel`, `.tools-meta`, `.tools-panel .ctx-block > summary` and `.tool-time`, lines ~1235-1256, ending where the `/* events */` header begins. Those four selectors were produced only by `tools.js`; `.ctx-block`, `.ctx-label`, `.ctx-preview` and `.ctx-size` belong to `context.js` and stay.\n\n## 5. Test files that name the deleted things (their edits are spelled out in the test plan)\n\n`test/independence.test.mjs` lists `public/tools.js` twice and would go red on the deletion; `test/page.test.mjs` has two cases that only exist for the tool panel and two more that mention it; `test/timeline.test.mjs` pins the old eight-field mark shape in five cases and imports `TOOL_PARAM_CHARS` by name (a named import of a removed export is a link-time SyntaxError, so that import must go in the same change).\n\n## Rejected\n\n- Keeping `toolCallOf`'s richer shape \"in case a later increment wants it\": the ballast is the reason this increment exists, and git holds the code.\n- Leaving the dead CSS behind: a selector no renderer can produce is the same debt in another file.\n- Purging `tool:` keys out of `state.expanded`: nothing can write one any more, and the Set does not outlive the page.\n- Touching the `/api/events` poll, the `sinceSeq` watermark, the lane tick marks, the `data-tools` count or the legend: the criteria name each of them as untouched.\n- The six technical tabs, `DETAIL_VIEWS`, `renderDetailViews()` and everything they drag in: a later increment takes them, so `renderDetailViews` stays imported and called in `app.js` and `fmtNum` stays used by it in `timeline.js`.",
-            "moduleMap": "tools/argus-ui/public/tools.js — DELETED. Held `laneToolInput()` (the calls one lane made up to the cursor) and `renderToolPanel()` (their markup).\ntools/argus-ui/test/tools.test.mjs — DELETED. The only test file for the module above.\ntools/argus-ui/public/app.js — the page. Entry points touched: the `./tools.js` import (line 18), the `toolMarks` state comment (lines 43-46), `renderLanePanel()` (line 948). Untouched here: `loadTimeline()` (line 886) with the `/api/events` + `sinceSeq` poll, `renderDetail()`'s `buildDensity(…, { tools: state.toolMarks })`, `selectSession()`'s resets.\ntools/argus-ui/public/timeline.js — the pure timeline module. Entry points touched: the `./format.js` import (line 15), `TOOL_PARAM_CHARS` (line 24, removed), the `spanLaneKeys` doc comment (lines 83-86), `paramText()` (lines 316-327, removed), `toolCallOf()` (line 345, cut to three fields), `mergeToolMarks()`'s doc comment (lines 361-377, body unchanged). Untouched: `TOOL_EVENT`, `activityMarks`, `renderTimeline`'s legend and lane meta.\ntools/argus-ui/public/styles.css — the stylesheet. The `/* tools */` section (lines ~1235-1256: `.tools-panel`, `.tools-meta`, `.tools-panel .ctx-block > summary`, `.tool-time`) is removed.\ntools/argus-ui/test/independence.test.mjs — project-wide rules. `'public/tools.js'` appears in two lists (lines 33 and 62) and must come out of both.\ntools/argus-ui/test/page.test.mjs — source-level assertions over public/*.js, read with `fs`. Cases for the tool panel at lines 594-632 and two mentions at lines 499-516 change; the new absence case lands here.\ntools/argus-ui/test/timeline.test.mjs — behavioural tests importing timeline.js directly. The import block (lines 4-25), the `toolCallOf` cases (lines 598-666) and two `mergeToolMarks` cases (lines 701-709, 774-779) change; the new legend case lands here.\ntools/argus-ui/test/context.test.mjs — UNCHANGED. Its 80-odd cases are the regression net for \"the context panel comes through the deletion whole\".",
-            "environment": "Node >= 20.11, already installed. `tools/argus-ui` has zero runtime and zero dev dependencies, so no `npm install` is needed and there is no `node_modules` to create. There is no linter, no formatter and no type checker in this project — nothing to run beyond the tests. The test runner is `node --test` over `test/*.test.mjs`, declared in `tools/argus-ui/package.json`.\n\nCommands, all run from the repository root:\n\n- Whole suite for this project: `npm --prefix tools/argus-ui test`\n- One file at a time, while working: `node --test tools/argus-ui/test/page.test.mjs`, `node --test tools/argus-ui/test/timeline.test.mjs`, `node --test tools/argus-ui/test/independence.test.mjs`, `node --test tools/argus-ui/test/context.test.mjs`\n\nNo server, no network and no fixture files are needed: every case in these four files is either a pure function call or a `fs.readFileSync` of a file under `public/`.",
-            "testPlan": "Tests are needed. The suite is `node --test` with `node:assert/strict`; every case is a top-level `test('sentence describing the behaviour', () => { … })`, the sentence written as a statement about the page rather than as a function name, and nearly every assertion carries a message saying what breaking it would cost. Two styles live side by side and must not be mixed: `test/timeline.test.mjs` and `test/context.test.mjs` import the module under test and assert over its return values; `test/page.test.mjs` and `test/independence.test.mjs` read source files with `fs` and assert over their text. Put each case in the file whose style fits it.\n\n## Criterion A — `public/tools.js` and `test/tools.test.mjs` are deleted, and `app.js` imports neither `laneToolInput` nor `renderToolPanel`\n\n**Case A1 (new) — `tools/argus-ui/test/page.test.mjs`, unit, source-level.** Name it after the behaviour, e.g. `test('the tool panel is gone from the page, module and all', …)`. This file already has `const PUBLIC = fileURLToPath(new URL('../public/', import.meta.url));` at line 7; add a sibling `const TEST_DIR = fileURLToPath(new URL('./', import.meta.url));` beside it or use `new URL('./tools.test.mjs', import.meta.url)` inline. Assert all four:\n- `assert.ok(!fs.existsSync(path.join(PUBLIC, 'tools.js')), …)`\n- `assert.ok(!fs.existsSync(path.join(TEST_DIR, 'tools.test.mjs')), …)`\n- `assert.doesNotMatch(appJs, /from\\s*['\\\"]\\.\\/tools\\.js['\\\"]/, …)` where `appJs` is read the way every case in this file reads it: `fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8')`\n- `assert.doesNotMatch(appJs, /\\blaneToolInput\\b/, …)` and `assert.doesNotMatch(appJs, /\\brenderToolPanel\\b/, …)`\nPlace it where the old tool-panel cases were (around line 591), and replace the `// Increment 7 — the click paints the tool list …` section comment with one naming this increment.\n\n**Case A2 (delete) — `tools/argus-ui/test/page.test.mjs` lines 594-600**, `test('app.js takes the tool panel from its module', …)`. It asserts the very import A1 forbids. Delete the whole case.\n\n**Case A3 (edit) — `tools/argus-ui/test/independence.test.mjs`.** Remove the string `'public/tools.js'` from the list at line 33 (`the interface is a project of its own…`) and from the list at line 62 (`nothing in the interface reaches outside the interface`). Both would go red on a file that no longer exists; both must keep every other entry. Nothing else in this file changes — the third case scans only `public/context.js` and `public/timeline.js`.\n\nRun these with `node --test tools/argus-ui/test/page.test.mjs` and `node --test tools/argus-ui/test/independence.test.mjs`.\n\n## Criterion B — `renderLanePanel()` paints only the context panel into `#lane-panel`\n\n**Case B1 (edit) — `tools/argus-ui/test/page.test.mjs` lines 602-615**, `test('the markup the panels render is what reaches the container', …)`. Rename it to the singular (e.g. `test('the markup the context panel renders is the whole of what reaches the container', …)`), keep the existing `assert.match(renderLanePanel, /container\\.innerHTML\\s*=\\s*renderContextPanel\\(/, …)`, delete the `assert.match(renderLanePanel, /\\+\\s*renderToolPanel\\(/, …)` that follows it, and add the \"only\" assertion: `assert.deepEqual(renderLanePanel.match(/render(?:Context|Tool)Panel\\(/g), ['renderContextPanel('], …)`. Use exactly that alternation rather than `render\\w*Panel\\(`, because `functionSource()` returns the text starting at the declaration and `renderLanePanel(` would match a looser pattern. This is the case that goes red if a second panel is ever concatenated back on.\n\n**Case B2 (delete) — `tools/argus-ui/test/page.test.mjs` lines 617-632**, `test('the tool list is drawn for the selected lane, at the cursor's moment, from the calls the page holds', …)`. Its first assertion calls `callArguments(renderLanePanel, 'renderToolPanel')`, which `assert.fail`s once the call is gone. Delete the whole case.\n\n**Case B3 (edit) — `tools/argus-ui/test/page.test.mjs` lines 494-517**, `test('the panel is drawn from the lane the reader selected and the answer held for it', …)`. Delete the trailing `assert.doesNotMatch(slice, /laneToolInput\\(/, …)` (lines 512-516) — it is a tautology once nothing imports that name, and A1 covers it. Keep the `const view = laneView();` assertion but reword its message, which today says \"hand the same one to both panels\", to say the page builds its lane view once before handing it to the panel. Keep the four `slice` assertions for `view,`, `key:`, `held:` and `expanded:` exactly as they are.\n\n**Already green and must stay green (no edit):** `test('the panel is drawn with the hidden set and the open flag', …)` at line 666 and `test('an open dropdown survives a repaint', …)` at line 712 both read the `renderContextPanel(` argument slice of the trimmed `renderLanePanel`; they are the guard that the trim did not drop `hidden:` or `filterOpen:`.\n\nRun with `node --test tools/argus-ui/test/page.test.mjs`.\n\n## Criterion C — the tick marks, the `data-tools` count, the legend entry and the incremental poll are untouched\n\n**Case C1 (new) — `tools/argus-ui/test/timeline.test.mjs`, unit.** The one signal with no test of its own today is the legend. Add, next to the other `renderTimeline` cases (after line 556 is a good home), `test('the legend still names the tool marks it explains', …)`: build the view the neighbouring case builds — `const content = threeRecordContent(); const view = buildDensity(buildLanes({ session: session(), content }), { content, tools: [toolMark({ spanId: 'sp-a', timeMs: 2200 })] }); const html = renderTimeline(view);` — then `assert.match(html, /<span data-kind=\"tool\">tool call<\\/span>/, 'a tick mark nobody can read is not a signal')`. Use the `session()`, `threeRecordContent()` and `toolMark()` fixtures already at the top of the file; add no new fixture.\n\n**Already green and must stay green (no edit), and these are the whole of the coverage for the rest of this criterion:**\n- `tools/argus-ui/test/timeline.test.mjs` line 531, `assert.match(row, /data-kind=\"tool\"/, …)` at line 555 — the tick mark on the lane track.\n- `tools/argus-ui/test/timeline.test.mjs` line 568, `assert.match(row, /data-tools=\"1\"/)` at line 583 — the count in the lane meta.\n- `tools/argus-ui/test/timeline.test.mjs` line 781, `test('the merged index is what the density reads', …)` — the merged marks still produce a `kind === 'tool'` activity mark and a `toolCalls` of 1 after the shape change.\n- `tools/argus-ui/test/page.test.mjs` line 171, `test('the page asks the collector for the tool calls, incrementally', …)` — `/api/events`, `TOOL_EVENT` and `sinceSeq` in `loadTimeline`.\n\nRun with `node --test tools/argus-ui/test/timeline.test.mjs`.\n\n## Criterion D — `toolCallOf()` keeps only `seq`, `timeMs`, `spanId`; `TOOL_PARAM_CHARS` and `paramText()` go; `mergeToolMarks()` keeps its contract\n\nAll of this lives in `tools/argus-ui/test/timeline.test.mjs`, unit level, module imported directly.\n\n**Import block (edit), lines 4-25.** Remove `TOOL_PARAM_CHARS` from the named import — a named import of a removed export is a link-time SyntaxError that takes the whole file down, not one case. Remove `import { previewOf } from '../public/format.js';` at line 25 too; line 607 is its only use and that case is going. Leave every other name in the import list, `DETAIL_VIEWS` and `renderDetailViews` included — the tabs are a later increment.\n\n**Case D1 (replace) — lines 598-612**, today `test('a tool call keeps the tool's name and the parameters it was called with', …)`. Replace it with `test('a tool call is kept as a mark and nothing more, whatever the event carried', …)`: `assert.deepEqual(toolCallOf(toolEvent()), { seq: 5, timeMs: 2200, spanId: 'sp-a' })`. The `toolEvent()` fixture (line 81) carries `tool_name`, `tool_use_id`, `success` and a JSON `tool_input`, so a strict `deepEqual` against three keys is red the moment any of them is derived again. Keep the fixture as it is — an event that carries attributes is exactly what makes this case load-bearing.\n\n**Case D2 (delete) — lines 614-628**, `test('the pre-2.1 attribute name is read when the current one is absent', …)`. Nothing reads `tool_parameters` any more.\n\n**Case D3 (delete) — lines 630-635**, `test('parameters that are not JSON are kept as they arrived, not dropped', …)`. Same reason; this was `paramText()`'s case.\n\n**Case D4 (replace) — lines 637-650**, `test('a call with no parameters and no name is still a row', …)`. Replace with `test('an event with no attributes at all is still a mark, and a missing span becomes null', …)`: `assert.deepEqual(toolCallOf({ seq: 1, timeMs: 1000, spanId: 'sp-a' }), { seq: 1, timeMs: 1000, spanId: 'sp-a' })` and `assert.deepEqual(toolCallOf({ seq: 1, timeMs: 1000 }), { seq: 1, timeMs: 1000, spanId: null })`. The second half is the edge that `mergeToolMarks` depends on.\n\n**Case D5 (replace) — lines 652-666**, today `test('a call whose parameters are a whole file keeps a bounded amount of them, and says how much there was', …)`. Replace with the case that pins the ballast being gone rather than capped: `test('a call whose parameters are a whole file leaves the mark the same size as any other', …)`. Build `const big = 'x'.repeat(50_000); const out = toolCallOf(toolEvent({ attrs: { tool_name: 'Write', tool_input: JSON.stringify({ file_path: '/tmp/big', content: big }) } }));`, then `assert.deepEqual(out, { seq: 5, timeMs: 2200, spanId: 'sp-a' })` and `assert.ok(JSON.stringify(out).length < 200, 'a mark that grows with the call it describes is the megabytes this increment removed')`. Do not reintroduce any character-count constant.\n\n**Case D6 (new) — same file.** `test('the parameter cap is gone from the module, not merely unused', …)`: `import * as timeline from '../public/timeline.js';` at the top of the file (a namespace import beside the existing named one is fine and is the only way to ask about an absent export without a SyntaxError), then `assert.ok(!('TOOL_PARAM_CHARS' in timeline), 'a cap still exported is a cap something can still be capped with')`. `paramText()` was never exported, so its removal is observable only through D1 and D5; that is deliberate and no source scan is added for it — this file is import-only by convention.\n\n**Case D7 (edit) — lines 701-709**, `test('merging into an empty index keeps every call, with the name and parameters a panel draws', …)`. Rename to something like `test('merging into an empty index projects every call through toolCallOf and holds nothing else', …)` and keep the body exactly as it is: the `deepEqual` against `[toolCallOf(…), toolCallOf(…)]` follows the new shape on its own, and its message already says the right thing.\n\n**Case D8 (edit) — lines 774-779**, `test('a missing spanId becomes null rather than undefined', …)`. Change the expected array from the eight-field object to `[{ seq: 3, timeMs: 2000, spanId: null }]`.\n\n**Already green and must stay green (no edit) — the `mergeToolMarks` contract:** lines 711 (a held event is not counted twice), 723 (merging the same response twice is a no-op), 734 (the watermark is what is held), 742 (an item with no usable seq is dropped), 753 (the input array is not mutated), 764 (out-of-order items still leave the highest seq). These six are the whole of \"`mergeToolMarks()` keeps its contract\"; they need no change and no addition, because the merge's body does not change.\n\nRun with `node --test tools/argus-ui/test/timeline.test.mjs`.\n\n## Criterion E — the context panel comes through the deletion whole\n\nNo new case. `tools/argus-ui/test/context.test.mjs` is untouched by this change and already carries a red-on-break case for each half of the criterion; it is the regression net, and the test-author's job here is to confirm it stays green rather than to write anything:\n- one input builder — `test('the panel's whole input still comes from one builder', …)`, line 1141\n- the filter renders — `test('the dropdown sits in the head, one checkbox per entry, checked, counted, in two labelled groups with two buttons', …)`, line 928\n- it hides — `test('unchecking an entry removes its blocks below and only unchecks that box', …)`, line 985\n- it reopens across a repaint — `test('the dropdown opens only when asked, and stays open across a repaint', …)`, line 1102\n- the head names visible-of-total — `test('a filtered head names the visible numbers beside the totals', …)`, line 1261, with `test('with nothing hidden the head line and its attributes are exactly what they were', …)`, line 1237, as its other half\n- all hidden keeps `data-state=\"ready\"` and shows the placeholder — `test('everything hidden shows a placeholder in place of the rows, and a reader can still turn entries back on', …)`, line 1043\n\nRun with `node --test tools/argus-ui/test/context.test.mjs` if you want it on its own; `npm --prefix tools/argus-ui test` covers it.\n\n## Criterion F — every case outside the deleted file asserting the old tool-mark shape or the tool panel's presence is updated or removed\n\nCases A2, A3, B1, B2, B3, D1-D5, D7 and D8 above are that inventory, exhaustively: they are every hit for `laneToolInput`, `renderToolPanel`, `tools.js`, `TOOL_PARAM_CHARS` and the eight-field mark shape outside `test/tools.test.mjs`. No new case guards this criterion; the whole-suite run is its check.\n\n## Left untested, on purpose\n\n- The `styles.css` deletion. There is no CSS test in this project and no renderer can emit `.tools-panel` any more; a test asserting a stylesheet does not contain a string buys nothing.\n- The doc-comment rewrites in `timeline.js` and `app.js`. Prose has nothing a tool can check.\n- `src/server.mjs` and the collector. Neither is touched.\n- Any browser-level rendering of `#lane-panel`. This project has no DOM harness — `page.test.mjs` asserts over source text by design, and that is the level criterion B is provable at.\n\n## What is already red\n\nI ran nothing, and no baseline run is needed to state this. On the production change alone, before the test edits, these go red and are expected to: `test/independence.test.mjs` (both lists name `public/tools.js`), `test/timeline.test.mjs` (fails to load at all — it imports `TOOL_PARAM_CHARS` by name), and the four `page.test.mjs` cases named in A2, B1, B2 and B3. Every one of them is addressed above; after the edits the whole suite must be green in one run.",
-            "checks": [
-              "npm --prefix tools/argus-ui test"
-            ],
-            "questions": []
-          }
-        },
-        {
-          "label": "tests:tools-box.0",
-          "at": "2026-08-07T16:12:38.728Z",
-          "return": {
-            "summary": "Wrote failing tests in tools/argus-ui/test/{page,timeline,independence}.test.mjs for increment 3 (the tools box goes, its tick marks stay), deleted test/tools.test.mjs, left production code untouched, and confirmed npm --prefix tools/argus-ui test runs 223 cases with exactly 7 red — one per behaviour the test plan named as currently unmet.",
-            "cases": [
-              {
-                "case": "Case A1 (new) — the tool panel is gone from the page, module and all: public/tools.js and test/tools.test.mjs deleted, app.js imports neither laneToolInput nor renderToolPanel",
-                "file": "tools/argus-ui/test/page.test.mjs",
-                "testName": "the tool panel is gone from the page, module and all",
-                "expected": "fs.existsSync is false for public/tools.js and test/tools.test.mjs, and app.js's text matches neither an import from ./tools.js nor the bare words laneToolInput / renderToolPanel",
-                "got": "AssertionError: 'public/tools.js must be deleted, not merely unused' — production still ships public/tools.js and app.js still imports laneToolInput and renderToolPanel from it, so this is the first assertion to fail"
-              },
-              {
-                "case": "Case A2 (delete) — app.js takes the tool panel from its module, which asserted the very import A1 forbids",
-                "file": "tools/argus-ui/test/page.test.mjs",
-                "testName": "",
-                "expected": "deleted outright — the case would assert app.js imports renderToolPanel/laneToolInput from tools.js, which A1 now forbids",
-                "got": "case removed from the file; it no longer runs"
-              },
-              {
-                "case": "Case A3 (edit) — independence.test.mjs no longer names public/tools.js in either file-existence list",
-                "file": "tools/argus-ui/test/independence.test.mjs",
-                "testName": "the interface is a project of its own, with everything a project needs / nothing in the interface reaches outside the interface",
-                "expected": "'public/tools.js' removed from the require-file list (line 33) and from the owned-modules list (line 62), every other entry left untouched",
-                "got": "both tests pass now (tools.js currently still exists in production, so removing it from the lists was the only change needed); confirmed by running node --test test/independence.test.mjs, 3/3 pass, exit 0 — this case is edited, not expected to be red, since it only stops asserting an existence check that would otherwise go red once the implementer deletes the file"
-              },
-              {
-                "case": "Case B1 (edit) — the markup the panels render is what reaches the container, renamed to the singular and given an 'only' assertion",
-                "file": "tools/argus-ui/test/page.test.mjs",
-                "testName": "the markup the context panel renders is the whole of what reaches the container",
-                "expected": "renderLanePanel matches container.innerHTML = renderContextPanel(...) and renderLanePanel.match(/render(?:Context|Tool)Panel\\(/g) deep-equals ['renderContextPanel(']",
-                "got": "AssertionError: 'renderLanePanel must paint the context panel and only the context panel — a tool panel concatenated back on must fail this' — actual match array is ['renderContextPanel(', 'renderToolPanel('] because renderLanePanel still concatenates the tool panel on"
-              },
-              {
-                "case": "Case B2 (delete) — the tool list is drawn for the selected lane..., whose first assertion calls callArguments(renderLanePanel, 'renderToolPanel')",
-                "file": "tools/argus-ui/test/page.test.mjs",
-                "testName": "",
-                "expected": "deleted outright — once renderToolPanel is gone, callArguments would assert.fail on a call that no longer exists",
-                "got": "case removed from the file; it no longer runs"
-              },
-              {
-                "case": "Case B3 (edit) — the panel is drawn from the lane the reader selected and the answer held for it: drop the tautological laneToolInput( doesNotMatch, reword the laneView() message, keep the four slice assertions",
-                "file": "tools/argus-ui/test/page.test.mjs",
-                "testName": "the panel is drawn from the lane the reader selected and the answer held for it",
-                "expected": "the const view = laneView(); assertion now reads 'the page must build its lane view once before handing it to the panel', the view/key/held/expanded slice assertions unchanged, no doesNotMatch(laneToolInput() left",
-                "got": "test passes as edited — the case still covers view/key/held/expanded, which A1 now covers laneToolInput's absence on its own; confirmed by running node --test test/page.test.mjs, this test is among the 49 passing"
-              },
-              {
-                "case": "Already green, no edit — the panel is drawn with the hidden set and the open flag",
-                "file": "tools/argus-ui/test/page.test.mjs",
-                "testName": "the panel is drawn with the hidden set and the open flag",
-                "expected": "renderContextPanel's argument slice still carries hidden: state.contextHidden and filterOpen: state.contextFilterOpen after the trim",
-                "got": "untouched, confirmed still passing (node --test test/page.test.mjs, exit-code-relevant subtest ok)"
-              },
-              {
-                "case": "Already green, no edit — an open dropdown survives a repaint",
-                "file": "tools/argus-ui/test/page.test.mjs",
-                "testName": "an open dropdown survives a repaint",
-                "expected": "renderLanePanel still passes state.contextFilterOpen back into renderContextPanel after the trim",
-                "got": "untouched, confirmed still passing"
-              },
-              {
-                "case": "Case C1 (new) — the legend still names the tool marks it explains",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "the legend still names the tool marks it explains",
-                "expected": "renderTimeline's html matches <span data-kind=\"tool\">tool call</span> for a view built with a tool mark, using the session()/threeRecordContent()/toolMark() fixtures already in the file",
-                "got": "passes today — the legend markup is untouched by this increment, so this case fills a coverage gap rather than pinning a change; confirmed green with node --test test/timeline.test.mjs"
-              },
-              {
-                "case": "Already green, no edit — data-kind=\"tool\" tick mark on the lane track",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "the density is rendered behind the bar, not instead of it, for the lane it belongs to",
-                "expected": "row matches /data-kind=\"tool\"/",
-                "got": "untouched, confirmed still passing"
-              },
-              {
-                "case": "Already green, no edit — data-tools count in lane meta",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "the lane meta reports the size and the counts as data, not as a pinned sentence",
-                "expected": "row matches /data-tools=\"1\"/",
-                "got": "untouched, confirmed still passing"
-              },
-              {
-                "case": "Already green, no edit — the merged index is what the density reads (mergeToolMarks still produces a kind === 'tool' activity mark and a toolCalls of 1 after the shape change)",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "the merged index is what the density reads",
-                "expected": "buildDensity fed merged.marks still yields agent.toolCalls === 1 and one activity mark of kind 'tool'",
-                "got": "untouched, confirmed still passing — its assertions never referenced the removed fields, so the shape change does not touch it"
-              },
-              {
-                "case": "Already green, no edit — the page asks the collector for the tool calls, incrementally (/api/events, TOOL_EVENT, sinceSeq)",
-                "file": "tools/argus-ui/test/page.test.mjs",
-                "testName": "the page asks the collector for the tool calls, incrementally",
-                "expected": "loadTimeline's source matches /\\/api\\/events/, /TOOL_EVENT/ and /sinceSeq/",
-                "got": "untouched, confirmed still passing"
-              },
-              {
-                "case": "Import block (edit) — remove TOOL_PARAM_CHARS from the named import and remove the previewOf import from format.js, so a link-time SyntaxError does not take the whole file down",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "",
-                "expected": "the named import list from ../public/timeline.js drops TOOL_PARAM_CHARS; the `import { previewOf } from '../public/format.js';` line is removed; a namespace `import * as timeline from '../public/timeline.js';` is added for D6",
-                "got": "file loads and runs; confirmed by running node --test test/timeline.test.mjs — 79 subtests execute, none aborted at load time"
-              },
-              {
-                "case": "Case D1 (replace) — a tool call is kept as a mark and nothing more, whatever the event carried",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "a tool call is kept as a mark and nothing more, whatever the event carried",
-                "expected": "toolCallOf(toolEvent()) deep-equals exactly { seq: 5, timeMs: 2200, spanId: 'sp-a' }",
-                "got": "AssertionError, actual carries chars: 53, name: 'Bash', preview: '{ \"command\": \"echo hi\", \"description\": \"say hi\" }', text: '{\\n  \"command\": \"echo hi\",\\n  \"description\": \"say hi\"\\n}', truncated: false in addition to the three kept fields"
-              },
-              {
-                "case": "Case D2 (delete) — the pre-2.1 attribute name is read when the current one is absent, which was paramText()'s case",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "",
-                "expected": "deleted outright — nothing reads tool_parameters any more",
-                "got": "case removed from the file; it no longer runs"
-              },
-              {
-                "case": "Case D3 (delete) — parameters that are not JSON are kept as they arrived, not dropped, which was paramText()'s case",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "",
-                "expected": "deleted outright — same reason as D2",
-                "got": "case removed from the file; it no longer runs"
-              },
-              {
-                "case": "Case D4 (replace) — an event with no attributes at all is still a mark, and a missing span becomes null",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "an event with no attributes at all is still a mark, and a missing span becomes null",
-                "expected": "toolCallOf({ seq: 1, timeMs: 1000, spanId: 'sp-a' }) deep-equals itself unchanged; toolCallOf({ seq: 1, timeMs: 1000 }) deep-equals { seq: 1, timeMs: 1000, spanId: null }",
-                "got": "AssertionError on the second half — actual carries chars: 0, name: 'tool', preview: '', text: '', truncated: false in addition to seq/timeMs/spanId: null"
-              },
-              {
-                "case": "Case D5 (replace) — a call whose parameters are a whole file leaves the mark the same size as any other",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "a call whose parameters are a whole file leaves the mark the same size as any other",
-                "expected": "toolCallOf on a 50,000-char tool_input deep-equals { seq: 5, timeMs: 2200, spanId: 'sp-a' }, and JSON.stringify(out).length < 200",
-                "got": "AssertionError — actual carries chars: 50046, name: 'Write', a truncated preview string, a ~50KB text field and truncated: true, so it is nowhere near under 200 characters when serialized"
-              },
-              {
-                "case": "Case D6 (new) — the parameter cap is gone from the module, not merely unused",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "the parameter cap is gone from the module, not merely unused",
-                "expected": "!('TOOL_PARAM_CHARS' in timeline) is true, importing the module as a namespace",
-                "got": "AssertionError: 'a cap still exported is a cap something can still be capped with' — TOOL_PARAM_CHARS is still exported by public/timeline.js"
-              },
-              {
-                "case": "Case D7 (edit) — merging into an empty index keeps every call, with the name and parameters a panel draws, renamed and body kept as-is",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "merging into an empty index projects every call through toolCallOf and holds nothing else",
-                "expected": "mergeToolMarks([], [...]).marks deep-equals [toolCallOf(...), toolCallOf(...)], same body as before, just renamed",
-                "got": "passes — both sides of the comparison call toolCallOf, so the assertion follows the new shape automatically; confirmed with node --test test/timeline.test.mjs"
-              },
-              {
-                "case": "Case D8 (edit) — a missing spanId becomes null rather than undefined, expected array narrowed to the three-field shape",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "a missing spanId becomes null rather than undefined",
-                "expected": "mergeToolMarks([], [{ seq: 3, timeMs: 2000 }]).marks deep-equals [{ seq: 3, timeMs: 2000, spanId: null }]",
-                "got": "AssertionError — actual array holds { seq: 3, timeMs: 2000, spanId: null, chars: 0, name: 'tool', preview: '', text: '', truncated: false }"
-              },
-              {
-                "case": "Already green, no edit — an event already held is not counted twice (mergeToolMarks contract)",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "an event already held is not counted twice",
-                "expected": "duplicates dropped by seq",
-                "got": "untouched, confirmed still passing"
-              },
-              {
-                "case": "Already green, no edit — merging the same response twice changes nothing the second time (mergeToolMarks contract)",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "merging the same response twice changes nothing the second time",
-                "expected": "idempotent merge",
-                "got": "untouched, confirmed still passing"
-              },
-              {
-                "case": "Already green, no edit — the watermark is what is held, never what was seen (mergeToolMarks contract)",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "the watermark is what is held, never what was seen",
-                "expected": "watermark equals the highest seq actually held",
-                "got": "untouched, confirmed still passing"
-              },
-              {
-                "case": "Already green, no edit — an item with no usable seq is dropped rather than held un-deduplicable (mergeToolMarks contract)",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "an item with no usable seq is dropped rather than held un-deduplicable",
-                "expected": "items with no/invalid seq are dropped",
-                "got": "untouched, confirmed still passing"
-              },
-              {
-                "case": "Already green, no edit — merging does not mutate the index it was given (mergeToolMarks contract)",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "merging does not mutate the index it was given",
-                "expected": "the held array passed in is left untouched",
-                "got": "untouched, confirmed still passing"
-              },
-              {
-                "case": "Already green, no edit — out-of-order items still leave the highest seq as the watermark (mergeToolMarks contract)",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "out-of-order items still leave the highest seq as the watermark",
-                "expected": "watermark is the maximum seq held, not the last item merged",
-                "got": "untouched, confirmed still passing"
-              },
-              {
-                "case": "Criterion E — the context panel comes through the deletion whole; no new case, confirm the existing regression net stays green",
-                "file": "tools/argus-ui/test/context.test.mjs",
-                "testName": "",
-                "expected": "one input builder, the filter renders/hides/reopens, the head names visible-of-total, an all-hidden record shows its placeholder with data-state=\"ready\" — all already covered by existing cases in this untouched file",
-                "got": "file left untouched; ran node --test test/context.test.mjs on its own, 78 cases, all pass, exit 0"
-              },
-              {
-                "case": "Criterion F — every case outside test/tools.test.mjs asserting the old tool-mark shape or the tool panel's presence is updated or removed in the same change; no new case, the whole-suite run is its check",
-                "file": "",
-                "testName": "",
-                "expected": "cases A2, A3, B1, B2, B3, D1-D5, D7 and D8 are the exhaustive inventory",
-                "got": "all of those cases were updated or removed as listed above; ran npm --prefix tools/argus-ui test (node --test over test/*.test.mjs) — 223 tests, 216 pass, 7 fail, exit non-zero, and every one of the 7 failures traces to production code the implementer has not yet touched (public/tools.js still exists, app.js still imports laneToolInput/renderToolPanel, toolCallOf still derives name/preview/text/chars/truncated, TOOL_PARAM_CHARS is still exported)"
-              }
-            ],
-            "openQuestions": [],
-            "questions": []
-          }
-        },
-        {
-          "label": "implement:tools-box.0",
-          "at": "2026-08-07T16:15:03.003Z",
-          "return": {
-            "deviations": [],
-            "commands": [
-              {
-                "command": "npm --prefix tools/argus-ui test",
-                "exitCode": 0,
-                "note": "223 tests, 223 pass, 0 fail; nothing skipped or excluded. The same command was run before any edit and reproduced exactly the seven recorded failures (128, 129, 184, 185, 186, 187, 197)."
-              }
-            ],
-            "blockers": [],
-            "questions": [],
-            "summary": "Deleted the tool list panel module and the per-call parameter ballast: public/tools.js is gone, renderLanePanel paints only the context panel, and a tool mark is now seq, moment and span alone."
-          }
-        },
-        {
-          "label": "review:tools-box.0",
-          "at": "2026-08-07T16:18:40.751Z",
-          "return": {
-            "findings": [
-              {
-                "claim": "tools/argus-ui/README.md still promises the tool list panel this increment deleted, so the project's own description of the interface is now false.",
-                "reproduction": "tools/argus-ui/README.md lines 71-73, in the \"Timeline\" bullet under \"What it shows\", read \"The same click also lists, under the context, every tool that agent had called by that moment — newest first, each row naming the tool and expanding to the parameters it was called with.\" After this change renderLanePanel() in tools/argus-ui/public/app.js line 947 assigns container.innerHTML = renderContextPanel(...) alone and public/tools.js no longer exists, so clicking a lane paints the context panel and nothing else — a reader following the README looks for a tool list under the context and finds none. No later increment's criteria touch this sentence; the tabs increment only covers the Overview/Tasks/Traces/Events/Metrics/Attributes bullets below it.",
-                "criterion": "none"
-              }
-            ],
-            "reason": "The argus-ui README still describes the per-lane tool list — naming each tool and expanding to its call parameters — as something a lane click shows, which this increment removed; the interface's own documentation now describes a panel that no longer exists.",
-            "questions": [],
-            "summary": "Ran the one listed command, `npm --prefix tools/argus-ui test`, 223 cases, exit 0, no skips; the increment meets every one of its criteria in code and in tests, and the only defect found is the stale tool-list sentence left in tools/argus-ui/README.md."
-          }
-        },
-        {
-          "label": "research:tools-box.1",
-          "at": "2026-08-07T16:20:51.705Z",
-          "return": {
-            "needsTests": false,
-            "summary": "Correction round 1 for increment 3 is one prose edit: delete the sentence in tools/argus-ui/README.md that promises the tool list under the context panel, leaving every other word of the Timeline bullet as it stands.",
-            "plan": "The code half of increment 3 is already landed and committed (36069c3 \"Increment 3: drop the tool list panel and its parameter ballast\", on top of the failing-test commit bf2972c). The working tree is clean and the whole suite was reported green at that commit: `npm --prefix tools/argus-ui test`, 223 tests, exit 0. Only the reviewer's single finding is open, and it is documentation, not code.\n\nThe finding: tools/argus-ui/README.md, in the **Timeline** bullet under \"## What it shows\", still tells the reader that clicking a lane lists every tool the agent had called, under the context. That panel no longer exists — renderLanePanel() in tools/argus-ui/public/app.js assigns `container.innerHTML = renderContextPanel(...)` alone and public/tools.js is deleted — so the sentence is false.\n\nThe whole change: in tools/argus-ui/README.md, delete the last sentence of the Timeline bullet. Replace this exact block\n\n```\n  opens that agent's context as of the cursor's moment, as a list of blocks —\n  system prompt, messages, thinking, tool calls and results, and every other\n  field the request carried — each showing its size and expanding to its full\n  text. The same click also lists, under the context, every tool that agent had\n  called by that moment — newest first, each row naming the tool and expanding\n  to the parameters it was called with.\n```\n\nwith\n\n```\n  opens that agent's context as of the cursor's moment, as a list of blocks —\n  system prompt, messages, thinking, tool calls and results, and every other\n  field the request carried — each showing its size and expanding to its full\n  text.\n```\n\nThat is the entire diff: one sentence out, the bullet's remaining wrapping untouched, no other line of the file changed.\n\nDecisions, including the rejected ones:\n\n1. Delete the sentence rather than rewrite it to describe something else. The tick marks it might be redirected to are already named eleven lines above (\"marked where it made an API request or called a tool\"), so a replacement sentence would be a second telling of a fact the bullet already carries.\n2. Do not add a description of the context filter delivered by increment 2. The reviewer's finding names one false sentence; documenting the filter is neither this increment's criteria nor this finding, and adding it here would be scope not given.\n3. Do not touch the Overview / Tasks / Traces / Events / Metrics / Attributes bullets on README lines 74-81. They describe the six technical tabs, which a later increment removes; that increment owns those bullets.\n4. Do not reflow the surrounding paragraph. The remaining lines already wrap under 80 columns and the deletion leaves `  text.` as a short final line, which is ordinary in this file's wrapped prose. A reflow would enlarge the diff for nothing.\n5. Add no test that greps README prose. Rejected because the project has no convention of asserting documentation wording — test/independence.test.mjs names README.md only in an existence list — and a regex over English pins the phrasing rather than the fact, so the next honest rewording would go red.\n\nNothing else in the repository still promises the deleted panel: a grep for `renderToolPanel`, `laneToolInput`, `tools.js`, `TOOL_PARAM_CHARS` and `paramText` across *.md, *.js, *.mjs, *.html and *.css outside docs/issues/ hits only test/page.test.mjs and test/timeline.test.mjs, where the names appear inside assertions that those things are gone, and tools/argus-ui/CLAUDE.md mentions no tool panel at all.",
-            "moduleMap": "tools/argus-ui/README.md — the user-facing page for the interface; the only file this correction touches. The edit is in the **Timeline** bullet under the \"## What it shows\" heading, currently lines 62-73; the sentence to delete begins \"The same click also lists, under the context, …\" on line 71 and ends \"…the parameters it was called with.\" on line 73.\ntools/argus-ui/public/app.js — read-only context: renderLanePanel() at line 946 already paints the context panel alone, which is what makes the README sentence false. Not edited.\ntools/argus-ui/test/page.test.mjs — read-only context: lines 588-603 already pin the code fact (public/tools.js deleted, app.js naming neither laneToolInput nor renderToolPanel). Not edited.",
-            "environment": "Node >= 20.11, already installed. The project has zero runtime dependencies and no build step, so no `npm install` is needed before the suite runs; there is no linter and no formatter in this project. The one command this plan asks anyone to run, from the repository root:\n\n  npm --prefix tools/argus-ui test\n\nIt runs `node --test \"test/*.test.mjs\"` over tools/argus-ui/test/ and needs no collector running — the collector is faked with node:http inside the test files.",
-            "testPlan": "No tests. The correction is a single English sentence deleted from tools/argus-ui/README.md, and there is nothing in it a tool can check that is not already checked: the code fact behind the finding — public/tools.js gone, app.js naming neither laneToolInput nor renderToolPanel, renderLanePanel() painting the context panel alone — is already asserted by tools/argus-ui/test/page.test.mjs lines 588-603, landed in the previous round. The only assertion a new test could add is a regex over README prose, and this project asserts documentation wording nowhere (test/independence.test.mjs names README.md solely in a file-existence list), so such a test would pin the phrasing rather than the fact and would go red on the next honest rewording. The test-author writes nothing this round.\n\nWhat is left untested, as a decision: that the README's Timeline bullet no longer promises the tool list. It is verified by reading the diff, which is the review this round gets.\n\nWhat is already red: I ran nothing, not even a baseline. From reading alone: the working tree is clean at commit ef7d963 and the implement step of round 0 recorded `npm --prefix tools/argus-ui test` at 223 tests, 223 passing, exit 0. A markdown-only edit imports into no test, and no existing case reads README.md's contents, so the suite is expected to stay at exit 0. The first run belongs to whoever runs it downstream.",
-            "checks": [
-              "npm --prefix tools/argus-ui test"
-            ],
-            "questions": []
-          }
-        },
-        {
-          "label": "implement:tools-box.1",
-          "at": "2026-08-07T16:21:52.381Z",
-          "return": {
-            "deviations": [],
-            "commands": [
-              {
-                "command": "npm --prefix tools/argus-ui test",
-                "exitCode": 0,
-                "note": "node --test over tools/argus-ui/test/*.test.mjs, 223 tests, 223 pass, 0 fail, 0 skipped, exit 0."
-              }
-            ],
-            "blockers": [],
-            "questions": [],
-            "summary": "Deleted the Timeline bullet's final sentence in tools/argus-ui/README.md, which still promised the per-lane tool list panel that increment 3 removed."
-          }
-        },
-        {
-          "label": "review:tools-box.1",
-          "at": "2026-08-07T16:24:44.252Z",
-          "return": {
-            "findings": [],
-            "reason": "",
-            "questions": [],
-            "summary": "Increment 3 accepted: npm --prefix tools/argus-ui test ran the whole suite, 223 cases, exit 0; public/tools.js and test/tools.test.mjs are deleted, app.js imports neither laneToolInput nor renderToolPanel, renderLanePanel() assigns only renderContextPanel(lanePanelInput(...)) to #lane-panel, toolCallOf() returns only {seq, timeMs, spanId} with TOOL_PARAM_CHARS and paramText() gone while mergeToolMarks() keeps its de-duplication, held-watermark and no-mutation contract, and the tick marks, data-tools count, tool call legend and the incremental /api/events?event=claude_code.tool_result poll with sinceSeq are untouched and each still pinned by a test; the only extra changes are the dead .tools-panel/.tools-meta/.tool-time CSS and the README sentence that promised the removed panel, both direct consequences of the deletion; the context panel's filter, visible-of-total head and all-hidden placeholder tests still pass unchanged."
-          }
-        }
-      ]
+      "status": "done",
+      "note": "Accepted in review round 1: public/tools.js and test/tools.test.mjs are gone, renderLanePanel() assigns only the context panel, toolCallOf() returns just seq/timeMs/spanId with TOOL_PARAM_CHARS and paramText() removed, mergeToolMarks() keeps its contract, and the tick marks, data-tools count, legend and incremental tool poll are untouched; the whole argus-ui suite ran 223 cases at exit 0. Round 0 was rejected for one defect only: the README still promised the deleted tool list, which round 1 removed.",
+      "steps": []
     },
     {
       "id": "tabs-out",
       "title": "The six technical tabs go out of the code",
-      "goal": "Remove the pre-timeline tab interface — its views, its state, its wiring and its per-refresh fetches — and land the whole issue with both suites green.",
+      "goal": "Remove the pre-timeline tab interface — its views, its state, its wiring, its per-refresh fetches, and everything left over that only it could produce — and land the whole issue with both suites green.",
       "criteria": [
         "`DETAIL_VIEWS` and `renderDetailViews()` are gone from `public/timeline.js`, and no tab nav is rendered anywhere.",
         "Gone from `public/app.js`: `renderTabBody()`, `renderOverviewTab()`, `renderTodosTab()`, `renderTracesTab()`, `renderWaterfall()`, `renderSpanInspector()`, `renderEventsTab()`, `renderMetricsTab()`, `renderRawTab()`, `loadTabData()`, the helpers only they used (`kpi`, `formatValue`, `spanKind`, `spanNote`, `todoStatusChip`, `SPAN_KINDS`), the `#tab-body` container, and the state fields `tab`, `trace`, `selectedTraceId`, `selectedSpanId`, `events`, `eventFilters`, `metrics`, `facets`.",
         "Gone from the wiring in `wireEvents()`: the handlers for `[data-tab]`, `[data-trace]`, `[data-span]` and `[data-event-seq]`, the `change` handler for `event-filter` and `event-errors`, and the `event-search` branch of the `input` handler. The 15-second interval no longer repaints a tab body.",
         "`renderDetail()` no longer builds the `counts` object, and no refresh requests `/api/traces`, `/api/facets` or `/api/metrics`. The `/api/events` request that feeds the tool marks stays.",
         "No unused import or dead helper is left behind in `app.js` or `timeline.js`, and the tests that pinned the removed views are removed with them rather than left skipped.",
-        "The `change` and `input` listeners the context filter and the rest of the page still need survive the removal: the filter's checkboxes, the *all on* and *all off* buttons and the lane selection all still work.",
+        "Nothing survives elsewhere in the interface that only a removed view could produce: the stylesheet keeps no rule for a tab nav, a tab body or any of the six views' markup, and no selector is left that no renderer can emit.",
+        "The interface's own documentation stops promising the removed views: the README no longer describes Overview, Tasks, Traces, Events, Metrics or Attributes as things a reader can open, and no other page under `tools/argus-ui` still names a tab. The previous increment was rejected in review for exactly this kind of stale prose, so it is part of the deletion rather than a follow-up.",
+        "The `change` and `input` listeners the context filter and the rest of the page still need survive the removal: the filter's checkboxes, the *all on* and *all off* buttons and the lane selection all still work, and the live refresh still repaints the timeline and the lane panel with an open dropdown left open.",
         "`src/server.mjs` is unchanged: it proxies `/api/*` blindly and knows no route by name.",
         "`npm --prefix tools/argus-ui test` is green over the whole suite, and each criterion above has at least one test that goes red when its behaviour is broken or removed.",
         "`./test.sh` is green."
       ],
       "status": "todo",
-      "note": "",
+      "note": "Re-cut after tools-box: two criteria added, both learned from that increment rather than from the issue. The reviewer rejected its first round solely for a README sentence that still promised the deleted panel, so removing the six tabs' README bullets is now named as part of this increment; and the same deletion had to take the stylesheet rules only the deleted module could produce, so the dead-CSS rule is named here too. Criterion 8 also now says the live refresh must still repaint the timeline and lane panel with the dropdown left open, which is the regression the filter increments would be most likely to lose to this deletion.",
       "steps": []
     }
   ],
@@ -401,7 +89,11 @@
       },
       {
         "label": "replan:filter-honesty",
-        "at": "2026-08-07T16:00:26.345Z",
+        "at": "2026-08-07T16:00:26.345Z"
+      },
+      {
+        "label": "replan:tools-box",
+        "at": "2026-08-07T16:27:59.866Z",
         "return": {
           "increments": [
             {
@@ -410,32 +102,32 @@
               "goal": "Give the context panel head a dropdown that lists the block kinds and top-level fields the shown request actually contains, and let the reader hide and show them, against the record the panel already holds.",
               "criteria": [
                 "The context panel head carries a dropdown built as a `<details>` popover, with no framework and no new dependency, listing every block kind and every top-level field the currently shown request actually contains, one checkbox each, with the number of blocks behind that entry (e.g. `tool_result 12`).",
-                "The list is in two labelled groups: **Blocks** first, holding the block kinds present, sorted alphabetically; then **Fields**, holding the body's remaining top-level keys, sorted alphabetically, labelled verbatim.",
-                "The dropdown holds two buttons, **all on** and **all off**.",
-                "Unchecking an entry removes its blocks from the list below and checking it puts them back, with no new fetch of `/api/content/at`.",
-                "The selection is one page-wide set of hidden entries, surviving lane change, scrub, live refresh and session change, not persisted, with anything never hidden arriving visible.",
-                "An entry the current request does not contain is not listed, and its hidden state is remembered.",
-                "The derivation and the markup are pure functions in `public/context.js`, and only the click wiring lives in `app.js`.",
-                "The filter's markup carries no `data-lane` and its `<summary>` no `data-block`.",
-                "An open dropdown survives a repaint.",
-                "`npm --prefix tools/argus-ui test` passes, with a red-on-break test per criterion."
+                "The list is in two labelled groups: **Blocks** first, holding the block kinds present (`assistant`, `other`, `raw`, `system`, `thinking`, `tool_result`, `tool_use`, `user`) sorted alphabetically; then **Fields**, holding the body's remaining top-level keys (`max_tokens`, `metadata`, `model`, `tools`, …) sorted alphabetically. Entries are labelled by the kind name and the field key verbatim, so `system` and `tools` read as one list.",
+                "The dropdown holds two buttons, **all on** and **all off**. *All on* makes every entry visible. *All off* hides every entry the currently shown request contains.",
+                "Unchecking an entry removes its blocks from the list below; checking it puts them back. Neither triggers a fetch: the filter is applied to the record the panel already holds, and `/api/content/at` is not called again.",
+                "The selection is one page-wide state, held as the set of *hidden* entries. It survives a lane change, a scrub, a live refresh and a session change; it is not persisted and a page reload starts with everything visible. An entry never hidden is visible, which is what makes an entry that appears for the first time — a `thinking` block in a later request, a field an earlier body did not carry — arrive visible, including after *all off* was pressed on a request that did not contain it.",
+                "An entry the current request does not contain is not listed, and its hidden state is remembered: scrubbing to a request that carries it again shows it still unchecked and its blocks still hidden.",
+                "The derivation and the markup are pure functions in `public/context.js` — no `document`, no `fetch`, no `location`, the contract `test/independence.test.mjs` guards — and only the click wiring lives in `app.js`.",
+                "The filter's markup carries no `data-lane` attribute and its `<summary>` carries no `data-block`, so opening the dropdown neither toggles the lane selection nor a block's expansion.",
+                "An open dropdown survives a repaint: a live refresh that re-renders `#lane-panel` does not snap it shut, the same way `state.expanded` keeps expanded blocks open today.",
+                "`npm --prefix tools/argus-ui test` passes after this increment, and each criterion above has at least one test that goes red when its behaviour is broken or removed."
               ],
               "status": "done",
-              "note": "Accepted in review round 1: the filter is pure functions in public/context.js with only click and change wiring in app.js, suite 230 cases exit 0."
+              "note": ""
             },
             {
               "id": "filter-honesty",
               "title": "The panel head names visible and total, and the empty case says so",
               "goal": "Make the filtered panel tell the truth about how much it is hiding: the head names visible-of-total blocks and characters, and a panel with everything hidden shows a placeholder instead of an empty list.",
               "criteria": [
-                "With nothing hidden the head line reads as today; with something hidden it names visible of total for blocks and for characters, totals staying on `data-chars`/`data-blocks` and the visible counts arriving in data attributes of their own.",
-                "With every entry hidden the panel keeps `data-state=\"ready\"` and shows a placeholder in place of the rows.",
-                "The new numbers and the placeholder are derived and rendered by pure functions in `public/context.js`, with no new wiring in `app.js`.",
-                "The previous increment's two superseded pinning cases are updated in the same change.",
-                "`npm --prefix tools/argus-ui test` passes over the whole suite, with a red-on-break test per criterion."
+                "With nothing hidden, the head line reads as it does today (`210.114 chars · 34 blocks`). With something hidden it names both numbers — visible of total — for blocks and for characters, so the filter can never make a context look smaller than it is. The totals stay readable off `data-chars` and `data-blocks`; the visible counts arrive in data attributes of their own.",
+                "With every entry hidden the panel keeps its `data-state=\"ready\"` and shows a placeholder in place of the rows, saying every kind is hidden and where to turn them back on.",
+                "The head's new numbers and the placeholder are derived and rendered by pure functions in `public/context.js`, under the contract `test/independence.test.mjs` guards; no new wiring is needed in `app.js` for either.",
+                "The cases the previous increment wrote to pin today's behaviour — that a partly filtered panel leaves the head's totals untouched, and that an all-hidden panel renders an empty block list with no placeholder — are updated to the new behaviour in the same change, so no case is left red, skipped or asserting the superseded shape.",
+                "`npm --prefix tools/argus-ui test` passes over the whole suite after this increment, and each criterion above has at least one test that goes red when its behaviour is broken or removed."
               ],
               "status": "done",
-              "note": "Accepted in review round 1 with no findings: contextCounts is a pure export of public/context.js, the head names visible-of-total chars and blocks with data-visible-chars/data-visible-blocks only while a block is actually hidden, an all-hidden record renders one placeholder in place of the rows with data-state=\"ready\" intact, app.js needed no new wiring, and the whole argus-ui suite ran 238 cases at exit 0."
+              "note": ""
             },
             {
               "id": "tools-box",
@@ -444,36 +136,38 @@
               "criteria": [
                 "`public/tools.js` and `test/tools.test.mjs` are deleted, and `app.js` imports neither `laneToolInput` nor `renderToolPanel`.",
                 "`renderLanePanel()` paints only the context panel into `#lane-panel`.",
-                "Everything else about tools on the timeline is untouched: the `data-kind=\"tool\"` tick marks, the `data-tools` count in each lane's meta, the `tool call` legend entry, and the incremental `/api/events?event=claude_code.tool_result` poll with its `sinceSeq` watermark.",
-                "`toolCallOf()` keeps only `seq`, `timeMs`, `spanId`; `TOOL_PARAM_CHARS` and `paramText()` go; `mergeToolMarks()` keeps its contract.",
-                "The context panel comes through the deletion whole: one input builder, the filter still renders, hides and reopens, the head still names visible-of-total when something is hidden, and an all-hidden record still shows its placeholder with `data-state=\"ready\"`.",
-                "Every case outside the deleted file asserting the old tool-mark shape or the tool panel's presence is updated or removed in the same change.",
-                "`npm --prefix tools/argus-ui test` passes over the whole suite, with a red-on-break test per criterion."
+                "Everything else about tools on the timeline is untouched: the `data-kind=\"tool\"` tick marks on the lane track, the `data-tools` count in each lane's meta, the `tool call` legend entry, and the incremental `/api/events?event=claude_code.tool_result` poll with its `sinceSeq` watermark.",
+                "`toolCallOf()` keeps only what a mark needs — `seq`, `timeMs`, `spanId` — and no longer derives or holds `name`, `preview`, `text`, `chars` or `truncated`. `TOOL_PARAM_CHARS` and the `paramText()` helper go with it. `mergeToolMarks()` keeps its contract: duplicates dropped by `seq`, the watermark returned as the highest `seq` actually held, the input array untouched.",
+                "The context panel comes through the deletion whole: it is still built from one input builder, the filter still renders, hides and reopens, the head still names visible-of-total blocks and characters when something is hidden, and an all-hidden record still shows its placeholder with `data-state=\"ready\"`.",
+                "Every case outside the deleted file that asserts the old tool-mark shape or the tool panel's presence — whole-object assertions on `toolCallOf()`'s return among them — is updated or removed in the same change, so no case is left red, skipped or asserting the superseded shape.",
+                "`npm --prefix tools/argus-ui test` passes over the whole suite after this increment, and each criterion above has at least one test that goes red when its behaviour is broken or removed."
               ],
-              "status": "todo",
-              "note": "Criterion 5 sharpened after filter-honesty: the panel that must survive this deletion now also carries the visible-of-total head and the all-hidden placeholder, and both ride on the input builder renderLanePanel feeds."
+              "status": "done",
+              "note": "Closed done on this call. Accepted in review round 1: public/tools.js and test/tools.test.mjs are gone, renderLanePanel() assigns only the context panel, toolCallOf() returns just seq/timeMs/spanId with TOOL_PARAM_CHARS and paramText() removed, mergeToolMarks() keeps its contract, and the tick marks, data-tools count, legend and incremental tool poll are untouched; the whole argus-ui suite ran 223 cases at exit 0. Round 0 was rejected for one defect only: the README still promised the deleted tool list, which round 1 removed."
             },
             {
               "id": "tabs-out",
               "title": "The six technical tabs go out of the code",
-              "goal": "Remove the pre-timeline tab interface — its views, its state, its wiring and its per-refresh fetches — and land the whole issue with both suites green.",
+              "goal": "Remove the pre-timeline tab interface — its views, its state, its wiring, its per-refresh fetches, and everything left over that only it could produce — and land the whole issue with both suites green.",
               "criteria": [
                 "`DETAIL_VIEWS` and `renderDetailViews()` are gone from `public/timeline.js`, and no tab nav is rendered anywhere.",
-                "Gone from `public/app.js`: the nine tab render functions, `loadTabData()`, the helpers only they used, the `#tab-body` container, and the eight tab state fields.",
-                "Gone from `wireEvents()`: the `[data-tab]`, `[data-trace]`, `[data-span]`, `[data-event-seq]` handlers, the `event-filter`/`event-errors` change handler and the `event-search` input branch; the 15-second interval no longer repaints a tab body.",
-                "`renderDetail()` no longer builds `counts`, and no refresh requests `/api/traces`, `/api/facets` or `/api/metrics`; the `/api/events` request feeding the tool marks stays.",
-                "No unused import or dead helper is left in `app.js` or `timeline.js`, and the tests pinning the removed views are removed rather than skipped.",
-                "The `change` and `input` listeners the context filter still needs survive: checkboxes, *all on*, *all off* and the lane selection all still work.",
-                "`src/server.mjs` is unchanged.",
-                "`npm --prefix tools/argus-ui test` is green over the whole suite, with a red-on-break test per criterion.",
+                "Gone from `public/app.js`: `renderTabBody()`, `renderOverviewTab()`, `renderTodosTab()`, `renderTracesTab()`, `renderWaterfall()`, `renderSpanInspector()`, `renderEventsTab()`, `renderMetricsTab()`, `renderRawTab()`, `loadTabData()`, the helpers only they used (`kpi`, `formatValue`, `spanKind`, `spanNote`, `todoStatusChip`, `SPAN_KINDS`), the `#tab-body` container, and the state fields `tab`, `trace`, `selectedTraceId`, `selectedSpanId`, `events`, `eventFilters`, `metrics`, `facets`.",
+                "Gone from the wiring in `wireEvents()`: the handlers for `[data-tab]`, `[data-trace]`, `[data-span]` and `[data-event-seq]`, the `change` handler for `event-filter` and `event-errors`, and the `event-search` branch of the `input` handler. The 15-second interval no longer repaints a tab body.",
+                "`renderDetail()` no longer builds the `counts` object, and no refresh requests `/api/traces`, `/api/facets` or `/api/metrics`. The `/api/events` request that feeds the tool marks stays.",
+                "No unused import or dead helper is left behind in `app.js` or `timeline.js`, and the tests that pinned the removed views are removed with them rather than left skipped.",
+                "Nothing survives elsewhere in the interface that only a removed view could produce: the stylesheet keeps no rule for a tab nav, a tab body or any of the six views' markup, and no selector is left that no renderer can emit.",
+                "The interface's own documentation stops promising the removed views: the README no longer describes Overview, Tasks, Traces, Events, Metrics or Attributes as things a reader can open, and no other page under `tools/argus-ui` still names a tab. The previous increment was rejected in review for exactly this kind of stale prose, so it is part of the deletion rather than a follow-up.",
+                "The `change` and `input` listeners the context filter and the rest of the page still need survive the removal: the filter's checkboxes, the *all on* and *all off* buttons and the lane selection all still work, and the live refresh still repaints the timeline and the lane panel with an open dropdown left open.",
+                "`src/server.mjs` is unchanged: it proxies `/api/*` blindly and knows no route by name.",
+                "`npm --prefix tools/argus-ui test` is green over the whole suite, and each criterion above has at least one test that goes red when its behaviour is broken or removed.",
                 "`./test.sh` is green."
               ],
               "status": "todo",
-              "note": ""
+              "note": "Re-cut after tools-box: two criteria added, both learned from that increment rather than from the issue. The reviewer rejected its first round solely for a README sentence that still promised the deleted panel, so removing the six tabs' README bullets is now named as part of this increment; and the same deletion had to take the stylesheet rules only the deleted module could produce, so the dead-CSS rule is named here too. Criterion 8 also now says the live refresh must still repaint the timeline and lane panel with the dropdown left open, which is the regression the filter increments would be most likely to lose to this deletion."
             }
           ],
           "questions": [],
-          "summary": "filter-honesty was accepted with no findings and is closed done: contextCounts landed as a pure export of public/context.js, the head names visible-of-total chars and blocks only while a block is actually hidden, an all-hidden record renders one placeholder with data-state=\"ready\", app.js was untouched, and the suite ran 238 cases at exit 0. The re-cut is deliberately small — the two open increments are removals whose scope this increment did not disturb. One criterion changed: tools-box's 'the context panel comes through unchanged' now names the visible-of-total head and the all-hidden placeholder among what must survive, because both are new since that criterion was written and both hang off the same input builder renderLanePanel feeds when the tool panel is torn out of it. I left tabs-out untouched: its criterion that the shared change and input listeners survive already covers the filter wiring, and nothing filter-honesty showed touches the tab code. I considered and rejected two re-cuts. Merging tools-box and tabs-out into one removal increment: they delete different things for different reasons, each leaves the repository working alone, and one review over both would be a 600-line diff plus a module deletion. Splitting tabs-out into views-and-state then wiring-and-fetches: removing a render function without its handler leaves a dead listener and a half-migrated file, so it is one change, and the budget (6 of 8 increments left for 2) does not force a split. One thing worth a reader's eye but not a criterion: contextCounts shipped with two call shapes, the documented object form plus an optional second positional argument, because the test author and the plan disagreed on the signature; the review accepted it, and narrowing it is not in this issue's criteria, so I did not invent an increment for it."
+          "summary": "Closed tools-box as done — the review accepted it in correction round 1, with the whole argus-ui suite at 223 cases, exit 0. One increment stays open, tabs-out, and I left it as one increment rather than splitting it: removing the six tabs is a single deletion, and any half of it (views without wiring, wiring without state) leaves the page referring to things that are gone, which is the definition of an increment that does not stand on its own. Two criteria were added to it, both taught by the run rather than by the issue. First, tools-box was rejected on its first review round for exactly one defect — the README still promised the panel it had deleted — and its research step recorded that the README's Overview/Tasks/Traces/Events/Metrics/Attributes bullets belong to this increment; so keeping documentation honest is now a criterion here rather than a defect waiting to be found. Second, that same deletion had to take the stylesheet rules no renderer could produce any more, so the dead-CSS rule is stated up front. I also sharpened the existing criterion about surviving listeners to say the live refresh must still repaint the timeline and the lane panel with an open dropdown left open — the two filter increments built that behaviour, and a deletion that rips the interval and the change/input wiring apart is where it would most plausibly be lost. Nothing else changed: the criteria carried over from the issue keep their wording and their increment, and no criterion moved between increments."
         }
       }
     ]
