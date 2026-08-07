@@ -263,6 +263,35 @@
             "openQuestions": [],
             "questions": []
           }
+        },
+        {
+          "label": "implement:collector-fixture.1",
+          "at": "2026-08-07T23:00:25.773Z",
+          "return": {
+            "deviations": [
+              "The plan's five corrections all live in tools/argus/test/with-collector.test.mjs, which the test-author had already written and committed as 524fcb3 before this step ran. I therefore wrote no code: I verified each of the five against the tree (waitForExit helper with its doc comment at lines 44-59; it is used at lines 157, 188 and 276 with a 10 s deadline; case 5's command writes COMMAND <pid> to the inherited stderr, its timer is 30 s and the finally SIGKILLs wrapper, commandPid and collectorPid each guarded; case 1 compares stdout.trim() to the port from the /127\\.0\\.0\\.1:(\\d+)/ match on stderr; waitForSilence is gone, grep -c returns 0) and then ran the checks. git show --stat 524fcb3 confirms no file under src/, bin/ or scripts/ and no documentation was touched, which is what the plan required of the production side."
+            ],
+            "commands": [
+              {
+                "command": "node --test tools/argus/test/with-collector.test.mjs",
+                "exitCode": 0,
+                "note": "The one file this round concerns, run on its own while confirming the state of the tree: 7 cases, 7 pass, 0 fail, 10.4 s. The previously red case 'a fixture killed outright leaves no collector on the port' passes in 7.3 s."
+              },
+              {
+                "command": "npm --prefix tools/argus test --silent",
+                "exitCode": 0,
+                "note": "The whole argus suite, node --test over test/*.test.mjs: 166 cases, 166 pass, 0 fail, 0 skipped, 78.3 s. This is the command the review named at 166 cases, and the count matches."
+              },
+              {
+                "command": "bash test-repo.sh",
+                "exitCode": 0,
+                "note": "The repository's shell suite: PASS: 82 cases, including all five guards under '=== an agent has a documented way to start and stop a collector' (the shared brief names the fixture, the shared brief names ARGUS_URL, tools/argus/CLAUDE.md names scripts/with-collector.mjs, the script exists, the script parses)."
+              }
+            ],
+            "blockers": [],
+            "questions": [],
+            "summary": "No code change was needed: the plan's whole correction was already committed in tools/argus/test/with-collector.test.mjs by the test-author, so this step verified all five corrections against the tree and ran the two commands that count, both exit 0 (argus suite 166 cases, test-repo.sh 82 cases)."
+          }
         }
       ]
     },
