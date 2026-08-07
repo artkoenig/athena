@@ -223,6 +223,16 @@
             "questions": [],
             "summary": "argus now turns the four Claude Code content flags on by default, classifies content-bearing log records with a new claude.mjs contentOf(log), serves them over GET /api/content (text opt-in with body=1) backed by store.queryContent, and keeps whole API bodies out of the /api/events tail; README updated for all three."
           }
+        },
+        {
+          "label": "review:content-pipeline.0",
+          "at": "2026-08-07T09:51:21.673Z",
+          "return": {
+            "findings": [],
+            "reason": "",
+            "questions": [],
+            "summary": "Reviewed the whole diff against main for increment 1: `npm --prefix tools/argus test` ran 156 cases, 0 fail, exit 0; `./test.sh` exits 126 (\"Permission denied\") because test.sh is committed mode 100644 on main and this diff does not touch it — run as `bash test.sh` it reports PASS: all 6 suites, exit 0, a pre-existing checkout fact, not a defect of this change. All four content flags (OTEL_LOG_USER_PROMPTS, OTEL_LOG_TOOL_DETAILS, OTEL_LOG_TOOL_CONTENT, OTEL_LOG_RAW_API_BODIES=1) are set unconditionally by otelEnvFor and covered by CLI-level tests across the shell, dotenv, json and settings formats; I independently confirmed every flag name, the inline-vs-file semantics of OTEL_LOG_RAW_API_BODIES, and the body/body_ref/body_length/body_truncated/query_source attributes against the official Claude Code monitoring reference (code.claude.com/docs/en/monitoring-usage), and the README's new table matches it. contentOf plus TelemetryStore.queryContent and GET /api/content store and serve the content-bearing records with an inclusive `at` bound, so \"nearest content at or before this moment\" is one request away, and the tests pin exactly that. No test pins behaviour for flagless recordings: the two null cases use claude_code.api_request, which carries no content under any flag setting. Blast radius: the only behaviour change outside the new endpoint is that /api/events now omits the `body` attribute of the two body events (copy only, the stored record keeps the text, and body_length/body_truncated survive), which no existing consumer reads — tools/argus-ui/public/app.js never had bodies to show since the flags were off before. Two facts I could not verify and did not file: the researcher's report of the subagent/request-body attribution gap lives in backlog.json, which I do not read (the docs do confirm api_request_body/api_response_body carry query_source and model but no agent.name, and /api/content surfaces both), and the collector's 50k-log cap now holds up to 60 KB per body, a memory ceiling nothing in the diff or the criteria addresses."
+          }
         }
       ]
     },
