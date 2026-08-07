@@ -1,0 +1,195 @@
+{
+  "version": 1,
+  "issue": "docs/issues/2026-08-07-second-timeline-run-fixes",
+  "workflow": "agile-loop",
+  "increments": [
+    {
+      "id": "coverage-only-round",
+      "title": "A correction round of pure coverage gaps runs test-author and reviewer only",
+      "goal": "Let the reviewer classify each finding it returns as a coverage gap or a defect, and have the workflow run a round whose findings are all coverage gaps through test-author and reviewer alone, visibly and on the record.",
+      "criteria": [
+        "The reviewer's structured return carries a per-finding classification field that says whether the finding is a coverage gap or a defect; it is a value the reviewer sets, not a phrase the workflow greps out of prose.",
+        "When every finding of a round is classified a coverage gap, that correction round runs the test-author and the reviewer only, and does not run the researcher or the implementer.",
+        "A round with at least one finding classified a defect runs the full four-agent chain exactly as it does today.",
+        "The workflow log()s that it is correcting coverage only when it takes the shortened path.",
+        "The reviewer's classification of each finding is recorded in backlog.json alongside the round it belongs to.",
+        "The reviewer's own brief states what makes a finding a coverage gap rather than a defect, so the classification is decided the same way twice.",
+        "The test suite passes."
+      ],
+      "status": "todo",
+      "note": "",
+      "steps": []
+    },
+    {
+      "id": "ui-harness-null",
+      "title": "The UI test harness returns null for an id the rendered markup does not contain",
+      "goal": "Stop the argus-ui test harness conjuring an element for every id, so an assertion that reads a container the page never rendered fails the way a browser would, and prove the harness with a case in the suite.",
+      "criteria": [
+        "installFakes in tools/argus-ui/test/app.test.mjs resolves an id the rendered markup does not contain to null rather than to a created-and-cached fake element.",
+        "Every existing case in the suite still passes, or is corrected to assert what the page actually renders; the report says which cases were corrected and why each was passing against markup the page never wrote.",
+        "A case in the suite proves the harness itself: it removes a container from the rendered markup and shows at least one assertion going red as a result, so the guard is part of the run rather than a manual mutation check.",
+        "npm --prefix tools/argus-ui test passes, with the case count reported."
+      ],
+      "status": "todo",
+      "note": "",
+      "steps": []
+    },
+    {
+      "id": "run-report",
+      "title": "parse-agent-log reports a whole workflow run",
+      "goal": "Give bin/parse-agent-log a mode that takes a workflow run directory and reports the run as one thing, and point the retro skill at that mode instead of at a hand-run loop.",
+      "criteria": [
+        "bin/parse-agent-log accepts a workflow run directory and reports the run as a single report rather than one transcript at a time.",
+        "That report carries per-agent-type totals, per-agent rows in the journal's order, a tool breakdown that shows failures, and which agents started without returning.",
+        "The existing single-transcript behaviour of the tool still works.",
+        "The retro skill's instructions tell the session to use the run-directory mode and no longer tell it to loop the tool over each transcript and re-join the results by hand.",
+        "The new mode has test coverage that goes red when the report drops a section or miscounts, and the test run is reported with its case count."
+      ],
+      "status": "todo",
+      "note": "",
+      "steps": []
+    },
+    {
+      "id": "agent-affordances",
+      "title": "Recording a step return and running a collector stop being improvisations",
+      "goal": "Let backlog.mjs record read the step return from stdin, give agents a documented way to start and stop a collector for ad-hoc inspection, and name both in the agent brief so no agent has to survive a heredoc or invent a pkill.",
+      "criteria": [
+        "backlog.mjs record accepts the step return on stdin as well as from a file path, and a return containing quotes, HTML attributes and newlines records correctly through the stdin form.",
+        "The file-path form of backlog.mjs record keeps working unchanged.",
+        "The agent brief instructs agents to record their step return through the stdin form.",
+        "A documented way to start and stop a collector for ad-hoc inspection exists — a script or an existing test helper made reachable — and starting and stopping it leaves no process holding the port.",
+        "The agent brief names that way, so an agent needing a live instance is told what to run instead of improvising a pkill.",
+        "Both changes have test coverage that goes red when they break, and the test runs are reported with their case counts."
+      ],
+      "status": "todo",
+      "note": "",
+      "steps": []
+    },
+    {
+      "id": "signing-check",
+      "title": "test.sh catches a commit-signing misconfiguration before an agent commits",
+      "goal": "Make ./test.sh verify that commit signing actually works in the environment it runs in, so a signing failure surfaces before an agent's first commit rather than after its work is done.",
+      "criteria": [
+        "./test.sh verifies that commit signing works in the environment it runs in — a signed commit in a throwaway repository, or the equivalent check the setup allows.",
+        "The check fails loudly and says what is misconfigured when signing does not work, and leaves nothing behind in the repository under test.",
+        "The check does not make ./test.sh fail in an environment where signing is legitimately not configured for the run, and the report states which behaviour was chosen and why.",
+        "./test.sh is green, and the report names the command, what it covered and its exit code."
+      ],
+      "status": "todo",
+      "note": "",
+      "steps": []
+    },
+    {
+      "id": "liveness-docs",
+      "title": "The loop skill pages tell the session how to tell a dead run from a live one",
+      "goal": "Correct the loop skill pages so the invoking session establishes liveness from the task's own status and knows that a user turn kills a running workflow.",
+      "criteria": [
+        "The loop skill pages tell the invoking session to establish whether the run is alive from the task's own status, and say plainly that transcript file timestamps do not establish it.",
+        "The pages say that an ordinary user turn kills a running workflow, and that the killed agent restarts from zero rather than resuming mid-flight, so an interruption costs a whole agent.",
+        "The pages tell a session that takes a message mid-run to check liveness and resume rather than to report progress from stale files.",
+        "The pages do not describe the periodic self check-in or the resumeFromRunId re-entry, which another issue owns."
+      ],
+      "status": "todo",
+      "note": "",
+      "steps": []
+    }
+  ],
+  "run": {
+    "steps": [
+      {
+        "label": "decompose",
+        "at": "2026-08-07T19:51:17.607Z",
+        "return": {
+          "increments": [
+            {
+              "id": "coverage-only-round",
+              "title": "A correction round of pure coverage gaps runs test-author and reviewer only",
+              "goal": "Let the reviewer classify each finding it returns as a coverage gap or a defect, and have the workflow run a round whose findings are all coverage gaps through test-author and reviewer alone, visibly and on the record.",
+              "criteria": [
+                "The reviewer's structured return carries a per-finding classification field that says whether the finding is a coverage gap or a defect; it is a value the reviewer sets, not a phrase the workflow greps out of prose.",
+                "When every finding of a round is classified a coverage gap, that correction round runs the test-author and the reviewer only, and does not run the researcher or the implementer.",
+                "A round with at least one finding classified a defect runs the full four-agent chain exactly as it does today.",
+                "The workflow log()s that it is correcting coverage only when it takes the shortened path.",
+                "The reviewer's classification of each finding is recorded in backlog.json alongside the round it belongs to.",
+                "The reviewer's own brief states what makes a finding a coverage gap rather than a defect, so the classification is decided the same way twice.",
+                "The test suite passes."
+              ],
+              "status": "todo",
+              "note": ""
+            },
+            {
+              "id": "ui-harness-null",
+              "title": "The UI test harness returns null for an id the rendered markup does not contain",
+              "goal": "Stop the argus-ui test harness conjuring an element for every id, so an assertion that reads a container the page never rendered fails the way a browser would, and prove the harness with a case in the suite.",
+              "criteria": [
+                "installFakes in tools/argus-ui/test/app.test.mjs resolves an id the rendered markup does not contain to null rather than to a created-and-cached fake element.",
+                "Every existing case in the suite still passes, or is corrected to assert what the page actually renders; the report says which cases were corrected and why each was passing against markup the page never wrote.",
+                "A case in the suite proves the harness itself: it removes a container from the rendered markup and shows at least one assertion going red as a result, so the guard is part of the run rather than a manual mutation check.",
+                "npm --prefix tools/argus-ui test passes, with the case count reported."
+              ],
+              "status": "todo",
+              "note": ""
+            },
+            {
+              "id": "run-report",
+              "title": "parse-agent-log reports a whole workflow run",
+              "goal": "Give bin/parse-agent-log a mode that takes a workflow run directory and reports the run as one thing, and point the retro skill at that mode instead of at a hand-run loop.",
+              "criteria": [
+                "bin/parse-agent-log accepts a workflow run directory and reports the run as a single report rather than one transcript at a time.",
+                "That report carries per-agent-type totals, per-agent rows in the journal's order, a tool breakdown that shows failures, and which agents started without returning.",
+                "The existing single-transcript behaviour of the tool still works.",
+                "The retro skill's instructions tell the session to use the run-directory mode and no longer tell it to loop the tool over each transcript and re-join the results by hand.",
+                "The new mode has test coverage that goes red when the report drops a section or miscounts, and the test run is reported with its case count."
+              ],
+              "status": "todo",
+              "note": ""
+            },
+            {
+              "id": "agent-affordances",
+              "title": "Recording a step return and running a collector stop being improvisations",
+              "goal": "Let backlog.mjs record read the step return from stdin, give agents a documented way to start and stop a collector for ad-hoc inspection, and name both in the agent brief so no agent has to survive a heredoc or invent a pkill.",
+              "criteria": [
+                "backlog.mjs record accepts the step return on stdin as well as from a file path, and a return containing quotes, HTML attributes and newlines records correctly through the stdin form.",
+                "The file-path form of backlog.mjs record keeps working unchanged.",
+                "The agent brief instructs agents to record their step return through the stdin form.",
+                "A documented way to start and stop a collector for ad-hoc inspection exists — a script or an existing test helper made reachable — and starting and stopping it leaves no process holding the port.",
+                "The agent brief names that way, so an agent needing a live instance is told what to run instead of improvising a pkill.",
+                "Both changes have test coverage that goes red when they break, and the test runs are reported with their case counts."
+              ],
+              "status": "todo",
+              "note": ""
+            },
+            {
+              "id": "signing-check",
+              "title": "test.sh catches a commit-signing misconfiguration before an agent commits",
+              "goal": "Make ./test.sh verify that commit signing actually works in the environment it runs in, so a signing failure surfaces before an agent's first commit rather than after its work is done.",
+              "criteria": [
+                "./test.sh verifies that commit signing works in the environment it runs in — a signed commit in a throwaway repository, or the equivalent check the setup allows.",
+                "The check fails loudly and says what is misconfigured when signing does not work, and leaves nothing behind in the repository under test.",
+                "The check does not make ./test.sh fail in an environment where signing is legitimately not configured for the run, and the report states which behaviour was chosen and why.",
+                "./test.sh is green, and the report names the command, what it covered and its exit code."
+              ],
+              "status": "todo",
+              "note": ""
+            },
+            {
+              "id": "liveness-docs",
+              "title": "The loop skill pages tell the session how to tell a dead run from a live one",
+              "goal": "Correct the loop skill pages so the invoking session establishes liveness from the task's own status and knows that a user turn kills a running workflow.",
+              "criteria": [
+                "The loop skill pages tell the invoking session to establish whether the run is alive from the task's own status, and say plainly that transcript file timestamps do not establish it.",
+                "The pages say that an ordinary user turn kills a running workflow, and that the killed agent restarts from zero rather than resuming mid-flight, so an interruption costs a whole agent.",
+                "The pages tell a session that takes a message mid-run to check liveness and resume rather than to report progress from stale files.",
+                "The pages do not describe the periodic self check-in or the resumeFromRunId re-entry, which another issue owns."
+              ],
+              "status": "todo",
+              "note": ""
+            }
+          ],
+          "questions": [],
+          "summary": "Opening cut of the seven-finding issue into six increments, ordered risky-first. Criterion-to-increment map, one criterion each: coverage-only-round takes the shortened-correction-round criterion and the visibility criterion (workflow log() plus the reviewer's classification recorded in backlog.json with the round); ui-harness-null takes the installFakes-returns-null criterion and the harness-proves-itself criterion; run-report takes the parse-agent-log workflow-run-directory criterion including the retro skill's instructions; agent-affordances takes the backlog.mjs record stdin criterion and the documented collector start/stop criterion; signing-check takes the ./test.sh signing-verification criterion and the './test.sh is green' criterion; liveness-docs takes the loop-skill liveness criterion.\n\nWhy this cut. Findings 1 and 2 of the issue are one delivery, not two: a classification the reviewer sets is worthless until the workflow branches on it, and a branch nobody can see in the log or the backlog is not reviewable, so the field, the branch, the log line and the record land together. It goes first because it is the largest and most load-bearing change and because it rewrites how every later correction round in this run behaves — learning it early is the point. Findings 2 of the issue (the UI harness) goes second: it is the other risky one, since making getElementById return null can turn existing green cases red and the increment has to decide, case by case, whether each was asserting against markup the page never wrote. I put the recorder-stdin fix and the collector fixture into one increment because they are one delivery from the reader's side — an agent stops improvising around missing tooling, and both are named in the same agent brief page — and because two separate chains editing that page would collide for no gain. I rejected splitting the UI harness into 'return null' and 'correct the cases', which is the classic half-increment that leaves the suite red; I rejected splitting parse-agent-log into a tool change and a retro-skill change, since a mode nothing points at is code nobody asked for; and I rejected merging the signing check with the agent-affordances increment, because verifying the environment and giving agents a tool are judged against different evidence.\n\nWhat the run has to settle that I could not. The shape of the reviewer's structured return and where the workflow decides to run a correction round are facts I do not have, so coverage-only-round is cut to make its researcher establish them first; the increment states the outcome the run needs and names no file or function. Likewise whether ./test.sh can sign a commit at all in this environment is unknown, so signing-check carries an explicit criterion asking the run to choose and justify the behaviour when signing is legitimately unconfigured, rather than putting that to the human and ending the run. The out-of-scope list is honoured: nothing here touches the resume mechanism, the reviewer's standard for rejecting a round, the two open findings of 2026-08-07-agile-loop-optimizations, or the timeline feature."
+        }
+      }
+    ]
+  }
+}
