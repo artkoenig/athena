@@ -200,7 +200,110 @@ function buildTurn(sessionId, sequence, startMs) {
     cursor += duration;
   };
 
+  /**
+   * A Task call on the main lane with two subagents of the *same* type running
+   * under it at the same time. Only the per-instance `agent_id` tells the two
+   * apart — `query_source` names the type, which they share — so this is the
+   * shape the timeline's lanes exist for. Their `tool.execution` child carries
+   * no agent attributes at all, exactly as the CLI emits it: it belongs to a
+   * subagent only through its span parent.
+   */
+  const emitSubagentFanout = () => {
+    const taskDuration = rand(2600, 7000);
+    const taskSpanId = hexId(8);
+    children.push(
+      span({
+        traceId,
+        spanId: taskSpanId,
+        parentSpanId: interactionId,
+        name: 'claude_code.tool',
+        startMs: cursor,
+        durationMs: taskDuration,
+        attributes: {
+          'session.id': sessionId,
+          'span.type': 'claude_code.tool',
+          tool_name: 'Task',
+          tool_use_id: `toolu_${hexId(6)}`,
+          duration_ms: Math.round(taskDuration),
+        },
+      }),
+    );
+
+    for (let i = 0; i < 2; i++) {
+      const agentId = `agt_${hexId(4)}`;
+      const agentAttrs = {
+        agent_id: agentId,
+        parent_agent_id: 'agt_main',
+        query_source: 'agent:builtin:researcher',
+      };
+      const agentStart = cursor + rand(80, 500);
+      const llmDuration = rand(600, 2200);
+      const agentModel = pick(MODELS);
+      children.push(
+        span({
+          traceId,
+          spanId: hexId(8),
+          parentSpanId: taskSpanId,
+          name: 'claude_code.llm_request',
+          startMs: agentStart,
+          durationMs: llmDuration,
+          attributes: {
+            'session.id': sessionId,
+            'span.type': 'claude_code.llm_request',
+            'gen_ai.system': 'anthropic',
+            model: agentModel,
+            llm_request_context: 'agent',
+            duration_ms: Math.round(llmDuration),
+            input_tokens: randInt(300, 1800),
+            output_tokens: randInt(60, 900),
+            attempt: 1,
+            success: true,
+            ...agentAttrs,
+          },
+        }),
+      );
+      const toolStart = agentStart + llmDuration;
+      const toolDuration = Math.max(50, cursor + taskDuration - toolStart - rand(50, 400));
+      const agentToolSpanId = hexId(8);
+      const agentToolName = pick(TOOLS);
+      children.push(
+        span({
+          traceId,
+          spanId: agentToolSpanId,
+          parentSpanId: taskSpanId,
+          name: 'claude_code.tool',
+          startMs: toolStart,
+          durationMs: toolDuration,
+          attributes: {
+            'session.id': sessionId,
+            'span.type': 'claude_code.tool',
+            tool_name: agentToolName,
+            tool_use_id: `toolu_${hexId(6)}`,
+            duration_ms: Math.round(toolDuration),
+            ...agentAttrs,
+          },
+        }),
+        span({
+          traceId,
+          spanId: hexId(8),
+          parentSpanId: agentToolSpanId,
+          name: 'claude_code.tool.execution',
+          startMs: toolStart,
+          durationMs: Math.max(20, toolDuration - rand(10, 60)),
+          attributes: {
+            'session.id': sessionId,
+            'span.type': 'claude_code.tool.execution',
+            duration_ms: Math.round(toolDuration),
+            success: true,
+          },
+        }),
+      );
+    }
+    cursor += taskDuration;
+  };
+
   emitLlmCall();
+  emitSubagentFanout();
 
   for (let i = 0; i < toolCount; i++) {
     const toolName = pick(TOOLS);

@@ -559,6 +559,7 @@ and new Claude Code attributes.
 | `POST /v1/{traces,metrics,logs}` | OTLP ingest (`http/protobuf`, `http/json`, gzip)   |
 | `GET /api/sessions`      | Session list (`search`, `limit`, `offset`)                 |
 | `GET /api/sessions/:id`  | Session aggregates including traces                        |
+| `GET /api/sessions/:id/agents` | Agent lanes of a session: main, one per subagent instance, unattributed |
 | `GET /api/traces/:id`    | Spans of a trace, flat with `depth` in render order        |
 | `GET /api/events`        | Events (`session`, `event`, `trace`, `search`, `errors`); raw API bodies are left out here |
 | `GET /api/content`       | Content records (`session`, `kind`, `at`, `limit`, `body=1` for the text) |

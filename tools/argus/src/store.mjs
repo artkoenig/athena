@@ -23,6 +23,7 @@ import {
   TASK_TOOL_NAMES,
   TOKEN_TYPES,
   EMPTY_TOKENS,
+  agentRefOf,
   bool,
   contentOf,
   num,
@@ -31,6 +32,18 @@ import {
   sessionNameOf,
   toolParametersOf,
 } from './claude.mjs';
+
+/**
+ * Lane identities for getAgents. The `agent:` prefix keeps a real agent id from
+ * ever colliding with one of the two synthetic lanes.
+ */
+const MAIN_LANE_ID = 'main';
+const UNATTRIBUTED_LANE_ID = 'unattributed';
+const AGENT_LANE_PREFIX = 'agent:';
+/** Main first, subagents in the middle, unattributed last. */
+const LANE_ORDER = { main: 0, subagent: 1, unattributed: 2 };
+/** How far up a parent chain a span's lane is looked for before giving up. */
+const MAX_LANE_CHAIN_DEPTH = 64;
 
 /** Bound on how many stray TaskCreate calls a session keeps (see #applyTodo). */
 const MAX_UNLINKED_CREATES = 200;
@@ -811,6 +824,105 @@ export class TelemetryStore {
       spanCount: flat.length,
       orphanCount: missingParents,
       spans: flat,
+    };
+  }
+
+  /**
+   * The agent lanes of one session: the main agent, one per subagent instance,
+   * and — only when something cannot be attributed — an unattributed lane.
+   *
+   * Returns `null` for an unknown session, the same contract `getSession` has.
+   * A known session with no spans yields `items: []`: lanes are built from
+   * spans, and none are invented.
+   *
+   * The join is a linear walk over the bounded span buffer, the house style of
+   * every other query here. It runs across traces on purpose: a subagent's
+   * spans can sit in a different trace than its parent's, so restricting the
+   * parent lookup to one trace would strand them.
+   *
+   * @param {string} sessionId
+   * @returns {null | {sessionId: string, firstMs: number, lastMs: number, items: object[]}}
+   */
+  getAgents(sessionId) {
+    if (!this.sessions.has(sessionId)) return null;
+    const spans = this.spans.filter((span) => span.sessionId === sessionId);
+    const byId = new Map(spans.map((span) => [span.spanId, span]));
+    const laneKeys = new Map();
+
+    /**
+     * Which lane a span belongs to. Spans that carry no agent attributes — the
+     * interaction, tool.execution, blocked_on_user and hook spans never do —
+     * inherit their lane from the parent chain, which is the only place their
+     * agent is recorded. A parent that is not in the buffer (it was evicted, or
+     * never arrived) is the one honest "cannot be attributed" case, and it lands
+     * on the unattributed lane rather than being folded into main.
+     */
+    const laneKeyOf = (span, depth = 0) => {
+      const cached = laneKeys.get(span.spanId);
+      if (cached) return cached;
+      let key;
+      const ref = agentRefOf(span.attrs ?? {});
+      if (ref) key = `${AGENT_LANE_PREFIX}${ref.agentId}`;
+      else if (!span.parentSpanId) key = MAIN_LANE_ID;
+      // The cap also stops a cyclic parent chain, which a malformed export can
+      // produce and which nothing else here would terminate.
+      else if (depth >= MAX_LANE_CHAIN_DEPTH) key = UNATTRIBUTED_LANE_ID;
+      else {
+        const parent = byId.get(span.parentSpanId);
+        key = parent ? laneKeyOf(parent, depth + 1) : UNATTRIBUTED_LANE_ID;
+      }
+      laneKeys.set(span.spanId, key);
+      return key;
+    };
+
+    const lanes = new Map();
+    for (const span of spans) {
+      const key = laneKeyOf(span);
+      let lane = lanes.get(key);
+      if (!lane) {
+        const isAgent = key.startsWith(AGENT_LANE_PREFIX);
+        lane = {
+          id: key,
+          kind: isAgent ? 'subagent' : key,
+          agentId: isAgent ? key.slice(AGENT_LANE_PREFIX.length) : null,
+          parentAgentId: null,
+          agentType: null,
+          firstMs: 0,
+          lastMs: 0,
+          durationMs: 0,
+          spanCount: 0,
+        };
+        lanes.set(key, lane);
+      }
+      lane.spanCount++;
+      // A span that never started (or never decoded) carries startMs 0; letting
+      // it in would drag the lane back to the epoch.
+      if (span.startMs > 0) {
+        lane.firstMs = lane.firstMs ? Math.min(lane.firstMs, span.startMs) : span.startMs;
+      }
+      lane.lastMs = Math.max(lane.lastMs, span.endMs || span.startMs);
+      if (lane.kind === 'subagent') {
+        const ref = agentRefOf(span.attrs ?? {});
+        if (ref) {
+          if (!lane.agentType && ref.agentType) lane.agentType = ref.agentType;
+          if (!lane.parentAgentId && ref.parentAgentId) lane.parentAgentId = ref.parentAgentId;
+        }
+      }
+    }
+
+    const items = [...lanes.values()];
+    for (const lane of items) lane.durationMs = Math.max(0, lane.lastMs - lane.firstMs);
+    items.sort((a, b) => LANE_ORDER[a.kind] - LANE_ORDER[b.kind] ||
+      a.firstMs - b.firstMs ||
+      (a.agentId < b.agentId ? -1 : a.agentId > b.agentId ? 1 : 0));
+
+    const starts = items.map((lane) => lane.firstMs).filter((value) => value > 0);
+    const ends = items.map((lane) => lane.lastMs).filter((value) => value > 0);
+    return {
+      sessionId,
+      firstMs: starts.length ? Math.min(...starts) : 0,
+      lastMs: ends.length ? Math.max(...ends) : 0,
+      items,
     };
   }
 

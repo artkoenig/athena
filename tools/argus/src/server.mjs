@@ -227,6 +227,13 @@ export function createServer({ store, token = null, endpoint = '', persist = nul
       else sendJson(res, 200, session);
       return true;
     }
+    const agentsMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/agents$/);
+    if (agentsMatch) {
+      const agents = store.getAgents(decodeURIComponent(agentsMatch[1]));
+      if (!agents) sendJson(res, 404, { error: 'unknown session' });
+      else sendJson(res, 200, agents);
+      return true;
+    }
     const traceMatch = pathname.match(/^\/api\/traces\/([^/]+)$/);
     if (traceMatch) {
       const trace = store.getTrace(decodeURIComponent(traceMatch[1]));

@@ -360,6 +360,36 @@
             ],
             "questions": []
           }
+        },
+        {
+          "label": "implement:timeline-landing.0",
+          "at": "2026-08-07T10:26:02.759Z",
+          "return": {
+            "summary": "Added the agent-lane join to the collector (agentRefOf, store.getAgents, GET /api/sessions/:id/agents, subagent spans in the demo emitter) and made the timeline the session's landing view in argus-ui, with the six technical views moved into a subordinate strip below it, closed by default.",
+            "deviations": [
+              "The plan named only laneRows(items, window) for geometry; the test-author's cases call laneGeometry(lane, lanesInScope, window) -> { leftPct, widthPct, depth }. I implemented laneGeometry as the pure per-lane function the tests require and kept laneRows as the plan named it, built on top of it — both are exported from tools/argus-ui/public/timeline.js.",
+              "The plan said loadSession() also fetches the agents payload; I put that fetch in a small loadAgents() helper that loadSession() awaits, so the failure path (empty lanes, window falling back to the session's own first/last sighting) is expressed once rather than inline.",
+              "Each timeline lane row also shows its span count next to the label. The plan named the label, the short agent id, the bar and the duration; the span count is one extra field I added because a lane with no visible width is otherwise indistinguishable from an empty one. No test pins it."
+            ],
+            "commands": [
+              {
+                "command": "npm --prefix tools/argus test",
+                "exitCode": 0,
+                "note": "176 cases, all pass. Before the change the same command was exit 1 with 17 failures: the 14 getAgents cases in store.test.mjs, the whole-file import failure of claude.test.mjs, and the two /api/sessions/:id/agents cases in server.test.mjs."
+              },
+              {
+                "command": "npm --prefix tools/argus-ui test",
+                "exitCode": 0,
+                "note": "30 cases, all pass, including the 16 in timeline.test.mjs. Before the change that file failed at import with ERR_MODULE_NOT_FOUND for public/timeline.js."
+              }
+            ],
+            "blockers": [],
+            "questions": [],
+            "notes": [
+              "Verified the demo emitter end-to-end outside the counted suites: a collector on port 4399 fed by scripts/demo-emit.mjs --sessions 1 answered GET /api/sessions/<id>/agents with 5 lanes — main (17 spans) and four subagent instances of the one type agent:builtin:researcher (two per turn, 3 spans each, the tool.execution child inherited through the parent chain).",
+              "Not touched, per the plan: skills/argus/SKILL.md's route table, the skeleton file list in tools/argus-ui/test/independence.test.mjs, and the out-of-increment features (activity marks, context curve, scrubbing, per-lane detail, chosen-time marker)."
+            ]
+          }
         }
       ]
     },

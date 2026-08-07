@@ -7,6 +7,9 @@
  * `node bin/argus-ui.mjs` inside a throwaway sandbox.
  */
 
+import { esc, fmtAgo, fmtClock, fmtCost, fmtDur, fmtNum, shortId } from './format.js';
+import { DEFAULT_VIEW, timelineHtml, viewStripHtml } from './timeline.js';
+
 const TOKEN = new URLSearchParams(location.search).get('token');
 
 const state = {
@@ -15,7 +18,11 @@ const state = {
   config: null,
   selectedSessionId: null,
   session: null,
-  tab: 'overview',
+  // The timeline is the session view; a subordinate technical view is opened
+  // below it, and null means none is.
+  view: DEFAULT_VIEW,
+  agents: [],
+  agentWindow: { startMs: 0, endMs: 0 },
   trace: null,
   selectedTraceId: null,
   selectedSpanId: null,
@@ -27,65 +34,7 @@ const state = {
   authError: false,
 };
 
-/* ------------------------------ formatting ------------------------------ */
-
-const esc = (value) =>
-  String(value ?? '').replace(
-    /[&<>"']/g,
-    (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char],
-  );
-
-function fmtNum(value) {
-  const n = Number(value) || 0;
-  if (Math.abs(n) >= 1e9) return `${(n / 1e9).toFixed(2)}B`;
-  if (Math.abs(n) >= 1e6) return `${(n / 1e6).toFixed(2)}M`;
-  if (Math.abs(n) >= 1000) return `${(n / 1000).toFixed(1)}k`;
-  return String(Math.round(n));
-}
-
-function fmtCost(value) {
-  const n = Number(value) || 0;
-  if (n === 0) return '$0';
-  if (n < 0.01) return `$${n.toFixed(4)}`;
-  if (n < 100) return `$${n.toFixed(3)}`;
-  return `$${n.toFixed(2)}`;
-}
-
-function fmtDur(ms) {
-  const n = Number(ms);
-  if (!Number.isFinite(n) || n <= 0) return '–';
-  if (n < 1) return '<1ms';
-  if (n < 1000) return `${Math.round(n)}ms`;
-  if (n < 60_000) return `${(n / 1000).toFixed(2)}s`;
-  const minutes = Math.floor(n / 60_000);
-  const seconds = Math.round((n % 60_000) / 1000);
-  if (minutes < 60) return `${minutes}m ${String(seconds).padStart(2, '0')}s`;
-  return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, '0')}m`;
-}
-
-function fmtClock(ms) {
-  if (!ms) return '–';
-  const date = new Date(ms);
-  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}:${String(
-    date.getSeconds(),
-  ).padStart(2, '0')}.${String(date.getMilliseconds()).padStart(3, '0')}`;
-}
-
-function fmtAgo(ms) {
-  if (!ms) return 'never';
-  const delta = Math.max(0, Date.now() - ms);
-  if (delta < 1000) return 'just now';
-  if (delta < 60_000) return `${Math.round(delta / 1000)}s ago`;
-  if (delta < 3_600_000) return `${Math.round(delta / 60_000)}m ago`;
-  if (delta < 86_400_000) return `${Math.round(delta / 3_600_000)}h ago`;
-  return `${Math.round(delta / 86_400_000)}d ago`;
-}
-
 const isLive = (session) => Date.now() - session.lastSeenMs < 90_000;
-
-function shortId(id, keep = 12) {
-  return id && id.length > keep + 3 ? `${id.slice(0, keep)}…` : id ?? '';
-}
 
 /* --------------------------------- api ---------------------------------- */
 
@@ -181,15 +130,6 @@ function renderSessionList() {
 
 /* -------------------------------- detail -------------------------------- */
 
-const TABS = [
-  { id: 'overview', label: 'Overview' },
-  { id: 'todos', label: 'Tasks' },
-  { id: 'traces', label: 'Traces' },
-  { id: 'events', label: 'Events' },
-  { id: 'metrics', label: 'Metrics' },
-  { id: 'raw', label: 'Attributes' },
-];
-
 function renderDetail() {
   const detail = document.getElementById('detail');
   const session = state.session;
@@ -225,24 +165,24 @@ function renderDetail() {
       </div>
     </div>
 
-    <nav class="tabs" role="tablist">
-      ${TABS.map(
-        (tab) => `<button type="button" class="tab" role="tab" data-tab="${tab.id}"
-          aria-selected="${state.tab === tab.id}">${tab.label}${
-            counts[tab.id] !== undefined ? `<span class="count">${fmtNum(counts[tab.id])}</span>` : ''
-          }</button>`,
-      ).join('')}
-    </nav>
+    ${timelineHtml(state.agents, state.agentWindow)}
 
-    <div id="tab-body"></div>
+    ${viewStripHtml(state.view, counts)}
+
+    <div id="view-body"></div>
   `;
-  renderTabBody();
+  renderViewBody();
 }
 
-function renderTabBody() {
-  const body = document.getElementById('tab-body');
+function renderViewBody() {
+  const body = document.getElementById('view-body');
   if (!body) return;
-  switch (state.tab) {
+  // Nothing open below the timeline is the resting state, not a missing view.
+  if (state.view === null) {
+    body.innerHTML = '';
+    return;
+  }
+  switch (state.view) {
     case 'todos':
       body.innerHTML = renderTodosTab();
       break;
@@ -877,6 +817,8 @@ async function loadStats() {
 async function loadSession() {
   if (!state.selectedSessionId) {
     state.session = null;
+    state.agents = [];
+    state.agentWindow = { startMs: 0, endMs: 0 };
     return;
   }
   try {
@@ -884,12 +826,36 @@ async function loadSession() {
   } catch {
     state.session = null;
     state.selectedSessionId = null;
+    state.agents = [];
+    state.agentWindow = { startMs: 0, endMs: 0 };
+    return;
+  }
+  await loadAgents();
+}
+
+/**
+ * The lanes of the timeline, and the window they are drawn in. The window is
+ * widened to the session's own first/last sighting, so a lane never runs past
+ * the edge of a session that also produced metrics or events outside its spans.
+ */
+async function loadAgents() {
+  const session = state.session;
+  try {
+    const payload = await api(`/api/sessions/${encodeURIComponent(session.id)}/agents`);
+    state.agents = payload.items ?? [];
+    state.agentWindow = {
+      startMs: Math.min(session.firstSeenMs, payload.firstMs || Infinity),
+      endMs: Math.max(session.lastSeenMs, payload.lastMs ?? 0),
+    };
+  } catch {
+    state.agents = [];
+    state.agentWindow = { startMs: session.firstSeenMs, endMs: session.lastSeenMs };
   }
 }
 
-async function loadTabData() {
-  if (!state.session) return;
-  if (state.tab === 'traces') {
+async function loadViewData() {
+  if (!state.session || state.view === null) return;
+  if (state.view === 'traces') {
     const traces = state.session.traces ?? [];
     if (!traces.some((trace) => trace.traceId === state.selectedTraceId)) {
       state.selectedTraceId = traces[0]?.traceId ?? null;
@@ -898,7 +864,7 @@ async function loadTabData() {
     state.trace = state.selectedTraceId
       ? await api(`/api/traces/${encodeURIComponent(state.selectedTraceId)}`).catch(() => null)
       : null;
-  } else if (state.tab === 'events') {
+  } else if (state.view === 'events') {
     const [events, facets] = await Promise.all([
       api('/api/events', {
         session: state.selectedSessionId,
@@ -911,7 +877,7 @@ async function loadTabData() {
     ]);
     state.events = events.items;
     state.facets = facets;
-  } else if (state.tab === 'metrics') {
+  } else if (state.view === 'metrics') {
     const metrics = await api('/api/metrics', { session: state.selectedSessionId, limit: 2000 });
     state.metrics = metrics.items;
   }
@@ -930,7 +896,7 @@ async function refresh({ sessions = true } = {}) {
   try {
     await Promise.all([loadStats(), sessions ? loadSessions() : Promise.resolve()]);
     await loadSession();
-    await loadTabData();
+    await loadViewData();
   } catch (error) {
     // A failed load must not skip the render. The empty state is the only thing
     // that can explain the failure, so throwing past it leaves the untouched
@@ -960,6 +926,10 @@ function selectSession(id, { render = true } = {}) {
   state.trace = null;
   state.events = [];
   state.metrics = [];
+  state.agents = [];
+  state.agentWindow = { startMs: 0, endMs: 0 };
+  // Opening a session lands on the timeline, whatever was open under the last one.
+  state.view = DEFAULT_VIEW;
   location.hash = `#/session/${encodeURIComponent(id)}`;
   if (render) refresh({ sessions: false }).then(renderSessionList);
 }
@@ -1015,23 +985,24 @@ function wireEvents() {
       copyFrom(copy.dataset.copy);
       return;
     }
-    const tab = event.target.closest('[data-tab]');
-    if (tab) {
-      state.tab = tab.dataset.tab;
-      loadTabData().then(renderDetail);
+    const view = event.target.closest('[data-view]');
+    if (view) {
+      // Clicking the open view closes it again, back to the timeline alone.
+      state.view = state.view === view.dataset.view ? null : view.dataset.view;
+      loadViewData().then(renderDetail);
       return;
     }
     const trace = event.target.closest('[data-trace]');
     if (trace) {
       state.selectedTraceId = trace.dataset.trace;
       state.selectedSpanId = null;
-      loadTabData().then(renderDetail);
+      loadViewData().then(renderDetail);
       return;
     }
     const span = event.target.closest('[data-span]');
     if (span) {
       state.selectedSpanId = state.selectedSpanId === span.dataset.span ? null : span.dataset.span;
-      renderTabBody();
+      renderViewBody();
       return;
     }
     const row = event.target.closest('[data-event-seq]');
@@ -1044,11 +1015,11 @@ function wireEvents() {
   document.getElementById('detail').addEventListener('change', (event) => {
     if (event.target.id === 'event-filter') {
       state.eventFilters.event = event.target.value;
-      loadTabData().then(renderTabBody);
+      loadViewData().then(renderViewBody);
     }
     if (event.target.id === 'event-errors') {
       state.eventFilters.errorsOnly = event.target.checked;
-      loadTabData().then(renderTabBody);
+      loadViewData().then(renderViewBody);
     }
   });
 
@@ -1057,7 +1028,7 @@ function wireEvents() {
     if (event.target.id !== 'event-search') return;
     state.eventFilters.search = event.target.value;
     clearTimeout(searchTimer);
-    searchTimer = setTimeout(() => loadTabData().then(renderTabBody), 250);
+    searchTimer = setTimeout(() => loadViewData().then(renderViewBody), 250);
   });
 
   let sessionSearchTimer = null;
@@ -1114,7 +1085,7 @@ async function boot() {
   // Sessions age out of "live" and relative timestamps drift; repaint slowly.
   setInterval(() => {
     renderSessionList();
-    if (state.session && state.tab === 'overview') renderTabBody();
+    if (state.session && state.view === 'overview') renderViewBody();
   }, 15_000);
 }
 

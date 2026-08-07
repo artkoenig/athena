@@ -252,6 +252,28 @@ export function attributionOf(attrs = {}) {
   return out;
 }
 
+/**
+ * The agent instance a record belongs to, or `null` when it carries no agent
+ * identity.
+ *
+ * Only `claude_code.llm_request` and `claude_code.tool` spans set `agent_id`
+ * and `parent_agent_id`, and only while the active agent is *not* the main one:
+ * the main agent emits no `agent_id` at all. So `null` means "not a subagent
+ * instance" — main-agent work, or a span type that never carries the attribute
+ * — never "unknown agent".
+ *
+ * `agent.name` and `query_source` (e.g. `agent:builtin:researcher`) name only
+ * the agent *type*, which two concurrent instances of one subagent share;
+ * `agent_id` is the only attribute that tells those two apart.
+ */
+export function agentRefOf(attrs = {}) {
+  const agentId = typeof attrs.agent_id === 'string' ? attrs.agent_id.trim() : '';
+  if (!agentId) return null;
+  const parentAgentId = typeof attrs.parent_agent_id === 'string' ? attrs.parent_agent_id.trim() : '';
+  const agentType = attrs['agent.name'] ?? attrs.query_source ?? null;
+  return { agentId, parentAgentId: parentAgentId || null, agentType: agentType || null };
+}
+
 const NUMERIC_RE = /^-?\d+(\.\d+)?$/;
 
 /** Attributes arrive as strings surprisingly often; coerce defensively. */
