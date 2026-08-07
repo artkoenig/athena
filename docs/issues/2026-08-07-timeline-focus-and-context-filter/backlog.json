@@ -314,6 +314,22 @@
             "blockers": [],
             "questions": []
           }
+        },
+        {
+          "label": "review:tabs-out.0",
+          "at": "2026-08-07T18:33:40.423Z",
+          "return": {
+            "summary": "Reviewed the whole diff against origin/main for increment 4: every acceptance criterion of the tabs-out increment is met in code, stylesheet, argus-ui README and tests; `npm --prefix tools/argus-ui test` ran 234 cases, 0 failed, 0 skipped, exit 0, and `./test.sh` exits 126 (Permission denied — the file is mode 100644 on origin/main and untouched here), while `bash test.sh` reports PASS over all 6 suites, exit 0; the one finding is the collector README still telling readers the page has the six deleted views.",
+            "findings": [
+              {
+                "claim": "The collector's README still tells a reader argus-ui shows the six views this increment deleted.",
+                "reproduction": "Open tools/argus/README.md line 431: \"What that looks like as a page — sessions, overview, tasks, traces, events, metrics, attributes — is argus-ui, which reads exactly these routes and nothing else.\" After this change the page has only the session list, the timeline and the context panel; overview, tasks, traces, events, metrics and attributes cannot be opened at all. The same page's signal table at line 154 promises \"Waterfall per interaction\" as what is built from traces, and renderWaterfall() no longer exists in any file under tools/argus-ui/public.",
+                "criterion": "none — criterion 7 scopes the documentation cleanup to pages under tools/argus-ui, and the issue's Out of scope names tools/argus; raised as blast radius, dismiss it if the human meant the collector's page to keep describing a page that no longer looks like that."
+              }
+            ],
+            "reason": "The collector's README still promises that the interface shows overview, tasks, traces, events, metrics and attributes, and a waterfall per interaction, all of which this increment deleted — stale prose the deletion left behind, outside the criterion's tools/argus-ui scope.",
+            "questions": []
+          }
         }
       ]
     }
