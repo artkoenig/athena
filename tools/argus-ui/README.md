@@ -68,9 +68,7 @@ for an `HttpOnly; SameSite=Strict` cookie and drops it from the address bar.
   opens that agent's context as of the cursor's moment, as a list of blocks —
   system prompt, messages, thinking, tool calls and results, and every other
   field the request carried — each showing its size and expanding to its full
-  text. The same click also lists, under the context, every tool that agent had
-  called by that moment — newest first, each row naming the tool and expanding
-  to the parameters it was called with.
+  text.
 - **Overview** — cost, tokens by type including cache hit rate, interactions,
   requests, tool calls, lines of code, commits, active time; tables per model
   and per tool.
