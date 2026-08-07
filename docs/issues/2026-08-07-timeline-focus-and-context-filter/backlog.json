@@ -34,148 +34,9 @@
         "The cases the previous increment wrote to pin today's behaviour — that a partly filtered panel leaves the head's totals untouched, and that an all-hidden panel renders an empty block list with no placeholder — are updated to the new behaviour in the same change, so no case is left red, skipped or asserting the superseded shape.",
         "`npm --prefix tools/argus-ui test` passes over the whole suite after this increment, and each criterion above has at least one test that goes red when its behaviour is broken or removed."
       ],
-      "status": "todo",
-      "note": "Criteria sharpened after filter-core: two of its cases deliberately pin the head's totals and the placeholder-less all-hidden panel, so updating them is part of this increment rather than a surprise red suite. Added that this increment needs no new app.js wiring, which filter-core's delivery showed.",
-      "steps": [
-        {
-          "label": "research:filter-honesty.0",
-          "at": "2026-08-07T15:47:15.934Z",
-          "return": {
-            "needsTests": true,
-            "summary": "Add a pure contextCounts() to public/context.js and use it in renderContextPanel so a filtered head names visible-of-total blocks and characters in its line and in two data attributes of its own, and an all-hidden request renders one placeholder in place of the block list while the panel stays data-state=\"ready\".",
-            "plan": "Make the filtered context panel tell the truth about what it hides. One production file changes: tools/argus-ui/public/context.js. Do not touch public/app.js, public/styles.css or public/index.html — the wiring and the CSS this increment needs already exist (app.js already passes `hidden` and `filterOpen` into `lanePanelInput`, and `.placeholder` is already styled).\n\nWHAT GETS BUILT\n\n1. A new exported pure function in public/context.js, placed in the \"the filter\" section directly after `visibleBlocks` and before `contextEntryIds`:\n\n   export function contextCounts({ blocks = [], chars = 0, hidden = [] } = {})\n\n   It returns { chars, blocks, visibleChars, visibleBlocks, filtered } where\n   - `chars` is the `chars` argument verbatim (the whole body's length, what `contextBlocks` returns and what `data-chars` already carries),\n   - `blocks` is `blocks.length`, the total block count,\n   - `visibleBlocks` is `visibleBlocks(blocks, hidden).length`,\n   - `visibleChars` is the sum of the `chars` field of exactly those visible blocks,\n   - `filtered` is `visibleBlocks !== blocks` — true only when this record actually lost a block.\n   It mutates neither argument, accepts `hidden` as an array or a Set (reuse the existing `visibleBlocks` helper, which already normalises it), and returns all zeroes for no arguments at all. The object-argument form matches `renderContextFilter` and `lanePanelInput`; the return keys map one-to-one onto the data attributes below, which is why the count field is named `blocks` even though the input `blocks` is an array — name the local array something else inside the body.\n\n2. `renderContextPanel` uses it for the head. Today the head line is\n   [fmtClock(item.timeMs), item.model, `${fmtNum(chars)} chars`, `${blocks.length} blocks`] joined by ' · ' after esc.\n   Keep that shape and swap the last two parts when, and only when, `counts.filtered` is true:\n   - chars part: `${fmtNum(counts.visibleChars)} of ${fmtNum(counts.chars)} chars`\n   - blocks part: `${counts.visibleBlocks} of ${counts.blocks} blocks`\n   Both parts keep going through the same `.map(esc).join(' · ')` as today. The word between the two numbers is `of`, lower case, with single spaces.\n\n3. The two new data attributes ride on the same `<span class=\"context-meta\">` as `data-chars` and `data-blocks`, are named `data-visible-chars` and `data-visible-blocks`, carry the raw integers through `esc`, and are rendered only when `counts.filtered` is true. `data-chars` and `data-blocks` keep the record's own totals in every case — the filter never rewrites them.\n\n4. The all-hidden placeholder. When `blocks.length > 0` and the visible list is empty, `renderContextPanel` renders, in place of the whole `<div class=\"ctx-blocks\">…</div>` container, exactly:\n   <div class=\"placeholder\">Every kind in this request is hidden. Turn them back on in the filter above.</div>\n   The head, its totals and the filter dropdown are unchanged and still rendered, and the shell stays `shell('ready', …)` so `data-state=\"ready\"` holds. The text carries no apostrophe and no angle bracket, so it survives `esc` unchanged; put it through `esc` anyway, the way the other two placeholders are. Reuse the bare `class=\"placeholder\"` — no new class and no new CSS rule.\n\nDECISIONS AND WHAT THEY WERE CHOSEN OVER\n\n- `visibleChars` is the sum of the visible blocks' own `chars`, not `chars` minus the hidden blocks' chars. Rejected because the block texts do not add up to the body: for the suite's own fixture the twelve blocks carry 396 characters against a 770-character body, the rest being JSON scaffolding that belongs to no block. Subtracting would make an all-hidden panel claim 374 visible characters with zero rows on screen, which is the exact lie this increment exists to prevent. The chosen definition gives 0 there, and it is the number a reader can add up from the `data-chars` on the rows. The consequence to accept: with nothing hidden the visible sum (396) is still below the total (770), which is why the visible numbers are rendered only when something is actually hidden — with nothing hidden the head is byte-for-byte today's.\n- `filtered` keys on a block actually removed, never on `hidden` being non-empty. A hidden id the current request does not carry must leave the markup byte-identical to the unfiltered render — an existing case ('an entry hidden but absent from this request changes nothing…') asserts that equality and must keep passing.\n- The placeholder is rendered inline by `renderContextPanel` rather than by a new exported render function: `renderContextPanel` is already the pure renderer the criterion asks for, and a second export would widen the surface for one string.\n- The placeholder is gated on `blocks.length > 0`. A request that simply has no blocks (`{\"messages\":[]}`) keeps rendering today's empty `<div class=\"ctx-blocks\"></div>` — nothing is hidden there, so nothing may claim it is.\n- `data-chars` stays the body length, so the head's two chars numbers are measured differently (visible = sum of block texts, total = body length). Say so in the JSDoc of `contextCounts`: the visible count never adds up to the total because the body's JSON scaffolding belongs to no block, which is precisely why the total is printed beside it and never replaced.\n\nSTYLE THE FILE KEEPS\n\nEvery exported function in public/context.js carries a JSDoc block with `@param`/`@returns` and a sentence on why it is shaped the way it is; inline comments explain the decision, not the mechanics. Follow it for `contextCounts` and for the placeholder branch. No `document`, no `fetch(`, no `location.` may appear in this module — `test/independence.test.mjs` greps for them.",
-            "moduleMap": "/home/user/uroboros/tools/argus-ui/public/context.js — the only production file this increment changes. Pure module (no browser globals). Holds `contextBlocks` (body -> { ok, chars, blocks }, `chars` is the body's own length), `entryIdOf`, `contextFilterEntries`, `visibleBlocks(blocks, hidden)`, `contextEntryIds`, `hiddenAfterAll`, `renderContextFilter`, `laneContentQuery`, `fetchLaneContext`, `laneContextInput`, `lanePanelInput`, `renderContextPanel`. Entry points for this change: the new exported `contextCounts` (add after `visibleBlocks`, around line 199) and `renderContextPanel` (line 395 — its head at lines 425-439 and its `rows`/`ctx-blocks` tail at lines 441-457).\n/home/user/uroboros/tools/argus-ui/test/context.test.mjs — the only test file this increment changes. 1137 lines, node:test. Fixture factories `requestBody`/`item`/`lane`/`view` at lines 21-64, helper `blockChunks(html)` at line 79. The two cases to rewrite: 'unchecking an entry removes its blocks below and only unchecks that box' (line 984, its head assertions at 1005-1010) and 'everything hidden leaves an empty list but a reader can still turn entries back on' (line 1038).\n/home/user/uroboros/tools/argus-ui/public/app.js — unchanged, and must stay so. `renderLanePanel()` (line 948) already spreads `hidden: state.contextHidden` and `filterOpen: state.contextFilterOpen` into `lanePanelInput`, so both new behaviours reach the page with no new wiring.\n/home/user/uroboros/tools/argus-ui/public/styles.css — unchanged. `.placeholder` (line 1407) and `.context-meta` (line 1046) already exist; the new markup adds no class.\n/home/user/uroboros/tools/argus-ui/public/format.js — unchanged. Supplies `esc`, `fmtNum` (1000 and up become e.g. `210.1k`, below stays the plain integer) and `fmtClock`.\n/home/user/uroboros/tools/argus-ui/test/independence.test.mjs — unchanged. Greps public/context.js for `document.`, `fetch(` and `location.`; this is the purity contract the increment names.\n/home/user/uroboros/tools/argus-ui/test/page.test.mjs — unchanged. Pins app.js's imports from context.js and its filter wiring; nothing here needs to move.",
-            "environment": "Node >= 20.11, already installed. tools/argus-ui has zero runtime and zero dev dependencies, so `npm install` never has to run and no node_modules is needed; both commands below work from a bare checkout. Run both from the repository root, /home/user/uroboros.\n\n- `npm --prefix tools/argus-ui test` — the whole argus-ui suite, `node --test \"test/*.test.mjs\"` over its seven test files.\n- `node --test tools/argus-ui/test/context.test.mjs` — the one test file this increment touches, on its own.\n\nThere is no linter, no formatter and no build step in this repository, and nothing to run for public/ beyond the two commands above.",
-            "testPlan": "Tests are needed. Everything in this increment is a pure function's output, and all of it is checkable in one file.\n\nWHERE, WITH WHAT, AND IN WHOSE STYLE\n\nEvery case below goes in /home/user/uroboros/tools/argus-ui/test/context.test.mjs. Framework: `node:test` with `node:assert/strict`, ESM, no runner config. Run just this file from the repository root with:\n\n  node --test tools/argus-ui/test/context.test.mjs\n\nConventions of that file, which the new cases follow:\n- Imports at the top: `import test from 'node:test'; import assert from 'node:assert/strict';` then a single named import block from `'../public/context.js'` (lines 4-15) and one from `'../public/format.js'`. Add `contextCounts` to the first block; `visibleBlocks`, `contextEntryIds` and `contextBlocks` are already imported, and `fmtNum` and `esc` come from the second.\n- All input comes from the four factories at lines 21-64 — `requestBody(over)`, `item(over)`, `lane(over)`, `view(over)` — each taking an override object spread last. Never build a body inline; call `requestBody({ messages: […] })`.\n- `blockChunks(html)` (line 79) returns the rendered `<details class=\"ctx-block\">…</details>` chunks in order; use it for anything about the row list.\n- Test names are lower-case sentences describing the behaviour ('unchecking an entry removes its blocks below and only unchecks that box'), never 'should …'. Every assertion carries a message saying what a failure means, in the same voice.\n- Numbers are derived in the test where they can be — the file writes `requestBody().length` and `contextBlocks(requestBody()).blocks` rather than literals, while hard-coding the block count 12. Do the same: derive character sums from `contextBlocks(requestBody()).blocks`, and keep 12 as the literal total block count.\n- Nothing is faked or stubbed: these are pure functions called directly. The only fake in the file is the `recorder()` api function, which none of these cases needs.\n- Put the new cases at the end of the file under one banner comment naming this increment, in the style of the existing `// Increment 5 — …` banners.\n\nFixture facts, for cross-checking (do not paste them as the expectations): `requestBody()` is 770 characters and yields 12 blocks whose own texts total 396 characters; the single `tool_result` block is 12 of those. So a panel with `kind:tool_result` hidden shows 11 of 12 blocks and 384 of 770 characters.\n\nTHE CASES\n\nCriterion 1 — with nothing hidden the head reads as today; with something hidden it names visible of total for blocks and for characters; the totals stay on data-chars and data-blocks; the visible counts arrive in data attributes of their own.\n\n1. 'the counts of an unfiltered record are its own totals' — unit, `contextCounts`. Input: `contextBlocks(requestBody())`'s `blocks` and `chars`, `hidden: []`. Expect `{ chars: requestBody().length, blocks: 12, visibleBlocks: 12, visibleChars: <sum of every block's chars, reduced in the test>, filtered: false }` by `assert.deepEqual`. Assert in the same case that that sum is strictly below `requestBody().length`, with a message saying the body's JSON scaffolding belongs to no block — without it the following cases cannot tell the two definitions of `visibleChars` apart and the suite goes vacuous.\n2. 'hiding one entry takes its blocks and its characters out of the visible counts' — unit, `contextCounts` with `hidden: ['kind:tool_result']`. Expect `visibleBlocks` 11, `visibleChars` equal to the reduced sum minus the tool_result block's own `chars`, `filtered` true, and `chars`/`blocks` still the record's totals.\n3. 'an id the record does not carry hides nothing and does not count as filtered' — unit, edge. `contextCounts` over the fixture with `hidden: ['kind:thinking', 'field:absent']` against a body built as `requestBody({ messages: [{ role: 'user', content: 'hi' }] })` (no thinking block, no such field). Expect `filtered: false`, `visibleBlocks` equal to `blocks`, `visibleChars` equal to that record's own block sum.\n4. 'every entry hidden leaves nothing visible at all' — unit, edge/limit. `hidden: contextEntryIds(item())` over the fixture's blocks. Expect `visibleBlocks: 0`, `visibleChars: 0`, `filtered: true`, and `chars`/`blocks` still the totals.\n5. 'the counts hold with no arguments and with a Set' — unit, edge/empty and repeat. `assert.deepEqual(contextCounts(), { chars: 0, blocks: 0, visibleChars: 0, visibleBlocks: 0, filtered: false })`, and `contextCounts` given `hidden` as `new Set(['kind:user'])` must deep-equal the same call given `['kind:user']`.\n6. 'with nothing hidden the head line and its attributes are exactly what they were' — integration over `renderContextPanel({ lane: lane(), item: item() })`. Assert the meta span still matches `data-chars=\"<requestBody().length>\"` and `data-blocks=\"12\"`, that the readable line still carries `` `${fmtNum(requestBody().length)} chars` `` and `12 blocks`, that the whole markup contains neither `data-visible-chars` nor `data-visible-blocks`, and that the meta span carries no ` of ` — the head of an unfiltered panel says nothing about a filter.\n7. Rewrite the existing case at line 984, 'unchecking an entry removes its blocks below and only unchecks that box'. Its block-list and checkbox assertions stay as they are. Its two head assertions (lines 1005-1010) keep asserting `data-blocks=\"12\"` and `data-chars=\"<requestBody().length>\"` — those totals are still the required behaviour — but their messages must lose the superseded 'the filter does not own that number yet' and say instead that the totals are what stops the filter making the context look smaller than it is. Add to the same case, or to a new case named 'a filtered head names the visible numbers beside the totals' fed the same `hidden: ['kind:tool_result']` input: `data-visible-blocks=\"11\"`, `data-visible-chars=\"<derived>\"`, and the readable line containing `11 of 12 blocks` and `` `${fmtNum(visibleChars)} of ${fmtNum(requestBody().length)} chars` ``. Whichever shape you pick, no assertion carrying the superseded message may survive in the file.\n8. Do not weaken the existing case at line 1051, 'an entry hidden but absent from this request changes nothing and is not listed, and its hidden state is remembered'. Its byte-for-byte equality is what pins criterion 1's other half — a request that lost no block renders exactly the unfiltered head. It must keep passing untouched. The same holds for the equality at lines 1012-1016 (`hidden: []` renders what no `hidden` renders) and for 'the head names the lane and the record the context came from' (line 309).\n\nCriterion 2 — with every entry hidden the panel keeps data-state=\"ready\" and shows a placeholder in place of the rows, saying every kind is hidden and where to turn them back on.\n\n9. Extend the existing case at line 1038, 'everything hidden leaves an empty list but a reader can still turn entries back on'. Keep its four assertions (no block chunks, `data-state=\"ready\"`, ten entries still listed, no checkbox checked) and add: exactly one `class=\"placeholder\"` in the markup; no `<div class=\"ctx-blocks\">` container at all; the placeholder's own text matching `/hidden/` and `/filter/` so a placeholder that names neither the state nor the way out fails; and `data-visible-blocks=\"0\"` on the meta span. Rename the case to say a placeholder replaces the rows.\n10. 'a request with no blocks at all shows no all-hidden placeholder' — integration, edge/empty. `renderContextPanel({ lane: lane(), item: item({ body: '{\"messages\":[]}' }) })`. Expect `data-state=\"ready\"`, no `class=\"placeholder\"` anywhere, and the empty `<div class=\"ctx-blocks\">` container still present — nothing is hidden here, so nothing may say it is. Note the sibling case at line 1112 already uses this body for the filter's own absence; leave it alone.\n11. 'a placeholder for no record is still the record placeholder' — integration, guard. The existing cases at lines 347 and 354 already pin `data-state=\"empty\"` with exactly one placeholder and `data-state=\"pending\"` with no blocks; add nothing, and do not touch them.\n\nCriterion 3 — the new numbers and the placeholder are derived and rendered by pure functions in public/context.js, under the contract test/independence.test.mjs guards, with no new wiring in app.js.\n\n12. No new case. `test/independence.test.mjs`'s third case already greps public/context.js for `document.`, `fetch(` and `location.` and goes red the moment the new code reaches for one, and every case above calls the new code as an import of that module, which is what makes 'pure function in context.js' the only way to pass them. The 'no new wiring' half is an absence in app.js: page.test.mjs already pins that `renderLanePanel` passes `hidden` and `filterOpen` through, and an assertion that app.js gained nothing else would pin the shape of a file this increment does not open.\n\nDELIBERATELY UNTESTED\n\n- The CSS. `.placeholder` is an existing rule and the markup adds no class; no case in this suite reads styles.css, and adding one for this would test the stylesheet's text rather than any behaviour.\n- The exact wording of the placeholder sentence. The cases pin that it names the hidden state and the filter, not the copy, so rewording it stays a free edit.\n- `fmtNum`'s own thresholds. They are covered where `fmtNum` is defined and tested; here the expectations call `fmtNum` rather than restating what it prints, so a change to the formatter cannot make these cases lie.\n- The browser. There is no DOM test in this project; every rendering case asserts on the returned HTML string, as the whole file does.\n\nWHAT IS ALREADY RED\n\nNothing is known red. I ran no test — not the suite and not one file — so the first run is the implementer's. The one command I did run was a `node -e` one-liner importing public/context.js to measure the fixture (770 body characters, 12 blocks, 396 characters of block text), which settled the definition of `visibleChars` recorded in the plan; it ran no test and exercised no changed code.",
-            "checks": [
-              "npm --prefix tools/argus-ui test"
-            ],
-            "questions": []
-          }
-        },
-        {
-          "label": "tests:filter-honesty.0",
-          "at": "2026-08-07T15:52:55.303Z",
-          "return": {
-            "summary": "Added failing/updated cases to tools/argus-ui/test/context.test.mjs for contextCounts (visible-of-total for blocks and characters) and for the all-hidden placeholder, updated the two superseded pinning cases from the previous increment in place, and confirmed the whole file now fails to import because public/context.js does not yet export contextCounts.",
-            "cases": [
-              {
-                "case": "the counts of an unfiltered record are its own totals",
-                "file": "tools/argus-ui/test/context.test.mjs",
-                "testName": "the counts of an unfiltered record are its own totals",
-                "expected": "contextCounts(contextBlocks(requestBody()), []) deep-equals { chars: requestBody().length, blocks: 12, visibleBlocks: 12, visibleChars: <reduced sum>, filtered: false }, and that sum is strictly below requestBody().length",
-                "got": "node --test on a copy with contextCounts stubbed to always return zeros: 'expected { chars: 770, blocks: 12, visibleBlocks: 12, visibleChars: 396, filtered: false } actual { chars: 0, blocks: 0, visibleChars: 0, visibleBlocks: 0, filtered: false }'. Against the real, unmodified file the whole suite fails earlier with a SyntaxError because public/context.js exports no contextCounts at all — the behaviour this case needs does not exist yet."
-              },
-              {
-                "case": "hiding one entry takes its blocks and its characters out of the visible counts",
-                "file": "tools/argus-ui/test/context.test.mjs",
-                "testName": "hiding one entry takes its blocks and its characters out of the visible counts",
-                "expected": "contextCounts(record, ['kind:tool_result']) has visibleBlocks 11, visibleChars = reduced sum minus the tool_result block's own chars, filtered true, chars/blocks unchanged",
-                "got": "stubbed-import check: 'hiding the request's one tool_result block must drop the visible block count by exactly one — 0 !== 11'. Real file: same import-time SyntaxError as above, contextCounts is missing."
-              },
-              {
-                "case": "an id the record does not carry hides nothing and does not count as filtered",
-                "file": "tools/argus-ui/test/context.test.mjs",
-                "testName": "an id the record does not carry hides nothing and does not count as filtered",
-                "expected": "hidden: ['kind:thinking', 'field:absent'] over a body with no thinking block and no such field yields filtered:false, visibleBlocks === blocks, visibleChars === that record's own block sum",
-                "got": "stubbed-import check: 'with nothing this record carries hidden, the visible characters must be this record's own block sum — 0 !== 184'. Real file: import-time SyntaxError, contextCounts missing."
-              },
-              {
-                "case": "every entry hidden leaves nothing visible at all",
-                "file": "tools/argus-ui/test/context.test.mjs",
-                "testName": "every entry hidden leaves nothing visible at all",
-                "expected": "hidden: contextEntryIds(item()) over the fixture's blocks yields visibleBlocks 0, visibleChars 0, filtered true, chars/blocks still the totals",
-                "got": "stubbed-import check: 'hiding every entry is still a filter — false !== true'. Real file: import-time SyntaxError, contextCounts missing."
-              },
-              {
-                "case": "the counts hold with no arguments and with a Set",
-                "file": "tools/argus-ui/test/context.test.mjs",
-                "testName": "the counts hold with no arguments and with a Set",
-                "expected": "contextCounts() deep-equals { chars: 0, blocks: 0, visibleChars: 0, visibleBlocks: 0, filtered: false }; contextCounts(record, new Set(['kind:user'])) deep-equals the same call given ['kind:user']",
-                "got": "not independently provable against a stub (a fixed-zero stub trivially satisfies both assertions regardless of arguments); the real, unmodified file fails at import time before this case can run, because public/context.js exports no contextCounts."
-              },
-              {
-                "case": "with nothing hidden the head line reads as it does today, and the totals stay on data-chars/data-blocks",
-                "file": "tools/argus-ui/test/context.test.mjs",
-                "testName": "with nothing hidden the head line and its attributes are exactly what they were",
-                "expected": "meta span carries data-chars=<body length> and data-blocks=\"12\", the readable line still carries '<fmtNum(len)> chars' and '12 blocks', and the whole markup carries neither data-visible-chars nor data-visible-blocks nor ' of ' anywhere in the meta span",
-                "got": "This case already passes against the present, unfiltered-only implementation — it pins today's shape, which the increment must not disturb; it will only go red if the implementer's change breaks the unfiltered head, which is exactly its job as a regression guard. Verified with the real public/context.js (contextCounts import removed for the check) — pass."
-              },
-              {
-                "case": "with something hidden the head names both numbers, visible of total, for blocks and for characters",
-                "file": "tools/argus-ui/test/context.test.mjs",
-                "testName": "a filtered head names the visible numbers beside the totals",
-                "expected": "renderContextPanel({ ..., hidden: ['kind:tool_result'] }) carries data-visible-blocks=\"11\", data-visible-chars=<derived>, and the readable line containing '11 of 12 blocks' and '<fmtNum(visibleChars)> of <fmtNum(total)> chars'",
-                "got": "against the real public/context.js (contextCounts import removed for the check, since this case never calls it): 'a filtered head must name how many blocks are visible, arriving in a data attribute of its own' — the actual markup carries data-chars/data-blocks but no data-visible-blocks/data-visible-chars and no ' of ' anywhere, proving the feature is entirely absent."
-              },
-              {
-                "case": "the previous increment's two pinning cases (unfiltered totals unchanged; all-hidden renders an empty list) are updated to the new behaviour, not left superseded",
-                "file": "tools/argus-ui/test/context.test.mjs",
-                "testName": "unchecking an entry removes its blocks below and only unchecks that box; everything hidden shows a placeholder in place of the rows, and a reader can still turn entries back on",
-                "expected": "the data-blocks/data-chars assertions in the first case keep their behaviour but lose the message 'the filter does not own that number yet', replaced by wording that the totals are what stop the filter making the context look smaller than it is; the second case keeps its four original assertions and adds a placeholder, no ctx-blocks container, placeholder text matching /hidden/ and /filter/, and data-visible-blocks=\"0\"",
-                "got": "the renamed/reworded first case ('unchecking an entry…') still passes today — its two head assertions (data-blocks/data-chars) hold under the current, unfiltered-total-only implementation, which is correct: that half of the behaviour is not new. The extended second case ('everything hidden shows a placeholder…') fails: 'exactly one placeholder must replace the hidden rows — expected: 1, actual: 0' — no placeholder markup exists yet, the panel still renders (nothing)."
-              },
-              {
-                "case": "a request with no blocks at all shows no all-hidden placeholder",
-                "file": "tools/argus-ui/test/context.test.mjs",
-                "testName": "a request with no blocks at all shows no all-hidden placeholder",
-                "expected": "renderContextPanel over item({ body: '{\"messages\":[]}' }) has data-state=\"ready\", no class=\"placeholder\" anywhere, and the empty <div class=\"ctx-blocks\"> container still present",
-                "got": "this is a negative/guard case: it already passes today, since no placeholder logic exists yet to fire wrongly on an empty-but-parseable body. It becomes a real guard once the placeholder feature lands, catching an implementation that shows the placeholder whenever the block list is empty rather than only when something is hidden."
-              },
-              {
-                "case": "a placeholder for no record is still the record placeholder (guard on the two pre-existing empty/pending cases)",
-                "file": "",
-                "testName": "",
-                "expected": "the existing data-state=\"empty\" and data-state=\"pending\" cases at (former) lines 347 and 354 are left untouched",
-                "got": "not written — the plan explicitly says to add nothing and not touch them; I verified both cases are unmodified in the diff."
-              },
-              {
-                "case": "the new numbers and the placeholder are derived and rendered by pure functions in context.js, guarded by independence.test.mjs, with no new wiring in app.js",
-                "file": "",
-                "testName": "",
-                "expected": "test/independence.test.mjs's existing grep for document./fetch(/location. in public/context.js, plus page.test.mjs's existing pin that renderLanePanel passes hidden/filterOpen through",
-                "got": "not written — the plan says no new case is needed: existing independence.test.mjs and page.test.mjs coverage already enforces this, and every new case above only reaches the new behaviour through an import of context.js's pure functions."
-              }
-            ],
-            "openQuestions": [
-              "The plan does not fix contextCounts's exact call shape. I inferred contextCounts(record, hidden) where record is the { chars, blocks } shape contextBlocks() already returns (so a caller can pass contextBlocks(body) straight through) and hidden is an array or Set of entry ids, defaulting to no record and no hidden entries when called with no arguments. If the implementer's natural reading is a different shape (e.g. positional (blocks, chars, hidden), or an options object with different key names), the five contextCounts unit cases will need their call sites adjusted to match — the expected values themselves are not in question, only the argument shape.",
-              "I could not confirm the placeholder element's tag name (only that it carries class=\"placeholder\", matching the class already used by the two pre-existing empty/pending placeholder cases) — the new all-hidden placeholder case scopes its /hidden/ and /filter/ text assertions to the substring of the rendered HTML from the class=\"placeholder\" match onward, which holds for any tag name.",
-              "Case 7 of the plan offered a choice between extending the existing 'unchecking an entry…' case or adding a new one for the filtered head's visible-of-total numbers; I added a new case ('a filtered head names the visible numbers beside the totals') rather than extending, since it keeps the filtered-head assertions bunched with their own vocabulary of derived numbers (toolResultBlock, visibleChars) separate from the pre-existing case's fixture-total assertions."
-            ],
-            "questions": []
-          }
-        },
-        {
-          "label": "implement:filter-honesty.0",
-          "at": "2026-08-07T15:55:04.581Z",
-          "return": {
-            "deviations": [
-              "contextCounts's signature: the plan named the object form contextCounts({ blocks, chars, hidden }), while every one of the five unit cases the test-author wrote calls contextCounts(record, hidden) positionally (record being what contextBlocks returns). I may not edit a test, so I implemented contextCounts({ blocks = [], chars = 0, hidden = [] } = {}, hiddenIds = hidden): the plan's object form is the primary and documented shape, and an optional second positional argument supplies hidden when the record is passed whole. renderContextPanel calls the object form the plan named. Both call shapes are covered by the suite; the test-author had flagged this exact ambiguity as open.",
-              "renderContextPanel builds the chars/blocks parts of the head line as two named locals (charsPart/blocksPart) before the array rather than swapping them inline in the array literal; same shape, same .filter(Boolean).map(esc).join(' · '), just readable."
-            ],
-            "commands": [
-              {
-                "command": "npm --prefix tools/argus-ui test",
-                "exitCode": 0,
-                "note": "Whole argus-ui suite, node --test over its seven test files: 238 tests, 238 pass, 0 fail, 0 skipped, 0 todo. Before the change the same command was exit 1 with test/context.test.mjs failing whole at import time — SyntaxError: The requested module '../public/context.js' does not provide an export named 'contextCounts' — which is the right red for the planned cases."
-              }
-            ],
-            "blockers": [],
-            "questions": [],
-            "summary": "Added the exported pure contextCounts to tools/argus-ui/public/context.js and made renderContextPanel name visible-of-total chars and blocks in its head, carry data-visible-chars/data-visible-blocks only while a block is actually hidden, and render a single .placeholder in place of the ctx-blocks container when a record's every block is hidden."
-          }
-        },
-        {
-          "label": "review:filter-honesty.0",
-          "at": "2026-08-07T15:57:47.578Z",
-          "return": {
-            "findings": [],
-            "reason": "",
-            "questions": [],
-            "summary": "Reviewed increment 2 (filter honesty) against the issue: `npm --prefix tools/argus-ui test` ran 238 cases, 0 failed, 0 skipped, exit 0; the new pure `contextCounts` and the head/placeholder rendering in public/context.js meet all four criteria, app.js is untouched as required, the two superseded increment-1 cases were rewritten rather than left asserting the old shape, and the blast radius (app.js reads none of the panel's markup, `.placeholder` is an existing style, no doc names the head's format) turned up nothing."
-          }
-        }
-      ]
+      "status": "done",
+      "note": "Accepted in review round 1 with no findings: contextCounts is a pure export of public/context.js, the head names visible-of-total chars and blocks with data-visible-chars/data-visible-blocks only while a block is actually hidden, an all-hidden record renders one placeholder in place of the rows with data-state=\"ready\" intact, app.js needed no new wiring, and the whole argus-ui suite ran 238 cases at exit 0.",
+      "steps": []
     },
     {
       "id": "tools-box",
@@ -186,12 +47,12 @@
         "`renderLanePanel()` paints only the context panel into `#lane-panel`.",
         "Everything else about tools on the timeline is untouched: the `data-kind=\"tool\"` tick marks on the lane track, the `data-tools` count in each lane's meta, the `tool call` legend entry, and the incremental `/api/events?event=claude_code.tool_result` poll with its `sinceSeq` watermark.",
         "`toolCallOf()` keeps only what a mark needs — `seq`, `timeMs`, `spanId` — and no longer derives or holds `name`, `preview`, `text`, `chars` or `truncated`. `TOOL_PARAM_CHARS` and the `paramText()` helper go with it. `mergeToolMarks()` keeps its contract: duplicates dropped by `seq`, the watermark returned as the highest `seq` actually held, the input array untouched.",
-        "The context panel and its filter come through unchanged: the panel is still built from one input builder, and the filter still renders, hides and reopens exactly as the earlier increments left it.",
+        "The context panel comes through the deletion whole: it is still built from one input builder, the filter still renders, hides and reopens, the head still names visible-of-total blocks and characters when something is hidden, and an all-hidden record still shows its placeholder with `data-state=\"ready\"`.",
         "Every case outside the deleted file that asserts the old tool-mark shape or the tool panel's presence — whole-object assertions on `toolCallOf()`'s return among them — is updated or removed in the same change, so no case is left red, skipped or asserting the superseded shape.",
         "`npm --prefix tools/argus-ui test` passes over the whole suite after this increment, and each criterion above has at least one test that goes red when its behaviour is broken or removed."
       ],
       "status": "todo",
-      "note": "Added two criteria after filter-core: that increment's one rejected round was caused entirely by older whole-object assertions left pinning a superseded shape, and this increment narrows a whole-object shape too. Also pinned that the context panel and its filter survive the deletion, since both now share `renderLanePanel()`.",
+      "note": "Criterion 5 sharpened after filter-honesty: the panel that must survive this deletion now also carries the visible-of-total head and the all-hidden placeholder, and both ride on the input builder that renderLanePanel feeds, so they are named among what must come through unchanged.",
       "steps": []
     },
     {
@@ -210,7 +71,7 @@
         "`./test.sh` is green."
       ],
       "status": "todo",
-      "note": "Two changes: the suite criterion now asks for this increment's own criteria to be covered rather than the whole issue's, since every earlier increment already carries its own coverage criterion; and a criterion was added that the shared `change` and `input` listeners the filter depends on survive, because filter-core put the filter's wiring into exactly those handlers.",
+      "note": "",
       "steps": []
     }
   ],
@@ -222,32 +83,83 @@
       },
       {
         "label": "replan:filter-core",
-        "at": "2026-08-07T15:40:15.809Z",
+        "at": "2026-08-07T15:40:15.809Z"
+      },
+      {
+        "label": "replan:filter-honesty",
+        "at": "2026-08-07T16:00:26.345Z",
         "return": {
-          "summary": "Closed filter-core as done (accepted in review round 1, suite 230 cases exit 0) and re-cut the three open increments against what it showed. The cut and its order are unchanged — filter-honesty, then tools-box, then tabs-out — because the risky part, the filter itself, is already delivered and each remaining increment is one coherent deliverable that leaves the repository working. What changed is the criteria, and one lesson drove most of it: filter-core's only rejected round was caused entirely by older whole-object assertions still pinning a shape the increment superseded, which cost a full correction chain. So every remaining increment that narrows or changes a pinned shape now carries an explicit criterion that those cases are updated or removed in the same change rather than left red or skipped: filter-honesty for the two cases filter-core wrote to pin today's head totals and the placeholder-less all-hidden panel, tools-box for the whole-object assertions on toolCallOf's return and anything asserting the tool panel's presence. Two further additions come from where filter-core put its wiring: tools-box now pins that the context panel and its filter come through the deletion of the tool box unchanged, since both now share renderLanePanel(), and tabs-out now pins that the shared change and input listeners the filter's checkboxes and its all on/all off buttons live in survive the removal of the tab handlers. filter-honesty gained a criterion that its numbers and placeholder stay pure functions in context.js needing no new app.js wiring, which filter-core's delivery showed to be achievable. tabs-out's suite criterion was narrowed from 'every criterion of the issue' to its own criteria, because every increment now carries its own coverage criterion and asking the last one to re-verify the others gives one criterion two owners. Nothing was split, merged or dropped: filter-honesty is small but coherent and belongs to nothing else, and the two deletions are separate deliverables that each stand alone.",
           "increments": [
             {
               "id": "filter-core",
+              "title": "The context panel gets a working block filter",
+              "goal": "Give the context panel head a dropdown that lists the block kinds and top-level fields the shown request actually contains, and let the reader hide and show them, against the record the panel already holds.",
+              "criteria": [
+                "The context panel head carries a dropdown built as a `<details>` popover, with no framework and no new dependency, listing every block kind and every top-level field the currently shown request actually contains, one checkbox each, with the number of blocks behind that entry (e.g. `tool_result 12`).",
+                "The list is in two labelled groups: **Blocks** first, holding the block kinds present, sorted alphabetically; then **Fields**, holding the body's remaining top-level keys, sorted alphabetically, labelled verbatim.",
+                "The dropdown holds two buttons, **all on** and **all off**.",
+                "Unchecking an entry removes its blocks from the list below and checking it puts them back, with no new fetch of `/api/content/at`.",
+                "The selection is one page-wide set of hidden entries, surviving lane change, scrub, live refresh and session change, not persisted, with anything never hidden arriving visible.",
+                "An entry the current request does not contain is not listed, and its hidden state is remembered.",
+                "The derivation and the markup are pure functions in `public/context.js`, and only the click wiring lives in `app.js`.",
+                "The filter's markup carries no `data-lane` and its `<summary>` no `data-block`.",
+                "An open dropdown survives a repaint.",
+                "`npm --prefix tools/argus-ui test` passes, with a red-on-break test per criterion."
+              ],
               "status": "done",
-              "note": "Accepted in review round 1: the context panel's filter is built as pure functions in public/context.js with only the click and change wiring in app.js, and the whole suite runs 230 cases at exit 0."
+              "note": "Accepted in review round 1: the filter is pure functions in public/context.js with only click and change wiring in app.js, suite 230 cases exit 0."
             },
             {
               "id": "filter-honesty",
-              "status": "todo",
-              "note": "Criteria sharpened after filter-core: two of its cases deliberately pin the head's totals and the placeholder-less all-hidden panel, so updating them is part of this increment rather than a surprise red suite. Added that this increment needs no new app.js wiring, which filter-core's delivery showed."
+              "title": "The panel head names visible and total, and the empty case says so",
+              "goal": "Make the filtered panel tell the truth about how much it is hiding: the head names visible-of-total blocks and characters, and a panel with everything hidden shows a placeholder instead of an empty list.",
+              "criteria": [
+                "With nothing hidden the head line reads as today; with something hidden it names visible of total for blocks and for characters, totals staying on `data-chars`/`data-blocks` and the visible counts arriving in data attributes of their own.",
+                "With every entry hidden the panel keeps `data-state=\"ready\"` and shows a placeholder in place of the rows.",
+                "The new numbers and the placeholder are derived and rendered by pure functions in `public/context.js`, with no new wiring in `app.js`.",
+                "The previous increment's two superseded pinning cases are updated in the same change.",
+                "`npm --prefix tools/argus-ui test` passes over the whole suite, with a red-on-break test per criterion."
+              ],
+              "status": "done",
+              "note": "Accepted in review round 1 with no findings: contextCounts is a pure export of public/context.js, the head names visible-of-total chars and blocks with data-visible-chars/data-visible-blocks only while a block is actually hidden, an all-hidden record renders one placeholder in place of the rows with data-state=\"ready\" intact, app.js needed no new wiring, and the whole argus-ui suite ran 238 cases at exit 0."
             },
             {
               "id": "tools-box",
+              "title": "The tools box under the timeline goes, its tick marks stay",
+              "goal": "Delete the redundant tool list panel and the per-call parameter ballast it forced into page state, while leaving every other tool signal on the timeline exactly as it is.",
+              "criteria": [
+                "`public/tools.js` and `test/tools.test.mjs` are deleted, and `app.js` imports neither `laneToolInput` nor `renderToolPanel`.",
+                "`renderLanePanel()` paints only the context panel into `#lane-panel`.",
+                "Everything else about tools on the timeline is untouched: the `data-kind=\"tool\"` tick marks, the `data-tools` count in each lane's meta, the `tool call` legend entry, and the incremental `/api/events?event=claude_code.tool_result` poll with its `sinceSeq` watermark.",
+                "`toolCallOf()` keeps only `seq`, `timeMs`, `spanId`; `TOOL_PARAM_CHARS` and `paramText()` go; `mergeToolMarks()` keeps its contract.",
+                "The context panel comes through the deletion whole: one input builder, the filter still renders, hides and reopens, the head still names visible-of-total when something is hidden, and an all-hidden record still shows its placeholder with `data-state=\"ready\"`.",
+                "Every case outside the deleted file asserting the old tool-mark shape or the tool panel's presence is updated or removed in the same change.",
+                "`npm --prefix tools/argus-ui test` passes over the whole suite, with a red-on-break test per criterion."
+              ],
               "status": "todo",
-              "note": "Added two criteria after filter-core: that increment's one rejected round was caused entirely by older whole-object assertions left pinning a superseded shape, and this increment narrows a whole-object shape too. Also pinned that the context panel and its filter survive the deletion, since both now share renderLanePanel()."
+              "note": "Criterion 5 sharpened after filter-honesty: the panel that must survive this deletion now also carries the visible-of-total head and the all-hidden placeholder, and both ride on the input builder renderLanePanel feeds."
             },
             {
               "id": "tabs-out",
+              "title": "The six technical tabs go out of the code",
+              "goal": "Remove the pre-timeline tab interface — its views, its state, its wiring and its per-refresh fetches — and land the whole issue with both suites green.",
+              "criteria": [
+                "`DETAIL_VIEWS` and `renderDetailViews()` are gone from `public/timeline.js`, and no tab nav is rendered anywhere.",
+                "Gone from `public/app.js`: the nine tab render functions, `loadTabData()`, the helpers only they used, the `#tab-body` container, and the eight tab state fields.",
+                "Gone from `wireEvents()`: the `[data-tab]`, `[data-trace]`, `[data-span]`, `[data-event-seq]` handlers, the `event-filter`/`event-errors` change handler and the `event-search` input branch; the 15-second interval no longer repaints a tab body.",
+                "`renderDetail()` no longer builds `counts`, and no refresh requests `/api/traces`, `/api/facets` or `/api/metrics`; the `/api/events` request feeding the tool marks stays.",
+                "No unused import or dead helper is left in `app.js` or `timeline.js`, and the tests pinning the removed views are removed rather than skipped.",
+                "The `change` and `input` listeners the context filter still needs survive: checkboxes, *all on*, *all off* and the lane selection all still work.",
+                "`src/server.mjs` is unchanged.",
+                "`npm --prefix tools/argus-ui test` is green over the whole suite, with a red-on-break test per criterion.",
+                "`./test.sh` is green."
+              ],
               "status": "todo",
-              "note": "Two changes: the suite criterion now asks for this increment's own criteria to be covered rather than the whole issue's, since every earlier increment already carries its own coverage criterion; and a criterion was added that the shared change and input listeners the filter depends on survive, because filter-core put the filter's wiring into exactly those handlers."
+              "note": ""
             }
           ],
-          "questions": []
+          "questions": [],
+          "summary": "filter-honesty was accepted with no findings and is closed done: contextCounts landed as a pure export of public/context.js, the head names visible-of-total chars and blocks only while a block is actually hidden, an all-hidden record renders one placeholder with data-state=\"ready\", app.js was untouched, and the suite ran 238 cases at exit 0. The re-cut is deliberately small — the two open increments are removals whose scope this increment did not disturb. One criterion changed: tools-box's 'the context panel comes through unchanged' now names the visible-of-total head and the all-hidden placeholder among what must survive, because both are new since that criterion was written and both hang off the same input builder renderLanePanel feeds when the tool panel is torn out of it. I left tabs-out untouched: its criterion that the shared change and input listeners survive already covers the filter wiring, and nothing filter-honesty showed touches the tab code. I considered and rejected two re-cuts. Merging tools-box and tabs-out into one removal increment: they delete different things for different reasons, each leaves the repository working alone, and one review over both would be a 600-line diff plus a module deletion. Splitting tabs-out into views-and-state then wiring-and-fetches: removing a render function without its handler leaves a dead listener and a half-migrated file, so it is one change, and the budget (6 of 8 increments left for 2) does not force a split. One thing worth a reader's eye but not a criterion: contextCounts shipped with two call shapes, the documented object form plus an optional second positional argument, because the test author and the plan disagreed on the signature; the review accepted it, and narrowing it is not in this issue's criteria, so I did not invent an increment for it."
         }
       }
     ]
