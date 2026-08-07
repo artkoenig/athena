@@ -676,7 +676,7 @@ test('the panel input is built from the lane whose key the reader selected', () 
     held: { key: 'agent:sp-b:probe', item: rec },
     expanded: ['12:0'],
   });
-  assert.deepEqual(out, { lane: v.lanes[1], item: rec, pending: false, expanded: ['12:0'] });
+  assert.deepEqual(out, { lane: v.lanes[1], item: rec, pending: false, expanded: ['12:0'], hidden: [], filterOpen: false });
   assert.equal(
     out.lane,
     v.lanes[1],
@@ -701,7 +701,7 @@ test('a key no lane carries, and no key at all, leave nothing to draw', () => {
 
   const noArgOut = lanePanelInput();
   assert.equal(noArgOut.lane, null);
-  assert.deepEqual(noArgOut, { lane: null, item: null, pending: true, expanded: [] });
+  assert.deepEqual(noArgOut, { lane: null, item: null, pending: true, expanded: [], hidden: [], filterOpen: false });
 
   assert.equal(
     renderContextPanel(lanePanelInput({ view: view(), key: null, held: null })),

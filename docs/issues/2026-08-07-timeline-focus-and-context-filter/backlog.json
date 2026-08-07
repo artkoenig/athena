@@ -288,6 +288,31 @@
             ],
             "questions": []
           }
+        },
+        {
+          "label": "tests:filter-core.1",
+          "at": "2026-08-07T15:30:21.660Z",
+          "return": {
+            "summary": "Widened the two lanePanelInput deepEqual expectations in tools/argus-ui/test/context.test.mjs to include hidden: [] and filterOpen: false, exactly as the reviewer's reproduction spec named, confirming both cases now pass and the full suite runs 230/230.",
+            "cases": [
+              {
+                "case": "Case 1 — the panel input is built from the lane whose key the reader selected: assert.deepEqual(out, ...) widened to include hidden: [], filterOpen: false",
+                "file": "/home/user/uroboros/tools/argus-ui/test/context.test.mjs",
+                "testName": "the panel input is built from the lane whose key the reader selected",
+                "expected": "lanePanelInput({ view, key: 'agent:sp-b:probe', held, expanded: ['12:0'] }) with no hidden/filterOpen passed returns { lane: v.lanes[1], item: rec, pending: false, expanded: ['12:0'], hidden: [], filterOpen: false } — the defaults for hidden and filterOpen are carried through untouched.",
+                "got": "Before the edit (reverted via git stash to confirm), assert.deepEqual failed with 'Expected values to be strictly deep-equal', diffing '+ filterOpen: false, + hidden: []' as unexpected extra keys on the actual object — the implementation already returns those keys but the old expected object omitted them. After the edit the case passes; ran via `node --test test/context.test.mjs`, this test now ok."
+              },
+              {
+                "case": "Case 2 — a key no lane carries, and no key at all, leave nothing to draw: assert.deepEqual(noArgOut, ...) widened to include hidden: [], filterOpen: false",
+                "file": "/home/user/uroboros/tools/argus-ui/test/context.test.mjs",
+                "testName": "a key no lane carries, and no key at all, leave nothing to draw",
+                "expected": "lanePanelInput() called with no argument returns { lane: null, item: null, pending: true, expanded: [], hidden: [], filterOpen: false } — a call with no argument at all defaults to nothing hidden and the dropdown closed.",
+                "got": "Before the edit, assert.deepEqual failed the same way, diffing '+ filterOpen: false, + hidden: []' as unexpected extra keys against the old expected object that only carried lane/item/pending/expanded. After the edit the case passes; ran via `node --test test/context.test.mjs`, this test now ok."
+              }
+            ],
+            "openQuestions": [],
+            "questions": []
+          }
         }
       ]
     },
