@@ -305,3 +305,146 @@ Traced, and nothing further found:
 One fact, not a finding: `test.sh` and `test-repo.sh` are still not executable
 in this checkout (`-rw-r--r--`), so `./test.sh` exits 126 while `bash test.sh`
 exits 0. That predates the change and is unchanged by it.
+
+## Round 2
+
+**Status: 2 findings, correction needed.**
+
+### The commands that count
+
+- `bash test-repo.sh` — **exit 0**. 47 cases, seven sections (`the licence`, `no
+  repository-local rule reaches an agent`, `the run state is the channel, and no
+  prose handoff is left`, `a run resumes from the state it recorded`, `the two
+  workflows coexist`, `every agent page is declared`, `remote operation deploys
+  the collector alone`). Nothing skipped or excluded.
+- `bash test.sh` — **exit 0**. `PASS: all 6 suites`: `the repository itself`
+  (test-repo.sh, 47 cases), `parallel runs: worktrees` (4 cases),
+  `skills/agent-brief/assets: the backlog recorder` (15 cases, 0 fail),
+  `tools/argus`, `tools/argus-ui`, `tools/log-parser` (23 pass, 0 fail in the
+  TAP summary). Nothing skipped or excluded.
+
+Both are green, so no red run is this change's to answer for.
+
+Round 1's three findings are all repaired: a recorded step whose return carried
+a question is worked again instead of replayed (`carriedQuestions` /
+`answeredBlock` in both scripts, pinned by driver mode `w9` on both), driver
+mode `w10` exercises a correction round end to end, and
+`skills/agent-brief/SKILL.md` now tells a repeated step what its interrupted
+first run may already have committed.
+
+The review was taken against `origin/main` (eb13462), which is the default
+branch tip; the local `main` ref in this checkout is stale at 57e5fd4, and
+diffing against it additionally shows six issue directories that are already on
+`origin/main`. That is a checkout fact, not part of this change. The real diff
+is 20 files.
+
+### Finding 1 — the plain loop throws away a question the closing planner asks
+
+**Claim.** `workflows/loop.js` dispatches the planner for the Close step and
+discards its return without ever looking at `questions`. A question asked there
+never reaches the human, never lands in `blockedOnHuman`, and can never be
+re-asked on a restart — while `workflows/agile-loop.js` handles the identical
+role in the identical position correctly.
+
+**Reproduction.** State: a plain-loop run reaching Close, where the planner's
+`close:i1` return is
+`{ questions: ["Should the increment count as done when one check was skipped?"], summary: "closed" }`.
+`workflows/loop.js` line 656 is `await step(closeLabel, 'Close', () => agent(...))`
+— the value is neither assigned nor passed to `asksTheHuman`, and lines 674-678
+go straight on to `task.status = ...`. Result: `blockedOnHuman` stays `[]`, so
+the `${blockedOnHuman.length} question(s) for the human ended this run` log at
+lines 680-685 never prints, the run returns `blockedOnHuman: []` at line 720,
+and the session — which the rulebook (line 609) tells to surface exactly that
+field — reports the run as finished. The question is written into
+`backlog.json` by the planner's own `record` call and then read by nobody: on a
+restart `close:i1` is put into `carriedQuestions` (lines 477-488), but the
+increment is already closed in the file, so `increments.find(t => t.status ===
+'todo')` at line 550 yields `null`, the guard `if (task && verdict && ...)` at
+line 653 is false, and the Close step is never dispatched again.
+
+The script promises the opposite in its own schema: `CLOSED.questions` at
+`workflows/loop.js` lines 311-317 is described as "Decisions only the human can
+make … A non-empty list ends the run." `workflows/agile-loop.js` line 772 does
+call `asksTheHuman(replanLabel, recut)` for the same planner in the same
+closing position, so the two workflows differ here in behaviour.
+
+No driver mode covers it: `returnFor` at `test-repo.sh` line 473 hands every
+`close:`/`replan:` label `{ summary: 'closed' }`, and `w7` — the only
+human-question mode — puts the question on the researcher.
+
+**Criterion.** "An agent's question for the human lands in `backlog.json` and
+ends the run as a regular exit (`blocked-on-human-exit`), so the session that
+picks the run back up finds the question in the state it resumes from." Also
+"the two workflows stay guarded against silent divergence": this is a
+divergence, and nothing in the suite would catch it.
+
+### Finding 2 — an increment handed back is now never worked a second time
+
+**Claim.** `workflows/agile-loop.js` keys its step labels on the increment id,
+and the in-session `recorded` map caches every dispatched step. So the second
+attempt at an increment the planner handed back re-uses the labels of the
+first, finds all of them cached, dispatches nobody, and re-reads the stale
+verdict and the stale re-cut — turning `MAX_ATTEMPTS` from "worked twice" into
+"worked once, then a no-op iteration". On `origin/main` the same path re-worked
+the increment.
+
+**Reproduction.** State: `increments = [i1]`; the planner's `replan:i1` return
+lists `i1` with `status: "todo"` again (the case the `MAX_ATTEMPTS` comment at
+`workflows/agile-loop.js` lines 48-51 exists for). Iteration `n = 1` works `i1`
+through `research:i1.0`, `tests:i1.0`, `implement:i1.0`, `review:i1.0`,
+`replan:i1`; `step()` at lines 531-540 writes each into `recorded`. Line 768
+then replaces `increments` with the re-cut, so `n = 2` picks `i1` again with
+`attempt = 2` (lines 624-631, within `MAX_ATTEMPTS`). Every label it builds at
+lines 640, 661, 680 and 698 is byte-identical to iteration 1's, so
+`recorded.has(label)` is true for all of them: each logs `recorded already,
+skipping` and returns iteration 1's payload. `verdict` is iteration 1's
+verdict, `replan:i1` at line 744 is skipped too, so `recut` is iteration 1's
+re-cut and `i1` is still `todo`; `n = 3` gives `attempt = 3 > MAX_ATTEMPTS` and
+the run stops with `"…" was worked 2 times and the planner handed it back again
+without re-cutting it` — a message that is now false, since it was worked once.
+
+`git show origin/main:workflows/agile-loop.js` line 280 builds the label as
+`research:${n}.${round}`, keyed on the iteration ordinal, so on `origin/main`
+iteration 2 used fresh labels and really did dispatch the chain a second time.
+This change moved the key to the increment id (lines 527-530's comment states
+that as deliberate) without giving the second attempt a distinct label, and no
+driver mode exercises a re-cut that hands an increment back as `todo`.
+
+**Criterion.** None — no criterion asks for the re-attempt behaviour either
+way. It is the blast radius of the resume mechanism: criterion 6's "Recorded
+steps never re-run" is satisfied, and agile-loop's second-chance backstop is
+what pays for it.
+
+### Beyond the criteria
+
+Traced, and nothing further found:
+
+- **Callers of what was touched.** `rulebook.md` steps 4-5, `README.md` (both
+  diagrams and the prose), `skills/retro/SKILL.md` and `.claude/rules/agents.md`
+  all move to the structured return and `backlog.json`. `grep -rn 'backlog\.md'`
+  outside `docs/issues/` returns nothing, and the only surviving occurrences of
+  "handoff" outside `docs/issues/` are `test-repo.sh`'s own guard comments and
+  an unrelated local variable in `tools/argus-ui/test/server.test.mjs`. No agent
+  owns a private `agents/<name>/skills/` directory, so the guard's
+  `skills/*/SKILL.md` glob misses nothing.
+- **The question triage and the shed together.** `close` drops each run step's
+  `return` and keeps `label` and `at`; `load()` (loop.js lines 478-483,
+  agile-loop lines 511-516) reads `s.return.questions` defensively, so a shed
+  step yields `asked = []` and lands in `recorded` with an `undefined` payload —
+  the resume still skips it. Driver mode `w3`'s `doneBacklog` fixture carries
+  exactly that shape.
+- **The reviewer's page.** It forbids reading `backlog.json`, excludes it from
+  the diff it judges, and the recorder prints one confirmation line and nothing
+  of the file, so the blind append holds. Its "nothing you run may change the
+  checkout" sentence sits beside an instruction to record and commit
+  `backlog.json`, but the same tension existed word for word on `origin/main`
+  (where it committed `reviewer.md`), so it is not this change's defect.
+- **`plugin.json`.** The recorder is an asset under the already-declared
+  `agent-brief` skill and its suite is listed in `test.sh`; `test-repo.sh`
+  checks both, and the agent-page declaration case passes.
+- **Old issue directories.** Nothing reads or migrates them, which is what the
+  out-of-scope section asks.
+
+One fact, not a finding: `test.sh` and `test-repo.sh` are still not executable
+in this checkout (`-rw-r--r--`), so `./test.sh` exits 126 while `bash test.sh`
+exits 0. That predates the change and is unchanged by it.
