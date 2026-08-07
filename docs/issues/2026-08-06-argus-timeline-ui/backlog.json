@@ -478,6 +478,22 @@
             "questions": [],
             "summary": "No production code changed: the three geometry cases the plan names were already in tools/argus-ui/test/timeline.test.mjs, and `npm --prefix tools/argus-ui test` is green at 33/33 while a constant .lane-bar style now makes two of them fail."
           }
+        },
+        {
+          "label": "review:timeline-landing.1",
+          "at": "2026-08-07T10:44:26.488Z",
+          "return": {
+            "findings": [
+              {
+                "claim": "Nothing in the suite fails if the UI stops opening a session on the timeline: only the constant DEFAULT_VIEW and the extracted pure renderers are pinned, while the wiring in public/app.js that actually makes a session land on the timeline is unverified.",
+                "reproduction": "Change tools/argus-ui/public/app.js:932 from `state.view = DEFAULT_VIEW;` to `state.view = 'overview';`, or delete the `${timelineHtml(state.agents, state.agentWindow)}` line at tools/argus-ui/public/app.js:168, or drop the `await loadAgents();` call at tools/argus-ui/public/app.js:833. Each of these makes a session open on a technical tab or on an always-empty timeline, and `npm --prefix tools/argus-ui test` still reports 33 passing cases, exit 0. The only assertion about landing is `assert.equal(DEFAULT_VIEW, null)` at tools/argus-ui/test/timeline.test.mjs:45, which pins a constant no test ties to the session view; tools/argus-ui/public/app.js has no test file at all. The same gap covers the subordination of the technical views: the strip's content and selection are pinned in timeline.test.mjs, but nothing pins that the strip is rendered below the timeline inside the session detail rather than in place of it.",
+                "criterion": "Opening a session in the argus UI lands on the timeline view; the previous technical views remain reachable from it and subordinate to it, not the other way round."
+              }
+            ],
+            "reason": "Opening a session on the timeline is the increment's headline behaviour and no test would catch its loss: the suite pins the extracted timeline module and a null default constant, but the code in the page that renders the timeline, resets the open technical view and fetches the agent lanes is untested, so a regression there stays green.",
+            "questions": [],
+            "summary": "Ran the one listed command, `npm --prefix tools/argus-ui test` (33 cases, exit 0, nothing skipped); the collector-side lane join in store.getAgents/agentRefOf and the UI lane geometry, labels, depth and unattributed lane match criteria 3 to 5 and are well covered by the tests that exist, but the landing behaviour itself (criteria 1 and 2) lives only in the untested public/app.js, which is the one finding."
+          }
         }
       ]
     },
