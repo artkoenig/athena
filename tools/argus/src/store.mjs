@@ -24,6 +24,7 @@ import {
   TOKEN_TYPES,
   EMPTY_TOKENS,
   bool,
+  contentOf,
   num,
   serviceNameOf,
   sessionIdOf,
@@ -837,6 +838,37 @@ export class TelemetryStore {
         if (!haystack.includes(needle)) continue;
       }
       matches.push(log);
+    }
+    matches.reverse();
+    return matches;
+  }
+
+  /**
+   * The content-bearing log records, oldest-first, newest `limit` kept.
+   *
+   * Same linear walk as queryEvents: bodies are already in `this.logs` with
+   * their attributes intact, so no index and no second copy is kept — one that
+   * would have to be held in step with eviction and buys nothing over the scan
+   * `/api/events` does on every request anyway.
+   *
+   * `atMs` is an inclusive upper bound, so `{atMs, limit: 1}` answers "the
+   * nearest content record at or before this moment".
+   *
+   * @param {{sessionId?: string|null, kinds?: string[]|null, atMs?: number|null, limit?: number}} query
+   * @returns {{log: object, content: object}[]} each record with its classification
+   */
+  queryContent({ sessionId = null, kinds = null, atMs = null, limit = 100 } = {}) {
+    const wanted = kinds?.length ? new Set(kinds) : null;
+    const matches = [];
+    // Walk newest-first so `limit` keeps the most recent records.
+    for (let i = this.logs.length - 1; i >= 0 && matches.length < limit; i--) {
+      const log = this.logs[i];
+      if (sessionId && log.sessionId !== sessionId) continue;
+      if (atMs !== null && atMs !== undefined && log.timeMs > atMs) continue;
+      const content = contentOf(log);
+      if (!content) continue;
+      if (wanted && !wanted.has(content.kind)) continue;
+      matches.push({ log, content });
     }
     matches.reverse();
     return matches;

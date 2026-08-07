@@ -67,6 +67,70 @@ export function toolParametersOf(attrs) {
   }
 }
 
+/**
+ * Classify a log record as one of the content-bearing kinds, or as not content
+ * at all. This is the one place that knows which attribute of which event holds
+ * text, so nothing else has to string-match attribute names.
+ *
+ * Returns `null` for an event that carries no content, and for a content event
+ * that arrived without text and without a reference — which is what a recording
+ * made with the content flags off looks like. There is no fallback for that
+ * case on purpose: such a recording simply has no content to serve.
+ *
+ * Careful: a log record has both a top-level `body` (the OTLP LogRecord body,
+ * here just the event name) and an `attrs.body` attribute (the payload). Only
+ * `attrs` is read here.
+ *
+ * @param {object} log a normalized log record from otlp/decode.mjs
+ * @returns {null | {kind: string, text: string|null, length: number, truncated: boolean, ref: string|null}}
+ *   `length` is the untruncated length the CLI reported, which can exceed
+ *   `text.length`; `ref` is a path on the *agent's* disk, set only when the CLI
+ *   ran with `OTEL_LOG_RAW_API_BODIES=file:<dir>`, and then no text arrives.
+ */
+export function contentOf(log) {
+  const attrs = log?.attrs ?? {};
+  switch (log?.eventName) {
+    case EVENT.apiRequestBody:
+      return bodyContent('request_body', attrs);
+    case EVENT.apiResponseBody:
+      return bodyContent('response_body', attrs);
+    case EVENT.userPrompt:
+      return textContent('user_prompt', attrs.prompt, attrs.prompt_length);
+    case EVENT.assistantResponse:
+      return textContent('assistant_response', attrs.response, attrs.response_length);
+    case EVENT.toolResult:
+      // Same fallback toolParametersOf documents: `tool_input` since 2.1.x,
+      // `tool_parameters` on older CLIs.
+      return textContent(
+        'tool_input',
+        attrs.tool_input ?? attrs.tool_parameters,
+        attrs.tool_input_size_bytes,
+      );
+    default:
+      return null;
+  }
+}
+
+/** `api_request_body` / `api_response_body`: inline text, or a file reference. */
+function bodyContent(kind, attrs) {
+  const text = typeof attrs.body === 'string' ? attrs.body : null;
+  const ref = typeof attrs.body_ref === 'string' && attrs.body_ref ? attrs.body_ref : null;
+  if (text === null && ref === null) return null;
+  return {
+    kind,
+    text,
+    length: num(attrs.body_length, text === null ? 0 : text.length),
+    truncated: bool(attrs.body_truncated),
+    ref,
+  };
+}
+
+/** The events that carry their text in one plain attribute and never a reference. */
+function textContent(kind, raw, reportedLength) {
+  if (typeof raw !== 'string') return null;
+  return { kind, text: raw, length: num(reportedLength, raw.length), truncated: false, ref: null };
+}
+
 /** Events worth surfacing as an audit trail (see "Audit security events"). */
 export const SECURITY_EVENTS = new Set([
   EVENT.toolDecision,
@@ -244,6 +308,20 @@ export function otelEnvFor(endpoint, { traces = true, token = null, fastFlush = 
     OTEL_LOGS_EXPORTER: 'otlp',
     OTEL_EXPORTER_OTLP_PROTOCOL: 'http/protobuf',
     OTEL_EXPORTER_OTLP_ENDPOINT: endpoint,
+    // Content, on by default. Without these four an agent's telemetry is
+    // shape-only: how many prompts, how many tool calls, how many tokens, but
+    // never what was said. They are deliberately not tied to the `traces`
+    // option — OTEL_LOG_TOOL_CONTENT only does anything with spans on, but it is
+    // inert otherwise, and making the whole content block depend on an unrelated
+    // switch would surprise anyone who turns traces off.
+    OTEL_LOG_USER_PROMPTS: '1',
+    OTEL_LOG_TOOL_DETAILS: '1',
+    OTEL_LOG_TOOL_CONTENT: '1',
+    // '1' means inline: the body travels in the event and reaches this
+    // collector. The alternative the CLI offers, 'file:<dir>', writes bodies to
+    // the *agent's* own disk and sends only a path, which a collector on
+    // another machine can never read.
+    OTEL_LOG_RAW_API_BODIES: '1',
   };
   if (traces) {
     // Spans are the beta signal and need their own opt-in flag.

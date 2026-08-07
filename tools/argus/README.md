@@ -74,6 +74,10 @@ export OTEL_METRICS_EXPORTER="otlp"
 export OTEL_LOGS_EXPORTER="otlp"
 export OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"
 export OTEL_EXPORTER_OTLP_ENDPOINT="http://127.0.0.1:4318"
+export OTEL_LOG_USER_PROMPTS="1"                 # content: see "Sensitive data" below
+export OTEL_LOG_TOOL_DETAILS="1"
+export OTEL_LOG_TOOL_CONTENT="1"
+export OTEL_LOG_RAW_API_BODIES="1"               # whole request/response bodies, inline
 export CLAUDE_CODE_ENHANCED_TELEMETRY_BETA="1"   # required for spans (beta)
 export OTEL_TRACES_EXPORTER="otlp"
 export OTEL_METRIC_EXPORT_INTERVAL="1000"        # the 60s default is too sluggish for short runs
@@ -502,12 +506,29 @@ argus start --open .uroboros-telemetry/2026-08-03T14-22-05
 
 ## Sensitive data
 
-By default Claude Code exports structure only: durations, model names, tool names, token
-counts. Prompts, tool arguments and API bodies arrive only with
-`OTEL_LOG_USER_PROMPTS=1`, `OTEL_LOG_TOOL_DETAILS=1`, `OTEL_LOG_TOOL_CONTENT=1` and
-`OTEL_LOG_RAW_API_BODIES`. `argus env` deliberately does **not** set these. Anyone
-who switches them on should know that prompt and file contents then live in the
-collector's memory and — with `--persist` — on disk.
+Left to itself Claude Code exports structure only: durations, model names, tool names,
+token counts. Content arrives with four flags, and **`argus env` now sets all four by
+default**:
+
+| Flag                       | What it adds                                                        |
+| -------------------------- | ------------------------------------------------------------------- |
+| `OTEL_LOG_USER_PROMPTS=1`  | prompt text on `user_prompt`, and assistant text on `assistant_response` |
+| `OTEL_LOG_TOOL_DETAILS=1`  | the call arguments on `tool_result`                                  |
+| `OTEL_LOG_TOOL_CONTENT=1`  | tool arguments and results on the `claude_code.tool` spans (needs traces) |
+| `OTEL_LOG_RAW_API_BODIES=1`| the whole request and response body of every model call, inline in the event |
+
+The consequence is deliberate and worth stating plainly: **prompts, file contents, tool
+arguments and entire conversation bodies then live in the collector's memory, and with
+`--persist` in the measurement directory on disk.** That is what makes `GET /api/content`
+able to answer "what was the model looking at at this moment" — and what makes a
+measurement directory as sensitive as the conversation it recorded. Anyone who does not
+want it unsets those variables after pasting the block.
+
+`1` for `OTEL_LOG_RAW_API_BODIES` means *inline*: the body travels in the event. The CLI
+also accepts `file:<dir>`, which writes bodies to the agent's own disk and sends only a
+path — a path this collector cannot read whenever the agent runs elsewhere. Bodies are
+truncated by the CLI at roughly 60 KB; `body_length` reports the untruncated size and
+`body_truncated` says it was cut.
 
 `user.email`, `user.account_uuid` and `organization.id` are standard attributes and appear
 in the interface under "Attributes".
@@ -539,7 +560,8 @@ and new Claude Code attributes.
 | `GET /api/sessions`      | Session list (`search`, `limit`, `offset`)                 |
 | `GET /api/sessions/:id`  | Session aggregates including traces                        |
 | `GET /api/traces/:id`    | Spans of a trace, flat with `depth` in render order        |
-| `GET /api/events`        | Events (`session`, `event`, `trace`, `search`, `errors`)   |
+| `GET /api/events`        | Events (`session`, `event`, `trace`, `search`, `errors`); raw API bodies are left out here |
+| `GET /api/content`       | Content records (`session`, `kind`, `at`, `limit`, `body=1` for the text) |
 | `GET /api/metrics`       | Metric points (`session`, `name`)                          |
 | `GET /api/stats`         | Totals, top models, top tools, buffer sizes                |
 | `GET /api/facets`        | Event and metric names that occur, with frequency          |

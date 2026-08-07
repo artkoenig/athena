@@ -12,7 +12,7 @@ import crypto from 'node:crypto';
 import zlib from 'node:zlib';
 
 import { decodeExportRequest } from './otlp/decode.mjs';
-import { attributionOf, describeEvent, otelEnvFor } from './claude.mjs';
+import { EVENT, attributionOf, describeEvent, otelEnvFor } from './claude.mjs';
 
 const MAX_BODY_BYTES = 32 * 1024 * 1024;
 const SSE_FLUSH_MS = 250;
@@ -79,6 +79,25 @@ function sendOtlpAck(res, contentType) {
   }
   res.writeHead(200, { 'content-type': 'application/x-protobuf', 'content-length': 0 });
   res.end();
+}
+
+/** The two events whose `body` attribute is a whole request or response. */
+const RAW_BODY_EVENTS = new Set([EVENT.apiRequestBody, EVENT.apiResponseBody]);
+
+/**
+ * The event tail returns whole records, and with `OTEL_LOG_RAW_API_BODIES` on a
+ * single page of it can carry dozens of 60 KB bodies on every poll. Drop the
+ * `body` attribute of the two body events and nothing else: `body_length`,
+ * `body_truncated` and every other attribute stay, and the full text is one
+ * `/api/content?body=1` away.
+ *
+ * Always on a copy — deleting from the stored record would destroy the content
+ * the collector exists to keep.
+ */
+function withoutRawBody(event) {
+  if (!RAW_BODY_EVENTS.has(event.eventName) || event.attrs?.body === undefined) return event;
+  const { body, ...attrs } = event.attrs;
+  return { ...event, attrs };
 }
 
 function intParam(params, key, fallback, max = Number.MAX_SAFE_INTEGER) {
@@ -227,10 +246,53 @@ export function createServer({ store, token = null, endpoint = '', persist = nul
       });
       sendJson(res, 200, {
         items: events.map((event) => ({
-          ...event,
+          ...withoutRawBody(event),
           summary: describeEvent(event),
           attribution: attributionOf(event.attrs),
         })),
+      });
+      return true;
+    }
+    if (pathname === '/api/content') {
+      // Text is opt-in: a hundred inline bodies are megabytes, and a caller that
+      // wants one body asks for one.
+      const withText = searchParams.get('body') === '1';
+      const kindParam = searchParams.get('kind');
+      const kinds = kindParam
+        ? kindParam.split(',').map((kind) => kind.trim()).filter(Boolean)
+        : null;
+      const records = store.queryContent({
+        sessionId: searchParams.get('session'),
+        kinds,
+        // An unparseable `at` falls back to "no bound" rather than erroring.
+        atMs: intParam(searchParams, 'at', null),
+        limit: intParam(searchParams, 'limit', 100, 500),
+      });
+      sendJson(res, 200, {
+        items: records.map(({ log: record, content }) => {
+          const attrs = record.attrs ?? {};
+          const item = {
+            seq: record.seq,
+            timeMs: record.timeMs,
+            sessionId: record.sessionId,
+            traceId: record.traceId,
+            spanId: record.spanId,
+            eventName: record.eventName,
+            kind: content.kind,
+            length: content.length,
+            truncated: content.truncated,
+            ref: content.ref,
+            model: attrs.model ?? null,
+            querySource: attrs.query_source ?? null,
+            requestId: attrs.request_id ?? null,
+            attribution: attributionOf(attrs),
+            // What actually arrived, which is below `length` when the CLI
+            // truncated and 0 when it sent only a reference.
+            storedLength: content.text ? content.text.length : 0,
+          };
+          if (withText) item.text = content.text;
+          return item;
+        }),
       });
       return true;
     }

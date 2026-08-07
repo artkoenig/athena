@@ -196,6 +196,33 @@
             "questions": [],
             "summary": "Wrote 20 planned test cases across four files (claude.test.mjs groups A and C, the new env.test.mjs for group B, store.test.mjs group D, server.test.mjs group E) exercising the content flags, contentOf classification, TelemetryStore.queryContent, and the new GET /api/content route; ran each file individually and confirmed every new/changed case fails for the missing-behaviour reason named in its 'got' field (a missing contentOf export, absent content flags in every argus env format, a missing queryContent method, or a missing/unstripped /api/content route), while all 129 previously-passing cases in the suite (npm --prefix tools/argus test, exit 1 for the expected 14 new-related failures) stayed green."
           }
+        },
+        {
+          "label": "implement:content-pipeline.0",
+          "at": "2026-08-07T09:42:53.117Z",
+          "return": {
+            "deviations": [],
+            "commands": [
+              {
+                "command": "npm --prefix tools/argus test",
+                "exitCode": 0,
+                "note": "node --test over tools/argus/test/*.test.mjs, 156 cases including the new test/env.test.mjs, nothing skipped or excluded."
+              },
+              {
+                "command": "./test.sh",
+                "exitCode": 126,
+                "note": "Permission denied: test.sh is tracked as mode 100644 and carries no executable bit, which predates this change. Re-run as `bash ./test.sh`, exit 0, PASS: all 6 suites (test-repo.sh, test-worktree.sh, backlog recorder, tools/argus, tools/argus-ui, tools/log-parser)."
+              },
+              {
+                "command": "bash ./test.sh",
+                "exitCode": 0,
+                "note": "The whole repository: all 6 suites pass."
+              }
+            ],
+            "blockers": [],
+            "questions": [],
+            "summary": "argus now turns the four Claude Code content flags on by default, classifies content-bearing log records with a new claude.mjs contentOf(log), serves them over GET /api/content (text opt-in with body=1) backed by store.queryContent, and keeps whole API bodies out of the /api/events tail; README updated for all three."
+          }
         }
       ]
     },
