@@ -18,11 +18,10 @@ import {
   scrubCursor,
   resolveCursor,
   toolCallOf,
-  TOOL_PARAM_CHARS,
   spanLaneKeys,
   laneByKey,
 } from '../public/timeline.js';
-import { previewOf } from '../public/format.js';
+import * as timeline from '../public/timeline.js';
 
 // The two shapes every case builds its input from — nothing else.
 const session = (over = {}) => ({ id: 's1', name: null, firstSeenMs: 1000, lastSeenMs: 5000, ...over });
@@ -555,6 +554,20 @@ test('the density is rendered behind the bar, not instead of it, for the lane it
   assert.match(row, /data-kind="tool"/, 'the tool call on this lane must leave a tool mark');
 });
 
+test('the legend still names the tool marks it explains', () => {
+  const content = threeRecordContent();
+  const view = buildDensity(buildLanes({ session: session(), content }), {
+    content,
+    tools: [toolMark({ spanId: 'sp-a', timeMs: 2200 })],
+  });
+  const html = renderTimeline(view);
+  assert.match(
+    html,
+    /<span data-kind="tool">tool call<\/span>/,
+    'a tick mark nobody can read is not a signal',
+  );
+});
+
 test('a lane with nothing on it renders as a bare lane', () => {
   const view = buildDensity(buildLanes({ session: session(), content: [] }), {});
   const html = renderTimeline(view);
@@ -590,79 +603,32 @@ test('the timeline still renders from a bare buildLanes view, with no density at
   assert.doesNotMatch(html, /NaN/);
 });
 
-// Increment 7 — selecting a lane also shows the tools it has used up to that
-// moment, with name and parameters. toolCallOf turns a tool-result event into
-// the row a panel draws, and mergeToolMarks keeps that row instead of the
-// three-field mark it used to.
+// Increment 3 — the tools box goes, its tick marks stay. toolCallOf() keeps
+// only what a mark needs, and holds no per-call ballast any more.
 
-test('a tool call keeps the tool\'s name and the parameters it was called with', () => {
-  const out = toolCallOf(toolEvent());
-  const text = JSON.stringify({ command: 'echo hi', description: 'say hi' }, null, 2);
-  assert.deepEqual(out, {
-    seq: 5,
-    timeMs: 2200,
-    spanId: 'sp-a',
-    name: 'Bash',
-    chars: text.length,
-    preview: previewOf(text),
-    text,
-    truncated: false,
-  });
-  assert.ok(out.text.includes('echo hi'), 'the command the call was made with is what answers "what for"');
+test('a tool call is kept as a mark and nothing more, whatever the event carried', () => {
+  assert.deepEqual(toolCallOf(toolEvent()), { seq: 5, timeMs: 2200, spanId: 'sp-a' });
 });
 
-test('the pre-2.1 attribute name is read when the current one is absent', () => {
-  const out = toolCallOf(
-    toolEvent({ attrs: { tool_name: 'Read', tool_parameters: JSON.stringify({ file_path: '/tmp/a.txt' }) } }),
-  );
-  assert.equal(out.name, 'Read');
-  assert.ok(out.text.includes('/tmp/a.txt'));
-
-  const both = toolCallOf(
-    toolEvent({
-      attrs: { tool_name: 'Read', tool_input: '{"file_path":"/new"}', tool_parameters: '{"file_path":"/old"}' },
-    }),
-  );
-  assert.ok(both.text.includes('/new'), 'the current attribute name must win over the pre-2.1 one');
-  assert.ok(!both.text.includes('/old'));
+test('an event with no attributes at all is still a mark, and a missing span becomes null', () => {
+  assert.deepEqual(toolCallOf({ seq: 1, timeMs: 1000, spanId: 'sp-a' }), { seq: 1, timeMs: 1000, spanId: 'sp-a' });
+  assert.deepEqual(toolCallOf({ seq: 1, timeMs: 1000 }), { seq: 1, timeMs: 1000, spanId: null });
 });
 
-test('parameters that are not JSON are kept as they arrived, not dropped', () => {
-  const out = toolCallOf(toolEvent({ attrs: { tool_name: 'Bash', tool_input: 'not json {' } }));
-  assert.equal(out.text, 'not json {');
-  assert.equal(out.chars, 10);
-  assert.equal(out.truncated, false);
-});
-
-test('a call with no parameters and no name is still a row', () => {
-  const expected = {
-    seq: 1,
-    timeMs: 1000,
-    spanId: 'sp-a',
-    name: 'tool',
-    chars: 0,
-    preview: '',
-    text: '',
-    truncated: false,
-  };
-  assert.deepEqual(toolCallOf({ seq: 1, timeMs: 1000, spanId: 'sp-a' }), expected);
-  assert.deepEqual(toolCallOf({ seq: 1, timeMs: 1000, spanId: 'sp-a', attrs: { tool_name: '' } }), expected);
-});
-
-test('a call whose parameters are a whole file keeps a bounded amount of them, and says how much there was', () => {
+test('a call whose parameters are a whole file leaves the mark the same size as any other', () => {
   const big = 'x'.repeat(50_000);
   const out = toolCallOf(
     toolEvent({ attrs: { tool_name: 'Write', tool_input: JSON.stringify({ file_path: '/tmp/big', content: big }) } }),
   );
-  assert.equal(out.text.length, TOOL_PARAM_CHARS, 'the page may not hold a file per tool call');
-  assert.ok(out.chars > TOOL_PARAM_CHARS);
-  assert.equal(out.truncated, true);
+  assert.deepEqual(out, { seq: 5, timeMs: 2200, spanId: 'sp-a' });
   assert.ok(
-    out.text.startsWith('{\n  "file_path": "/tmp/big"'),
-    'what is kept is the beginning, where the parameters that name the call are',
+    JSON.stringify(out).length < 200,
+    'a mark that grows with the call it describes is the megabytes this increment removed',
   );
-  assert.ok(out.preview.length <= 121, 'the collapsed line stays one line');
-  assert.ok(out.preview.endsWith('…'));
+});
+
+test('the parameter cap is gone from the module, not merely unused', () => {
+  assert.ok(!('TOOL_PARAM_CHARS' in timeline), 'a cap still exported is a cap something can still be capped with');
 });
 
 // Increment 7 — a call lands on the lane that made it, and on no other.
@@ -698,7 +664,7 @@ test('a key names its lane, and a key no lane carries names none', () => {
 
 // Criterion 5, round 1 — the tool-mark index survives an overlapping refresh.
 
-test('merging into an empty index keeps every call, with the name and parameters a panel draws', () => {
+test('merging into an empty index projects every call through toolCallOf and holds nothing else', () => {
   const result = mergeToolMarks([], [toolEvent({ seq: 4, timeMs: 2000 }), { seq: 7, timeMs: 3000, spanId: 'sp-b' }]);
   assert.deepEqual(
     result.marks,
@@ -773,9 +739,7 @@ test('out-of-order items still leave the highest seq as the watermark', () => {
 
 test('a missing spanId becomes null rather than undefined', () => {
   const result = mergeToolMarks([], [{ seq: 3, timeMs: 2000 }]);
-  assert.deepEqual(result.marks, [
-    { seq: 3, timeMs: 2000, spanId: null, name: 'tool', chars: 0, preview: '', text: '', truncated: false },
-  ]);
+  assert.deepEqual(result.marks, [{ seq: 3, timeMs: 2000, spanId: null }]);
 });
 
 test('the merged index is what the density reads', () => {

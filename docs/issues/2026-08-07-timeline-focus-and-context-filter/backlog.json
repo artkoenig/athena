@@ -69,6 +69,227 @@
             ],
             "questions": []
           }
+        },
+        {
+          "label": "tests:tools-box.0",
+          "at": "2026-08-07T16:12:38.728Z",
+          "return": {
+            "summary": "Wrote failing tests in tools/argus-ui/test/{page,timeline,independence}.test.mjs for increment 3 (the tools box goes, its tick marks stay), deleted test/tools.test.mjs, left production code untouched, and confirmed npm --prefix tools/argus-ui test runs 223 cases with exactly 7 red — one per behaviour the test plan named as currently unmet.",
+            "cases": [
+              {
+                "case": "Case A1 (new) — the tool panel is gone from the page, module and all: public/tools.js and test/tools.test.mjs deleted, app.js imports neither laneToolInput nor renderToolPanel",
+                "file": "tools/argus-ui/test/page.test.mjs",
+                "testName": "the tool panel is gone from the page, module and all",
+                "expected": "fs.existsSync is false for public/tools.js and test/tools.test.mjs, and app.js's text matches neither an import from ./tools.js nor the bare words laneToolInput / renderToolPanel",
+                "got": "AssertionError: 'public/tools.js must be deleted, not merely unused' — production still ships public/tools.js and app.js still imports laneToolInput and renderToolPanel from it, so this is the first assertion to fail"
+              },
+              {
+                "case": "Case A2 (delete) — app.js takes the tool panel from its module, which asserted the very import A1 forbids",
+                "file": "tools/argus-ui/test/page.test.mjs",
+                "testName": "",
+                "expected": "deleted outright — the case would assert app.js imports renderToolPanel/laneToolInput from tools.js, which A1 now forbids",
+                "got": "case removed from the file; it no longer runs"
+              },
+              {
+                "case": "Case A3 (edit) — independence.test.mjs no longer names public/tools.js in either file-existence list",
+                "file": "tools/argus-ui/test/independence.test.mjs",
+                "testName": "the interface is a project of its own, with everything a project needs / nothing in the interface reaches outside the interface",
+                "expected": "'public/tools.js' removed from the require-file list (line 33) and from the owned-modules list (line 62), every other entry left untouched",
+                "got": "both tests pass now (tools.js currently still exists in production, so removing it from the lists was the only change needed); confirmed by running node --test test/independence.test.mjs, 3/3 pass, exit 0 — this case is edited, not expected to be red, since it only stops asserting an existence check that would otherwise go red once the implementer deletes the file"
+              },
+              {
+                "case": "Case B1 (edit) — the markup the panels render is what reaches the container, renamed to the singular and given an 'only' assertion",
+                "file": "tools/argus-ui/test/page.test.mjs",
+                "testName": "the markup the context panel renders is the whole of what reaches the container",
+                "expected": "renderLanePanel matches container.innerHTML = renderContextPanel(...) and renderLanePanel.match(/render(?:Context|Tool)Panel\\(/g) deep-equals ['renderContextPanel(']",
+                "got": "AssertionError: 'renderLanePanel must paint the context panel and only the context panel — a tool panel concatenated back on must fail this' — actual match array is ['renderContextPanel(', 'renderToolPanel('] because renderLanePanel still concatenates the tool panel on"
+              },
+              {
+                "case": "Case B2 (delete) — the tool list is drawn for the selected lane..., whose first assertion calls callArguments(renderLanePanel, 'renderToolPanel')",
+                "file": "tools/argus-ui/test/page.test.mjs",
+                "testName": "",
+                "expected": "deleted outright — once renderToolPanel is gone, callArguments would assert.fail on a call that no longer exists",
+                "got": "case removed from the file; it no longer runs"
+              },
+              {
+                "case": "Case B3 (edit) — the panel is drawn from the lane the reader selected and the answer held for it: drop the tautological laneToolInput( doesNotMatch, reword the laneView() message, keep the four slice assertions",
+                "file": "tools/argus-ui/test/page.test.mjs",
+                "testName": "the panel is drawn from the lane the reader selected and the answer held for it",
+                "expected": "the const view = laneView(); assertion now reads 'the page must build its lane view once before handing it to the panel', the view/key/held/expanded slice assertions unchanged, no doesNotMatch(laneToolInput() left",
+                "got": "test passes as edited — the case still covers view/key/held/expanded, which A1 now covers laneToolInput's absence on its own; confirmed by running node --test test/page.test.mjs, this test is among the 49 passing"
+              },
+              {
+                "case": "Already green, no edit — the panel is drawn with the hidden set and the open flag",
+                "file": "tools/argus-ui/test/page.test.mjs",
+                "testName": "the panel is drawn with the hidden set and the open flag",
+                "expected": "renderContextPanel's argument slice still carries hidden: state.contextHidden and filterOpen: state.contextFilterOpen after the trim",
+                "got": "untouched, confirmed still passing (node --test test/page.test.mjs, exit-code-relevant subtest ok)"
+              },
+              {
+                "case": "Already green, no edit — an open dropdown survives a repaint",
+                "file": "tools/argus-ui/test/page.test.mjs",
+                "testName": "an open dropdown survives a repaint",
+                "expected": "renderLanePanel still passes state.contextFilterOpen back into renderContextPanel after the trim",
+                "got": "untouched, confirmed still passing"
+              },
+              {
+                "case": "Case C1 (new) — the legend still names the tool marks it explains",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "the legend still names the tool marks it explains",
+                "expected": "renderTimeline's html matches <span data-kind=\"tool\">tool call</span> for a view built with a tool mark, using the session()/threeRecordContent()/toolMark() fixtures already in the file",
+                "got": "passes today — the legend markup is untouched by this increment, so this case fills a coverage gap rather than pinning a change; confirmed green with node --test test/timeline.test.mjs"
+              },
+              {
+                "case": "Already green, no edit — data-kind=\"tool\" tick mark on the lane track",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "the density is rendered behind the bar, not instead of it, for the lane it belongs to",
+                "expected": "row matches /data-kind=\"tool\"/",
+                "got": "untouched, confirmed still passing"
+              },
+              {
+                "case": "Already green, no edit — data-tools count in lane meta",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "the lane meta reports the size and the counts as data, not as a pinned sentence",
+                "expected": "row matches /data-tools=\"1\"/",
+                "got": "untouched, confirmed still passing"
+              },
+              {
+                "case": "Already green, no edit — the merged index is what the density reads (mergeToolMarks still produces a kind === 'tool' activity mark and a toolCalls of 1 after the shape change)",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "the merged index is what the density reads",
+                "expected": "buildDensity fed merged.marks still yields agent.toolCalls === 1 and one activity mark of kind 'tool'",
+                "got": "untouched, confirmed still passing — its assertions never referenced the removed fields, so the shape change does not touch it"
+              },
+              {
+                "case": "Already green, no edit — the page asks the collector for the tool calls, incrementally (/api/events, TOOL_EVENT, sinceSeq)",
+                "file": "tools/argus-ui/test/page.test.mjs",
+                "testName": "the page asks the collector for the tool calls, incrementally",
+                "expected": "loadTimeline's source matches /\\/api\\/events/, /TOOL_EVENT/ and /sinceSeq/",
+                "got": "untouched, confirmed still passing"
+              },
+              {
+                "case": "Import block (edit) — remove TOOL_PARAM_CHARS from the named import and remove the previewOf import from format.js, so a link-time SyntaxError does not take the whole file down",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "",
+                "expected": "the named import list from ../public/timeline.js drops TOOL_PARAM_CHARS; the `import { previewOf } from '../public/format.js';` line is removed; a namespace `import * as timeline from '../public/timeline.js';` is added for D6",
+                "got": "file loads and runs; confirmed by running node --test test/timeline.test.mjs — 79 subtests execute, none aborted at load time"
+              },
+              {
+                "case": "Case D1 (replace) — a tool call is kept as a mark and nothing more, whatever the event carried",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "a tool call is kept as a mark and nothing more, whatever the event carried",
+                "expected": "toolCallOf(toolEvent()) deep-equals exactly { seq: 5, timeMs: 2200, spanId: 'sp-a' }",
+                "got": "AssertionError, actual carries chars: 53, name: 'Bash', preview: '{ \"command\": \"echo hi\", \"description\": \"say hi\" }', text: '{\\n  \"command\": \"echo hi\",\\n  \"description\": \"say hi\"\\n}', truncated: false in addition to the three kept fields"
+              },
+              {
+                "case": "Case D2 (delete) — the pre-2.1 attribute name is read when the current one is absent, which was paramText()'s case",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "",
+                "expected": "deleted outright — nothing reads tool_parameters any more",
+                "got": "case removed from the file; it no longer runs"
+              },
+              {
+                "case": "Case D3 (delete) — parameters that are not JSON are kept as they arrived, not dropped, which was paramText()'s case",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "",
+                "expected": "deleted outright — same reason as D2",
+                "got": "case removed from the file; it no longer runs"
+              },
+              {
+                "case": "Case D4 (replace) — an event with no attributes at all is still a mark, and a missing span becomes null",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "an event with no attributes at all is still a mark, and a missing span becomes null",
+                "expected": "toolCallOf({ seq: 1, timeMs: 1000, spanId: 'sp-a' }) deep-equals itself unchanged; toolCallOf({ seq: 1, timeMs: 1000 }) deep-equals { seq: 1, timeMs: 1000, spanId: null }",
+                "got": "AssertionError on the second half — actual carries chars: 0, name: 'tool', preview: '', text: '', truncated: false in addition to seq/timeMs/spanId: null"
+              },
+              {
+                "case": "Case D5 (replace) — a call whose parameters are a whole file leaves the mark the same size as any other",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "a call whose parameters are a whole file leaves the mark the same size as any other",
+                "expected": "toolCallOf on a 50,000-char tool_input deep-equals { seq: 5, timeMs: 2200, spanId: 'sp-a' }, and JSON.stringify(out).length < 200",
+                "got": "AssertionError — actual carries chars: 50046, name: 'Write', a truncated preview string, a ~50KB text field and truncated: true, so it is nowhere near under 200 characters when serialized"
+              },
+              {
+                "case": "Case D6 (new) — the parameter cap is gone from the module, not merely unused",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "the parameter cap is gone from the module, not merely unused",
+                "expected": "!('TOOL_PARAM_CHARS' in timeline) is true, importing the module as a namespace",
+                "got": "AssertionError: 'a cap still exported is a cap something can still be capped with' — TOOL_PARAM_CHARS is still exported by public/timeline.js"
+              },
+              {
+                "case": "Case D7 (edit) — merging into an empty index keeps every call, with the name and parameters a panel draws, renamed and body kept as-is",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "merging into an empty index projects every call through toolCallOf and holds nothing else",
+                "expected": "mergeToolMarks([], [...]).marks deep-equals [toolCallOf(...), toolCallOf(...)], same body as before, just renamed",
+                "got": "passes — both sides of the comparison call toolCallOf, so the assertion follows the new shape automatically; confirmed with node --test test/timeline.test.mjs"
+              },
+              {
+                "case": "Case D8 (edit) — a missing spanId becomes null rather than undefined, expected array narrowed to the three-field shape",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "a missing spanId becomes null rather than undefined",
+                "expected": "mergeToolMarks([], [{ seq: 3, timeMs: 2000 }]).marks deep-equals [{ seq: 3, timeMs: 2000, spanId: null }]",
+                "got": "AssertionError — actual array holds { seq: 3, timeMs: 2000, spanId: null, chars: 0, name: 'tool', preview: '', text: '', truncated: false }"
+              },
+              {
+                "case": "Already green, no edit — an event already held is not counted twice (mergeToolMarks contract)",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "an event already held is not counted twice",
+                "expected": "duplicates dropped by seq",
+                "got": "untouched, confirmed still passing"
+              },
+              {
+                "case": "Already green, no edit — merging the same response twice changes nothing the second time (mergeToolMarks contract)",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "merging the same response twice changes nothing the second time",
+                "expected": "idempotent merge",
+                "got": "untouched, confirmed still passing"
+              },
+              {
+                "case": "Already green, no edit — the watermark is what is held, never what was seen (mergeToolMarks contract)",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "the watermark is what is held, never what was seen",
+                "expected": "watermark equals the highest seq actually held",
+                "got": "untouched, confirmed still passing"
+              },
+              {
+                "case": "Already green, no edit — an item with no usable seq is dropped rather than held un-deduplicable (mergeToolMarks contract)",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "an item with no usable seq is dropped rather than held un-deduplicable",
+                "expected": "items with no/invalid seq are dropped",
+                "got": "untouched, confirmed still passing"
+              },
+              {
+                "case": "Already green, no edit — merging does not mutate the index it was given (mergeToolMarks contract)",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "merging does not mutate the index it was given",
+                "expected": "the held array passed in is left untouched",
+                "got": "untouched, confirmed still passing"
+              },
+              {
+                "case": "Already green, no edit — out-of-order items still leave the highest seq as the watermark (mergeToolMarks contract)",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "out-of-order items still leave the highest seq as the watermark",
+                "expected": "watermark is the maximum seq held, not the last item merged",
+                "got": "untouched, confirmed still passing"
+              },
+              {
+                "case": "Criterion E — the context panel comes through the deletion whole; no new case, confirm the existing regression net stays green",
+                "file": "tools/argus-ui/test/context.test.mjs",
+                "testName": "",
+                "expected": "one input builder, the filter renders/hides/reopens, the head names visible-of-total, an all-hidden record shows its placeholder with data-state=\"ready\" — all already covered by existing cases in this untouched file",
+                "got": "file left untouched; ran node --test test/context.test.mjs on its own, 78 cases, all pass, exit 0"
+              },
+              {
+                "case": "Criterion F — every case outside test/tools.test.mjs asserting the old tool-mark shape or the tool panel's presence is updated or removed in the same change; no new case, the whole-suite run is its check",
+                "file": "",
+                "testName": "",
+                "expected": "cases A2, A3, B1, B2, B3, D1-D5, D7 and D8 are the exhaustive inventory",
+                "got": "all of those cases were updated or removed as listed above; ran npm --prefix tools/argus-ui test (node --test over test/*.test.mjs) — 223 tests, 216 pass, 7 fail, exit non-zero, and every one of the 7 failures traces to production code the implementer has not yet touched (public/tools.js still exists, app.js still imports laneToolInput/renderToolPanel, toolCallOf still derives name/preview/text/chars/truncated, TOOL_PARAM_CHARS is still exported)"
+              }
+            ],
+            "openQuestions": [],
+            "questions": []
+          }
         }
       ]
     },

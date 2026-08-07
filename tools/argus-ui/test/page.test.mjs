@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const PUBLIC = fileURLToPath(new URL('../public/', import.meta.url));
+const TEST_DIR = fileURLToPath(new URL('./', import.meta.url));
 
 /** Every file under public/, recursively. */
 function walk(dir, found = []) {
@@ -499,7 +500,7 @@ test('the panel is drawn from the lane the reader selected and the answer held f
   assert.match(
     renderLanePanel,
     /const view = laneView\(\);/,
-    'the page must build its lane view once and hand the same one to both panels',
+    'the page must build its lane view once before handing it to the panel',
   );
   assert.match(slice, /\bview,/, 'the page\'s own lane view must reach the panel');
   assert.match(
@@ -509,11 +510,6 @@ test('the panel is drawn from the lane the reader selected and the answer held f
   );
   assert.match(slice, /held:\s*state\.laneContext\b/, 'the answer held for the selection must reach the panel');
   assert.match(slice, /expanded:\s*state\.expanded\b/, 'the remembered expansion state must still reach the panel');
-  assert.doesNotMatch(
-    slice,
-    /laneToolInput\(/,
-    'the context panel\'s arguments must be read on their own, or a sibling panel\'s key: silently satisfies this case',
-  );
 });
 
 test('scrubbing moves the context with the cursor', () => {
@@ -588,18 +584,26 @@ test('the page opens with no lane selected', () => {
   assert.match(stateSlice, /\bselectedLane:\s*null\b/, 'a freshly opened session must select no lane');
 });
 
-// Increment 7 — the click paints the tool list, under the same selection and
-// the same moment.
+// Increment 3 — the tools box goes, its tick marks stay: renderLanePanel()
+// paints only the context panel, and tools.js and its test are gone.
 
-test('app.js takes the tool panel from its module', () => {
+test('the tool panel is gone from the page, module and all', () => {
   const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
-  for (const name of ['renderToolPanel', 'laneToolInput']) {
-    const re = new RegExp(`import\\s*\\{[^}]*\\b${name}\\b[^}]*\\}\\s*from\\s*['"]\\./tools\\.js['"]`);
-    assert.match(appJs, re, `app.js must import ${name} from tools.js, so the tested function is the one the page runs`);
-  }
+  assert.ok(!fs.existsSync(path.join(PUBLIC, 'tools.js')), 'public/tools.js must be deleted, not merely unused');
+  assert.ok(
+    !fs.existsSync(path.join(TEST_DIR, 'tools.test.mjs')),
+    'test/tools.test.mjs must be deleted along with the module it tested',
+  );
+  assert.doesNotMatch(
+    appJs,
+    /from\s*['"]\.\/tools\.js['"]/,
+    'app.js must import nothing from tools.js — the module no longer exists',
+  );
+  assert.doesNotMatch(appJs, /\blaneToolInput\b/, 'app.js must name laneToolInput nowhere, imported or otherwise');
+  assert.doesNotMatch(appJs, /\brenderToolPanel\b/, 'app.js must name renderToolPanel nowhere, imported or otherwise');
 });
 
-test('the markup the panels render is what reaches the container', () => {
+test('the markup the context panel renders is the whole of what reaches the container', () => {
   const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
   const renderLanePanel = functionSource(appJs, 'renderLanePanel');
   assert.match(
@@ -607,27 +611,10 @@ test('the markup the panels render is what reaches the container', () => {
     /container\.innerHTML\s*=\s*renderContextPanel\(/,
     'a panel computed and then thrown away paints an empty box for every lane',
   );
-  assert.match(
-    renderLanePanel,
-    /\+\s*renderToolPanel\(/,
-    'the tool list must be part of that same assignment, so no repaint can paint one panel without the other',
-  );
-});
-
-test('the tool list is drawn for the selected lane, at the cursor\'s moment, from the calls the page holds', () => {
-  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
-  const renderLanePanel = functionSource(appJs, 'renderLanePanel');
-  const slice = callArguments(renderLanePanel, 'renderToolPanel');
-  assert.match(slice, /laneToolInput\(/, 'the tool list must be built from laneToolInput');
-  assert.match(slice, /\bview,/, 'without the page\'s own lane view the list is empty for every lane');
-  assert.match(slice, /key:\s*state\.selectedLane\b/, 'without it the list is empty for every lane');
-  assert.match(slice, /calls:\s*state\.toolMarks\b/, 'the merged index is the only source there is');
-  assert.match(slice, /cursor:\s*state\.cursor\b/, 'without it the list ignores the scrub');
-  assert.match(slice, /expanded:\s*state\.expanded\b/);
-  assert.doesNotMatch(
-    slice,
-    /lanePanelInput\(/,
-    'the tool panel\'s arguments must be read on their own, or the context panel\'s key: silently satisfies this case',
+  assert.deepEqual(
+    renderLanePanel.match(/render(?:Context|Tool)Panel\(/g),
+    ['renderContextPanel('],
+    'renderLanePanel must paint the context panel and only the context panel — a tool panel concatenated back on must fail this',
   );
 });
 
