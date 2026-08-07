@@ -52,7 +52,7 @@ Your caller gives you the issue directory and tells you which call this is.
 **The first call.** `issue.md` is everything you get. Cut its acceptance
 criteria into increments so that every criterion lands in exactly one of them —
 a criterion in two increments gets built twice, and a criterion in none is work
-this run will never do. Say in your handoff which criterion went where.
+this run will never do. Say in your `summary` which criterion went where.
 
 **Every later call.** Your prompt names the increment that was just worked, what
 the review made of it and how many findings stand — that verdict is everything
@@ -105,9 +105,10 @@ you never edit it by hand, and you use its subcommands:
   re-cut lists every increment you want the file to hold, finished and dropped
   ones included.
 - **`close`** — set an increment's status and note, on the call that closes it.
-  Closing sheds that increment's recorded step returns, which is what keeps the
-  file small; its record afterwards is its status, its note, its criteria and
-  the git history.
+  Closing sheds that increment's recorded step returns and the returns of the
+  run's own steps, keeping their labels, which is what keeps the file small; the
+  increment's record afterwards is its status, its note, its criteria and the
+  git history.
 
 Every increment carries its id, title, what it delivers, its own acceptance
 criteria and its status — `todo`, `done`, `blocked` or `dropped`. Keep finished

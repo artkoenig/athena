@@ -139,3 +139,82 @@ case red or a fact settled:
   which is also the proof that neither uses `require`, a file API or anything
   else outside those four parameters — so the "the agent records, the script
   never does" decision holds in code, not only in prose.
+
+## Round 1
+
+Both judgment commands are green. Two production files changed: the one
+production text the reviewer's finding 2 named, and the shed the reviewer's
+finding 5 named. Findings 1, 3 and 4 are repairs inside the guards, which the
+test-author owns and had already landed when I started — I ran them, confirmed
+they were green, and touched nothing of theirs.
+
+### Running the planned tests first
+
+Before any edit of mine:
+
+- `bash test-repo.sh` — 42 cases, **exit 1**, `FAIL: 1 of 42 cases`. The single
+  failure is the plan's case 8, the word guard, red on exactly the line finding
+  2 names:
+  `/home/user/uroboros/agents/planner.md:55:this run will never do. Say in your handoff which criterion went where.`
+- `node --test skills/agent-brief/assets/backlog.test.mjs` — 15 tests, 13 pass,
+  **2 fail**, exit 1. The two are the plan's cases 10 and 11, both on the
+  missing-key assertion (`the shed run step carries no return key at all`,
+  `the run step shed by the first close stays shed after the second`), which is
+  finding 5's defect. This command is not on the judgment list; I ran it to see
+  those two cases fail in isolation, as the test-author's handoff says it is
+  for.
+
+That is exactly the red the researcher's "What is already red" and the
+test-author's handoff both predicted, and nothing else was red.
+
+### What I changed
+
+| Path | What I did |
+| --- | --- |
+| `agents/planner.md` | Line 55: "Say in your handoff which criterion went where." → "Say in your `summary` which criterion went where." — the field the page's own "What you return" section already describes. The `close` bullet now says the shed takes the returns of the run's own steps too, keeping their labels. |
+| `skills/agent-brief/assets/backlog.mjs` | `close()` now walks `backlog.run.steps` after emptying the increment's `steps` and does `delete step.return` on every entry, guarded by `backlog.run && Array.isArray(backlog.run.steps)` so a backlog with no `run` key is untouched. The header comment (the third of its three subtle rules) and the comment over `close()` say the run's steps shed too, and the `close()` comment states why the entry survives with its label: a workflow resumes on `recorded.has(label)`, so a `{label, at}` stub still skips its step while dropping the entry would re-dispatch the opening cut after every close. |
+
+No other file was opened for editing. `workflows/loop.js` and
+`workflows/agile-loop.js` are unchanged this round, as the plan says.
+
+### Commands I ran
+
+The two the plan's "What counts as done" names, from the repository root, and
+nothing else. There is no linter and no formatter in this repository.
+
+- **`bash test-repo.sh` — exit 0.** `PASS: 42 cases`. Nothing skipped or
+  excluded.
+- **`bash test.sh` — exit 0.** `PASS: all 6 suites`: `test-repo.sh` 42 cases,
+  `test-worktree.sh` 4 cases, the recorder suite 15 tests (15 pass, 0 fail),
+  `tools/argus` 135 tests, `tools/argus-ui` 14 tests, `tools/log-parser` 23
+  tests. Nothing skipped or excluded.
+
+Invoked as `bash test.sh` and `bash test-repo.sh`, not `./…`: neither file is
+executable in this checkout, and the plan's Environment section says so and
+says not to `chmod` them.
+
+The single-file run above (`node --test
+skills/agent-brief/assets/backlog.test.mjs`, 15 tests, exit 0 after the change)
+is not part of the judgment; `test.sh` reaches that suite.
+
+### Deviations from the plan
+
+None. Every change is the one its finding named, in the file and at the line the
+module map gives.
+
+### Notes for the reviewer
+
+- The plan says `skills/agent-brief/SKILL.md` needs no change because it never
+  describes `close`. I confirmed that by reading it: it names `backlog.mjs
+  record` and the push, and says nothing about closing an increment. So the
+  shed's new half is documented in `agents/planner.md` alone, which is the page
+  of the only agent that calls `close`.
+- The residue the plan calls out by design holds in the code: `close` sheds
+  before the planner records its own close return, so exactly one run-level full
+  return exists at any moment. Nothing in this round tests that directly, and
+  the plan does not ask for it — recorder case 11 pins the repeat, not the
+  residue.
+- This file now carries two sections headed `## Round 1`: the earlier one is the
+  first build, this one is the correction round. My prompt named the heading and
+  told me to leave every earlier section as it stands, so I did not renumber the
+  first.

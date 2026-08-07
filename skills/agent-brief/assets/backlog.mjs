@@ -8,8 +8,8 @@
 // three of its rules are the kind an agent gets subtly wrong: an increment kept
 // across a re-cut keeps the steps it already recorded, a step repeated after a
 // crash replaces its own earlier entry instead of piling up, and closing an
-// increment sheds its step returns. Enforced in code, they are testable; asked
-// for in prose, they are hoped for.
+// increment sheds its step returns and the returns of the run's own steps.
+// Enforced in code, they are testable; asked for in prose, they are hoped for.
 //
 // `record` prints one confirmation line and never any part of the file, so an
 // agent forbidden to read the state can still write into it.
@@ -156,7 +156,14 @@ function record(backlogPath, incrementId, label, payloadFile) {
 // `close` is the planner's verdict call. Shedding the steps is the point as
 // much as the status is: a closed increment's record is its status, its note,
 // its criteria and the git history, and nobody downstream re-reads the returns
-// that got it there.
+// that got it there. The run's own steps shed with it — the opening cut is the
+// largest return of the run and belongs to no increment, so leaving it would
+// keep the whole cut in the file for every close that follows.
+//
+// The shed drops each run step's `return` and keeps its `label` and `at`. A
+// workflow resumes by asking whether a label is recorded, so the stub still
+// skips its step; deleting the entry outright would re-dispatch the opening
+// cut after every close.
 function close(backlogPath, incrementId, status, note) {
   if (!STATUSES.includes(status)) {
     fail(`status must be one of ${STATUSES.join('|')}, not "${status}"`, 1)
@@ -168,6 +175,10 @@ function close(backlogPath, incrementId, status, note) {
   increment.status = status
   increment.note = note || ''
   increment.steps = []
+
+  if (backlog.run && Array.isArray(backlog.run.steps)) {
+    for (const step of backlog.run.steps) delete step.return
+  }
 
   writeBacklog(backlogPath, backlog)
   process.stdout.write(`closed ${incrementId} as ${status}\n`)
