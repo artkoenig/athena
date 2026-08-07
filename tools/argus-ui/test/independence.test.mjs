@@ -79,3 +79,21 @@ test('nothing in the interface reaches outside the interface', () => {
   }
   assert.deepEqual(problems, []);
 });
+
+test('the pure modules the tests import reach for no browser global', () => {
+  // Both files' own doc comments use the words document, fetch and location in
+  // prose, and context.js exports fetchLaneContext — so the patterns below name
+  // the browser globals themselves, not the bare words, or this case would fail
+  // on the files as they stand today.
+  const files = ['public/context.js', 'public/timeline.js'];
+  const problems = [];
+  for (const relative of files) {
+    const full = path.join(PROJECT, relative);
+    assert.ok(fs.existsSync(full), `the scan does not cover ${relative} — it is not there to check`);
+    const source = fs.readFileSync(full, 'utf8');
+    for (const pattern of [/\bdocument\s*\./, /\bfetch\s*\(/, /\blocation\s*\./]) {
+      if (pattern.test(source)) problems.push(`${relative} matches ${pattern} — a pure module must reach for no browser global`);
+    }
+  }
+  assert.deepEqual(problems, []);
+});

@@ -37,6 +37,206 @@
             ],
             "questions": []
           }
+        },
+        {
+          "label": "tests:filter-core.0",
+          "at": "2026-08-07T15:17:11.842Z",
+          "return": {
+            "summary": "Wrote the 17 pure-module cases (A1-A17) and one lanePanelInput case in tools/argus-ui/test/context.test.mjs, the seven wiring cases (B1-B7) in tools/argus-ui/test/page.test.mjs, and the one purity-contract case (C1) in tools/argus-ui/test/independence.test.mjs, exactly as the increment-1 test plan specifies; ran node --test on each file plus npm --prefix tools/argus-ui test and confirmed the new cases fail for the right reason (a whole-file SyntaxError from the not-yet-exported context.js names for A1-A17, individual AssertionErrors naming the missing wiring for B1-B6) while every pre-existing case across the suite stays green.",
+            "cases": [
+              {
+                "case": "A1 — the list names every kind and every field the request contains, grouped, sorted, counted",
+                "file": "tools/argus-ui/test/context.test.mjs",
+                "testName": "the filter lists every kind and every field the request contains, grouped, sorted, counted",
+                "expected": "contextFilterEntries(contextBlocks(requestBody()).blocks) deep-equals the 10-entry array (6 kind entries then 4 field entries, alphabetical within each group, kind:system count 3, all others count 1)",
+                "got": "whole-file module load error: SyntaxError: The requested module '../public/context.js' does not provide an export named 'contextEntryIds' — one SyntaxError at the top of the file blocks node:test from registering any case in context.test.mjs, so this and every other A-case below fail together through that one error, the same shape every earlier round's brand-new export in this project has produced"
+              },
+              {
+                "case": "A2 — what the request does not contain is not listed",
+                "file": "tools/argus-ui/test/context.test.mjs",
+                "testName": "what the request does not contain is not listed",
+                "expected": "no entry kind:thinking/kind:tool_use/kind:tool_result; field:metadata present count 1; kind:user present count 1",
+                "got": "same whole-file SyntaxError as A1"
+              },
+              {
+                "case": "A3 — the unparsable body",
+                "file": "tools/argus-ui/test/context.test.mjs",
+                "testName": "an unparsable body lists one raw entry and no fields group at all",
+                "expected": "contextFilterEntries deep-equals [{ id:'kind:raw', group:'blocks', label:'raw', count:1 }]",
+                "got": "same whole-file SyntaxError as A1"
+              },
+              {
+                "case": "A4 — a field named like a kind cannot collide with it",
+                "file": "tools/argus-ui/test/context.test.mjs",
+                "testName": "a field named like a kind cannot collide with it",
+                "expected": "both kind:user (blocks) and field:user (fields) entries present; visibleBlocks(blocks, ['field:user']) keeps the user message block (text 'ping') and drops the field block labelled 'user'",
+                "got": "same whole-file SyntaxError as A1"
+              },
+              {
+                "case": "A5 — hiding removes exactly that entry's blocks",
+                "file": "tools/argus-ui/test/context.test.mjs",
+                "testName": "hiding an entry removes exactly that entry's blocks, and touches neither input",
+                "expected": "visibleBlocks(blocks, ['kind:system']) has 9 entries none kind system, first survivor's index is 2; visibleBlocks(blocks, []) has 12; input blocks array and a hidden Set are both left unmutated",
+                "got": "same whole-file SyntaxError as A1"
+              },
+              {
+                "case": "A6 — all off hides what is shown and keeps what was already hidden; all on clears everything",
+                "file": "tools/argus-ui/test/context.test.mjs",
+                "testName": "all off hides what is shown and keeps what was already hidden; all on clears everything",
+                "expected": "hiddenAfterAll(before, ids, false) is before ∪ ids; hiddenAfterAll(before, ids, true) is empty; before.size unchanged at 1 after both calls",
+                "got": "same whole-file SyntaxError as A1"
+              },
+              {
+                "case": "A7 — the ids of the held record, and nothing without one",
+                "file": "tools/argus-ui/test/context.test.mjs",
+                "testName": "the ids of the held record, and nothing without one",
+                "expected": "contextEntryIds(item()) deep-equals the 10 A1 ids in order; contextEntryIds(null) and contextEntryIds({}) both []",
+                "got": "same whole-file SyntaxError as A1"
+              },
+              {
+                "case": "A8 — the dropdown sits in the head, one checkbox per entry, checked, counted, two labelled groups, two buttons",
+                "file": "tools/argus-ui/test/context.test.mjs",
+                "testName": "the dropdown sits in the head, one checkbox per entry, checked, counted, in two labelled groups with two buttons",
+                "expected": "exactly one <details class=\"ctx-filter\"> before <div class=\"ctx-blocks\">; 10 data-ctx-entry occurrences; kind:tool_result/field:tools present; name-then-count run present; kind:system entry carries data-count=\"3\"; Blocks before Fields with data-group attributes; data-ctx-all on/off with visible 'all on'/'all off' text; 10 checkboxes all checked",
+                "got": "same whole-file SyntaxError as A1"
+              },
+              {
+                "case": "A9 — unchecking removes the blocks below and only unchecks that box",
+                "file": "tools/argus-ui/test/context.test.mjs",
+                "testName": "unchecking an entry removes its blocks below and only unchecks that box",
+                "expected": "hidden:['kind:tool_result'] leaves 11 block chunks none tool_result, that entry's checkbox unchecked, the other 9 still checked, data-blocks=\"12\" and data-chars=\"<body length>\" unchanged, and hidden:[] renders byte-identical to no hidden key at all",
+                "got": "same whole-file SyntaxError as A1"
+              },
+              {
+                "case": "A10 — a field entry hides its field only",
+                "file": "tools/argus-ui/test/context.test.mjs",
+                "testName": "a field entry hides its field only",
+                "expected": "hidden:['field:tools'] leaves 11 chunks, none labelled tools, one labelled model still present, all 3 system chunks still present",
+                "got": "same whole-file SyntaxError as A1"
+              },
+              {
+                "case": "A11 — everything hidden",
+                "file": "tools/argus-ui/test/context.test.mjs",
+                "testName": "everything hidden leaves an empty list but a reader can still turn entries back on",
+                "expected": "blockChunks empty, data-state=\"ready\" kept, all 10 entries still listed, none checked, no placeholder text asserted",
+                "got": "same whole-file SyntaxError as A1"
+              },
+              {
+                "case": "A12 — an entry hidden but absent from this request changes nothing and is remembered",
+                "file": "tools/argus-ui/test/context.test.mjs",
+                "testName": "an entry hidden but absent from this request changes nothing and is not listed, and its hidden state is remembered",
+                "expected": "with a thinking-less body, hidden:['kind:thinking'] renders identically to no hidden key and lists no kind:thinking; with the full fixture and the same hidden array, the kind:thinking box is present, unchecked, and its blocks are gone",
+                "got": "same whole-file SyntaxError as A1"
+              },
+              {
+                "case": "A13 — a caller may pass an array or a Set",
+                "file": "tools/argus-ui/test/context.test.mjs",
+                "testName": "a caller may pass hidden as an array or a Set",
+                "expected": "hidden: ['kind:user'] and hidden: new Set(['kind:user']) render byte-identical markup",
+                "got": "same whole-file SyntaxError as A1"
+              },
+              {
+                "case": "A14 — the dropdown opens only when asked, and stays open across a repaint",
+                "file": "tools/argus-ui/test/context.test.mjs",
+                "testName": "the dropdown opens only when asked, and stays open across a repaint",
+                "expected": "filterOpen:true renders <details class=\"ctx-filter\" open>; no filterOpen renders the bare tag with no open; two filterOpen:true renders are byte-identical",
+                "got": "same whole-file SyntaxError as A1"
+              },
+              {
+                "case": "A15 — the filter catches no click meant for a lane or a block",
+                "file": "tools/argus-ui/test/context.test.mjs",
+                "testName": "the filter catches no click meant for a lane or a block",
+                "expected": "the sliced <details class=\"ctx-filter\">...</details> chunk and its own <summary> tag carry neither data-lane= nor data-block=, and the whole panel still carries no data-lane=",
+                "got": "same whole-file SyntaxError as A1"
+              },
+              {
+                "case": "A16 — no entries at all",
+                "file": "tools/argus-ui/test/context.test.mjs",
+                "testName": "no entries at all renders no filter and does not throw",
+                "expected": "a body with no blocks (\"{\\\"messages\\\":[]}\") renders no ctx-filter markup and does not throw",
+                "got": "same whole-file SyntaxError as A1"
+              },
+              {
+                "case": "A17 — the panel's whole input still comes from one builder",
+                "file": "tools/argus-ui/test/context.test.mjs",
+                "testName": "the panel's whole input still comes from one builder",
+                "expected": "lanePanelInput({..., hidden:['kind:user'], filterOpen:true}) returns hidden ['kind:user'] and filterOpen true; called without those keys returns hidden [] and filterOpen false",
+                "got": "same whole-file SyntaxError as A1"
+              },
+              {
+                "case": "B1 — the selection is page-wide state that starts empty, and is not persisted",
+                "file": "tools/argus-ui/test/page.test.mjs",
+                "testName": "the block filter's selection is page-wide state that starts empty, and is never persisted",
+                "expected": "the state literal matches /contextHidden:\\s*new Set\\(\\)/ and /contextFilterOpen:\\s*false\\b/; app.js nowhere matches /localStorage/",
+                "got": "AssertionError: 'the hidden set must start empty, or a page load would open with something already hidden' — the state literal today declares no contextHidden field at all"
+              },
+              {
+                "case": "B2 — the derivation lives in the pure module",
+                "file": "tools/argus-ui/test/page.test.mjs",
+                "testName": "the derivation the filter uses comes from the pure module",
+                "expected": "app.js imports contextEntryIds and hiddenAfterAll from ./context.js",
+                "got": "AssertionError: app.js must import contextEntryIds from context.js, so the tested function is the one the page runs — neither import exists yet"
+              },
+              {
+                "case": "B3 — the panel is drawn with the hidden set and the open flag",
+                "file": "tools/argus-ui/test/page.test.mjs",
+                "testName": "the panel is drawn with the hidden set and the open flag",
+                "expected": "the renderContextPanel call inside renderLanePanel matches /hidden:\\s*state\\.contextHidden\\b/ and /filterOpen:\\s*state\\.contextFilterOpen\\b/",
+                "got": "AssertionError: 'without it the panel filters nothing, whatever the reader unchecked' — quoted actual is today's unfiltered lanePanelInput({ view, key: state.selectedLane, held: state.laneContext, expanded: state.expanded }) call, carrying neither key"
+              },
+              {
+                "case": "B4 — unchecking an entry repaints and fetches nothing",
+                "file": "tools/argus-ui/test/page.test.mjs",
+                "testName": "unchecking an entry repaints and fetches nothing",
+                "expected": "the change listener on #detail matches input[data-ctx-entry], state.contextHidden and renderLanePanel(, and matches none of loadLaneContext(/scheduleLaneContext(/api(",
+                "got": "AssertionError: 'the change handler must catch a filter checkbox being toggled' — today's change listener only branches on #event-filter and #event-errors"
+              },
+              {
+                "case": "B5 — all on and all off go through the pure helper against the held record, and fetch nothing",
+                "file": "tools/argus-ui/test/page.test.mjs",
+                "testName": "all on and all off go through the pure helper against the held record, and fetch nothing",
+                "expected": "the click listener contains a data-ctx-all branch matching hiddenAfterAll(, contextEntryIds(, state.laneContext.item and renderLanePanel(, and matching neither loadLaneContext( nor scheduleLaneContext(",
+                "got": "AssertionError: 'the click handler must catch the all on / all off buttons' — expected true, actual false; today's click listener carries no data-ctx-all branch at all"
+              },
+              {
+                "case": "B6 — an open dropdown survives a repaint",
+                "file": "tools/argus-ui/test/page.test.mjs",
+                "testName": "an open dropdown survives a repaint",
+                "expected": "the click listener matches summary[data-ctx-filter] and state.contextFilterOpen = !state.contextFilterOpen; renderLanePanel matches state.contextFilterOpen",
+                "got": "AssertionError: 'the click handler must catch the dropdown's own summary being clicked' — quoted actual is today's full click listener body, which has no data-ctx-filter branch"
+              },
+              {
+                "case": "B7 — the selection survives a lane change and a session change",
+                "file": "tools/argus-ui/test/page.test.mjs",
+                "testName": "the selection survives a lane change and a session change",
+                "expected": "selectSession's source matches neither /contextHidden/ nor /contextFilterOpen/; the click listener does not match /state\\.contextHidden\\s*=\\s*new Set\\(\\)/",
+                "got": "passes today (green), not red: all three are doesNotMatch assertions and neither contextHidden nor contextFilterOpen exists anywhere in app.js yet, so they are vacuously satisfied; the case only starts guarding once the implementer introduces those fields and could start wrongly touching them in selectSession or the lane-change branch — flagged in openQuestions rather than forced red"
+              },
+              {
+                "case": "C1 — the pure modules touch no browser global",
+                "file": "tools/argus-ui/test/independence.test.mjs",
+                "testName": "the pure modules the tests import reach for no browser global",
+                "expected": "public/context.js and public/timeline.js match none of /\\bdocument\\s*\\./, /\\bfetch\\s*\\(/, /\\blocation\\s*\\./",
+                "got": "passes today (green), exactly as the plan itself predicts ('Both files are clean today, so this case is green on arrival') — it turns red only if the implementer reaches for a browser global from either pure module, which is its job"
+              }
+            ],
+            "openQuestions": [
+              "B7, as the plan specifies it, is three doesNotMatch assertions against fields (contextHidden, contextFilterOpen, the reset-to-new-Set line) that do not exist anywhere in app.js today, so the case passes vacuously before the increment is implemented rather than going red like B1-B6 — noted here rather than silently reported as a normal red failure; it will only catch a regression once the implementer has introduced the fields and could wire them wrong in selectSession or the lane branch."
+            ],
+            "questions": [],
+            "recordCommand": "record docs/issues/2026-08-07-timeline-focus-and-context-filter/backlog.json filter-core tests:filter-core.0 <this file>",
+            "filesTouched": [
+              "tools/argus-ui/test/context.test.mjs",
+              "tools/argus-ui/test/page.test.mjs",
+              "tools/argus-ui/test/independence.test.mjs"
+            ],
+            "commandsRun": [
+              "node --test tools/argus-ui/test/context.test.mjs — 1 top-level failure (whole-file SyntaxError, covers A1-A17), 0 pass, 1 fail, exit 1",
+              "node --test tools/argus-ui/test/page.test.mjs — 52 tests, 46 pass, 6 fail (B1-B6), exit 1 (B7 passes vacuously, see openQuestions)",
+              "node --test tools/argus-ui/test/independence.test.mjs — 3 tests, 3 pass, 0 fail, exit 0 (C1 is green on arrival by design)",
+              "npm --prefix tools/argus-ui test — 161 tests, 154 pass, 7 fail, exit 1; the 7 failures are exactly context.test.mjs's one whole-file load error (covering A1-A17) plus B1-B6 in page.test.mjs; every pre-existing case in every other file stays green"
+            ]
+          }
         }
       ]
     },

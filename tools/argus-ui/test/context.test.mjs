@@ -8,6 +8,10 @@ import {
   fetchLaneContext,
   laneContextInput,
   lanePanelInput,
+  contextFilterEntries,
+  visibleBlocks,
+  hiddenAfterAll,
+  contextEntryIds,
 } from '../public/context.js';
 import { esc, fmtNum, PREVIEW_CHARS } from '../public/format.js';
 
@@ -775,4 +779,359 @@ test('the one line a collapsed block shows reaches the markup', () => {
     assert.ok(m, `block ${i} must carry a ctx-preview span`);
     assert.equal(m[1], esc(block.preview), `block ${i}'s collapsed line must be its own preview`);
   });
+});
+
+// Increment 1 — the context panel's block filter: what the request contains,
+// and what the reader hid.
+
+test('the filter lists every kind and every field the request contains, grouped, sorted, counted', () => {
+  const { blocks } = contextBlocks(requestBody());
+  const entries = contextFilterEntries(blocks);
+  assert.deepEqual(
+    entries,
+    [
+      { id: 'kind:assistant', group: 'blocks', label: 'assistant', count: 1 },
+      { id: 'kind:system', group: 'blocks', label: 'system', count: 3 },
+      { id: 'kind:thinking', group: 'blocks', label: 'thinking', count: 1 },
+      { id: 'kind:tool_result', group: 'blocks', label: 'tool_result', count: 1 },
+      { id: 'kind:tool_use', group: 'blocks', label: 'tool_use', count: 1 },
+      { id: 'kind:user', group: 'blocks', label: 'user', count: 1 },
+      { id: 'field:max_tokens', group: 'fields', label: 'max_tokens', count: 1 },
+      { id: 'field:model', group: 'fields', label: 'model', count: 1 },
+      { id: 'field:stream', group: 'fields', label: 'stream', count: 1 },
+      { id: 'field:tools', group: 'fields', label: 'tools', count: 1 },
+    ],
+    'one deepEqual over the whole list proves membership, grouping, order and the counts at once — the fixture writes ' +
+      'its fields as model, tools, max_tokens, stream, so this order is proof the fields group is sorted, not copied',
+  );
+});
+
+test('what the request does not contain is not listed', () => {
+  const { blocks } = contextBlocks(
+    requestBody({ messages: [{ role: 'user', content: 'hi' }], metadata: { user_id: 'u' } }),
+  );
+  const entries = contextFilterEntries(blocks);
+  const ids = entries.map((e) => e.id);
+  for (const missing of ['kind:thinking', 'kind:tool_use', 'kind:tool_result']) {
+    assert.ok(!ids.includes(missing), `${missing} must not be listed — this request carries no such block`);
+  }
+  assert.deepEqual(
+    entries.find((e) => e.id === 'field:metadata'),
+    { id: 'field:metadata', group: 'fields', label: 'metadata', count: 1 },
+    'a field this request does carry must be listed, counted once',
+  );
+  assert.deepEqual(
+    entries.find((e) => e.id === 'kind:user'),
+    { id: 'kind:user', group: 'blocks', label: 'user', count: 1 },
+    'the one user message this request carries must be listed, counted once',
+  );
+});
+
+test('an unparsable body lists one raw entry and no fields group at all', () => {
+  const { blocks } = contextBlocks('{"messages":[');
+  assert.deepEqual(
+    contextFilterEntries(blocks),
+    [{ id: 'kind:raw', group: 'blocks', label: 'raw', count: 1 }],
+    'a body that could not be parsed is one raw block, and the filter must not invent a fields group for it',
+  );
+});
+
+test('a field named like a kind cannot collide with it', () => {
+  const { blocks } = contextBlocks(requestBody({ user: 'an account id' }));
+  const entries = contextFilterEntries(blocks);
+  assert.deepEqual(
+    entries.find((e) => e.id === 'kind:user'),
+    { id: 'kind:user', group: 'blocks', label: 'user', count: 1 },
+    'the user message block must still be listed under its own id',
+  );
+  assert.deepEqual(
+    entries.find((e) => e.id === 'field:user'),
+    { id: 'field:user', group: 'fields', label: 'user', count: 1 },
+    'the user field must be listed under its own id, on the fields side, not merged with the message kind',
+  );
+
+  const kept = visibleBlocks(blocks, ['field:user']);
+  assert.ok(
+    kept.some((b) => b.text === 'ping'),
+    'hiding the field must leave the user message block alone',
+  );
+  assert.ok(
+    !kept.some((b) => b.kind === 'field' && b.label === 'user'),
+    'hiding the field must remove the field block, and only the field block',
+  );
+});
+
+test('hiding an entry removes exactly that entry\'s blocks, and touches neither input', () => {
+  const { blocks } = contextBlocks(requestBody());
+
+  const withoutSystem = visibleBlocks(blocks, ['kind:system']);
+  assert.equal(withoutSystem.length, 9, 'hiding kind:system must remove exactly its three blocks');
+  assert.ok(
+    !withoutSystem.some((b) => b.kind === 'system'),
+    'no system block may survive when kind:system is hidden',
+  );
+  assert.equal(
+    withoutSystem[0].index,
+    2,
+    'the surviving blocks must keep their original index — the array is non-contiguous, which is what keeps expansion keys stable',
+  );
+
+  assert.equal(visibleBlocks(blocks, []).length, 12, 'nothing hidden must show every block');
+
+  assert.equal(blocks.length, 12, 'the input blocks array must not be mutated by visibleBlocks');
+  const hiddenSet = new Set(['kind:system']);
+  visibleBlocks(blocks, hiddenSet);
+  assert.equal(hiddenSet.size, 1, 'a hidden Set passed in must not be mutated by visibleBlocks');
+});
+
+test('all off hides what is shown and keeps what was already hidden; all on clears everything', () => {
+  const before = new Set(['kind:thinking']);
+  const ids = contextEntryIds(item({ body: requestBody({ messages: [{ role: 'user', content: 'hi' }] }) }));
+  assert.ok(!ids.includes('kind:thinking'), 'the fixture for this case must carry no thinking block');
+
+  const afterOff = hiddenAfterAll(before, ids, false);
+  assert.ok(afterOff instanceof Set, 'all off must answer with a Set');
+  assert.deepEqual(
+    [...afterOff].sort(),
+    [...new Set([...before, ...ids])].sort(),
+    'all off must hide every entry the request contains, and keep an already-hidden entry the request does not contain',
+  );
+
+  const afterOn = hiddenAfterAll(before, ids, true);
+  assert.deepEqual([...afterOn], [], 'all on must clear the hidden set entirely');
+
+  assert.equal(before.size, 1, 'neither call may mutate the Set the caller passed in');
+});
+
+test('the ids of the held record, and nothing without one', () => {
+  assert.deepEqual(
+    contextEntryIds(item()),
+    [
+      'kind:assistant',
+      'kind:system',
+      'kind:thinking',
+      'kind:tool_result',
+      'kind:tool_use',
+      'kind:user',
+      'field:max_tokens',
+      'field:model',
+      'field:stream',
+      'field:tools',
+    ],
+    'the ids must be the same ten, in the same order, as contextFilterEntries reports for this fixture',
+  );
+  assert.deepEqual(contextEntryIds(null), [], 'no record at all must yield no ids');
+  assert.deepEqual(contextEntryIds({}), [], 'a record with no body must yield no ids');
+});
+
+test('the dropdown sits in the head, one checkbox per entry, checked, counted, in two labelled groups with two buttons', () => {
+  const html = renderContextPanel({ lane: lane(), item: item() });
+
+  assert.equal(
+    (html.match(/<details class="ctx-filter"/g) ?? []).length,
+    1,
+    'exactly one filter dropdown must be rendered',
+  );
+  assert.ok(
+    html.indexOf('<details class="ctx-filter"') < html.indexOf('<div class="ctx-blocks">'),
+    'the dropdown must sit in the panel head, before the block list',
+  );
+
+  assert.equal(
+    (html.match(/data-ctx-entry="/g) ?? []).length,
+    10,
+    'one entry per kind and field the fixture carries',
+  );
+  assert.ok(html.includes('data-ctx-entry="kind:tool_result"'));
+  assert.ok(html.includes('data-ctx-entry="field:tools"'));
+
+  assert.match(
+    html,
+    /tool_result<\/span>\s*<span class="ctx-filter-count" data-count="1">\s*1/,
+    'the name and the count behind it must sit side by side, e.g. "tool_result 1"',
+  );
+  const systemEntryStart = html.indexOf('data-ctx-entry="kind:system"');
+  assert.ok(systemEntryStart >= 0, 'the kind:system entry must be present');
+  const nextEntryStart = html.indexOf('data-ctx-entry="', systemEntryStart + 1);
+  const systemEntryChunk = html.slice(systemEntryStart, nextEntryStart === -1 ? html.length : nextEntryStart);
+  assert.match(
+    systemEntryChunk,
+    /data-count="3"/,
+    'the system entry — the fixture\'s three system blocks — must show a count of 3',
+  );
+
+  const blocksTitleIdx = html.indexOf('>Blocks<');
+  const fieldsTitleIdx = html.indexOf('>Fields<');
+  assert.ok(blocksTitleIdx >= 0, 'the Blocks group must be titled');
+  assert.ok(fieldsTitleIdx >= 0, 'the Fields group must be titled');
+  assert.ok(blocksTitleIdx < fieldsTitleIdx, 'Blocks must come before Fields');
+  assert.ok(html.includes('data-group="blocks"'));
+  assert.ok(html.includes('data-group="fields"'));
+
+  assert.ok(html.includes('data-ctx-all="on"'));
+  assert.ok(html.includes('data-ctx-all="off"'));
+  assert.ok(html.includes('all on'));
+  assert.ok(html.includes('all off'));
+
+  assert.equal((html.match(/type="checkbox"/g) ?? []).length, 10, 'ten checkboxes, one per entry');
+  assert.equal(
+    (html.match(/ checked>/g) ?? []).length,
+    10,
+    'with nothing hidden, every one of the ten checkboxes must be checked',
+  );
+});
+
+test('unchecking an entry removes its blocks below and only unchecks that box', () => {
+  const bothHtml = renderContextPanel({ lane: lane(), item: item(), hidden: ['kind:tool_result'] });
+
+  const chunks = blockChunks(bothHtml);
+  assert.equal(chunks.length, 11, 'hiding kind:tool_result must remove exactly its one block');
+  assert.ok(
+    !chunks.some((c) => c.includes('data-kind="tool_result"')),
+    'no tool_result block may remain in the list',
+  );
+
+  assert.match(
+    bothHtml,
+    /data-ctx-entry="kind:tool_result"(?! checked)/,
+    'the hidden entry\'s own checkbox must not carry checked',
+  );
+  assert.equal(
+    (bothHtml.match(/ checked>/g) ?? []).length,
+    9,
+    'the nine entries still visible must still carry checked — hiding one entry must not touch the others',
+  );
+
+  assert.match(bothHtml, /data-blocks="12"/, 'the head\'s total block count must stay the fixture\'s own total, not the filtered count');
+  assert.match(
+    bothHtml,
+    new RegExp(`data-chars="${requestBody().length}"`),
+    'the head\'s total character count must stay the fixture\'s own total — the filter does not own that number yet',
+  );
+
+  assert.equal(
+    renderContextPanel({ lane: lane(), item: item(), hidden: [] }),
+    renderContextPanel({ lane: lane(), item: item() }),
+    'checking the entry back must restore the list byte for byte',
+  );
+});
+
+test('a field entry hides its field only', () => {
+  const html = renderContextPanel({ lane: lane(), item: item(), hidden: ['field:tools'] });
+  const chunks = blockChunks(html);
+  assert.equal(chunks.length, 11, 'hiding field:tools must remove exactly its one block');
+  assert.ok(
+    !chunks.some((c) => /class="ctx-label">tools<\/span>/.test(c)),
+    'no block labelled tools may remain',
+  );
+  assert.ok(
+    chunks.some((c) => /class="ctx-label">model<\/span>/.test(c)),
+    'the model field must still be there — only tools was hidden',
+  );
+  assert.equal(
+    chunks.filter((c) => c.includes('data-kind="system"')).length,
+    3,
+    'the three system blocks are untouched by hiding a field',
+  );
+});
+
+test('everything hidden leaves an empty list but a reader can still turn entries back on', () => {
+  const hidden = contextEntryIds(item());
+  const html = renderContextPanel({ lane: lane(), item: item(), hidden });
+  assert.deepEqual(blockChunks(html), [], 'every block must be hidden');
+  assert.match(html, /data-state="ready"/, 'the panel stays ready — this is not the empty-record state');
+  assert.equal((html.match(/data-ctx-entry="/g) ?? []).length, 10, 'every entry must still be listed');
+  assert.equal(
+    (html.match(/ checked>/g) ?? []).length,
+    0,
+    'with every entry hidden, no checkbox may carry checked',
+  );
+});
+
+test('an entry hidden but absent from this request changes nothing and is not listed, and its hidden state is remembered', () => {
+  const bodyWithoutThinking = requestBody({ messages: [{ role: 'user', content: 'hi' }] });
+  const withHidden = renderContextPanel({ lane: lane(), item: item({ body: bodyWithoutThinking }), hidden: ['kind:thinking'] });
+  const withoutHidden = renderContextPanel({ lane: lane(), item: item({ body: bodyWithoutThinking }) });
+  assert.equal(withHidden, withoutHidden, 'hiding an entry the request does not carry must change nothing');
+  assert.ok(!withHidden.includes('kind:thinking'), 'an absent entry must not be listed at all');
+
+  const withThinking = renderContextPanel({ lane: lane(), item: item(), hidden: ['kind:thinking'] });
+  assert.match(
+    withThinking,
+    /data-ctx-entry="kind:thinking"(?! checked)/,
+    'scrubbing back to a request that carries the entry must show it still unchecked',
+  );
+  assert.ok(
+    !blockChunks(withThinking).some((c) => c.includes('data-kind="thinking"')),
+    'and its blocks still hidden',
+  );
+});
+
+test('a caller may pass hidden as an array or a Set', () => {
+  assert.equal(
+    renderContextPanel({ lane: lane(), item: item(), hidden: ['kind:user'] }),
+    renderContextPanel({ lane: lane(), item: item(), hidden: new Set(['kind:user']) }),
+    'an array and a Set of the same ids must render byte-identical markup',
+  );
+});
+
+test('the dropdown opens only when asked, and stays open across a repaint', () => {
+  const openHtml = renderContextPanel({ lane: lane(), item: item(), filterOpen: true });
+  assert.match(openHtml, /<details class="ctx-filter" open>/, 'filterOpen: true must render the dropdown open');
+
+  const closedHtml = renderContextPanel({ lane: lane(), item: item() });
+  const tag = closedHtml.match(/<details class="ctx-filter"[^>]*>/);
+  assert.ok(tag, 'the filter dropdown must still be rendered');
+  assert.equal(tag[0], '<details class="ctx-filter">', 'without filterOpen the dropdown\'s own tag must carry no open');
+
+  assert.equal(
+    renderContextPanel({ lane: lane(), item: item(), filterOpen: true }),
+    renderContextPanel({ lane: lane(), item: item(), filterOpen: true }),
+    'the markup is a pure function of the flag — two renders with the same flag must be byte-identical, which is what ' +
+      '"a repaint does not snap it shut" means on this side',
+  );
+});
+
+test('the filter catches no click meant for a lane or a block', () => {
+  const html = renderContextPanel({ lane: lane(), item: item(), filterOpen: true });
+  const filterMatch = html.match(/<details class="ctx-filter"[\s\S]*?<\/details>/);
+  assert.ok(filterMatch, 'the filter dropdown must be present to slice out');
+  const filter = filterMatch[0];
+
+  assert.doesNotMatch(filter, /data-lane=/, 'a data-lane attribute here would make opening the dropdown toggle the lane selection');
+  assert.doesNotMatch(filter, /data-block=/, 'a data-block attribute here would make opening the dropdown expand a block');
+
+  const summaryMatch = filter.match(/<summary[^>]*>/);
+  assert.ok(summaryMatch, 'the dropdown must have its own summary');
+  assert.doesNotMatch(summaryMatch[0], /data-lane=/, 'the summary itself must carry no data-lane');
+  assert.doesNotMatch(summaryMatch[0], /data-block=/, 'the summary itself must carry no data-block');
+
+  assert.doesNotMatch(html, /data-lane=/, 'the whole panel must still carry no data-lane attribute');
+});
+
+test('no entries at all renders no filter and does not throw', () => {
+  const html = renderContextPanel({ lane: lane(), item: item({ body: '{"messages":[]}' }) });
+  assert.ok(!html.includes('ctx-filter'), 'with nothing in the request there is nothing to filter');
+});
+
+test('the panel\'s whole input still comes from one builder', () => {
+  const withFilterState = lanePanelInput({
+    view: view(),
+    key: 'main',
+    held: { key: 'main', item: item() },
+    expanded: [],
+    hidden: ['kind:user'],
+    filterOpen: true,
+  });
+  assert.deepEqual(withFilterState.hidden, ['kind:user']);
+  assert.equal(withFilterState.filterOpen, true);
+
+  const withoutFilterState = lanePanelInput({
+    view: view(),
+    key: 'main',
+    held: { key: 'main', item: item() },
+    expanded: [],
+  });
+  assert.deepEqual(withoutFilterState.hidden, [], 'no hidden set given must default to nothing hidden');
+  assert.equal(withoutFilterState.filterOpen, false, 'no filterOpen given must default to closed');
 });

@@ -630,3 +630,124 @@ test('the tool list is drawn for the selected lane, at the cursor\'s moment, fro
     'the tool panel\'s arguments must be read on their own, or the context panel\'s key: silently satisfies this case',
   );
 });
+
+// Increment 1 — the block filter's wiring: the click paints the panel again,
+// and never fetches.
+
+test('the block filter\'s selection is page-wide state that starts empty, and is never persisted', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const start = appJs.indexOf('const state = {');
+  assert.ok(start >= 0, 'app.js must still declare the state literal');
+  const end = appJs.indexOf('\n};', start);
+  assert.ok(end >= 0, 'the state literal must still close with `\\n};`');
+  const stateSlice = appJs.slice(start, end);
+
+  assert.match(
+    stateSlice,
+    /\bcontextHidden:\s*new Set\(\)/,
+    'the hidden set must start empty, or a page load would open with something already hidden',
+  );
+  assert.match(stateSlice, /\bcontextFilterOpen:\s*false\b/, 'the dropdown must start closed');
+  assert.doesNotMatch(
+    appJs,
+    /localStorage/,
+    'the filter is not persisted — a page reload must start with everything visible, which localStorage would defeat',
+  );
+});
+
+test('the derivation the filter uses comes from the pure module', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  for (const name of ['contextEntryIds', 'hiddenAfterAll']) {
+    const re = new RegExp(`import\\s*\\{[^}]*\\b${name}\\b[^}]*\\}\\s*from\\s*['"]\\./context\\.js['"]`);
+    assert.match(appJs, re, `app.js must import ${name} from context.js, so the tested function is the one the page runs`);
+  }
+});
+
+test('the panel is drawn with the hidden set and the open flag', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const renderLanePanel = functionSource(appJs, 'renderLanePanel');
+  const slice = callArguments(renderLanePanel, 'renderContextPanel');
+  assert.match(slice, /hidden:\s*state\.contextHidden\b/, 'without it the panel filters nothing, whatever the reader unchecked');
+  assert.match(
+    slice,
+    /filterOpen:\s*state\.contextFilterOpen\b/,
+    'without it a live refresh would always render the dropdown closed',
+  );
+});
+
+test('unchecking an entry repaints and fetches nothing', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const change = detailListener(appJs, 'change');
+  assert.match(change, /input\[data-ctx-entry\]/, 'the change handler must catch a filter checkbox being toggled');
+  assert.match(change, /state\.contextHidden/, 'the toggle must update the page-wide hidden set');
+  assert.match(change, /renderLanePanel\(/, 'the panel must repaint so the list reflects the new selection');
+  assert.doesNotMatch(
+    change,
+    /loadLaneContext\(/,
+    'the filter acts on the record already held — unchecking an entry must never fetch',
+  );
+  assert.doesNotMatch(change, /scheduleLaneContext\(/, 'unchecking an entry must never schedule a fetch either');
+  assert.doesNotMatch(change, /\bapi\(/, 'unchecking an entry must never call the api function directly');
+});
+
+test('all on and all off go through the pure helper against the held record, and fetch nothing', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const click = detailListener(appJs, 'click');
+  const allIdx = click.indexOf('data-ctx-all');
+  assert.ok(allIdx >= 0, 'the click handler must catch the all on / all off buttons');
+  const tail = click.slice(allIdx);
+
+  assert.match(tail, /hiddenAfterAll\(/, 'the branch must delegate the union/clear logic to the pure helper');
+  assert.match(tail, /contextEntryIds\(/, 'the branch must derive the current request\'s own ids, not a fixed list');
+  assert.match(
+    tail,
+    /state\.laneContext\.item/,
+    'the ids must be derived from the record the panel already holds, not a fresh fetch',
+  );
+  assert.match(tail, /renderLanePanel\(/, 'the panel must repaint so the list reflects the new selection');
+  assert.doesNotMatch(tail, /loadLaneContext\(/, 'all on / all off must never fetch — the branch after data-lane already fetches, this one must not');
+  assert.doesNotMatch(tail, /scheduleLaneContext\(/, 'all on / all off must never schedule a fetch either');
+});
+
+test('an open dropdown survives a repaint', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const click = detailListener(appJs, 'click');
+  assert.match(
+    click,
+    /summary\[data-ctx-filter\]/,
+    'the click handler must catch the dropdown\'s own summary being clicked',
+  );
+  assert.match(
+    click,
+    /state\.contextFilterOpen\s*=\s*!\s*state\.contextFilterOpen/,
+    'the open state must be remembered and toggled, the same way state.expanded remembers an opened block',
+  );
+  const renderLanePanel = functionSource(appJs, 'renderLanePanel');
+  assert.match(
+    renderLanePanel,
+    /state\.contextFilterOpen/,
+    'renderLanePanel must pass the remembered open state back in, or a live refresh snaps the dropdown shut',
+  );
+});
+
+test('the selection survives a lane change and a session change', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const selectSession = functionSource(appJs, 'selectSession');
+  assert.doesNotMatch(
+    selectSession,
+    /contextHidden/,
+    'a new session must inherit the reader\'s filter, unlike its lane and expansions',
+  );
+  assert.doesNotMatch(
+    selectSession,
+    /contextFilterOpen/,
+    'a new session must inherit the reader\'s filter, unlike its lane and expansions',
+  );
+
+  const click = detailListener(appJs, 'click');
+  assert.doesNotMatch(
+    click,
+    /state\.contextHidden\s*=\s*new Set\(\)/,
+    'the lane-change branch resets state.expanded and must leave the filter selection alone',
+  );
+});
