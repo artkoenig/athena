@@ -876,6 +876,47 @@ run_driver "$root/workflows/agile-loop.js" w15 "agile-loop.js: a run resumed beh
 rm -rf "$driver_tmp"
 
 echo
+echo "=== no page under tools/argus describes an argus-ui view that does not exist"
+
+# docs/issues/2026-08-07-timeline-focus-and-context-filter removed argus-ui's
+# six technical tabs, so a session's detail pane is now only the session list,
+# the timeline and the context panel. tools/argus/README.md still promised the
+# old shape: "tabs" plural, a "waterfall" figure, the wrapped enumeration
+# "sessions, overview, tasks, traces, events, metrics, attributes", a "tools
+# table", content shown "under \"Attributes\"", and a sentence that "writes
+# the source under" every figure. Nothing compared the collector's own docs to
+# the interface it describes, so this drifted for a whole increment before a
+# reviewer caught it. Whitespace is collapsed before matching because the
+# offending enumeration is line-wrapped in the source — "sessions, overview,"
+# ends one line and "tasks, traces, …" begins the next — and a per-line grep
+# would miss it.
+declare -a argus_view_patterns=(
+  '\btabs?\b'
+  '\bwaterfall\b'
+  'overview, *tasks'
+  'tools table'
+  'under "Attributes"'
+  'writes the source under'
+)
+argus_view_hits=""
+for file in "$root"/tools/argus/*.md; do
+  [ -e "$file" ] || continue
+  collapsed="$(tr '\n' ' ' <"$file" | tr -s ' ')"
+  for pattern in "${argus_view_patterns[@]}"; do
+    if echo "$collapsed" | grep -qiE "$pattern"; then
+      argus_view_hits="${argus_view_hits}$(basename "$file") matches $pattern
+"
+    fi
+  done
+done
+if [ -z "$argus_view_hits" ]; then
+  ok "no page under tools/argus describes an argus-ui view that does not exist"
+else
+  no "these pages under tools/argus still describe a removed argus-ui view:"
+  echo "$argus_view_hits" | sed 's/^/       /'
+fi
+
+echo
 echo "=== the two workflows coexist"
 
 # `loop` and `agile-loop` are two files rather than one with a switch, and the

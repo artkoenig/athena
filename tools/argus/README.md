@@ -74,6 +74,11 @@ export OTEL_METRICS_EXPORTER="otlp"
 export OTEL_LOGS_EXPORTER="otlp"
 export OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"
 export OTEL_EXPORTER_OTLP_ENDPOINT="http://127.0.0.1:4318"
+export OTEL_LOG_USER_PROMPTS="1"                 # prompts, responses, tool arguments
+export OTEL_LOG_TOOL_DETAILS="1"
+export OTEL_LOG_TOOL_CONTENT="1"                 # rides on span events, inert without traces
+export OTEL_LOG_RAW_API_BODIES="1"               # whole request/response bodies
+export CLAUDE_CODE_OTEL_CONTENT_MAX_LENGTH="2000000"  # the 61,440 default cuts the first body in half
 export CLAUDE_CODE_ENHANCED_TELEMETRY_BETA="1"   # required for spans (beta)
 export OTEL_TRACES_EXPORTER="otlp"
 export OTEL_METRIC_EXPORT_INTERVAL="1000"        # the 60s default is too sluggish for short runs
@@ -146,10 +151,11 @@ Three signals, three independent switches — each works on its own:
 | ---------- | ---------------------------------------------------------- | ------------------------------------------------------ |
 | Metrics    | `OTEL_METRICS_EXPORTER=otlp`                               | Tokens, cost, lines of code, commits, active time       |
 | Log events | `OTEL_LOGS_EXPORTER=otlp`                                  | Event timeline, tool results, API errors, audit trail   |
-| Traces     | `OTEL_TRACES_EXPORTER=otlp` + `…ENHANCED_TELEMETRY_BETA=1` | Waterfall per interaction                               |
+| Traces     | `OTEL_TRACES_EXPORTER=otlp` + `…ENHANCED_TELEMETRY_BETA=1` | The span tree of an interaction, over `/api/traces/:id` |
 
 With metrics **and** events active, the metric wins for tokens and cost — nothing is
-counted twice. The interface writes the source under every figure.
+counted twice. The session record names which source a figure came from, in `costSource`
+and `tokenSource`.
 
 ## Self-hosting
 
@@ -422,9 +428,9 @@ Two things hold for all of these variants:
 
 The JSON API below is the whole surface: sessions with their aggregates, traces, events,
 metric points, totals and facets, plus a Server-Sent Events stream that fires on ingest
-(bursts coalesced into 250 ms). What that looks like as a page — sessions, overview,
-tasks, traces, events, metrics, attributes — is [`argus-ui`](../argus-ui/), which reads
-exactly these routes and nothing else.
+(bursts coalesced into 250 ms). What that looks like as a page — the session list, the
+timeline and the context panel — is [`argus-ui`](../argus-ui/), which reads a subset of
+these routes and nothing else.
 
 ## Options
 
@@ -505,12 +511,22 @@ argus start --open .uroboros-telemetry/2026-08-03T14-22-05
 By default Claude Code exports structure only: durations, model names, tool names, token
 counts. Prompts, tool arguments and API bodies arrive only with
 `OTEL_LOG_USER_PROMPTS=1`, `OTEL_LOG_TOOL_DETAILS=1`, `OTEL_LOG_TOOL_CONTENT=1` and
-`OTEL_LOG_RAW_API_BODIES`. `argus env` deliberately does **not** set these. Anyone
-who switches them on should know that prompt and file contents then live in the
-collector's memory and — with `--persist` — on disk.
+`OTEL_LOG_RAW_API_BODIES=1`. **`argus env` sets all four**, plus
+`CLAUDE_CODE_OTEL_CONTENT_MAX_LENGTH=2000000` so a body arrives whole rather than cut at
+the CLI's 61,440-character default. That is deliberate: argus is a local measurement tool
+for your own sessions, and the content *is* the measurement — without it there is no
+answering "what was in the context at that moment".
 
-`user.email`, `user.account_uuid` and `organization.id` are standard attributes and appear
-in the interface under "Attributes".
+Know what that means. Your prompts, your tool arguments, your file contents and whole
+conversation bodies live in the collector's memory, are served by its HTTP API, and — with
+`--persist` — are written to the (gitignored) measurement directory. Point it at nothing
+you would not read out loud, put a `--token` on any collector reachable beyond localhost,
+and unset `OTEL_LOG_RAW_API_BODIES` by hand for a session whose content must not be
+recorded.
+
+`user.email`, `user.account_uuid` and `organization.id` are standard attributes. They
+arrive on the OTel resource and are served with the session record, as `resource` on the
+summary that `GET /api/sessions/:id` returns.
 
 ## Architecture
 
@@ -540,6 +556,8 @@ and new Claude Code attributes.
 | `GET /api/sessions/:id`  | Session aggregates including traces                        |
 | `GET /api/traces/:id`    | Spans of a trace, flat with `depth` in render order        |
 | `GET /api/events`        | Events (`session`, `event`, `trace`, `search`, `errors`)   |
+| `GET /api/content`       | Content records, metadata only (`session`, `agent`, `main`, `span`, `event`, `limit`) |
+| `GET /api/content/at`    | The body in force at a moment (`session` required, `at`, `agent`, `main`, `span`, `event`) |
 | `GET /api/metrics`       | Metric points (`session`, `name`)                          |
 | `GET /api/stats`         | Totals, top models, top tools, buffer sizes                |
 | `GET /api/facets`        | Event and metric names that occur, with frequency          |
@@ -567,16 +585,18 @@ npm run demo      # emit a synthetic session
   2.1.220).** The documented `result_tokens` attribute on `claude_code.tool` spans is not
   sent by the CLI at the moment. When it is missing, the store extrapolates it from
   `tool_result_size_bytes` on the matching `claude_code.tool_result` event (~4 bytes per
-  token, a rule of thumb for English text) and marks the value in the tools table with a
-  tilde (`~`). As soon as the CLI delivers the attribute itself, that value is preferred
-  and the tilde disappears.
+  token, a rule of thumb for English text) and reports the estimated share as
+  `resultTokensEstimated` on that tool. As soon as the CLI delivers the attribute itself,
+  that value is preferred and `resultTokensEstimated` stays zero.
 - **Newly created tasks cannot always be matched to their ID.** The CLI assigns the task
-  ID on `TaskCreate` and names it only in the tool result — which only
-  `OTEL_LOG_TOOL_CONTENT=1` exports (undocumented format, considerably more sensitive, see
-  [Sensitive data](#sensitive-data)). The Tasks tab therefore shows such tasks separately
-  under "Created (id not yet known)" instead of guessing.
-- **The Tasks tab shows what was ever seen, not what exists right now.** A deleted or
-  completed task does not disappear from the table, it only gets the status
+  ID on `TaskCreate` and names it only in the tool result, which `OTEL_LOG_TOOL_CONTENT=1`
+  exports as a *span event* — and span events are not read by the store. The flag is on
+  (see [Sensitive data](#sensitive-data)), so the limit no longer has anything to do with
+  it being off. The store therefore keeps such tasks apart on the session record, as
+  `todos.unlinkedCreates`, instead of guessing.
+- **The task list the store keeps (`todos` on the session record) shows what was ever
+  seen, not what exists right now.** A deleted or completed task does not disappear from
+  the list, it only gets the status
   `deleted`/`completed`. There is deliberately no aggregate counter here (unlike traces,
   events and metrics), because it could only grow monotonically.
 - The store lives in the process. For long-term retention or alerting, the telemetry
@@ -617,6 +637,6 @@ In order:
 3. **Is the value encoded?** The value is restricted to US-ASCII and comma-separated, so a
    space, a comma or an umlaut has to be percent-encoded (`nightly%20run`). An unencoded
    one truncates the attribute or drops it.
-4. **Does the session's own record carry it?** Open the session in the interface, tab
-   "Attributes": if `session.name` is not among the resource attributes, it never left the
-   agent.
+4. **Does the session's own record carry it?** Read the record itself —
+   `curl -s http://127.0.0.1:4318/api/sessions/<id>` — and look for `session.name` among
+   the `resource` attributes: if it is not there, it never left the agent.

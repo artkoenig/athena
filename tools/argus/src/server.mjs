@@ -12,7 +12,7 @@ import crypto from 'node:crypto';
 import zlib from 'node:zlib';
 
 import { decodeExportRequest } from './otlp/decode.mjs';
-import { attributionOf, describeEvent, otelEnvFor } from './claude.mjs';
+import { CONTENT_EVENTS, EVENT, attributionOf, contentMetaOf, describeEvent, otelEnvFor } from './claude.mjs';
 
 const MAX_BODY_BYTES = 32 * 1024 * 1024;
 const SSE_FLUSH_MS = 250;
@@ -176,6 +176,7 @@ export function createServer({ store, token = null, endpoint = '', persist = nul
           logs: store.options.maxLogs,
           metricPoints: store.options.maxMetricPoints,
           sessions: store.options.maxSessions,
+          contentChars: store.options.maxContentChars,
         },
         env: otelEnvFor(endpoint, { token }),
       });
@@ -226,11 +227,57 @@ export function createServer({ store, token = null, endpoint = '', persist = nul
         limit: intParam(searchParams, 'limit', 200, 2000),
       });
       sendJson(res, 200, {
-        items: events.map((event) => ({
-          ...event,
-          summary: describeEvent(event),
-          attribution: attributionOf(event.attrs),
-        })),
+        items: events.map((event) => {
+          const item = {
+            ...event,
+            summary: describeEvent(event),
+            attribution: attributionOf(event.attrs),
+          };
+          // A body is megabytes and the tail is polled: ship its metadata here
+          // and serve the text from /api/content/at instead. The stored record
+          // is copied, never edited — the store still holds the body, and
+          // persistence may not have written it yet.
+          if (CONTENT_EVENTS.has(event.eventName)) {
+            const { body, ...attrs } = event.attrs ?? {};
+            item.attrs = attrs;
+            item.content = contentMetaOf(event);
+          }
+          return item;
+        }),
+      });
+      return true;
+    }
+    if (pathname === '/api/content') {
+      sendJson(res, 200, {
+        items: store.listContent({
+          sessionId: searchParams.get('session'),
+          agent: searchParams.get('agent'),
+          mainOnly: searchParams.get('main') === '1',
+          spanId: searchParams.get('span'),
+          eventName: searchParams.get('event'),
+          limit: intParam(searchParams, 'limit', 200, 2000),
+        }),
+      });
+      return true;
+    }
+    if (pathname === '/api/content/at') {
+      // Nearest-in-time across sessions would answer a question nobody asked.
+      const sessionId = searchParams.get('session');
+      if (!sessionId) {
+        sendJson(res, 400, { error: 'session required' });
+        return true;
+      }
+      // A moment before the first request is a normal place to scrub to, so an
+      // empty answer is a 200 with a null item and not a 404.
+      sendJson(res, 200, {
+        item: store.contentAt({
+          sessionId,
+          agent: searchParams.get('agent'),
+          mainOnly: searchParams.get('main') === '1',
+          spanId: searchParams.get('span'),
+          eventName: searchParams.get('event') ?? EVENT.apiRequestBody,
+          atMs: intParam(searchParams, 'at', Date.now()),
+        }),
       });
       return true;
     }

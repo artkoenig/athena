@@ -16,6 +16,7 @@
  */
 
 import {
+  CONTENT_EVENTS,
   EVENT,
   ERROR_EVENTS,
   METRIC,
@@ -23,7 +24,10 @@ import {
   TASK_TOOL_NAMES,
   TOKEN_TYPES,
   EMPTY_TOKENS,
+  agentOf,
   bool,
+  contentMetaOf,
+  isSubagentSource,
   num,
   serviceNameOf,
   sessionIdOf,
@@ -42,6 +46,10 @@ const DEFAULTS = {
   maxMetricPoints: 50_000,
   maxSessions: 500,
   retentionMs: 24 * 60 * 60 * 1000,
+  // Chars, not bytes: a body's size is `attrs.body.length`, which is the only
+  // measure available in O(1). With the content flags on by default a full log
+  // window at ~100 KB per body would otherwise be gigabytes.
+  maxContentChars: 128 * 1024 * 1024,
 };
 
 /**
@@ -124,6 +132,8 @@ function newSession(id, now) {
       userPrompts: 0,
       apiRequests: 0,
       apiErrors: 0,
+      // Answers "does this recording carry content" without a second request.
+      contentRecords: 0,
     },
     tokensMetric: EMPTY_TOKENS(),
     tokensEvent: EMPTY_TOKENS(),
@@ -177,6 +187,23 @@ function seriesKey(point) {
   return `${point.name}|${attrs}`;
 }
 
+/** What a content record costs the store: the size of the body that arrived. */
+function bodyCharsOf(log) {
+  const body = log?.attrs?.body;
+  return typeof body === 'string' ? body.length : 0;
+}
+
+/** The filter shared by listContent and contentAt; every criterion is ANDed. */
+function matchesContent(log, { sessionId, agent, mainOnly, spanId, eventName }) {
+  if (sessionId && log.sessionId !== sessionId) return false;
+  if (eventName && log.eventName !== eventName) return false;
+  if (spanId && log.spanId !== spanId) return false;
+  const attrs = log.attrs ?? {};
+  if (agent && agentOf(attrs) !== agent) return false;
+  if (mainOnly && isSubagentSource(attrs)) return false;
+  return true;
+}
+
 export class TelemetryStore {
   constructor(options = {}) {
     this.options = { ...DEFAULTS, ...options };
@@ -184,6 +211,12 @@ export class TelemetryStore {
     this.logs = [];
     this.metricPoints = [];
     this.spansByTrace = new Map();
+    // References to the same records that sit in `this.logs`, in ingest order,
+    // plus the running total of their body sizes. A content record is an
+    // ordinary log event that happens to be heavy; it is indexed here as well,
+    // never instead.
+    this.contentLogs = [];
+    this.contentChars = 0;
     this.sessions = new Map();
     this.traces = new Map();
     this.listeners = new Set();
@@ -198,6 +231,8 @@ export class TelemetryStore {
     this.logs = [];
     this.metricPoints = [];
     this.spansByTrace.clear();
+    this.contentLogs = [];
+    this.contentChars = 0;
     this.sessions.clear();
     this.traces.clear();
     this.received = { traces: 0, metrics: 0, logs: 0 };
@@ -446,6 +481,12 @@ export class TelemetryStore {
     const attrs = log.attrs ?? {};
     log.isError = ERROR_EVENTS.has(log.eventName) || log.severity === 'ERROR' || log.severity === 'FATAL';
 
+    if (CONTENT_EVENTS.has(log.eventName)) {
+      session.counts.contentRecords++;
+      this.contentLogs.push(log);
+      this.contentChars += bodyCharsOf(log);
+    }
+
     switch (log.eventName) {
       case EVENT.userPrompt:
         session.counts.userPrompts++;
@@ -662,6 +703,7 @@ export class TelemetryStore {
     this.#trim('spans', this.options.maxSpans, cutoff, (span) => span.startMs);
     this.#trim('logs', this.options.maxLogs, cutoff, (log) => log.timeMs);
     this.#trim('metricPoints', this.options.maxMetricPoints, cutoff, (point) => point.timeMs);
+    this.#trimContent();
     this.#evictSessions(cutoff);
   }
 
@@ -673,6 +715,40 @@ export class TelemetryStore {
     if (drop <= 0) return;
     const removed = list.splice(0, drop);
     if (field === 'spans') this.#unindexSpans(removed);
+    if (field === 'logs') this.#unindexContent(removed);
+  }
+
+  /** Drop evicted log records from the content index and give back their chars. */
+  #unindexContent(removed) {
+    const dropped = new Set(removed.filter((log) => CONTENT_EVENTS.has(log.eventName)));
+    if (!dropped.size) return;
+    for (const log of dropped) this.contentChars -= bodyCharsOf(log);
+    this.contentLogs = this.contentLogs.filter((log) => !dropped.has(log));
+    if (this.contentChars < 0) this.contentChars = 0;
+  }
+
+  /**
+   * Keep the content window inside its char budget, oldest first, evicting whole
+   * records from both indexes — the module's contract everywhere else, and the
+   * only way to stay consistent with persistence, which has not necessarily
+   * written the record yet (it subscribes to the change stream, emitted after
+   * eviction) and would otherwise see a gutted body.
+   *
+   * The `> 1` guard is deliberate: one body larger than the whole budget is
+   * still kept, because "the newest context" is the one thing this store must
+   * always be able to answer.
+   */
+  #trimContent() {
+    if (this.contentChars <= this.options.maxContentChars) return;
+    const dropped = new Set();
+    while (this.contentChars > this.options.maxContentChars && this.contentLogs.length > 1) {
+      const log = this.contentLogs.shift();
+      this.contentChars -= bodyCharsOf(log);
+      dropped.add(log);
+    }
+    if (this.contentChars < 0) this.contentChars = 0;
+    if (!dropped.size) return;
+    this.logs = this.logs.filter((log) => !dropped.has(log));
   }
 
   #unindexSpans(removed) {
@@ -719,6 +795,11 @@ export class TelemetryStore {
       this.spansByTrace.delete(traceId);
     }
     this.spans = this.spans.filter((span) => span.sessionId !== id);
+    for (const log of this.contentLogs) {
+      if (log.sessionId === id) this.contentChars -= bodyCharsOf(log);
+    }
+    this.contentLogs = this.contentLogs.filter((log) => log.sessionId !== id);
+    if (this.contentChars < 0) this.contentChars = 0;
     this.logs = this.logs.filter((log) => log.sessionId !== id);
     this.metricPoints = this.metricPoints.filter((point) => point.sessionId !== id);
   }
@@ -840,6 +921,50 @@ export class TelemetryStore {
     }
     matches.reverse();
     return matches;
+  }
+
+  /**
+   * The cheap index over content records: metadata only, never a body.
+   *
+   * A lane is a `spanId` and a name is only a label on it — two concurrent
+   * subagents of one type share a `query_source` and differ only by span — so
+   * `agent` and `spanId` are separate filters and every filter is ANDed.
+   */
+  listContent({
+    sessionId = null,
+    agent = null,
+    mainOnly = false,
+    spanId = null,
+    eventName = null,
+    limit = 200,
+  } = {}) {
+    const matches = [];
+    // Newest-first, so `limit` keeps the most recent records.
+    for (let i = this.contentLogs.length - 1; i >= 0 && matches.length < limit; i--) {
+      const log = this.contentLogs[i];
+      if (!matchesContent(log, { sessionId, agent, mainOnly, spanId, eventName })) continue;
+      matches.push(log);
+    }
+    matches.reverse();
+    return matches.map((log) => contentMetaOf(log));
+  }
+
+  /** The newest matching record at or before `atMs`, body included, or null. */
+  contentAt({
+    sessionId,
+    agent = null,
+    mainOnly = false,
+    spanId = null,
+    eventName = EVENT.apiRequestBody,
+    atMs,
+  } = {}) {
+    for (let i = this.contentLogs.length - 1; i >= 0; i--) {
+      const log = this.contentLogs[i];
+      if (log.timeMs > atMs) continue;
+      if (!matchesContent(log, { sessionId, agent, mainOnly, spanId, eventName })) continue;
+      return { ...contentMetaOf(log), body: log.attrs?.body ?? null };
+    }
+    return null;
   }
 
   queryMetrics({ sessionId = null, name = null, limit = 500 } = {}) {

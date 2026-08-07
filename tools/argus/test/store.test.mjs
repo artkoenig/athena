@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { TelemetryStore } from '../src/store.mjs';
+import { agentOf } from '../src/claude.mjs';
 
 const SESSION = 'sess-1';
 const base = { resource: { 'service.name': 'agent' } };
@@ -30,6 +31,30 @@ const log = (eventName, attributes = {}, timeMs = Date.now()) => ({
   traceId: '',
   spanId: '',
   attrs: { 'session.id': SESSION, ...attributes },
+});
+
+// A content record as measured against a real capture: string attributes for
+// body_length/body_truncated, session.id kept in attrs like the other helpers.
+const bodyLog = (attributes = {}, timeMs = Date.now()) =>
+  log(
+    'claude_code.api_request_body',
+    {
+      'event.sequence': '5',
+      'prompt.id': 'prompt-1',
+      model: 'claude-sonnet-5',
+      query_source: 'sdk',
+      body: '{"messages":[{"role":"user","content":"hi"}]}',
+      body_length: '106251',
+      body_truncated: 'true',
+      ...attributes,
+    },
+    timeMs,
+  );
+
+// A response body as measured: same shape as a request body, plus request_id.
+const responseBodyLog = (attributes = {}, timeMs = Date.now()) => ({
+  ...bodyLog({ request_id: 'req_011Cdm', ...attributes }, timeMs),
+  eventName: 'claude_code.api_response_body',
 });
 
 // Spans carry absolute wall-clock timestamps; anything older than the retention
@@ -456,4 +481,155 @@ test('clear() empties the store but keeps subscribers attached', () => {
   assert.equal(store.sessions.size, 0);
   store.ingest('logs', [log('claude_code.user_prompt')]);
   assert.equal(notified, 2);
+});
+
+test('an ingested api_request_body event is listed with parsed metadata and never with its body', () => {
+  const store = new TelemetryStore();
+  store.ingest('logs', [bodyLog()]);
+  const items = store.listContent({ sessionId: SESSION });
+  assert.equal(items.length, 1);
+  const item = items[0];
+  assert.equal(item.querySource, 'sdk');
+  assert.equal(item.agent, null);
+  assert.equal(item.isSubagent, false);
+  assert.equal(item.model, 'claude-sonnet-5');
+  assert.equal(item.bodyLength, 106251);
+  assert.equal(typeof item.bodyLength, 'number', 'body_length arrives as a string on the wire and must be parsed');
+  assert.equal(item.truncated, true);
+  assert.equal(typeof item.truncated, 'boolean', 'body_truncated arrives as a string on the wire and must be parsed');
+  assert.ok(!('body' in item), 'listContent must never carry the full body');
+});
+
+test('contentAt returns the exact body for a record whose time matches the boundary exactly', () => {
+  const store = new TelemetryStore();
+  const t = Date.now();
+  const record = bodyLog({}, t);
+  store.ingest('logs', [record]);
+  const item = store.contentAt({ sessionId: SESSION, atMs: t });
+  assert.equal(item.body, record.attrs.body);
+});
+
+test('contentAt returns the newest record at or before the requested time, and null before the first record', () => {
+  const store = new TelemetryStore();
+  const t = Date.now();
+  store.ingest('logs', [
+    bodyLog({ 'prompt.id': 'p-early' }, t),
+    bodyLog({ 'prompt.id': 'p-later' }, t + 1000),
+  ]);
+  const mid = store.contentAt({ sessionId: SESSION, atMs: t + 500 });
+  assert.equal(mid.promptId, 'p-early');
+  assert.equal(store.contentAt({ sessionId: SESSION, atMs: t - 1 }), null);
+});
+
+test('main and subagent content records are told apart by query_source, and a redacted name still resolves to something', () => {
+  const store = new TelemetryStore();
+  store.ingest('logs', [
+    bodyLog({ query_source: 'sdk', 'prompt.id': 'p-main' }),
+    bodyLog({ query_source: 'agent:custom:probe-bot', 'prompt.id': 'p-sub' }),
+  ]);
+
+  const byAgent = store.listContent({ sessionId: SESSION, agent: 'probe-bot' });
+  assert.equal(byAgent.length, 1);
+  assert.equal(byAgent[0].promptId, 'p-sub');
+
+  const mainOnly = store.listContent({ sessionId: SESSION, mainOnly: true });
+  assert.equal(mainOnly.length, 1);
+  assert.equal(mainOnly[0].promptId, 'p-main');
+
+  assert.equal(agentOf({ query_source: 'agent:custom' }), 'custom');
+});
+
+test('two concurrent subagents of the same type are distinguished by spanId, not by query_source alone', () => {
+  const store = new TelemetryStore();
+  store.ingest('logs', [
+    { ...bodyLog({ query_source: 'agent:custom:probe-bot', 'prompt.id': 'p-a' }), spanId: 'span-a' },
+    { ...bodyLog({ query_source: 'agent:custom:probe-bot', 'prompt.id': 'p-b' }), spanId: 'span-b' },
+  ]);
+  const items = store.listContent({ sessionId: SESSION, spanId: 'span-a' });
+  assert.equal(items.length, 1);
+  assert.equal(items[0].promptId, 'p-a');
+});
+
+test('content records are evicted oldest-first once the total exceeds maxContentChars, whole from both indexes', () => {
+  const store = new TelemetryStore({ maxContentChars: 120 });
+  const t = Date.now();
+  const bodies = ['a'.repeat(50), 'b'.repeat(50), 'c'.repeat(50)];
+  const records = bodies.map((body, i) =>
+    bodyLog({ 'prompt.id': `p-${i}`, body, body_length: String(body.length), body_truncated: 'false' }, t + i),
+  );
+  const other = log('claude_code.user_prompt', { prompt: 'unrelated' }, t + 10);
+  store.ingest('logs', [...records, other]);
+
+  const ids = store.listContent({ sessionId: SESSION }).map((item) => item.promptId);
+  assert.ok(!ids.includes('p-0'), 'the oldest content record must be evicted once the budget is exceeded');
+  assert.ok(ids.includes('p-2'), 'the newest content record must survive');
+
+  const rawIds = store
+    .queryEvents({ sessionId: SESSION, eventName: 'claude_code.api_request_body' })
+    .map((event) => event.attrs['prompt.id']);
+  assert.ok(!rawIds.includes('p-0'), 'eviction removes the whole record from the raw log too, not just the index');
+
+  assert.equal(
+    store.queryEvents({ sessionId: SESSION, eventName: 'claude_code.user_prompt' }).length,
+    1,
+    'a non-content log ingested alongside must be untouched by content eviction',
+  );
+});
+
+test('a single body larger than the whole content budget is still kept, never dropped', () => {
+  const store = new TelemetryStore({ maxContentChars: 10 });
+  const bigBody = 'x'.repeat(500);
+  const t = Date.now();
+  store.ingest('logs', [bodyLog({ body: bigBody, body_length: String(bigBody.length), body_truncated: 'false' }, t)]);
+  const item = store.contentAt({ sessionId: SESSION, atMs: t });
+  assert.equal(item.body, bigBody);
+});
+
+test('clear() resets content bookkeeping along with everything else', () => {
+  const store = new TelemetryStore();
+  store.ingest('logs', [bodyLog({ 'prompt.id': 'p-before' })]);
+  store.clear();
+  store.ingest('logs', [bodyLog({ 'prompt.id': 'p-after' })]);
+  const items = store.listContent({ sessionId: SESSION });
+  assert.equal(items.length, 1);
+  assert.equal(items[0].promptId, 'p-after');
+});
+
+test('dropping the oldest session under maxSessions removes its content records too', () => {
+  const store = new TelemetryStore({ maxSessions: 1 });
+  const t = Date.now();
+  store.ingest('logs', [bodyLog({ 'session.id': 'sess-a', 'prompt.id': 'p-a' }, t)]);
+  store.ingest('logs', [bodyLog({ 'session.id': 'sess-b', 'prompt.id': 'p-b' }, t + 1000)]);
+  assert.equal(store.listContent({ sessionId: 'sess-a' }).length, 0);
+  assert.equal(store.listContent({ sessionId: 'sess-b' }).length, 1);
+});
+
+test('an api_response_body record is indexed alongside a request body, and the eventName filter discriminates between them', () => {
+  const store = new TelemetryStore();
+  store.ingest('logs', [bodyLog(), responseBodyLog({ 'prompt.id': 'p-resp' })]);
+
+  const responses = store.listContent({ sessionId: SESSION, eventName: 'claude_code.api_response_body' });
+  assert.equal(responses.length, 1);
+  assert.equal(responses[0].eventName, 'claude_code.api_response_body');
+  assert.equal(responses[0].requestId, 'req_011Cdm');
+  assert.ok(!('body' in responses[0]), 'listContent must never carry the full body for a response record either');
+
+  const requests = store.listContent({ sessionId: SESSION, eventName: 'claude_code.api_request_body' });
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].eventName, 'claude_code.api_request_body');
+});
+
+test('contentAt with an eventName filter returns the matching body, and the default filter still means api_request_body', () => {
+  const store = new TelemetryStore();
+  const t = Date.now();
+  store.ingest('logs', [
+    bodyLog({ body: 'request text' }, t),
+    responseBodyLog({ body: 'response text' }, t + 10),
+  ]);
+
+  const response = store.contentAt({ sessionId: SESSION, atMs: t + 100, eventName: 'claude_code.api_response_body' });
+  assert.equal(response.body, 'response text');
+
+  const request = store.contentAt({ sessionId: SESSION, atMs: t + 100 });
+  assert.equal(request.body, 'request text', 'the newer response record must not bleed into the documented default filter');
 });

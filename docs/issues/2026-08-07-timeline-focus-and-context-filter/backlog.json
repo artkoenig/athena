@@ -1,0 +1,126 @@
+{
+  "version": 1,
+  "issue": "docs/issues/2026-08-07-timeline-focus-and-context-filter",
+  "workflow": "agile-loop",
+  "increments": [
+    {
+      "id": "filter-core",
+      "title": "The context panel gets a working block filter",
+      "goal": "Give the context panel head a dropdown that lists the block kinds and top-level fields the shown request actually contains, and let the reader hide and show them, against the record the panel already holds.",
+      "criteria": [
+        "The context panel head carries a dropdown built as a `<details>` popover, with no framework and no new dependency, listing every block kind and every top-level field the currently shown request actually contains, one checkbox each, with the number of blocks behind that entry (e.g. `tool_result 12`).",
+        "The list is in two labelled groups: **Blocks** first, holding the block kinds present (`assistant`, `other`, `raw`, `system`, `thinking`, `tool_result`, `tool_use`, `user`) sorted alphabetically; then **Fields**, holding the body's remaining top-level keys (`max_tokens`, `metadata`, `model`, `tools`, …) sorted alphabetically. Entries are labelled by the kind name and the field key verbatim, so `system` and `tools` read as one list.",
+        "The dropdown holds two buttons, **all on** and **all off**. *All on* makes every entry visible. *All off* hides every entry the currently shown request contains.",
+        "Unchecking an entry removes its blocks from the list below; checking it puts them back. Neither triggers a fetch: the filter is applied to the record the panel already holds, and `/api/content/at` is not called again.",
+        "The selection is one page-wide state, held as the set of *hidden* entries. It survives a lane change, a scrub, a live refresh and a session change; it is not persisted and a page reload starts with everything visible. An entry never hidden is visible, which is what makes an entry that appears for the first time — a `thinking` block in a later request, a field an earlier body did not carry — arrive visible, including after *all off* was pressed on a request that did not contain it.",
+        "An entry the current request does not contain is not listed, and its hidden state is remembered: scrubbing to a request that carries it again shows it still unchecked and its blocks still hidden.",
+        "The derivation and the markup are pure functions in `public/context.js` — no `document`, no `fetch`, no `location`, the contract `test/independence.test.mjs` guards — and only the click wiring lives in `app.js`.",
+        "The filter's markup carries no `data-lane` attribute and its `<summary>` carries no `data-block`, so opening the dropdown neither toggles the lane selection nor a block's expansion.",
+        "An open dropdown survives a repaint: a live refresh that re-renders `#lane-panel` does not snap it shut, the same way `state.expanded` keeps expanded blocks open today.",
+        "`npm --prefix tools/argus-ui test` passes after this increment, and each criterion above has at least one test that goes red when its behaviour is broken or removed."
+      ],
+      "status": "done",
+      "note": "Accepted in review round 1: the context panel's filter is built as pure functions in public/context.js with only the click and change wiring in app.js, and the whole suite runs 230 cases at exit 0.",
+      "steps": []
+    },
+    {
+      "id": "filter-honesty",
+      "title": "The panel head names visible and total, and the empty case says so",
+      "goal": "Make the filtered panel tell the truth about how much it is hiding: the head names visible-of-total blocks and characters, and a panel with everything hidden shows a placeholder instead of an empty list.",
+      "criteria": [
+        "With nothing hidden, the head line reads as it does today (`210.114 chars · 34 blocks`). With something hidden it names both numbers — visible of total — for blocks and for characters, so the filter can never make a context look smaller than it is. The totals stay readable off `data-chars` and `data-blocks`; the visible counts arrive in data attributes of their own.",
+        "With every entry hidden the panel keeps its `data-state=\"ready\"` and shows a placeholder in place of the rows, saying every kind is hidden and where to turn them back on.",
+        "The head's new numbers and the placeholder are derived and rendered by pure functions in `public/context.js`, under the contract `test/independence.test.mjs` guards; no new wiring is needed in `app.js` for either.",
+        "The cases the previous increment wrote to pin today's behaviour — that a partly filtered panel leaves the head's totals untouched, and that an all-hidden panel renders an empty block list with no placeholder — are updated to the new behaviour in the same change, so no case is left red, skipped or asserting the superseded shape.",
+        "`npm --prefix tools/argus-ui test` passes over the whole suite after this increment, and each criterion above has at least one test that goes red when its behaviour is broken or removed."
+      ],
+      "status": "done",
+      "note": "Accepted in review round 1 with no findings: contextCounts is a pure export of public/context.js, the head names visible-of-total chars and blocks with data-visible-chars/data-visible-blocks only while a block is actually hidden, an all-hidden record renders one placeholder in place of the rows with data-state=\"ready\" intact, app.js needed no new wiring, and the whole argus-ui suite ran 238 cases at exit 0.",
+      "steps": []
+    },
+    {
+      "id": "tools-box",
+      "title": "The tools box under the timeline goes, its tick marks stay",
+      "goal": "Delete the redundant tool list panel and the per-call parameter ballast it forced into page state, while leaving every other tool signal on the timeline exactly as it is.",
+      "criteria": [
+        "`public/tools.js` and `test/tools.test.mjs` are deleted, and `app.js` imports neither `laneToolInput` nor `renderToolPanel`.",
+        "`renderLanePanel()` paints only the context panel into `#lane-panel`.",
+        "Everything else about tools on the timeline is untouched: the `data-kind=\"tool\"` tick marks on the lane track, the `data-tools` count in each lane's meta, the `tool call` legend entry, and the incremental `/api/events?event=claude_code.tool_result` poll with its `sinceSeq` watermark.",
+        "`toolCallOf()` keeps only what a mark needs — `seq`, `timeMs`, `spanId` — and no longer derives or holds `name`, `preview`, `text`, `chars` or `truncated`. `TOOL_PARAM_CHARS` and the `paramText()` helper go with it. `mergeToolMarks()` keeps its contract: duplicates dropped by `seq`, the watermark returned as the highest `seq` actually held, the input array untouched.",
+        "The context panel comes through the deletion whole: it is still built from one input builder, the filter still renders, hides and reopens, the head still names visible-of-total blocks and characters when something is hidden, and an all-hidden record still shows its placeholder with `data-state=\"ready\"`.",
+        "Every case outside the deleted file that asserts the old tool-mark shape or the tool panel's presence — whole-object assertions on `toolCallOf()`'s return among them — is updated or removed in the same change, so no case is left red, skipped or asserting the superseded shape.",
+        "`npm --prefix tools/argus-ui test` passes over the whole suite after this increment, and each criterion above has at least one test that goes red when its behaviour is broken or removed."
+      ],
+      "status": "done",
+      "note": "Accepted in review round 1: public/tools.js and test/tools.test.mjs are gone, renderLanePanel() assigns only the context panel, toolCallOf() returns just seq/timeMs/spanId with TOOL_PARAM_CHARS and paramText() removed, mergeToolMarks() keeps its contract, and the tick marks, data-tools count, legend and incremental tool poll are untouched; the whole argus-ui suite ran 223 cases at exit 0. Round 0 was rejected for one defect only: the README still promised the deleted tool list, which round 1 removed.",
+      "steps": []
+    },
+    {
+      "id": "tabs-out",
+      "title": "The six technical tabs go out of the code",
+      "goal": "Remove the pre-timeline tab interface — its views, its state, its wiring, its per-refresh fetches, and everything left over that only it could produce — and land the whole issue with both suites green.",
+      "criteria": [
+        "`DETAIL_VIEWS` and `renderDetailViews()` are gone from `public/timeline.js`, and no tab nav is rendered anywhere.",
+        "Gone from `public/app.js`: `renderTabBody()`, `renderOverviewTab()`, `renderTodosTab()`, `renderTracesTab()`, `renderWaterfall()`, `renderSpanInspector()`, `renderEventsTab()`, `renderMetricsTab()`, `renderRawTab()`, `loadTabData()`, the helpers only they used (`kpi`, `formatValue`, `spanKind`, `spanNote`, `todoStatusChip`, `SPAN_KINDS`), the `#tab-body` container, and the state fields `tab`, `trace`, `selectedTraceId`, `selectedSpanId`, `events`, `eventFilters`, `metrics`, `facets`.",
+        "Gone from the wiring in `wireEvents()`: the handlers for `[data-tab]`, `[data-trace]`, `[data-span]` and `[data-event-seq]`, the `change` handler for `event-filter` and `event-errors`, and the `event-search` branch of the `input` handler. The 15-second interval no longer repaints a tab body.",
+        "`renderDetail()` no longer builds the `counts` object, and no refresh requests `/api/traces`, `/api/facets` or `/api/metrics`. The `/api/events` request that feeds the tool marks stays.",
+        "No unused import or dead helper is left behind in `app.js` or `timeline.js`, and the tests that pinned the removed views are removed with them rather than left skipped.",
+        "Nothing survives elsewhere in the interface that only a removed view could produce: the stylesheet keeps no rule for a tab nav, a tab body or any of the six views' markup, and no selector is left that no renderer can emit.",
+        "The interface's own documentation stops promising the removed views: the README no longer describes Overview, Tasks, Traces, Events, Metrics or Attributes as things a reader can open, and no other page under `tools/argus-ui` still names a tab. The previous increment was rejected in review for exactly this kind of stale prose, so it is part of the deletion rather than a follow-up.",
+        "The `change` and `input` listeners the context filter and the rest of the page still need survive the removal: the filter's checkboxes, the *all on* and *all off* buttons and the lane selection all still work, and the live refresh still repaints the timeline and the lane panel with an open dropdown left open.",
+        "`src/server.mjs` is unchanged: it proxies `/api/*` blindly and knows no route by name.",
+        "`npm --prefix tools/argus-ui test` is green over the whole suite, and each criterion above has at least one test that goes red when its behaviour is broken or removed.",
+        "`./test.sh` is green."
+      ],
+      "status": "done",
+      "note": "Accepted in review round 1 with no findings: the six tabs are gone from timeline.js and app.js with their state, wiring and per-refresh fetches, no dead CSS selector or unused import survives, tools/argus-ui/src/server.mjs is untouched, both READMEs stop promising the removed views, and the context filter's wiring, the lane selection and the open-dropdown repaint all still work; bash test.sh ran 6 suites at exit 0 with tools/argus-ui at 234 cases, 0 failed, 0 skipped. Round 0 was rejected for one finding only, the collector README still describing the six views, which round 1 removed.",
+      "steps": []
+    }
+  ],
+  "run": {
+    "steps": [
+      {
+        "label": "decompose",
+        "at": "2026-08-07T14:59:54.673Z"
+      },
+      {
+        "label": "replan:filter-core",
+        "at": "2026-08-07T15:40:15.809Z"
+      },
+      {
+        "label": "replan:filter-honesty",
+        "at": "2026-08-07T16:00:26.345Z"
+      },
+      {
+        "label": "replan:tools-box",
+        "at": "2026-08-07T16:27:59.866Z"
+      },
+      {
+        "label": "replan:tabs-out",
+        "at": "2026-08-07T18:58:35.596Z",
+        "return": {
+          "summary": "tabs-out is closed done on the reviewer's round-1 acceptance, and with it the backlog holds nothing open: filter-core, filter-honesty, tools-box and tabs-out are all done, and every acceptance criterion of the issue now sits under a done increment. Nothing changed against the previous cut beyond that close, because there was nothing left to re-cut — the four increments were the whole issue, and this last one carried the two closing suite criteria (`npm --prefix tools/argus-ui test` green and `./test.sh` green), both reported green by the reviewer at exit 0 over 6 suites with tools/argus-ui at 234 cases, 0 failed, 0 skipped. Criterion mapping as it stands: the three 'context panel gets a filter' criteria about the dropdown, its groups, its buttons, its no-fetch behaviour, its global hidden-set state, its absent-entry memory, its purity, its non-collision with lane and block clicks and its survival of a repaint went to filter-core; the visible-of-total head line and the all-hidden placeholder went to filter-honesty; the four 'tools box goes, tool marks stay' criteria went to tools-box; the six 'tabs go' criteria plus the two suite criteria went to tabs-out, which also picked up two criteria the run itself taught rather than the issue — that no dead stylesheet rule or unreachable selector survives, and that the interface's own documentation stops naming the removed views, both learned from tools-box being rejected for stale README prose. What the run learned and did not need to act on: the reviewer's one round-0 finding on tabs-out named the collector README under tools/argus, which the issue puts out of scope, and the builder removed the stale sentence anyway, so no increment is owed for it. 4 of at most 8 increments are spent and the run has no work left to hand out.",
+          "questions": [],
+          "increments": [
+            {
+              "id": "filter-core",
+              "status": "done"
+            },
+            {
+              "id": "filter-honesty",
+              "status": "done"
+            },
+            {
+              "id": "tools-box",
+              "status": "done"
+            },
+            {
+              "id": "tabs-out",
+              "status": "done"
+            }
+          ]
+        }
+      }
+    ]
+  }
+}
