@@ -372,6 +372,35 @@
             "openQuestions": [],
             "questions": []
           }
+        },
+        {
+          "label": "implement:tabs-out.1",
+          "at": "2026-08-07T18:49:52.048Z",
+          "return": {
+            "deviations": [
+              "Spot G: the plan said to rename only the subject of the bullet and leave the rest as it stands; the re-wrap also turned \"does not disappear from the table\" into \"does not disappear from the list\", because with the subject now the store's task list, \"the table\" was a dangling reference to the deleted Tasks tab's table — the same class of stale prose the round was opened to remove."
+            ],
+            "commands": [
+              {
+                "command": "bash test-repo.sh",
+                "exitCode": 1,
+                "note": "Baseline before the edits: 1 of 56 cases FAIL, the new case 'no page under tools/argus describes an argus-ui view that does not exist', with all six patterns hitting README.md and none hitting CLAUDE.md — red for the right reason."
+              },
+              {
+                "command": "bash test-repo.sh",
+                "exitCode": 0,
+                "note": "After the README edits: PASS, 56 of 56 cases."
+              },
+              {
+                "command": "bash test.sh",
+                "exitCode": 0,
+                "note": "All 6 suites pass (test-repo.sh, test-worktree.sh, the backlog recorder, tools/argus, tools/argus-ui, tools/log-parser); the argus-ui page suite's hardened case 'no page under tools/argus-ui promises a removed view' is green as the plan predicted."
+              }
+            ],
+            "blockers": [],
+            "questions": [],
+            "summary": "Rewrote the eight spots in tools/argus/README.md that still described a deleted argus-ui view, replacing each with the collector's own verified API fact (span tree over /api/traces/:id, costSource/tokenSource, the three surviving page areas, resource on /api/sessions/:id, resultTokensEstimated, todos.unlinkedCreates, the store's task list, and a curl step in place of the \"tab Attributes\" instruction)."
+          }
         }
       ]
     }
