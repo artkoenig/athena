@@ -12,6 +12,7 @@ import {
   visibleBlocks,
   hiddenAfterAll,
   contextEntryIds,
+  contextCounts,
 } from '../public/context.js';
 import { esc, fmtNum, PREVIEW_CHARS } from '../public/format.js';
 
@@ -1002,11 +1003,15 @@ test('unchecking an entry removes its blocks below and only unchecks that box', 
     'the nine entries still visible must still carry checked — hiding one entry must not touch the others',
   );
 
-  assert.match(bothHtml, /data-blocks="12"/, 'the head\'s total block count must stay the fixture\'s own total, not the filtered count');
+  assert.match(
+    bothHtml,
+    /data-blocks="12"/,
+    'the head\'s total block count must stay the fixture\'s own total — the totals are what stop the filter making the context look smaller than it is',
+  );
   assert.match(
     bothHtml,
     new RegExp(`data-chars="${requestBody().length}"`),
-    'the head\'s total character count must stay the fixture\'s own total — the filter does not own that number yet',
+    'the head\'s total character count must stay the fixture\'s own total — the totals are what stop the filter making the context look smaller than it is',
   );
 
   assert.equal(
@@ -1035,7 +1040,7 @@ test('a field entry hides its field only', () => {
   );
 });
 
-test('everything hidden leaves an empty list but a reader can still turn entries back on', () => {
+test('everything hidden shows a placeholder in place of the rows, and a reader can still turn entries back on', () => {
   const hidden = contextEntryIds(item());
   const html = renderContextPanel({ lane: lane(), item: item(), hidden });
   assert.deepEqual(blockChunks(html), [], 'every block must be hidden');
@@ -1045,6 +1050,25 @@ test('everything hidden leaves an empty list but a reader can still turn entries
     (html.match(/ checked>/g) ?? []).length,
     0,
     'with every entry hidden, no checkbox may carry checked',
+  );
+  assert.equal(
+    (html.match(/class="placeholder"/g) ?? []).length,
+    1,
+    'exactly one placeholder must replace the hidden rows',
+  );
+  assert.ok(
+    !html.includes('<div class="ctx-blocks">'),
+    'with everything hidden there must be no block-list container at all, only the placeholder',
+  );
+  const placeholderIdx = html.indexOf('class="placeholder"');
+  assert.ok(placeholderIdx >= 0, 'the placeholder\'s own markup must be findable');
+  const placeholderText = html.slice(placeholderIdx);
+  assert.match(placeholderText, /hidden/, 'the placeholder must say every kind is hidden');
+  assert.match(placeholderText, /filter/, 'the placeholder must say where to turn entries back on');
+  assert.match(
+    html,
+    /data-visible-blocks="0"/,
+    'the meta span must report zero visible blocks when everything is hidden',
   );
 });
 
@@ -1134,4 +1158,137 @@ test('the panel\'s whole input still comes from one builder', () => {
   });
   assert.deepEqual(withoutFilterState.hidden, [], 'no hidden set given must default to nothing hidden');
   assert.equal(withoutFilterState.filterOpen, false, 'no filterOpen given must default to closed');
+});
+
+// Increment 2 — the panel tells the truth about how much it is hiding:
+// contextCounts derives visible-of-total for blocks and characters, the head
+// names both when something is hidden, and an all-hidden panel shows a
+// placeholder in place of the rows instead of an empty list.
+
+test('the counts of an unfiltered record are its own totals', () => {
+  const record = contextBlocks(requestBody());
+  const sum = record.blocks.reduce((total, block) => total + block.chars, 0);
+  assert.deepEqual(
+    contextCounts(record, []),
+    { chars: requestBody().length, blocks: 12, visibleBlocks: 12, visibleChars: sum, filtered: false },
+    'with nothing hidden, the visible counts must equal the record\'s own totals',
+  );
+  assert.ok(
+    sum < requestBody().length,
+    'the sum of the blocks\' own texts must be strictly below the body\'s own length — the JSON scaffolding around ' +
+      'them belongs to no block, and without that gap the following cases cannot tell the two definitions of ' +
+      'visibleChars apart and the suite goes vacuous',
+  );
+});
+
+test('hiding one entry takes its blocks and its characters out of the visible counts', () => {
+  const record = contextBlocks(requestBody());
+  const sum = record.blocks.reduce((total, block) => total + block.chars, 0);
+  const toolResultBlock = record.blocks.find((block) => block.kind === 'tool_result');
+  const counts = contextCounts(record, ['kind:tool_result']);
+  assert.equal(
+    counts.visibleBlocks,
+    11,
+    'hiding the request\'s one tool_result block must drop the visible block count by exactly one',
+  );
+  assert.equal(
+    counts.visibleChars,
+    sum - toolResultBlock.chars,
+    'hiding the tool_result entry must take its own characters, and only its own, out of the visible total',
+  );
+  assert.equal(counts.filtered, true, 'hiding a non-empty entry must mark the record as filtered');
+  assert.equal(counts.chars, requestBody().length, 'the total character count must stay the record\'s own, filter or no filter');
+  assert.equal(counts.blocks, 12, 'the total block count must stay the record\'s own, filter or no filter');
+});
+
+test('an id the record does not carry hides nothing and does not count as filtered', () => {
+  const body = requestBody({ messages: [{ role: 'user', content: 'hi' }] });
+  const record = contextBlocks(body);
+  const sum = record.blocks.reduce((total, block) => total + block.chars, 0);
+  const counts = contextCounts(record, ['kind:thinking', 'field:absent']);
+  assert.equal(counts.filtered, false, 'hiding ids this record does not carry must not count as a filter');
+  assert.equal(counts.visibleBlocks, counts.blocks, 'with nothing this record carries hidden, every one of its blocks stays visible');
+  assert.equal(counts.visibleChars, sum, 'with nothing this record carries hidden, the visible characters must be this record\'s own block sum');
+});
+
+test('every entry hidden leaves nothing visible at all', () => {
+  const record = contextBlocks(requestBody());
+  const counts = contextCounts(record, contextEntryIds(item()));
+  assert.equal(counts.visibleBlocks, 0, 'hiding every entry the record carries must leave no block visible');
+  assert.equal(counts.visibleChars, 0, 'hiding every entry the record carries must leave no character visible');
+  assert.equal(counts.filtered, true, 'hiding every entry is still a filter');
+  assert.equal(counts.chars, requestBody().length, 'the total character count must stay the record\'s own even with everything hidden');
+  assert.equal(counts.blocks, 12, 'the total block count must stay the record\'s own even with everything hidden');
+});
+
+test('the counts hold with no arguments and with a Set', () => {
+  assert.deepEqual(
+    contextCounts(),
+    { chars: 0, blocks: 0, visibleChars: 0, visibleBlocks: 0, filtered: false },
+    'no record and no hidden set at all must count as nothing, not a crash',
+  );
+  assert.deepEqual(
+    contextCounts(contextBlocks(requestBody()), new Set(['kind:user'])),
+    contextCounts(contextBlocks(requestBody()), ['kind:user']),
+    'a Set of hidden ids and an array of the same ids must produce the same counts',
+  );
+});
+
+test('with nothing hidden the head line and its attributes are exactly what they were', () => {
+  const html = renderContextPanel({ lane: lane(), item: item() });
+  const metaMatch = html.match(/<span class="context-meta"[\s\S]*?<\/span>/);
+  assert.ok(metaMatch, 'the meta span must be present');
+  const meta = metaMatch[0];
+  assert.match(
+    meta,
+    new RegExp(`data-chars="${requestBody().length}"`),
+    'the meta span must still carry the body\'s own total as data-chars',
+  );
+  assert.match(meta, /data-blocks="12"/, 'the meta span must still carry the fixture\'s own block total as data-blocks');
+  assert.ok(meta.includes(`${fmtNum(requestBody().length)} chars`), 'the readable line must still carry the unfiltered chars total');
+  assert.ok(meta.includes('12 blocks'), 'the readable line must still carry the unfiltered blocks total');
+  assert.ok(
+    !html.includes('data-visible-chars'),
+    'an unfiltered head must carry no data-visible-chars — nothing is hidden to report',
+  );
+  assert.ok(
+    !html.includes('data-visible-blocks'),
+    'an unfiltered head must carry no data-visible-blocks — nothing is hidden to report',
+  );
+  assert.ok(!meta.includes(' of '), 'the meta span of an unfiltered panel must say nothing about a filter');
+});
+
+test('a filtered head names the visible numbers beside the totals', () => {
+  const { blocks } = contextBlocks(requestBody());
+  const toolResultBlock = blocks.find((block) => block.kind === 'tool_result');
+  const visibleChars = blocks.reduce((total, block) => total + block.chars, 0) - toolResultBlock.chars;
+  const html = renderContextPanel({ lane: lane(), item: item(), hidden: ['kind:tool_result'] });
+  assert.match(
+    html,
+    /data-visible-blocks="11"/,
+    'a filtered head must name how many blocks are visible, arriving in a data attribute of its own',
+  );
+  assert.match(
+    html,
+    new RegExp(`data-visible-chars="${visibleChars}"`),
+    'a filtered head must name how many characters are visible, arriving in a data attribute of its own',
+  );
+  assert.ok(
+    html.includes('11 of 12 blocks'),
+    'the readable line must name visible of total for blocks, so a filtered context cannot look smaller than it is',
+  );
+  assert.ok(
+    html.includes(`${fmtNum(visibleChars)} of ${fmtNum(requestBody().length)} chars`),
+    'the readable line must name visible of total for characters, so a filtered context cannot look smaller than it is',
+  );
+});
+
+test('a request with no blocks at all shows no all-hidden placeholder', () => {
+  const html = renderContextPanel({ lane: lane(), item: item({ body: '{"messages":[]}' }) });
+  assert.match(html, /data-state="ready"/, 'a request that parses but carries no blocks is still a ready panel');
+  assert.ok(!html.includes('class="placeholder"'), 'nothing is hidden here, so nothing may say it is');
+  assert.ok(
+    html.includes('<div class="ctx-blocks">'),
+    'the empty blocks container must still be present, not swapped for the all-hidden placeholder',
+  );
 });
