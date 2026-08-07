@@ -476,6 +476,29 @@ const decomposeReturnRecut = {
   summary: 'backlog summary',
 };
 
+// Round 5's fixture (round 4, finding 1): a closed increment beside an open
+// one — the state a session leaves when it dies after `replan:i1` closed the
+// first increment and re-cut. The resumed run must count `i1` as increment 1
+// even though this session never worked it, pick `i2` up as increment 2, and
+// hand its reviewer the baseline block naming the accepted code in the diff.
+function laterIncrementBacklog() {
+  return {
+    version: 1,
+    issue: 'docs/issues/x',
+    workflow: 'agile-loop',
+    increments: [
+      { id: 'i1', title: 'Deliver i1', goal: 'Deliver i1.', criteria: ['does i1'], status: 'done', note: 'accepted', steps: [] },
+      { id: 'i2', title: 'Deliver i2', goal: 'Deliver i2.', criteria: ['does i2'], status: 'todo', note: '', steps: [] },
+    ],
+    run: {
+      steps: [
+        { label: 'decompose', at: '2026-08-07T00:00:00.000Z' },
+        { label: 'replan:i1', at: '2026-08-07T00:00:02.000Z', return: { summary: 'closed' } },
+      ],
+    },
+  };
+}
+
 function contextFor(m) {
   switch (m) {
     case 'w1':
@@ -518,6 +541,8 @@ function contextFor(m) {
       return { stateReturn: { exists: true, backlogJson: JSON.stringify(recutBacklog(true), null, 2) + '\n', summary: '' }, decomposeReturn: decomposeReturnRecut, researchReturn: planReturn };
     case 'w14':
       return { stateReturn: { exists: true, backlogJson: JSON.stringify(recutBacklog(false), null, 2) + '\n', summary: '' }, decomposeReturn: decomposeReturnRecut, researchReturn: planReturn };
+    case 'w15':
+      return { stateReturn: { exists: true, backlogJson: JSON.stringify(laterIncrementBacklog(), null, 2) + '\n', summary: '' }, decomposeReturn: decomposeReturnTwo, researchReturn: planReturn };
     default:
       throw new Error('unknown mode ' + m);
   }
@@ -729,6 +754,26 @@ async function main() {
       assertTrue(!!decomposeCall && decomposeCall.prompt.includes('MARKER-CUT-QUESTION'),
         'the Decompose worked again does not carry the question that ended the last run');
     }
+  } else if (mode === 'w15') {
+    // Round 4, finding 1: a resumed run counted its increments from scratch,
+    // so the first increment it picked up was treated as increment 1 —
+    // baseline(1) is the empty string, and the reviewer was handed the code
+    // an earlier iteration had already accepted with nothing naming it. The
+    // human's result lost the closed increment's line the same way.
+    assertTrue(isAgile, "w15 is the incremental loop's mode: the plain loop holds one increment");
+    assertEqualArrays(labels,
+      ['load-state', 'research:i2.0', 'tests:i2.0', 'implement:i2.0', 'review:i2.0', 'replan:i2', 'publish'],
+      'the resumed run did not pick up the open increment behind the closed one');
+    const reviewCall = calls.find((c) => c.label === 'review:i2.0');
+    assertTrue(!!reviewCall && reviewCall.prompt.includes('Increment 1 was reviewed and accepted'),
+      "the resumed reviewer's prompt does not name the closed increment as its baseline");
+    assertTrue(!!reviewCall && reviewCall.prompt.includes('increment 2 is yours'),
+      'the resumed run does not count the open increment as the second');
+    assertTrue(!!result && result.delivered === 2,
+      'the resumed run did not close both increments as delivered');
+    assertTrue(!!result && Array.isArray(result.increments) && result.increments.length === 2
+      && JSON.stringify(result.increments).includes('"i1"'),
+      'the increment the earlier session closed has no line in result.increments');
   } else {
     throw new Error('unknown mode ' + mode);
   }
@@ -779,6 +824,7 @@ done
 # Round 3, finding 2: only the incremental loop re-cuts, so an increment
 # handed back is agile-loop.js's case alone.
 run_driver "$root/workflows/agile-loop.js" w12 "agile-loop.js: an increment the planner hands back is worked a second time, not skipped as recorded"
+run_driver "$root/workflows/agile-loop.js" w15 "agile-loop.js: a run resumed behind a closed increment counts it and hands the reviewer its baseline"
 
 rm -rf "$driver_tmp"
 

@@ -611,6 +611,26 @@ const worked = []
 const attempts = new Map()
 let stopped = ''
 
+// A resumed run picks up counting where the state left off. Every increment
+// the file already holds closed was worked by an earlier session: it keeps its
+// ordinal, its line in the result, and its place in the reviewer's baseline
+// block below — `done` is the accepted case, `blocked` the not-accepted one,
+// and a dropped increment was never worked and counts for nothing. The
+// findings behind a restored `blocked` were shed when it closed, so its note
+// is the reason the state still carries.
+for (const t of increments) {
+  if (t.status === 'done' || t.status === 'blocked') {
+    worked.push({
+      n: worked.length + 1,
+      id: t.id,
+      title: t.title,
+      accepted: t.status === 'done',
+      findings: t.status === 'done' ? 0 : null,
+      reason: t.note || `closed as ${t.status} in an earlier session`,
+    })
+  }
+}
+
 // The reviewer sees the whole diff against main, so from the second increment
 // on that diff carries work an earlier review already ruled on. Saying which is
 // what keeps it from re-litigating a settled increment every round, without
@@ -637,7 +657,7 @@ function baseline(n) {
 }
 
 if (!blockedOnHuman.length) {
-  for (let n = 1; ; n++) {
+  for (let n = worked.length + 1; ; n++) {
     const task = increments.find((t) => t.status === 'todo')
     if (!task) break
 
