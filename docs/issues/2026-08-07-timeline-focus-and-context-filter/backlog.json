@@ -356,6 +356,16 @@
             "questions": [],
             "summary": "Deleted the Timeline bullet's final sentence in tools/argus-ui/README.md, which still promised the per-lane tool list panel that increment 3 removed."
           }
+        },
+        {
+          "label": "review:tools-box.1",
+          "at": "2026-08-07T16:24:44.252Z",
+          "return": {
+            "findings": [],
+            "reason": "",
+            "questions": [],
+            "summary": "Increment 3 accepted: npm --prefix tools/argus-ui test ran the whole suite, 223 cases, exit 0; public/tools.js and test/tools.test.mjs are deleted, app.js imports neither laneToolInput nor renderToolPanel, renderLanePanel() assigns only renderContextPanel(lanePanelInput(...)) to #lane-panel, toolCallOf() returns only {seq, timeMs, spanId} with TOOL_PARAM_CHARS and paramText() gone while mergeToolMarks() keeps its de-duplication, held-watermark and no-mutation contract, and the tick marks, data-tools count, tool call legend and the incremental /api/events?event=claude_code.tool_result poll with sinceSeq are untouched and each still pinned by a test; the only extra changes are the dead .tools-panel/.tools-meta/.tool-time CSS and the README sentence that promised the removed panel, both direct consequences of the deletion; the context panel's filter, visible-of-total head and all-hidden placeholder tests still pass unchanged."
+          }
         }
       ]
     },
