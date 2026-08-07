@@ -1049,6 +1049,100 @@ td.name {
   color: var(--text-faint);
 }
 
+/* The filter is a dropdown and not a row of chips so that opening it floats
+   over the block list instead of pushing it down the page. */
+.ctx-filter {
+  position: relative;
+  font-family: var(--mono);
+  font-size: 10px;
+}
+
+.ctx-filter > summary {
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-faint);
+  cursor: pointer;
+  list-style: none;
+}
+
+.ctx-filter > summary::-webkit-details-marker {
+  display: none;
+}
+
+.ctx-filter > summary:hover {
+  background: var(--panel-hover);
+}
+
+.ctx-filter-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 20;
+  min-width: 180px;
+  max-height: 60vh;
+  overflow-y: auto;
+  margin-top: 4px;
+  padding: 6px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.ctx-filter-actions {
+  display: flex;
+  gap: 6px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.ctx-filter-all {
+  flex: 1;
+  padding: 2px 4px;
+  font: inherit;
+  color: var(--text-faint);
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.ctx-filter-all:hover {
+  background: var(--panel-hover);
+}
+
+.ctx-filter-group {
+  padding-top: 6px;
+}
+
+.ctx-filter-title {
+  display: block;
+  padding-bottom: 2px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.ctx-filter-entry {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+  cursor: pointer;
+}
+
+.ctx-filter-entry:hover {
+  background: var(--panel-hover);
+}
+
+.ctx-filter-name {
+  flex: 1;
+}
+
+.ctx-filter-count {
+  color: var(--text-faint);
+}
+
 .ctx-block {
   border-bottom: 1px solid var(--border);
 }

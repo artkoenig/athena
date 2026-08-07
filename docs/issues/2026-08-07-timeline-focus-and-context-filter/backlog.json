@@ -237,6 +237,25 @@
               "npm --prefix tools/argus-ui test — 161 tests, 154 pass, 7 fail, exit 1; the 7 failures are exactly context.test.mjs's one whole-file load error (covering A1-A17) plus B1-B6 in page.test.mjs; every pre-existing case in every other file stays green"
             ]
           }
+        },
+        {
+          "label": "implement:filter-core.0",
+          "at": "2026-08-07T15:21:41.335Z",
+          "return": {
+            "summary": "Added the context panel's block filter: six pure functions and two new panel input keys in public/context.js, the hidden-set/open-flag state and its three delegated branches in public/app.js, and the dropdown's styles in public/styles.css.",
+            "deviations": [],
+            "commands": [
+              {
+                "command": "npm --prefix tools/argus-ui test",
+                "exitCode": 1,
+                "note": "230 cases, 228 pass, 2 fail. All 23 planned cases (A1-A17, B1-B7, C1) are green. The two reds are the pre-existing increment-6 cases 'the panel input is built from the lane whose key the reader selected' (test/context.test.mjs:670) and 'a key no lane carries, and no key at all, leave nothing to draw' (test/context.test.mjs:694); both assert.deepEqual lanePanelInput's whole return against a four-key object, so the two keys A17 requires lanePanelInput to add (hidden, filterOpen) make them fail. Both were green before this change and neither can be reconciled with A17 without editing a test, which is not mine to do."
+              }
+            ],
+            "blockers": [
+              "test/context.test.mjs:670 and :694 (pre-existing) deepEqual lanePanelInput's whole return against {lane,item,pending,expanded}; A17 requires it to also return hidden and filterOpen, so the two contradict and both older cases are now red. Update those two expectations to include hidden: [] and filterOpen: false."
+            ],
+            "questions": []
+          }
         }
       ]
     },

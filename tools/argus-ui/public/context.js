@@ -130,6 +130,150 @@ export function contextBlocks(body) {
   return { ok: true, chars, blocks };
 }
 
+/* ------------------------------- the filter ------------------------------ */
+
+/**
+ * The id of the filter entry one block belongs to, namespaced by what it is.
+ *
+ * The namespace is load-bearing: a body may carry a top-level key named `user`
+ * or `system`, and a bare-name id would make hiding that field hide the
+ * messages with it.
+ *
+ * @param {{ kind: string, label: string }} block
+ * @returns {string} `field:<key>` for a body field, `kind:<kind>` for anything else
+ */
+export function entryIdOf(block) {
+  return block.kind === 'field' ? `field:${block.label}` : `kind:${block.kind}`;
+}
+
+/** Codepoint order, not `localeCompare`, whose order depends on the environment. */
+const byLabel = (a, b) => (a.label < b.label ? -1 : a.label > b.label ? 1 : 0);
+
+/**
+ * A block list folded into the entries the filter offers: what this request
+ * actually contains, and how much of each.
+ *
+ * The blocks group comes first, then the fields group, each sorted by its own
+ * label. The id is never shown; the label is the bare kind name or the bare
+ * field key, so `system` and `tools` read as one list.
+ *
+ * @param {object[]} blocks
+ * @returns {{ id: string, group: 'blocks'|'fields', label: string, count: number }[]}
+ */
+export function contextFilterEntries(blocks) {
+  const byId = new Map();
+  for (const block of blocks ?? []) {
+    const id = entryIdOf(block);
+    const seen = byId.get(id);
+    if (seen) {
+      seen.count += 1;
+      continue;
+    }
+    byId.set(id, {
+      id,
+      group: block.kind === 'field' ? 'fields' : 'blocks',
+      label: block.kind === 'field' ? block.label : block.kind,
+      count: 1,
+    });
+  }
+  const all = [...byId.values()];
+  const group = (name) => all.filter((entry) => entry.group === name).sort(byLabel);
+  return [...group('blocks'), ...group('fields')];
+}
+
+/**
+ * The blocks left once what the reader hid is taken out.
+ *
+ * Every survivor keeps its own `index`, so the expansion keys stay the same
+ * whether the list is filtered or not: hiding one kind must not shut an
+ * expanded block of another. Neither argument is mutated, and `hidden` may be
+ * an array or a Set — the same freedom `expanded` already has.
+ *
+ * @param {object[]} blocks
+ * @param {string[]|Set<string>} hidden
+ * @returns {object[]}
+ */
+export function visibleBlocks(blocks, hidden = []) {
+  const hiddenIds = new Set(hidden ?? []);
+  return (blocks ?? []).filter((block) => !hiddenIds.has(entryIdOf(block)));
+}
+
+/**
+ * The entry ids of the record the panel holds — what *all off* needs, without
+ * the page having to re-derive anything of its own.
+ *
+ * @param {{ body?: string }|null|undefined} item
+ * @returns {string[]}
+ */
+export function contextEntryIds(item) {
+  return contextFilterEntries(contextBlocks(item?.body ?? '').blocks).map((entry) => entry.id);
+}
+
+/**
+ * The hidden set after *all on* or *all off*.
+ *
+ * *All on* makes every entry visible, unqualified, so it clears the whole set.
+ * *All off* adds only what the shown request contains, which is what leaves an
+ * entry that was absent at the time visible when it later appears. Neither
+ * argument is mutated.
+ *
+ * @param {string[]|Set<string>} hidden what is hidden now
+ * @param {string[]} ids the entries the shown request contains
+ * @param {boolean} on true for *all on*, false for *all off*
+ * @returns {Set<string>}
+ */
+export function hiddenAfterAll(hidden, ids, on) {
+  return on ? new Set() : new Set([...hidden, ...ids]);
+}
+
+/**
+ * The filter dropdown: one checkbox per entry, in two labelled groups, over a
+ * pair of buttons that turn everything on or off at once.
+ *
+ * Nothing here may carry `data-lane` or `data-block`: the page binds the first
+ * to lane rows and the second to block expansion, so either would make opening
+ * the dropdown do something else entirely. The buttons sit in the menu body and
+ * not in the `<summary>`, or clicking one would shut the dropdown.
+ *
+ * @param {{ entries: object[], hidden: string[]|Set<string>, open: boolean }} input
+ * @returns {string} `''` when there is nothing to filter
+ */
+export function renderContextFilter({ entries = [], hidden = [], open = false } = {}) {
+  if (!entries.length) return '';
+  const hiddenIds = new Set(hidden ?? []);
+
+  // The count is the plain integer and never `fmtNum`: a count of 1200 that
+  // reads `1.2k` is no longer a count of anything a reader can check.
+  const entryRow = (entry) =>
+    `<label class="ctx-filter-entry"><input type="checkbox" data-ctx-entry="${esc(entry.id)}"${
+      hiddenIds.has(entry.id) ? '' : ' checked'
+    }><span class="ctx-filter-name">${esc(entry.label)}</span> <span class="ctx-filter-count" data-count="${esc(
+      entry.count,
+    )}">${esc(entry.count)}</span></label>`;
+
+  // A group with nothing in it is left out whole, header and all.
+  const group = (name, title) => {
+    const rows = entries
+      .filter((entry) => entry.group === name)
+      .map(entryRow)
+      .join('');
+    return rows
+      ? `<div class="ctx-filter-group" data-group="${name}"><span class="ctx-filter-title">${title}</span>${rows}</div>`
+      : '';
+  };
+
+  return `<details class="ctx-filter"${open ? ' open' : ''}>
+      <summary class="ctx-filter-summary" data-ctx-filter="toggle">filter</summary>
+      <div class="ctx-filter-menu">
+        <div class="ctx-filter-actions">
+          <button type="button" class="ctx-filter-all" data-ctx-all="on">all on</button>
+          <button type="button" class="ctx-filter-all" data-ctx-all="off">all off</button>
+        </div>
+        ${group('blocks', 'Blocks')}${group('fields', 'Fields')}
+      </div>
+    </details>`;
+}
+
 /**
  * The one lane filter that goes on the wire for a lane's context.
  *
@@ -218,15 +362,24 @@ export function laneContextInput(key, held) {
  * carries — and no key at all — resolves to no lane, which is how the panel
  * disappears when the selection is let go.
  *
- * The four keys are the four `renderContextPanel` reads, so the result is its
+ * The keys are the keys `renderContextPanel` reads, so the result is its
  * argument whole: the page cannot drop one of them on the way.
  *
- * @param {{ view: object|null, key: string|null, held: object|null, expanded: string[]|Set<string> }} input
- * @returns {{ lane: object|null, item: object|null, pending: boolean, expanded: string[]|Set<string> }}
+ * @param {{ view: object|null, key: string|null, held: object|null, expanded: string[]|Set<string>,
+ *   hidden: string[]|Set<string>, filterOpen: boolean }} input
+ * @returns {{ lane: object|null, item: object|null, pending: boolean, expanded: string[]|Set<string>,
+ *   hidden: string[]|Set<string>, filterOpen: boolean }}
  */
-export function lanePanelInput({ view = null, key = null, held = null, expanded = [] } = {}) {
+export function lanePanelInput({
+  view = null,
+  key = null,
+  held = null,
+  expanded = [],
+  hidden = [],
+  filterOpen = false,
+} = {}) {
   const lane = laneByKey(view, key);
-  return { lane, ...laneContextInput(key, held), expanded };
+  return { lane, ...laneContextInput(key, held), expanded, hidden, filterOpen };
 }
 
 /**
@@ -236,9 +389,17 @@ export function lanePanelInput({ view = null, key = null, held = null, expanded 
  * `[data-lane]` to lane rows, so one in this markup would make every click
  * inside the panel toggle the lane selection.
  *
- * @param {{ lane: object|null, item: object|null, pending: boolean, expanded: string[]|Set<string> }} input
+ * @param {{ lane: object|null, item: object|null, pending: boolean, expanded: string[]|Set<string>,
+ *   hidden: string[]|Set<string>, filterOpen: boolean }} input
  */
-export function renderContextPanel({ lane = null, item = null, pending = false, expanded = [] } = {}) {
+export function renderContextPanel({
+  lane = null,
+  item = null,
+  pending = false,
+  expanded = [],
+  hidden = [],
+  filterOpen = false,
+} = {}) {
   if (!lane) return '';
 
   const title = `<span class="context-title">${esc(lane.label)}</span>`;
@@ -259,6 +420,7 @@ export function renderContextPanel({ lane = null, item = null, pending = false, 
 
   const { chars, blocks } = contextBlocks(item.body);
   const openKeys = new Set(expanded ?? []);
+  const entries = contextFilterEntries(blocks);
 
   const line = [fmtClock(item.timeMs), item.model, `${fmtNum(chars)} chars`, `${blocks.length} blocks`]
     .filter(Boolean)
@@ -266,14 +428,17 @@ export function renderContextPanel({ lane = null, item = null, pending = false, 
     .join(' · ');
 
   // The numbers ride in data attributes so what the panel is built from can be
-  // read without reading a sentence.
+  // read without reading a sentence. They are the whole record's, filtered or
+  // not: what the request holds does not change because a reader stopped
+  // looking at part of it.
   const head = `<div class="context-head">${title}
       <span class="context-meta" data-chars="${esc(chars)}" data-blocks="${esc(blocks.length)}"
         data-time="${esc(item.timeMs)}" data-model="${esc(item.model ?? '')}"
         data-truncated="${item.truncated === true}">${line}</span>
+      ${renderContextFilter({ entries, hidden, open: filterOpen })}
     </div>`;
 
-  const rows = blocks
+  const rows = visibleBlocks(blocks, hidden)
     .map((block) => {
       // Keyed by the record too: when the cursor lands on a different request
       // the keys stop matching and everything collapses, which is right — it is

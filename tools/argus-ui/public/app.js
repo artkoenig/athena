@@ -8,7 +8,13 @@
  */
 
 import { esc, fmtNum, fmtCost, fmtDur, fmtClock, fmtAgo, isLive, shortId } from './format.js';
-import { fetchLaneContext, lanePanelInput, renderContextPanel } from './context.js';
+import {
+  contextEntryIds,
+  fetchLaneContext,
+  hiddenAfterAll,
+  lanePanelInput,
+  renderContextPanel,
+} from './context.js';
 import { laneToolInput, renderToolPanel } from './tools.js';
 import {
   buildLanes,
@@ -50,6 +56,12 @@ const state = {
   laneContext: { key: null, item: null },
   // Which blocks the reader has expanded, so a live refresh does not shut them.
   expanded: new Set(),
+  // Which context entries the reader has hidden, and whether the filter's own
+  // dropdown is open. Both are page-wide and last until the page is reloaded:
+  // hiding a kind is a preference, not a position, so neither is reset where
+  // `expanded` is, and neither is written to storage.
+  contextHidden: new Set(),
+  contextFilterOpen: false,
   trace: null,
   selectedTraceId: null,
   selectedSpanId: null,
@@ -939,7 +951,14 @@ function renderLanePanel() {
   const view = laneView();
   container.innerHTML =
     renderContextPanel(
-      lanePanelInput({ view, key: state.selectedLane, held: state.laneContext, expanded: state.expanded }),
+      lanePanelInput({
+        view,
+        key: state.selectedLane,
+        held: state.laneContext,
+        expanded: state.expanded,
+        hidden: state.contextHidden,
+        filterOpen: state.contextFilterOpen,
+      }),
     ) +
     renderToolPanel(
       laneToolInput({
@@ -1171,6 +1190,25 @@ function wireEvents() {
       else state.expanded.add(block.dataset.block);
       return;
     }
+    const filter = event.target.closest('summary[data-ctx-filter]');
+    if (filter) {
+      // The browser has already opened or shut the dropdown; this only
+      // remembers which, so the next repaint does not undo it.
+      state.contextFilterOpen = !state.contextFilterOpen;
+      return;
+    }
+    const all = event.target.closest('[data-ctx-all]');
+    if (all) {
+      // The record the panel is drawn from is already held: turning entries on
+      // or off never goes back to the collector for it.
+      state.contextHidden = hiddenAfterAll(
+        state.contextHidden,
+        contextEntryIds(state.laneContext.item),
+        all.dataset.ctxAll === 'on',
+      );
+      renderLanePanel();
+      return;
+    }
     const tab = event.target.closest('[data-tab]');
     if (tab) {
       // Clicking the open view closes it, which is the way back to the timeline alone.
@@ -1206,6 +1244,15 @@ function wireEvents() {
     if (event.target.id === 'event-errors') {
       state.eventFilters.errorsOnly = event.target.checked;
       loadTabData().then(renderTabBody);
+    }
+    // A wrapping <label> fires two click events for one press, so the filter's
+    // checkboxes are toggled on `change`, which fires exactly once.
+    const entry = event.target.closest('input[data-ctx-entry]');
+    if (entry) {
+      const id = entry.dataset.ctxEntry;
+      if (state.contextHidden.has(id)) state.contextHidden.delete(id);
+      else state.contextHidden.add(id);
+      renderLanePanel();
     }
   });
 
