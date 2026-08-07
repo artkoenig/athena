@@ -12,16 +12,13 @@
  * import it directly.
  */
 
-import { esc, fmtClock, fmtDur, fmtNum, previewOf } from './format.js';
+import { esc, fmtClock, fmtDur, fmtNum } from './format.js';
 
 /** A bar narrower than this is invisible, so an instant of activity gets this much. */
 export const MIN_LANE_WIDTH_PCT = 0.6;
 
 /** The log event a tool call leaves behind. Its span is the lane's span. */
 export const TOOL_EVENT = 'claude_code.tool_result';
-
-/** A tool call's parameters are kept up to this much text; beyond it, a size. */
-export const TOOL_PARAM_CHARS = 2000;
 
 /** The content record that *is* the context at that moment. */
 export const REQUEST_EVENT = 'claude_code.api_request_body';
@@ -81,9 +78,8 @@ export function laneByKey(view, key) {
  * else.
  *
  * A tool call carries the span of the conversation that made it, so this map
- * plus "the main lane otherwise" is the whole attribution rule: the one the
- * density counts with and the one the tool list is filtered by, so a lane's
- * `data-tools` count and the rows under it can never disagree.
+ * plus "the main lane otherwise" is the whole attribution rule, and the density
+ * counts are its one consumer.
  */
 export function spanLaneKeys(lanes) {
   const bySpan = new Map();
@@ -313,57 +309,33 @@ export function buildDensity(view, { content = [], tools = [] } = {}) {
   };
 }
 
-/** The parameters as text: pretty JSON when they parse, the string as it arrived otherwise. */
-function paramText(raw) {
-  if (raw === undefined || raw === null) return '';
-  if (typeof raw !== 'string') return JSON.stringify(raw, null, 2) ?? '';
-  try {
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === 'object') return JSON.stringify(parsed, null, 2) ?? raw;
-  } catch {
-    // Not JSON: the string itself is what the call was made with.
-  }
-  return raw;
-}
-
 /**
- * One tool-result event turned into the row a panel draws: which tool, what it
- * was called with, and how much of that there was.
+ * One tool-result event turned into a mark: *when* the call happened and
+ * *whose* lane it belongs to.
  *
  * The call carries no attribution of its own — only the span of the
  * conversation that made it — so `spanId` is what later decides whose lane it
- * belongs to. The parameters arrive as a JSON string under `tool_input`
- * (`tool_parameters` on CLI versions before 2.1) and are pretty-printed so the
- * row is readable.
+ * belongs to, and a missing one becomes `null` rather than absent so every mark
+ * has the same shape.
  *
- * `chars` is the whole size and `text` is capped at TOOL_PARAM_CHARS: a single
+ * The parameters the call was made with are deliberately not held: a single
  * Write call carries a file's entire content, and a session's worth of those
- * kept in page state is megabytes held for a line nobody reads to the end.
- * `truncated` says the two differ, so the panel can never imply it is showing
- * everything when it is not.
+ * kept in page state is megabytes held for nothing. Marks answer the lane's
+ * tick marks and its count, and that is all.
  */
 export function toolCallOf(item) {
-  const attrs = item?.attrs ?? {};
-  const text = paramText(attrs.tool_input ?? attrs.tool_parameters);
-  const name = typeof attrs.tool_name === 'string' && attrs.tool_name ? attrs.tool_name : 'tool';
   return {
     seq: item.seq,
     timeMs: item.timeMs,
-    spanId: item.spanId ?? null,
-    name,
-    chars: text.length,
-    preview: previewOf(text),
-    text: text.slice(0, TOOL_PARAM_CHARS),
-    truncated: text.length > TOOL_PARAM_CHARS,
+    spanId: item?.spanId ?? null,
   };
 }
 
 /**
  * Merge a page of tool events into the calls already held.
  *
- * Each event is projected through `toolCallOf`, so what is held is the row a
- * panel draws — the tool's name and its parameters capped at
- * `TOOL_PARAM_CHARS` — and never the whole event.
+ * Each event is projected through `toolCallOf`, so what is held is a mark and
+ * never the whole event.
  *
  * The watermark comes back as the highest `seq` *held*, never as the highest
  * seen: a record that was not kept can then never be skipped as already seen,

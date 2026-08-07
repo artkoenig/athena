@@ -15,7 +15,6 @@ import {
   lanePanelInput,
   renderContextPanel,
 } from './context.js';
-import { laneToolInput, renderToolPanel } from './tools.js';
 import {
   buildLanes,
   buildDensity,
@@ -40,10 +39,9 @@ const state = {
   // timeline, and the views below it are where a reader goes next.
   tab: null,
   content: [],
-  // Tool calls, kept as the row a panel draws — seq, moment, span, the
-  // tool's name and its call parameters capped at TOOL_PARAM_CHARS. A whole
-  // tool_input is a file's content, so the cap is what keeps a long
-  // session's index bounded while still answering "which tools, and what for".
+  // Tool calls, kept as a mark and nothing more — seq, moment and span. That is
+  // all a lane's tick marks and its count need, and holding a call's parameters
+  // here would be a session's worth of file contents kept for nothing.
   toolMarks: [],
   toolSeq: 0,
   // A session opens live: the cursor sits on the newest data and moves with it
@@ -949,26 +947,16 @@ function renderLanePanel() {
   const container = document.getElementById('lane-panel');
   if (!container) return;
   const view = laneView();
-  container.innerHTML =
-    renderContextPanel(
-      lanePanelInput({
-        view,
-        key: state.selectedLane,
-        held: state.laneContext,
-        expanded: state.expanded,
-        hidden: state.contextHidden,
-        filterOpen: state.contextFilterOpen,
-      }),
-    ) +
-    renderToolPanel(
-      laneToolInput({
-        view,
-        key: state.selectedLane,
-        calls: state.toolMarks,
-        cursor: state.cursor,
-        expanded: state.expanded,
-      }),
-    );
+  container.innerHTML = renderContextPanel(
+    lanePanelInput({
+      view,
+      key: state.selectedLane,
+      held: state.laneContext,
+      expanded: state.expanded,
+      hidden: state.contextHidden,
+      filterOpen: state.contextFilterOpen,
+    }),
+  );
 }
 
 let laneContextTimer = null;

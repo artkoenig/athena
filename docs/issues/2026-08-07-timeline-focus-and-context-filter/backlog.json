@@ -290,6 +290,23 @@
             "openQuestions": [],
             "questions": []
           }
+        },
+        {
+          "label": "implement:tools-box.0",
+          "at": "2026-08-07T16:15:03.003Z",
+          "return": {
+            "deviations": [],
+            "commands": [
+              {
+                "command": "npm --prefix tools/argus-ui test",
+                "exitCode": 0,
+                "note": "223 tests, 223 pass, 0 fail; nothing skipped or excluded. The same command was run before any edit and reproduced exactly the seven recorded failures (128, 129, 184, 185, 186, 187, 197)."
+              }
+            ],
+            "blockers": [],
+            "questions": [],
+            "summary": "Deleted the tool list panel module and the per-call parameter ballast: public/tools.js is gone, renderLanePanel paints only the context panel, and a tool mark is now seq, moment and span alone."
+          }
         }
       ]
     },
