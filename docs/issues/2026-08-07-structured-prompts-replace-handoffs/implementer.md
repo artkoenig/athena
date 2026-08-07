@@ -302,3 +302,96 @@ and the plan's Environment section says so and says not to `chmod` them.
   record` overwrites the stale return with the question rather than duplicating
   it, and a human who restarts without answering gets the same question and the
   same regular exit.
+
+## Round 3
+
+I read `researcher.md` (`## Round 3`) and `test-author.md` only. Both findings
+land in the workflow scripts; nothing else was opened or edited. Every change
+is the plan's, verbatim where it gave code.
+
+### The baseline, before I changed anything
+
+`bash test-repo.sh` → `FAIL: 2 of 50 cases`, exit 1. The two failures were
+exactly the ones the plan predicted:
+
+- `loop.js: a question from the closing planner ends the run and reaches the
+  human` (mode `w11`) — four assertion lines: `the closing planner's question
+  did not end the run as blocked on the human`, `blockedOnHuman does not carry
+  the question the closing planner asked`, `blockedOnHuman does not name
+  close:i1 as the step that asked`, `the closing planner's question never
+  reached the human in the chat`.
+- `agile-loop.js: an increment the planner hands back is worked a second time,
+  not skipped as recorded` (mode `w12`) — `expected [... "replan:i1",
+  "research:i1.0", ... ,"replan:i1","publish"] got [... "replan:i1","publish"]`
+  and `the researcher was not dispatched again for the second attempt`.
+
+`w11` on `agile-loop.js` was green in the same run, which is the divergence
+finding 1 is about, observed rather than assumed.
+
+### What changed
+
+**`workflows/loop.js`** (finding 1, three lines):
+
+- The Close dispatch at l. 656 now binds its return: `const closed = await
+  step(closeLabel, 'Close', () => agent(...))`. The name was free in the file.
+- After `task.status = accepted ? 'done' : 'blocked'`, added the plan's
+  four-line comment and `asksTheHuman(closeLabel, closed)`. That is before the
+  existing `if (blockedOnHuman.length)` log, which is the only ordering the
+  plan requires, and it is the same position `agile-loop.js` uses for `replan`.
+- The prompt, `answeredBlock(closeLabel)`, `recordStep('-', closeLabel)` and
+  the `CLOSED` schema are untouched.
+
+**`workflows/agile-loop.js`** (finding 2):
+
+- Added `forgetSteps(id)` immediately after `step()`, with the plan's comment,
+  exactly as written: it walks `recorded.keys()`, skips a label with no colon,
+  and deletes a label whose part after the colon is `id` or starts with
+  `` `${id}.` `` — so `i1` never forgets `i10`.
+- After the re-cut replaces `increments` and before the `After increment ${n}:`
+  log, added the plan's six-line comment and the loop `for (const t of
+  increments) { if (t.status === 'todo' && attempts.has(t.id))
+  forgetSteps(t.id) }`.
+- Nothing else in the file moved; `asksTheHuman(replanLabel, recut)` keeps its
+  place after the log.
+
+No file outside those two was touched: `skills/agent-brief/assets/backlog.mjs`,
+the agent pages, `rulebook.md`, `README.md` and `skills/*/SKILL.md` are
+unchanged, as the plan required. `test-repo.sh` I did not edit — it is the
+test-author's, and its Round 3 cases were already in place and already red for
+the right reason. I wrote neither the word `handoff` in any spelling nor any
+prose-handoff file name into either script, so the standing greps at
+`test-repo.sh` l. 136-159 stay green.
+
+### Commands I ran
+
+The plan's closed list, both from `/home/user/uroboros`:
+
+- `bash test-repo.sh` — 50 cases, `PASS: 50 cases`, exit 0. The two red cases
+  above are now green; every case from every earlier round is still green.
+- `bash test.sh` — all 6 suites (`test-repo.sh`, `test-worktree.sh`, the
+  recorder suite, and the three `tools/` suites), `PASS: all 6 suites`,
+  exit 0. Nothing skipped, nothing excluded.
+
+Nothing else was run: there is no linter and no formatter in this repository,
+and the plan names no other command.
+
+### Deviations
+
+None. Every code block the plan gave was applied as written.
+
+### Notes for the reviewer
+
+- The plan's `w12` expectation and the test-author's Round 3 note agree that
+  two of that case's four assertions (`result.stopped === ''` and
+  `result.increments.length === 2`) were already true before my change, so only
+  the label-sequence and dispatch-count assertions carried the red signal. Both
+  now pass, and the other two are unchanged.
+- The limit the plan states as a decision holds in the code: a run that ends on
+  a Close question is not re-dispatched on resume, because the planner already
+  closed the increment in `backlog.json` and the resumed run finds no `todo`
+  work. The question is in the state and in `blockedOnHuman`; `agile-loop.js`'s
+  `replan` has had the same limit since Round 2.
+- `forgetSteps()` is a hoisted function declaration placed above the increment
+  loop that calls it, next to `step()` where the plan's module map puts it. It
+  reads only `recorded`, which is initialised by the state loader long before
+  any call reaches it.

@@ -653,7 +653,7 @@ let accepted = false
 if (task && verdict && !blockedOnHuman.length) {
   accepted = (verdict.findings || []).length === 0
   const closeLabel = `close:${task.id}`
-  await step(closeLabel, 'Close', () =>
+  const closed = await step(closeLabel, 'Close', () =>
     agent(
       `Issue directory: ${dir}\n` +
         answeredBlock(closeLabel) +
@@ -672,6 +672,11 @@ if (task && verdict && !blockedOnHuman.length) {
     ),
   )
   task.status = accepted ? 'done' : 'blocked'
+  // The planner may end its own step with a question — a status only the human
+  // can settle. Same call, same position as the incremental loop's replan: a
+  // question here ends the run as a regular exit, and the run state the planner
+  // recorded carries it into the session that picks the run back up.
+  asksTheHuman(closeLabel, closed)
   if (!accepted) {
     log(`Stopped after ${MAX_CORRECTIONS} correction loops with findings open. Hand back to the human.`)
   }

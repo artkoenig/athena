@@ -539,6 +539,18 @@ async function step(label, phaseName, run) {
   return out
 }
 
+// Every step label that belongs to one increment: `research:<id>.<round>` and
+// its siblings, plus `replan:<id>`. `load-state`, `decompose` and `publish`
+// carry no id and are never forgotten.
+function forgetSteps(id) {
+  for (const label of [...recorded.keys()]) {
+    const at = label.indexOf(':')
+    if (at < 0) continue
+    const rest = label.slice(at + 1)
+    if (rest === id || rest.startsWith(`${id}.`)) recorded.delete(label)
+  }
+}
+
 // A question only the human can answer ends the run: the loop skips to Publish
 // and hands the questions back. The question is inside the step return the agent
 // recorded, so the session that resumes finds it in the state too.
@@ -767,6 +779,15 @@ if (!blockedOnHuman.length) {
     task.status = accepted ? 'done' : 'blocked'
     if (recut && Array.isArray(recut.increments) && recut.increments.length) {
       increments = recut.increments
+    }
+    // The planner may hand an increment already worked back as `todo` — the
+    // second chance MAX_ATTEMPTS exists for. Closing it emptied its steps in
+    // the run state, so the in-session map forgets them too: left there, every
+    // label of the next attempt would be found recorded, the attempt would
+    // dispatch nobody and would re-read this iteration's verdict and this
+    // iteration's re-cut as if they were the new ones.
+    for (const t of increments) {
+      if (t.status === 'todo' && attempts.has(t.id)) forgetSteps(t.id)
     }
     log(`After increment ${n}: ${increments.map((t) => `${t.title} [${t.status}]`).join(' | ')}`)
     if (asksTheHuman(replanLabel, recut)) break
