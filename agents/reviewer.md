@@ -137,8 +137,8 @@ review, that is a fact for your report, not a licence.
 
   That list is the whole triage: empty means the change is accepted,
   anything else sends your caller into another correction round, and whoever
-  works that round — a researcher, or the builder alone — has these fields and
-  nothing else. Findings you left out, or that need no correction, are not in
+  works that round — a researcher, the test-author alone, or the builder alone
+  — has these fields and nothing else. Findings you left out, or that need no correction, are not in
   it.
 - **`reason`** — why another round is needed, in one or two sentences: what is
   wrong and which acceptance criterion it misses. The human reads it in the chat

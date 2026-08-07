@@ -204,6 +204,28 @@
             "openQuestions": [],
             "questions": []
           }
+        },
+        {
+          "label": "implement:coverage-only-round.1",
+          "at": "2026-08-07T20:24:27.390Z",
+          "return": {
+            "deviations": [],
+            "commands": [
+              {
+                "command": "bash test-repo.sh",
+                "exitCode": 0,
+                "note": "71 cases, all green; the four cases that were red before this change (the test-author's coverage-only mode, the reviewer's round-worker enumeration, and the worktree sandbox in each of loop.js and agile-loop.js) now pass. Nothing skipped or excluded."
+              },
+              {
+                "command": "./test.sh",
+                "exitCode": 0,
+                "note": "All 6 suites, test-repo.sh first; the node --test suites report 23 tests, 0 failures. Nothing skipped or excluded."
+              }
+            ],
+            "blockers": [],
+            "questions": [],
+            "summary": "Gave the test-author's page a coverage-only mode with the worktree go-red proof, qualified the three sentences that contradicted it, extended the reviewer's round-worker enumeration with the test-author-alone path, and replaced the 'test files only' clause of coverageBlock in both workflows with one that names the sandbox."
+          }
         }
       ]
     },

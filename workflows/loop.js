@@ -527,8 +527,10 @@ function coverageBlock(verdict, round) {
     `behaviour use. The behaviour is already there, so each case passes against the code as it ` +
     `stands and would fail if that behaviour were removed: confirm both and say so in \`got\` ` +
     `for every case. This round has no implementer to turn a red test green, and a red test ` +
-    `reaching the reviewer ends the increment blocked. Touch test files only — no production ` +
-    `code. A finding you cannot turn into a case goes in \`openQuestions\`, not into a guess.\n`
+    `reaching the reviewer ends the increment blocked. Touch no production code in the ` +
+    `checkout — prove the go-red in a \`git worktree\` sandbox outside it and remove it ` +
+    `afterwards. A finding you cannot turn into a case goes in \`openQuestions\`, not into a ` +
+    `guess.\n`
   )
 }
 
