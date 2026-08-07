@@ -1,7 +1,8 @@
 # argus-ui
 
-The web interface for an [argus](../argus/) collector: sessions, tokens, cost,
-traces, events and metrics, updating live over Server-Sent Events.
+The web interface for an [argus](../argus/) collector: the sessions it holds,
+a timeline of each one, and the context an agent was carrying behind any lane
+of it, updating live over Server-Sent Events.
 
 Two processes, deliberately. The collector receives OpenTelemetry, aggregates
 and persists it, and serves JSON — that is the half that gets deployed and
@@ -61,22 +62,14 @@ for an `HttpOnly; SameSite=Strict` cookie and drops it from the address bar.
 - **Sessions** — every session by last activity, with cost, tokens and errors.
 - **Timeline** — one lane for the main session and one per subagent, each
   spanning that agent's lifetime, marked where it made an API request or called
-  a tool and shaded behind with the size of the context it was carrying; the
-  views below it are reachable from there. A time cursor can be dragged to any
-  moment of the session; it starts in a live mode that follows the newest data,
-  which scrubbing leaves and the **Live** control returns to. Clicking a lane
+  a tool and shaded behind with the size of the context it was carrying. A time
+  cursor can be dragged to any moment of the session; it starts in a live mode
+  that follows the newest data, which scrubbing leaves and the **Live** control
+  returns to. Clicking a lane
   opens that agent's context as of the cursor's moment, as a list of blocks —
   system prompt, messages, thinking, tool calls and results, and every other
   field the request carried — each showing its size and expanding to its full
   text.
-- **Overview** — cost, tokens by type including cache hit rate, interactions,
-  requests, tool calls, lines of code, commits, active time; tables per model
-  and per tool.
-- **Tasks** — reconstructed `TodoWrite` / `TaskCreate` state.
-- **Traces** — waterfall per interaction, clicking a bar shows its attributes.
-- **Events** — filterable event tail, every row expandable.
-- **Metrics** — buffered data points by metric and attribute combination.
-- **Attributes** — resource and standard attributes of a session.
 
 ## How it reaches the collector
 

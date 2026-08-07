@@ -29,16 +29,6 @@ export const ACTIVITY_BUCKETS = 120;
 /** An area narrower than this is invisible, so a single request gets this much. */
 export const MIN_CURVE_WIDTH_PCT = 0.6;
 
-/** The technical views, subordinate to the timeline and all still reachable. */
-export const DETAIL_VIEWS = [
-  { id: 'overview', label: 'Overview' },
-  { id: 'todos', label: 'Tasks' },
-  { id: 'traces', label: 'Traces' },
-  { id: 'events', label: 'Events' },
-  { id: 'metrics', label: 'Metrics' },
-  { id: 'raw', label: 'Attributes' },
-];
-
 const usableTime = (record) => Number.isFinite(record?.timeMs) && record.timeMs > 0;
 
 const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
@@ -499,18 +489,4 @@ export function renderTimeline(view, cursor = null, selectedKey = null) {
       </div>
     </div>
   </div>`;
-}
-
-/**
- * The nav for the technical views. `selected: null` renders every view reachable
- * and none open, which is where a freshly opened session lands.
- */
-export function renderDetailViews({ selected = null, counts = {} } = {}) {
-  const buttons = DETAIL_VIEWS.map(
-    (view) => `<button type="button" class="tab" role="tab" data-tab="${view.id}"
-      aria-selected="${selected === view.id}">${esc(view.label)}${
-        counts[view.id] !== undefined ? `<span class="count">${esc(fmtNum(counts[view.id]))}</span>` : ''
-      }</button>`,
-  ).join('');
-  return `<nav class="tabs" role="tablist" aria-label="Technical views">${buttons}</nav>`;
 }

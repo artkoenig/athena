@@ -7,7 +7,7 @@
  * `node bin/argus-ui.mjs` inside a throwaway sandbox.
  */
 
-import { esc, fmtNum, fmtCost, fmtDur, fmtClock, fmtAgo, isLive, shortId } from './format.js';
+import { esc, fmtNum, fmtCost, fmtClock, fmtAgo, isLive, shortId } from './format.js';
 import {
   contextEntryIds,
   fetchLaneContext,
@@ -20,7 +20,6 @@ import {
   buildDensity,
   mergeToolMarks,
   renderTimeline,
-  renderDetailViews,
   resolveCursor,
   scrubCursor,
   liveCursor,
@@ -35,9 +34,6 @@ const state = {
   config: null,
   selectedSessionId: null,
   session: null,
-  // No technical view is open until one is asked for: a session opens on the
-  // timeline, and the views below it are where a reader goes next.
-  tab: null,
   content: [],
   // Tool calls, kept as a mark and nothing more — seq, moment and span. That is
   // all a lane's tick marks and its count need, and holding a call's parameters
@@ -60,13 +56,6 @@ const state = {
   // `expanded` is, and neither is written to storage.
   contextHidden: new Set(),
   contextFilterOpen: false,
-  trace: null,
-  selectedTraceId: null,
-  selectedSpanId: null,
-  events: [],
-  eventFilters: { event: '', errorsOnly: false, search: '' },
-  metrics: [],
-  facets: { events: [], metrics: [] },
   search: '',
   authError: false,
 };
@@ -173,14 +162,6 @@ function renderDetail() {
     return;
   }
   const errors = session.counts.apiErrors + session.counts.toolFailures;
-  const counts = {
-    // No count badge for the tasks tab: completed/deleted tasks stay in the
-    // reconstructed state (see #applyTodo), so a count only ever grows and
-    // stops reflecting what currently exists — worse than no number at all.
-    traces: session.traceCount,
-    events: session.counts.logs,
-    metrics: session.counts.metricPoints,
-  };
 
   detail.innerHTML = `
     <div class="detail-head">
@@ -210,515 +191,8 @@ function renderDetail() {
     )}
 
     <div id="lane-panel"></div>
-
-    ${renderDetailViews({ selected: state.tab, counts })}
-
-    <div id="tab-body"></div>
   `;
-  renderTabBody();
   renderLanePanel();
-}
-
-function renderTabBody() {
-  const body = document.getElementById('tab-body');
-  if (!body) return;
-  switch (state.tab) {
-    // Nothing selected is the landing state: the timeline above stands alone.
-    case null:
-      body.innerHTML = '';
-      break;
-    case 'todos':
-      body.innerHTML = renderTodosTab();
-      break;
-    case 'traces':
-      body.innerHTML = renderTracesTab();
-      break;
-    case 'events':
-      body.innerHTML = renderEventsTab();
-      break;
-    case 'metrics':
-      body.innerHTML = renderMetricsTab();
-      break;
-    case 'raw':
-      body.innerHTML = renderRawTab();
-      break;
-    default:
-      body.innerHTML = renderOverviewTab();
-  }
-}
-
-/* ------------------------------- overview ------------------------------- */
-
-function kpi(label, value, { sub = '', tone = null } = {}) {
-  return `<div class="kpi"${tone ? ` data-tone="${tone}"` : ''}>
-    <div class="kpi-value">${esc(value)}</div>
-    <div class="kpi-label">${esc(label)}</div>
-    ${sub ? `<div class="kpi-sub">${esc(sub)}</div>` : ''}
-  </div>`;
-}
-
-function renderOverviewTab() {
-  const s = state.session;
-  const tokens = s.tokens;
-  const cacheHitRate =
-    tokens.input + tokens.cacheRead > 0
-      ? Math.round((tokens.cacheRead / (tokens.input + tokens.cacheRead)) * 100)
-      : null;
-  const toolFailures = s.counts.toolFailures + s.toolFailuresFromEvents;
-
-  const kpis = [
-    kpi('cost', fmtCost(s.costUsd), { sub: `source: ${s.costSource}`, tone: 'accent' }),
-    kpi('tokens', fmtNum(s.tokensTotal), { sub: `source: ${s.tokenSource}` }),
-    kpi('input', fmtNum(tokens.input)),
-    kpi('output', fmtNum(tokens.output)),
-    kpi('cache read', fmtNum(tokens.cacheRead), {
-      sub: cacheHitRate === null ? '' : `${cacheHitRate}% of prompt`,
-    }),
-    kpi('cache write', fmtNum(tokens.cacheCreation)),
-    kpi('interactions', fmtNum(s.counts.interactions), { sub: `${fmtNum(s.counts.userPrompts)} prompts` }),
-    kpi('llm requests', fmtNum(s.counts.llmRequests)),
-    kpi('tool calls', fmtNum(s.counts.toolCalls), {
-      sub: toolFailures ? `${toolFailures} failed` : '',
-      tone: toolFailures ? 'error' : null,
-    }),
-    kpi('api errors', fmtNum(s.counts.apiErrors), { tone: s.counts.apiErrors ? 'error' : null }),
-    kpi('lines of code', `+${fmtNum(s.linesAdded)} / -${fmtNum(s.linesRemoved)}`),
-    kpi('commits / prs', `${fmtNum(s.commits)} / ${fmtNum(s.pullRequests)}`),
-    kpi('active time', fmtDur((s.activeTimeSec.user + s.activeTimeSec.cli) * 1000), {
-      sub: `wall ${fmtDur(s.durationMs)}`,
-    }),
-    kpi('edit decisions', `${s.editDecisions.accept} ✓ / ${s.editDecisions.reject} ✕`),
-  ].join('');
-
-  const models = s.models.length
-    ? `<div class="panel">
-        <h3>Models</h3>
-        <div class="table-scroll"><table>
-          <thead><tr>
-            <th>Model</th><th class="num">Requests</th><th class="num">Input</th>
-            <th class="num">Output</th><th class="num">Cache read</th><th class="num">Cost</th>
-            <th class="num">Avg latency</th><th class="num">Avg TTFT</th><th class="num">Errors</th>
-          </tr></thead>
-          <tbody>${s.models
-            .map(
-              (model) => `<tr>
-                <td class="name">${esc(model.name)}</td>
-                <td class="num">${fmtNum(model.requests)}</td>
-                <td class="num">${fmtNum(model.tokens.input)}</td>
-                <td class="num">${fmtNum(model.tokens.output)}</td>
-                <td class="num">${fmtNum(model.tokens.cacheRead)}</td>
-                <td class="num">${esc(fmtCost(model.costUsd))}</td>
-                <td class="num">${esc(fmtDur(model.avgDurationMs))}</td>
-                <td class="num">${esc(fmtDur(model.avgTtftMs))}</td>
-                <td class="num${model.errors ? ' bad' : ''}">${model.errors}</td>
-              </tr>`,
-            )
-            .join('')}</tbody>
-        </table></div>
-      </div>`
-    : '';
-
-  const tools = s.tools.length
-    ? `<div class="panel">
-        <h3>Tools</h3>
-        <div class="table-scroll"><table>
-          <thead><tr>
-            <th>Tool</th><th class="num">Calls</th><th class="num">Failures</th>
-            <th class="num">Rejected</th><th class="num">Avg duration</th><th class="num">Total</th>
-            <th class="num">Result tokens</th>
-          </tr></thead>
-          <tbody>${s.tools
-            .map((tool) => {
-              const estimated = tool.resultTokensEstimated > 0;
-              const resultTokens = estimated
-                ? `<span class="muted" title="CLI didn't report result_tokens for these calls; estimated from tool_result_size_bytes (~4 bytes/token)">~${fmtNum(tool.resultTokens)}</span>`
-                : fmtNum(tool.resultTokens);
-              return `<tr>
-                <td class="name">${esc(tool.name)}</td>
-                <td class="num">${fmtNum(tool.calls)}</td>
-                <td class="num${tool.failures ? ' bad' : ''}">${tool.failures}</td>
-                <td class="num">${tool.rejected}</td>
-                <td class="num">${esc(fmtDur(tool.avgDurationMs))}</td>
-                <td class="num">${esc(fmtDur(tool.durationMsTotal))}</td>
-                <td class="num">${resultTokens}</td>
-              </tr>`;
-            })
-            .join('')}</tbody>
-        </table></div>
-      </div>`
-    : '';
-
-  const lastError = s.lastError
-    ? `<div class="panel">
-        <h3>Last error</h3>
-        <table class="attr-table"><tbody>
-          <tr><td>kind</td><td>${esc(s.lastError.kind)}</td></tr>
-          <tr><td>at</td><td>${esc(fmtClock(s.lastError.at))}</td></tr>
-          <tr><td>message</td><td>${esc(s.lastError.message)}</td></tr>
-        </tbody></table>
-      </div>`
-    : '';
-
-  return `<div class="kpi-grid">${kpis}</div>${lastError}${models}${tools}`;
-}
-
-/* --------------------------------- todos --------------------------------- */
-
-function todoStatusChip(status) {
-  const tone = { completed: 'ok', in_progress: 'warn', deleted: 'error' }[status];
-  return `<span class="chip"${tone ? ` data-tone="${tone}"` : ''}>${esc(status || 'pending')}</span>`;
-}
-
-function renderTodosTab() {
-  const todos = state.session.todos;
-  const legacy = todos.legacy;
-  const tasks = todos.tasks;
-  const unlinked = todos.unlinkedCreates;
-
-  if (!legacy && !tasks.length && !unlinked.length) {
-    if (todos.callsSeen > 0) {
-      return `<div class="placeholder">
-        ${todos.callsSeen} TodoWrite/TaskCreate/TaskUpdate call(s) seen, but the calls carried no
-        parameters we could read, so there is no task content or status to show.
-      </div>`;
-    }
-    return '<div class="placeholder">No tasks recorded for this session.</div>';
-  }
-
-  const sections = [];
-
-  if (legacy) {
-    sections.push(`<div class="panel">
-      <h3>Todos (TodoWrite) · last write ${esc(fmtAgo(todos.legacyAtMs))}</h3>
-      <div class="table-scroll"><table>
-        <thead><tr><th>Status</th><th>Content</th></tr></thead>
-        <tbody>${legacy
-          .map(
-            (todo) => `<tr>
-              <td>${todoStatusChip(todo.status)}</td>
-              <td>${esc(todo.status === 'in_progress' && todo.activeForm ? todo.activeForm : todo.content)}</td>
-            </tr>`,
-          )
-          .join('')}</tbody>
-      </table></div>
-    </div>`);
-  }
-
-  if (tasks.length) {
-    sections.push(`<div class="panel">
-      <h3>Tasks by id (TaskUpdate)</h3>
-      <div class="table-scroll"><table>
-        <thead><tr><th>Id</th><th>Status</th><th>Subject</th><th>Description</th><th class="num">Updated</th></tr></thead>
-        <tbody>${tasks
-          .map(
-            (task) => `<tr>
-              <td class="name" title="${esc(task.taskId)}">${esc(shortId(task.taskId, 10))}</td>
-              <td>${todoStatusChip(task.status)}</td>
-              <td>${esc(task.subject || '—')}</td>
-              <td>${esc(task.description || '—')}</td>
-              <td class="num">${esc(fmtAgo(task.updatedAtMs))}</td>
-            </tr>`,
-          )
-          .join('')}</tbody>
-      </table></div>
-    </div>`);
-  }
-
-  if (unlinked.length) {
-    sections.push(`<div class="panel">
-      <h3>Created (id not yet known)</h3>
-      <p class="muted" style="padding: 0 12px 10px">
-        Claude Code assigns the task id after <code>TaskCreate</code> runs and only reports it in
-        the tool result, which this telemetry does not carry. These are the raw
-        <code>TaskCreate</code> calls — match them to the table above by time and subject.
-      </p>
-      <div class="table-scroll"><table>
-        <thead><tr><th>Subject</th><th>Description</th><th class="num">Created</th></tr></thead>
-        <tbody>${unlinked
-          .map(
-            (item) => `<tr>
-              <td>${esc(item.subject || '—')}</td>
-              <td>${esc(item.description || '—')}</td>
-              <td class="num">${esc(fmtAgo(item.createdAtMs))}</td>
-            </tr>`,
-          )
-          .join('')}</tbody>
-      </table></div>
-    </div>`);
-  }
-
-  return sections.join('');
-}
-
-/* -------------------------------- traces -------------------------------- */
-
-const SPAN_KINDS = [
-  ['claude_code.interaction', 'interaction'],
-  ['claude_code.llm_request', 'llm'],
-  ['claude_code.tool.blocked_on_user', 'blocked'],
-  ['claude_code.tool.execution', 'execution'],
-  ['claude_code.tool', 'tool'],
-  ['claude_code.hook', 'hook'],
-];
-
-function spanKind(name) {
-  for (const [prefix, kind] of SPAN_KINDS) if (name === prefix) return kind;
-  return 'other';
-}
-
-function spanNote(span) {
-  const a = span.attrs ?? {};
-  if (span.name === 'claude_code.llm_request') {
-    const tokens = [a.input_tokens, a.output_tokens].filter((value) => value !== undefined);
-    return [a.model, tokens.length ? `${fmtNum(a.input_tokens)}→${fmtNum(a.output_tokens)}` : '', a.stop_reason]
-      .filter(Boolean)
-      .join(' · ');
-  }
-  if (span.name === 'claude_code.tool') return [a.tool_name, a.file_path ?? a.full_command].filter(Boolean).join(' · ');
-  if (span.name === 'claude_code.hook') return a.hook_name ?? a.hook_event ?? '';
-  if (span.name === 'claude_code.tool.blocked_on_user') return a.decision ?? '';
-  if (span.name === 'claude_code.interaction') return a.user_prompt ? String(a.user_prompt).slice(0, 90) : '';
-  return '';
-}
-
-function renderTracesTab() {
-  const traces = state.session.traces ?? [];
-  if (!traces.length) {
-    return `<div class="placeholder">
-      No spans for this session. Spans come with the environment block under Setup; a session
-      recorded without that block has none.
-    </div>`;
-  }
-  const picker = traces
-    .map(
-      (trace) => `<button type="button" class="trace-pill" data-trace="${esc(trace.traceId)}"
-        aria-current="${trace.traceId === state.selectedTraceId}">
-        <span class="title">${esc(trace.prompt || trace.rootName || trace.traceId)}</span>
-        <span class="meta">${esc(fmtDur(trace.durationMs))} · ${trace.spanCount} spans${
-          trace.errorCount ? ` · ${trace.errorCount} err` : ''
-        }</span>
-      </button>`,
-    )
-    .join('');
-
-  return `<div class="trace-picker">${picker}</div>${renderWaterfall()}`;
-}
-
-function renderWaterfall() {
-  const trace = state.trace;
-  if (!trace) return '<div class="placeholder">Select a trace</div>';
-  const total = Math.max(trace.durationMs, 1);
-
-  const ticks = [0, 0.25, 0.5, 0.75, 1]
-    .map(
-      (fraction) =>
-        `<span class="axis-tick" style="left:${(fraction * 100).toFixed(2)}%">${esc(
-          fmtDur(total * fraction) === '–' ? '0' : fmtDur(total * fraction),
-        )}</span>`,
-    )
-    .join('');
-
-  const rows = trace.spans
-    .map((span) => {
-      const start = Math.max(0, span.startMs - trace.firstMs);
-      const open = span.durationMs === null || span.durationMs === undefined;
-      const duration = open ? Math.max(0, trace.lastMs - span.startMs) : span.durationMs;
-      const left = (start / total) * 100;
-      const width = Math.max((duration / total) * 100, 0.4);
-      const isError = span.status?.code === 'error' || span.attrs?.success === false || span.attrs?.success === 'false';
-      const note = spanNote(span);
-      // Bars that reach the right edge get their duration label flipped to the
-      // inside, otherwise it would be clipped or sit on top of the bar.
-      const flip = left + width > 80;
-      const labelStyle = flip
-        ? `right:${(100 - left - width).toFixed(3)}%;text-align:right`
-        : `left:${(left + width).toFixed(3)}%`;
-      return `<button type="button" class="span-row" data-span="${esc(span.spanId)}"
-          aria-current="${span.spanId === state.selectedSpanId}">
-        <span class="span-label" style="padding-left:${span.depth * 12}px">
-          <span class="name">${esc(span.name.replace('claude_code.', ''))}</span>
-          ${note ? `<span class="detail-note" title="${esc(note)}">${esc(note)}</span>` : ''}
-        </span>
-        <span class="span-track">
-          <span class="span-bar" data-kind="${spanKind(span.name)}" data-error="${isError}"
-            style="left:${left.toFixed(3)}%;width:${width.toFixed(3)}%"></span>
-          <span class="span-duration" data-flip="${flip}" style="${labelStyle}">${esc(
-            open ? 'open' : fmtDur(duration),
-          )}</span>
-        </span>
-      </button>`;
-    })
-    .join('');
-
-  return `<div class="panel" style="padding:12px">
-      <div class="waterfall">
-        <div class="waterfall-axis"><span></span><span class="axis-ticks">${ticks}</span></div>
-        ${rows}
-      </div>
-    </div>
-    ${trace.orphanCount ? `<p class="muted">${trace.orphanCount} span(s) reference a parent that is not in the buffer.</p>` : ''}
-    <div class="span-inspector" id="span-inspector">${renderSpanInspector()}</div>`;
-}
-
-function renderSpanInspector() {
-  const span = state.trace?.spans.find((item) => item.spanId === state.selectedSpanId);
-  if (!span) return '<div class="placeholder">Select a span to inspect its attributes</div>';
-  const rows = Object.entries(span.attrs ?? {})
-    .sort(([a], [b]) => (a < b ? -1 : 1))
-    .map(([key, value]) => `<tr><td>${esc(key)}</td><td>${esc(formatValue(value))}</td></tr>`)
-    .join('');
-  const events = (span.events ?? [])
-    .map(
-      (event) => `<tr><td>${esc(fmtClock(event.timeMs))}</td><td>${esc(event.name)} ${esc(
-        JSON.stringify(event.attrs ?? {}),
-      )}</td></tr>`,
-    )
-    .join('');
-  return `<div class="panel">
-    <h3>${esc(span.name)} · ${esc(fmtDur(span.durationMs))}</h3>
-    <table class="attr-table"><tbody>
-      <tr><td>span_id</td><td>${esc(span.spanId)}</td></tr>
-      <tr><td>parent_span_id</td><td>${esc(span.parentSpanId || '—')}</td></tr>
-      <tr><td>start</td><td>${esc(fmtClock(span.startMs))}</td></tr>
-      <tr><td>status</td><td>${esc(span.status?.code ?? 'unset')}${
-        span.status?.message ? ` — ${esc(span.status.message)}` : ''
-      }</td></tr>
-      ${rows}
-    </tbody></table>
-    ${events ? `<h3>Span events</h3><table class="attr-table"><tbody>${events}</tbody></table>` : ''}
-  </div>`;
-}
-
-function formatValue(value) {
-  if (value === null || value === undefined) return '';
-  if (typeof value === 'object') return JSON.stringify(value, null, 2);
-  return String(value);
-}
-
-/* -------------------------------- events -------------------------------- */
-
-function renderEventsTab() {
-  const options = ['<option value="">all events</option>']
-    .concat(
-      state.facets.events.map(
-        (facet) =>
-          `<option value="${esc(facet.name)}"${facet.name === state.eventFilters.event ? ' selected' : ''}>${esc(
-            facet.name.replace('claude_code.', ''),
-          )} (${facet.count})</option>`,
-      ),
-    )
-    .join('');
-
-  const rows = state.events.length
-    ? state.events
-        .slice()
-        .reverse()
-        .map(
-          (event) => `<tr class="event-row" data-event-seq="${event.seq}" data-error="${event.isError}">
-            <td class="event-time">${esc(fmtClock(event.timeMs))}</td>
-            <td class="event-name">${esc(event.eventName.replace('claude_code.', ''))}</td>
-            <td class="event-summary">${esc(event.summary ?? '')}</td>
-          </tr>
-          <tr class="event-detail" data-detail-seq="${event.seq}" hidden>
-            <td colspan="3">
-              <table class="attr-table"><tbody>${Object.entries(event.attrs ?? {})
-                .sort(([a], [b]) => (a < b ? -1 : 1))
-                .map(([key, value]) => `<tr><td>${esc(key)}</td><td>${esc(formatValue(value))}</td></tr>`)
-                .join('')}</tbody></table>
-            </td>
-          </tr>`,
-        )
-        .join('')
-    : '<tr><td colspan="3"><div class="placeholder">No events match</div></td></tr>';
-
-  return `
-    <div class="filters">
-      <select id="event-filter">${options}</select>
-      <input id="event-search" type="search" placeholder="Search attributes…" value="${esc(
-        state.eventFilters.search,
-      )}" />
-      <label class="toggle">
-        <input type="checkbox" id="event-errors" ${state.eventFilters.errorsOnly ? 'checked' : ''} />
-        errors only
-      </label>
-      <span class="muted">${state.events.length} shown · newest first</span>
-    </div>
-    <div class="panel"><div class="table-scroll"><table>
-      <thead><tr><th>Time</th><th>Event</th><th>Summary</th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table></div></div>`;
-}
-
-/* -------------------------------- metrics ------------------------------- */
-
-function renderMetricsTab() {
-  if (!state.metrics.length) {
-    return '<div class="placeholder">No metric points buffered for this session.</div>';
-  }
-  const byName = new Map();
-  for (const point of state.metrics) {
-    let group = byName.get(point.name);
-    if (!group) {
-      group = { name: point.name, unit: point.unit, kind: point.kind, temporality: point.temporality, series: new Map() };
-      byName.set(point.name, group);
-    }
-    const attrs = Object.entries(point.attrs ?? {})
-      .filter(([key]) => key !== 'session.id')
-      .sort(([a], [b]) => (a < b ? -1 : 1))
-      .map(([key, value]) => `${key}=${value}`)
-      .join(' ');
-    const series = group.series.get(attrs) ?? { attrs, points: 0, total: 0, last: 0, lastTimeMs: 0 };
-    series.points++;
-    series.total += Number(point.value) || 0;
-    series.last = Number(point.value) || 0;
-    series.lastTimeMs = Math.max(series.lastTimeMs, point.timeMs);
-    group.series.set(attrs, series);
-  }
-
-  return [...byName.values()]
-    .map(
-      (group) => `<div class="panel">
-        <h3>${esc(group.name)} · ${esc(group.kind)}${group.unit ? ` · ${esc(group.unit)}` : ''}${
-          group.temporality && group.temporality !== 'unspecified' ? ` · ${esc(group.temporality)}` : ''
-        }</h3>
-        <div class="table-scroll"><table>
-          <thead><tr><th>Attributes</th><th class="num">Points</th><th class="num">Window sum</th><th class="num">Last</th><th class="num">Last seen</th></tr></thead>
-          <tbody>${[...group.series.values()]
-            .sort((a, b) => b.total - a.total)
-            .map(
-              (series) => `<tr>
-                <td class="name">${esc(series.attrs || '(no attributes)')}</td>
-                <td class="num">${series.points}</td>
-                <td class="num">${esc(
-                  group.name === 'claude_code.cost.usage' ? fmtCost(series.total) : fmtNum(series.total),
-                )}</td>
-                <td class="num">${esc(
-                  group.name === 'claude_code.cost.usage' ? fmtCost(series.last) : fmtNum(series.last),
-                )}</td>
-                <td class="num">${esc(fmtAgo(series.lastTimeMs))}</td>
-              </tr>`,
-            )
-            .join('')}</tbody>
-        </table></div>
-      </div>`,
-    )
-    .join('');
-}
-
-/* --------------------------------- raw ---------------------------------- */
-
-function renderRawTab() {
-  const s = state.session;
-  const rows = (obj) =>
-    Object.entries(obj ?? {})
-      .sort(([a], [b]) => (a < b ? -1 : 1))
-      .map(([key, value]) => `<tr><td>${esc(key)}</td><td>${esc(formatValue(value))}</td></tr>`)
-      .join('') || '<tr><td colspan="2" class="muted">none</td></tr>';
-  return `
-    <div class="panel"><h3>Resource attributes</h3>
-      <table class="attr-table"><tbody>${rows(s.resource)}</tbody></table></div>
-    <div class="panel"><h3>Standard attributes</h3>
-      <table class="attr-table"><tbody>${rows(s.attrs)}</tbody></table></div>`;
 }
 
 /* ------------------------------ empty state ----------------------------- */
@@ -969,36 +443,6 @@ function scheduleLaneContext(delay = 250) {
   }, delay);
 }
 
-async function loadTabData() {
-  if (!state.session) return;
-  if (state.tab === 'traces') {
-    const traces = state.session.traces ?? [];
-    if (!traces.some((trace) => trace.traceId === state.selectedTraceId)) {
-      state.selectedTraceId = traces[0]?.traceId ?? null;
-      state.selectedSpanId = null;
-    }
-    state.trace = state.selectedTraceId
-      ? await api(`/api/traces/${encodeURIComponent(state.selectedTraceId)}`).catch(() => null)
-      : null;
-  } else if (state.tab === 'events') {
-    const [events, facets] = await Promise.all([
-      api('/api/events', {
-        session: state.selectedSessionId,
-        event: state.eventFilters.event,
-        search: state.eventFilters.search,
-        errors: state.eventFilters.errorsOnly ? '1' : '',
-        limit: 300,
-      }),
-      api('/api/facets'),
-    ]);
-    state.events = events.items;
-    state.facets = facets;
-  } else if (state.tab === 'metrics') {
-    const metrics = await api('/api/metrics', { session: state.selectedSessionId, limit: 2000 });
-    state.metrics = metrics.items;
-  }
-}
-
 /** Full refresh, preserving scroll position and any focused filter input. */
 async function refresh({ sessions = true } = {}) {
   const detail = document.getElementById('detail');
@@ -1015,7 +459,6 @@ async function refresh({ sessions = true } = {}) {
     await loadTimeline();
     // Live mode follows the head, so new requests have to reach the panel too.
     await loadLaneContext();
-    await loadTabData();
   } catch (error) {
     // A failed load must not skip the render. The empty state is the only thing
     // that can explain the failure, so throwing past it leaves the untouched
@@ -1040,13 +483,6 @@ async function refresh({ sessions = true } = {}) {
 function selectSession(id, { render = true } = {}) {
   if (state.selectedSessionId === id) return;
   state.selectedSessionId = id;
-  state.selectedTraceId = null;
-  state.selectedSpanId = null;
-  state.trace = null;
-  state.events = [];
-  state.metrics = [];
-  // Every session opens on its timeline, whatever view the previous one was on.
-  state.tab = null;
   state.content = [];
   state.toolMarks = [];
   state.toolSeq = 0;
@@ -1162,7 +598,8 @@ function wireEvents() {
     }
     const laneRow = event.target.closest('[data-lane]');
     if (laneRow) {
-      // Clicking the open lane closes it, the way the technical views work.
+      // Clicking the lane that is already open closes it again, so the timeline
+      // stands alone without a second control to press.
       state.selectedLane = state.selectedLane === laneRow.dataset.lane ? null : laneRow.dataset.lane;
       state.expanded = new Set();
       renderLanePanel();
@@ -1197,42 +634,9 @@ function wireEvents() {
       renderLanePanel();
       return;
     }
-    const tab = event.target.closest('[data-tab]');
-    if (tab) {
-      // Clicking the open view closes it, which is the way back to the timeline alone.
-      state.tab = state.tab === tab.dataset.tab ? null : tab.dataset.tab;
-      loadTabData().then(renderDetail);
-      return;
-    }
-    const trace = event.target.closest('[data-trace]');
-    if (trace) {
-      state.selectedTraceId = trace.dataset.trace;
-      state.selectedSpanId = null;
-      loadTabData().then(renderDetail);
-      return;
-    }
-    const span = event.target.closest('[data-span]');
-    if (span) {
-      state.selectedSpanId = state.selectedSpanId === span.dataset.span ? null : span.dataset.span;
-      renderTabBody();
-      return;
-    }
-    const row = event.target.closest('[data-event-seq]');
-    if (row) {
-      const detailRow = document.querySelector(`[data-detail-seq="${row.dataset.eventSeq}"]`);
-      if (detailRow) detailRow.hidden = !detailRow.hidden;
-    }
   });
 
   document.getElementById('detail').addEventListener('change', (event) => {
-    if (event.target.id === 'event-filter') {
-      state.eventFilters.event = event.target.value;
-      loadTabData().then(renderTabBody);
-    }
-    if (event.target.id === 'event-errors') {
-      state.eventFilters.errorsOnly = event.target.checked;
-      loadTabData().then(renderTabBody);
-    }
     // A wrapping <label> fires two click events for one press, so the filter's
     // checkboxes are toggled on `change`, which fires exactly once.
     const entry = event.target.closest('input[data-ctx-entry]');
@@ -1254,17 +658,9 @@ function wireEvents() {
     });
   }
 
-  let searchTimer = null;
   document.getElementById('detail').addEventListener('input', (event) => {
     // Keyboard scrubbing (arrow keys on a range) arrives here too.
-    if (event.target.id === 'timeline-scrub') {
-      scrubTo(event.target);
-      return;
-    }
-    if (event.target.id !== 'event-search') return;
-    state.eventFilters.search = event.target.value;
-    clearTimeout(searchTimer);
-    searchTimer = setTimeout(() => loadTabData().then(renderTabBody), 250);
+    if (event.target.id === 'timeline-scrub') scrubTo(event.target);
   });
 
   let sessionSearchTimer = null;
@@ -1321,7 +717,6 @@ async function boot() {
   // Sessions age out of "live" and relative timestamps drift; repaint slowly.
   setInterval(() => {
     renderSessionList();
-    if (state.session && state.tab === 'overview') renderTabBody();
   }, 15_000);
 }
 
