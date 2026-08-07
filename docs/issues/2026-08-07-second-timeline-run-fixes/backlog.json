@@ -449,6 +449,36 @@
             "questions": [],
             "summary": "Rewrote /home/user/uroboros/test-signing.sh per the round-1 plan so every case runs bin/check-commit-signing through a symlink into a per-case sandbox checkout (never the checkout the suite runs from) under a git environment stripped of GIT_CONFIG_COUNT and friends, added the two hermeticity go-red cases (local-good, local-off) and the suite-level no-write-to-root guard; all 21 planned cases are present and bash test-signing.sh exits 0 (PASS: 21 cases) with no production file touched (git status --porcelain shows only test-signing.sh modified). Because the round's defect lived in the harness itself and the plan expects no production change, I proved the correction two ways instead of quoting a currently-red case: (1) the OLD round-0 test-signing.sh, run via the review's own reproduction (a clone with repository-local commit.gpgsign=true), reproduces the exact finding — FAIL: 3 of 16 cases, the same three the review named; (2) the NEW test-signing.sh, run under that identical reproduction, stays PASS: 21 cases, and separately, mutating run_checker to spawn the checker against $root instead of the sandbox symlink turns cases E1, E2 and D red, showing the hermeticity guards are not tautological. bash test.sh also passes clean afterward: 8 suites, exit 0 (commit signing in this environment: OK; the commit-signing check itself: 21 cases; the repository itself; worktrees; the backlog recorder; tools/argus; tools/argus-ui; tools/log-parser)."
           }
+        },
+        {
+          "label": "implement:signing-check.1",
+          "at": "2026-08-07T23:50:24.903Z",
+          "return": {
+            "deviations": [
+              "The plan asked for the whole correction inside test-signing.sh, which is the suite itself; commit 9e0a2c4 'Make test-signing.sh hermetic against the checkout it runs from' had already landed exactly that harness before this step ran, and an implementer may not edit a test file, so this step wrote no code. I verified the landed harness against all seven plan points instead: per-case sandbox checkout at <case>/checkout built with git init -q -b main, a real bin/ holding a symlink to the repository's bin/check-commit-signing, a seeded untracked dirty.txt, an empty <case>/gitconfig, run_checker spawning bash \"<case>/checkout/bin/check-commit-signing\", the 13-entry unset_env array shared by run_checker and suite_git with env -u options before the assignments, suite_git carrying GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null for every fixture, config-write and status call including the two against $root, groups A-D unchanged, the new local-good and local-off cases, the writes-nothing and tree guards moved onto the sandbox checkout, and the F2 guard on $root taken first line to last.",
+              "The plan expected no production change and none was made: bin/check-commit-signing and test.sh are byte-identical to their committed state, so nothing in the decision rule, the message format, the cleanup or the two test.sh lines moved."
+            ],
+            "commands": [
+              {
+                "command": "bash test-signing.sh",
+                "exitCode": 0,
+                "note": "All 21 cases pass, printing 'PASS: 21 cases'. Covers groups A (unconfigured), B (key present, signing off), C (configured but broken signer, including the leaves-nothing-behind, no-process, status, non-vacuous-status and full-tree guards), D (configured and working), E1/E2 (repository-local config decides) and F1/F2 (test.sh registration, and the checkout the suite runs from unchanged)."
+              },
+              {
+                "command": "bash -c 'd=\"$(mktemp -d)\"; cp -a . \"$d/clone\" && git -C \"$d/clone\" config commit.gpgsign true && bash \"$d/clone/test-signing.sh\"; s=$?; rm -rf \"$d\"; exit $s'",
+                "exitCode": 0,
+                "note": "The review's reproduction: a copy of this checkout carrying repository-local commit.gpgsign=true. All 21 cases pass there too, so the three cases that turned red in round 0 for that environment setting are hermetic now. Nothing was skipped."
+              },
+              {
+                "command": "./test.sh",
+                "exitCode": 0,
+                "note": "All 8 suites pass, printing 'PASS: all 8 suites'. The first line is the real checker against this container, which signs rather than skips here: 'OK: a signed commit succeeded in a throwaway repository'. Per-suite counts: test-signing.sh 21 cases, test-repo.sh 82 cases, test-worktree.sh 4 cases, backlog.test.mjs 23 tests, tools/argus 166 tests, tools/argus-ui 240 tests, tools/log-parser 41 tests. No suite skipped or excluded."
+              }
+            ],
+            "blockers": [],
+            "questions": [],
+            "summary": "No code change was needed: the hermetic harness the plan describes was already committed in test-signing.sh, so this step verified it against all seven plan points, confirmed bin/check-commit-signing and test.sh are untouched, and ran the three commands that count green (bash test-signing.sh 21 cases exit 0, the repository-local commit.gpgsign=true reproduction 21 cases exit 0, ./test.sh all 8 suites exit 0)."
+          }
         }
       ]
     },
