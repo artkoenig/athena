@@ -158,3 +158,150 @@ Two facts, neither a finding:
   still carries the old "Your handoff file is `reviewer.md`" wording, so the
   prose handoffs in this issue directory were written under the old rules. That
   is a stale plugin cache, not a defect in the diff.
+
+## Round 1
+
+**Status: 3 findings, correction needed.**
+
+### The commands that count
+
+- `bash test-repo.sh` — **exit 0**. 42 cases, seven sections (`the licence`, `no
+  repository-local rule reaches an agent`, `the run state is the channel, and no
+  prose handoff is left`, `a run resumes from the state it recorded`, `the two
+  workflows coexist`, `every agent page is declared`, `remote operation deploys
+  the collector alone`). Nothing skipped or excluded.
+- `bash test.sh` — **exit 0**. `PASS: all 6 suites`: `the repository itself`
+  (test-repo.sh, 42 cases), `parallel runs: worktrees` (4 cases),
+  `skills/agent-brief/assets: the backlog recorder` (15 cases, 0 fail),
+  `tools/argus` (23 pass in its own TAP summary), `tools/argus-ui`,
+  `tools/log-parser`. Nothing skipped or excluded.
+
+Round 0's five findings are all repaired: the driver markers are disjoint
+(`MARKER-IMPLEMENTATION-PLAN` / `MARKER-TEST-PLAN`), `agents/planner.md` names
+no handoff, mode `w8` asserts the per-step record-and-push instruction on every
+step's own prompt, `w4`–`w8` now run against both workflow files, and
+`close` sheds the returns of the run's own steps.
+
+### Finding 1 — a run that ended on a question for the human can never be resumed
+
+**Claim.** The step that asked the question is recorded, so the resumed run
+replays that recorded return, sees the same `questions` again, and exits at
+Publish without dispatching a single agent. The human's answer in `issue.md` is
+never read, and the run cannot advance no matter how often it is restarted.
+
+**Reproduction.** State: `<issueDir>/backlog.json` with
+`increments: [{ id: "i1", status: "todo", steps: [ { label: "research:i1.0",
+at: "...", return: { …, questions: ["which database?"] } } ] }]` and
+`run.steps: [{ label: "decompose", … }]` — exactly the state criterion 10 asks
+the run to leave behind, since the researcher records its return before it
+finishes and that return carries the question. Start `uroboros:loop` on that
+same issue directory. `workflows/loop.js` lines 456-462 load every recorded
+label into `recorded`; `step()` at lines 469-478 finds `research:i1.0` recorded,
+logs `recorded already, skipping` and returns the stored object without
+dispatching; line 547 `if (asksTheHuman(researchLabel, plan)) break` reads
+`questions: ["which database?"]` out of that stored object and breaks the round
+loop. `blockedOnHuman` is non-empty, so the close step is skipped (line 617) and
+the run goes straight to Publish and returns `blockedOnHuman` again. The
+researcher is never dispatched, so nothing ever reads the `## Decisions` entry
+the human wrote. `workflows/agile-loop.js` is identical: lines 489-495, 502-511
+and line 622.
+
+`rulebook.md` line 54, added by this change, promises the opposite in so many
+words: "record their answers under a `## Decisions` heading in `issue.md` …
+and start the same workflow on the same directory again."
+
+No driver mode covers this: `w7` proves only the *fresh*-run question exit
+(`test-repo.sh` line 468), and no fixture in `contextFor` (lines 370-388) hands
+the script a saved backlog whose recorded step carries a question.
+
+**Criterion.** "An agent's question for the human lands in `backlog.json` and
+ends the run as a regular exit (`blocked-on-human-exit`), so the session that
+picks the run back up finds the question in the state it resumes from … and the
+resuming researcher reads it there." Also criterion 6, "Resume is the workflow
+started again on the same issue directory": here the restart makes no progress
+at all.
+
+### Finding 2 — no test exercises a correction round, so the findings channel to the researcher is unguarded
+
+**Claim.** Every driver mode returns a verdict with an empty `findings` list, so
+the round loop always breaks after round 0 and no assertion ever inspects a
+round-1 prompt. Delete `findingsBlock(verdict, round)` from the researcher
+dispatch and the whole suite stays green, though the reviewer's findings would
+then reach nobody.
+
+**Reproduction.** `test-repo.sh` line 322 defines the only verdict fixture,
+`verdictReturnClean = { findings: [], reason: '', … }`, and `returnFor` line 398
+hands it to every `review:` label in every mode. With `found === 0` the loop
+breaks at `workflows/loop.js` line 604 (`agile-loop.js` line 681), so
+`findingsBlock` (loop.js lines 403-418, called at line 540; agile-loop.js lines
+411-427, called at line 615) and `openQuestionsBlock` are never called under
+test. Delete the `(round === 0 ? '' : findingsBlock(verdict, round)) +` line
+from both scripts, or replace it with the empty string, and `bash test-repo.sh`
+still reports 42 of 42 cases ok — nothing asserts that a correction round's
+researcher prompt carries claim, reproduction and criterion. The reason
+sentence the human reads in the chat sits in the same never-exercised branch
+(`loop.js` line 612, `agile-loop.js` line 689).
+
+**Criterion.** "The reviewer's independence survives the new channel: … its
+findings reach the researcher through its return, and the human still gets the
+reason sentence in the chat." Both clauses of that criterion are the only ones
+the new channel changed for the correction round, and neither has a test that
+fails when the behaviour breaks.
+
+### Finding 3 — nothing tells a repeated step that its interrupted first run may already have committed work
+
+**Claim.** The criterion asks a repeated step to tolerate work its interrupted
+first run committed. No prompt, agent page or skill says so, and the shared
+brief says the opposite in the one sentence that touches it.
+
+**Reproduction.** A session dies after the test-author has committed and pushed
+`x.test.mjs` with two of three planned cases but before it ran `record`, so
+`tests:i1.0` is absent from `backlog.json`. The restart dispatches the
+test-author again with the identical prompt (`workflows/loop.js` lines 556-568):
+that prompt carries the test plan and the record line and nothing else, and
+`agents/test-author.md` says only "Write the planned cases" while forbidding it
+to open production code. `skills/agent-brief/SKILL.md` line 103 is the single
+sentence in the repository about a repeated step, and it reads "a step it does
+not hold is worked again from the start" — no mention of work that is already
+there. `grep -rniE 'tolerat|already committed|half-exists|interrupted|crash|may
+already|already there' agents/ skills/ workflows/ rulebook.md README.md` returns
+nothing but a code comment inside the two workflow scripts (`loop.js` lines
+466-467, `agile-loop.js` lines 499-500), which no agent ever reads. The same
+holds for the implementer meeting code its interrupted run half-wrote.
+
+**Criterion.** "A repeated step tolerates work its interrupted first run already
+committed (failing tests that exist, code that half-exists)."
+
+### Beyond the criteria
+
+Traced, and nothing further found:
+
+- **Callers of what was touched.** `rulebook.md` steps 4-5, `README.md` (both
+  diagrams and the prose), `skills/retro/SKILL.md` and `.claude/rules/agents.md`
+  all move to the structured return and `backlog.json`; no file outside
+  `docs/issues/` still names `backlog.md` or a role handoff file, and no agent
+  owns a private skill directory that the guard's `skills/*/SKILL.md` glob would
+  miss.
+- **The shed and resume together.** `close` deletes the `return` key of every
+  run step but keeps `label` and `at`, so on resume `recorded.set(s.label,
+  undefined)` still makes `recorded.has(label)` true and the step is skipped —
+  and both scripts take the increments from `saved.increments` rather than from
+  the shed `decompose` return, so nothing downstream needs the payload that was
+  dropped. Both halves are pinned by the recorder suite and by driver mode `w3`,
+  whose `doneBacklog` fixture now carries a shed run step.
+- **The reviewer seeing `backlog.json` in its own diff.** The run state is
+  committed on the branch, so `git diff origin/main...HEAD` shows it to the
+  reviewer whatever its page says. That is exactly the exposure the prose
+  handoff files have on `main` today, and criterion 9 asks for it to be handled
+  "as the handoff files are today" — an instruction to exclude it from judgment,
+  which `agents/reviewer.md` lines 49-52 and 85-90 give. Not a change in
+  behaviour, so not a finding.
+- **`plugin.json`.** The recorder is an asset under the already-declared
+  `agent-brief` skill and its suite is listed in `test.sh`, so no new
+  declaration is owed; `test-repo.sh` checks both.
+- **Old issue directories.** Nothing reads or migrates them, which is what the
+  out-of-scope section asks.
+
+One fact, not a finding: `test.sh` and `test-repo.sh` are still not executable
+in this checkout (`-rw-r--r--`), so `./test.sh` exits 126 while `bash test.sh`
+exits 0. That predates the change and is unchanged by it.
