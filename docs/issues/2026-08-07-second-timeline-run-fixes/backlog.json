@@ -16,267 +16,9 @@
         "The reviewer's own brief states what makes a finding a coverage gap rather than a defect, so the classification is decided the same way twice.",
         "The test suite passes."
       ],
-      "status": "todo",
-      "note": "",
-      "steps": [
-        {
-          "label": "research:coverage-only-round.0",
-          "at": "2026-08-07T19:58:02.247Z",
-          "return": {
-            "needsTests": true,
-            "summary": "Give every reviewer finding a required `kind` of coverage-gap or defect, route a round whose findings are all coverage gaps through the test-author and the reviewer alone with a log line saying it is correcting coverage only, and state the standard on the reviewer's page.",
-            "plan": "GOAL\n\nA correction round whose every finding is \"the behaviour is right but nothing goes red when it breaks\" must run the test-author and the reviewer only. Today the reviewer's finding already carries `fix` (`direct` | `needs-plan`), which decides how much *planning* a correction needs; that field cannot answer *what sort of wrong* the finding is, so a second, orthogonal field is added.\n\nBoth `workflows/loop.js` and `workflows/agile-loop.js` change, identically. The two scripts deliberately duplicate each other (a workflow script cannot import a sibling) and `agile-loop.js`'s own header says anything changed in one chain belongs in the other; `test-repo.sh`'s driver runs the same modes against both. A change in one file only is a divergence the suite will catch.\n\n1. THE FIELD — VERDICT schema, both workflows\n\nIn the `VERDICT` constant (`loop.js` ~line 265, `agile-loop.js` ~line 291), `findings.items` gains one property, placed BEFORE `fix`, and added to that item's `required` array (the item keeps `additionalProperties: false`):\n\n    kind: {\n      type: 'string',\n      enum: ['coverage-gap', 'defect'],\n      description:\n        'coverage-gap: the behaviour a criterion asks for is present and right, and the ' +\n        'only thing wrong is that nothing goes red when it breaks — a criterion with no ' +\n        'test, a case that cannot fail, an assertion that reads something the code always ' +\n        'produces. Correcting it touches test files alone. defect: everything else, and ' +\n        'everything you hesitate over — the behaviour, the prose or the diff is wrong. A ' +\n        'round in which every finding is a coverage-gap is worked by the test-author ' +\n        'alone: no researcher, no implementer.',\n    },\n\nRequired order in `required`: ['claim', 'reproduction', 'criterion', 'kind', 'fix'].\n\nRejected: extending the existing `fix` enum to a third value `coverage`. One field cannot hold two independent answers, and the criterion asks for a field that says whether the finding is a coverage gap or a defect — a value hidden among two defect values does not say that. Rejected too: making `kind` optional. Every routing field in these scripts is opted into, never fallen into.\n\n2. THE ROUTING — both workflows\n\nBeside `isDirectFixRound`, add, with a comment in the register of the file (why this exists, what it costs, what it does not skip):\n\n    function isCoverageOnlyRound(verdict) {\n      const findings = (verdict && Array.isArray(verdict.findings) && verdict.findings) || []\n      return findings.length > 0 && findings.every((f) => f && f.kind === 'coverage-gap')\n    }\n\nA finding with no `kind` at all is therefore a defect for routing purposes — the shortened path is opted into.\n\n`isDirectFixRound` gains one guard: a finding counts as direct only when `f.fix === 'direct' && f.kind !== 'coverage-gap'`. A coverage gap has no code to fix, so an implementer-only round could not correct it even if the reviewer marked it `direct`. Every round whose findings are all defects behaves exactly as it does today.\n\nIn the round loop (`loop.js` ~line 624, `agile-loop.js` ~line 730), replace the single `directFix` line with:\n\n    const coverageOnly = round > 0 && isCoverageOnlyRound(verdict)\n    const directFix = round > 0 && !coverageOnly && isDirectFixRound(verdict)\n\nBoth are decided before anything is dispatched and only from the verdict of the round before, so `plan` is always the one an earlier round produced.\n\nThe round body becomes three branches instead of two:\n\n    if (coverageOnly) {\n      log(<the coverage line below>)\n      const testsLabel = `tests:${task.id}.${round}`\n      tests = await step(testsLabel, 'Tests', () => agent(<the coverage prompt below>, {\n        agentType: 'uroboros:test-author', phase: 'Tests', label: testsLabel, schema: TESTS,\n      }))\n      if (asksTheHuman(testsLabel, tests)) break\n    } else if (directFix) {\n      <unchanged>\n    } else {\n      <unchanged research + tests block>\n    }\n\nand the implementer dispatch that follows is wrapped in `if (!coverageOnly) { ... }`, its `asksTheHuman(buildLabel, build)` break included. The review dispatch, the findings count, the accept/`MAX_CORRECTIONS` logging and everything after are untouched: a coverage-only round is reviewed like any other, which is what keeps it cheap rather than unsafe.\n\nLabels are unchanged (`tests:<id>.<round>`, `review:<id>.<round>`), so resume from `backlog.json` keeps working with no change.\n\n3. THE LOG LINE\n\nExactly one `log()` fires on the shortened path, and it must contain the literal phrase `correcting coverage only` — a test asserts on that phrase.\n\n`agile-loop.js`:\n    `Increment ${n} round ${round}: every finding is a coverage gap — correcting coverage only, research and implementation skipped, checks carried over from round ${round - 1}.`\n\n`loop.js` (no increment ordinal, matching its sibling direct-fix line):\n    `Round ${round}: every finding is a coverage gap — correcting coverage only, research and implementation skipped, checks carried over from round ${round - 1}.`\n\nNo other path may emit that phrase.\n\n4. THE COVERAGE-ROUND TEST-AUTHOR PROMPT\n\nAdd `coverageBlock(verdict, round)` beside `directFixBlock`, built the same way (findings numbered, claim / Reproduction / Criterion per line). `agile-loop.js` says \"for this increment\" where `loop.js` does not, exactly as the two `directFixBlock`s already differ. It must state, in the imperative:\n\n- this is correction loop N of MAX_CORRECTIONS and it is a coverage-only round: every finding says the behaviour is already right and only the guard is missing, so nobody planned this round and nobody implements it;\n- the findings are the whole work order — each reproduction is the spec of one case;\n- write those cases and nothing else, in the file and style the existing tests for that behaviour use;\n- the behaviour is already there, so the case passes against the code as it stands and would fail if that behaviour were removed; confirm both and say so in `got` for each case — this round has no implementer to turn a red test green, and a red test reaching the reviewer ends the increment blocked;\n- test files only, no production code;\n- a finding you cannot turn into a case goes in `openQuestions`, not into a guess.\n\nThe test-author's prompt in this round is assembled as: scope block (`agile-loop.js` only, as today) + `coverageBlock(verdict, round)` + `checkList(plan.checks)` + `recordStep(task.id, testsLabel)` + `noDispatch`. `checkList` is included because no implementer runs this round: the commands the round before closed are what the test-author runs to confirm its new case is green, and they are the same ones the reviewer will run.\n\nRejected: amending `agents/test-author.md` for this round. The page says tests must fail first; that rule is right for every other round, and the one round where it inverts is fully described by the prompt the workflow builds. No criterion of this increment asks for the page to change.\n\n5. THE REVIEWER'S BRIEF — agents/reviewer.md\n\nIn \"What you return\", the `findings` bullet (lines 111-128), insert `kind` ahead of `fix` and define the standard once, in that bullet and nowhere else on the page:\n\n- `coverage-gap` — the behaviour a criterion asks for is present and right in the diff, and the only thing wrong is that nothing goes red when it breaks: a criterion no test would catch, a case that cannot fail, an assertion that reads something the code always produces. The correction touches test files alone.\n- `defect` — everything else: the behaviour, the prose, or the diff itself is wrong, and correcting it changes something other than a test file.\n- The tie-break, stated plainly: if you cannot say the correction touches test files alone, it is a `defect`. A round whose findings are all `coverage-gap` is worked by the test-author alone — no researcher, no implementer — so a defect marked `coverage-gap` buys a round that cannot fix it.\n- `fix` is read only for a `defect`; set `needs-plan` on a coverage gap.\n\nKeep the existing `fix` sentences as they are. Do not restate the standard in check 3 (\"The tests against the intent\") — one home per rule; two wordings drift.\n\nThe page must contain the literal strings `coverage-gap`, `defect` and the phrase `goes red` (a test greps for all three).\n\n6. README.md\n\nThe README documents how a round is routed, so it would otherwise describe a rule the scripts no longer follow in full. Two minimal edits, no new section:\n\n- in the `LOOP` mermaid subgraph (~line 45, beside the existing `REV -.->|\"every finding a direct fix:<br/>no plan, no test\"| IMPL`), add `REV -.->|\"every finding a coverage gap:<br/>no plan, no fix\"| TEST`;\n- in the paragraph beginning \"A finding says how much of the chain its correction needs\" (~lines 62-71), add two or three sentences: a finding also says what sort of wrong it is, a coverage gap being one where the behaviour is right and only the guard is missing, and a round of nothing but coverage gaps is worked by the test-author and the reviewer — no plan, no fix, because there is nothing to fix.\n\nNothing else in README.md changes.\n\n7. WHAT IS ALREADY DONE\n\nThe criterion \"the classification is recorded in backlog.json alongside the round\" needs no new code: `skills/agent-brief/assets/backlog.mjs`'s `record` stores the step return verbatim under the label `review:<id>.<round>`, which carries the round. The new `kind` field is what makes there be something to record; a case in the recorder suite pins that the two meet.\n\nOUT OF SCOPE for this increment: the argus-ui test harness, `bin/parse-agent-log`, the collector fixture, `test.sh`'s signing check, the loop skill pages, and `backlog.mjs record` reading stdin. Later increments own each.",
-            "moduleMap": "workflows/loop.js — the plain loop's script; VERDICT schema (~line 265) gets `kind`, isDirectFixRound (~line 458) gets the coverage guard, new isCoverageOnlyRound + coverageBlock beside it, round loop (~line 624) gets the third branch and the wrapped implementer.\nworkflows/agile-loop.js — the incremental loop's script; the identical change at VERDICT (~line 291), the helpers (~lines 456-489) and the round loop (~lines 730-841), with the increment ordinal in its log line and its coverageBlock.\nagents/reviewer.md — the reviewer's brief; the `findings` bullet under \"What you return\" (lines 111-128) gains the `kind` field and the coverage-gap/defect standard.\nREADME.md — the LOOP mermaid subgraph (~line 45) gains one edge, and the \"A finding says how much of the chain its correction needs\" paragraph (~lines 62-71) two or three sentences.\ntest-repo.sh — the repository's own suite; the workflow driver heredoc (markers ~304-323, fixtures ~365-391, contextFor ~521-570, assertions ~798-825, run_driver loop ~853-869) and the reviewer-page grep block (~176-186).\nskills/agent-brief/assets/backlog.test.mjs — the recorder's node:test suite; one new case that a recorded verdict keeps each finding's classification under the round's label.",
-            "environment": "Everything runs from the repository root, /home/user/uroboros. Prerequisites: `bash` and `node` (the suites use `node --test` and `node:test`, so Node 18 or newer). No install step and no network: every suite in the repository is zero-dependency, and the npm ones run through their own package's `test` script with no `npm install` first.\n\nCommands the test plan asks anyone to run:\n- `bash test-repo.sh` — the repository's own suite, which contains the workflow driver modes and every grep case.\n- `node --test skills/agent-brief/assets/backlog.test.mjs` — the backlog recorder suite alone.\n- `./test.sh` — every suite in the repository, one after another; it already runs both of the above.\n\nThere is no linter and no formatter in this repository. There is no watch mode and no single-case filter for `test-repo.sh`: it is a bash script that prints one `ok`/`FAIL` line per case and exits non-zero when any failed, so a single driver mode is run directly with the driver the script writes, or by reading the `ok`/`FAIL` lines of the whole run.",
-            "testPlan": "TESTS ARE NEEDED.\n\nI ran nothing: no command was needed to settle a question this plan depends on, so the first run of the list below is the implementer's. Nothing in the suite is known to be red; `test-repo.sh` and the recorder suite are expected green on the current checkout, and the new cases below are expected red until the implementation lands — except case D, which is green from the start and says so.\n\nTHE TWO TEST FILES AND THEIR CONVENTIONS\n\n(1) /home/user/uroboros/test-repo.sh — bash, no framework. Two helpers at the top define a case: `ok \"<sentence>\"` and `no \"<sentence>\"`, each printing one line; the script exits non-zero when any case failed. Sections are separated by `echo` + `echo \"=== <section title>\"`. Every case carries a comment above it saying which finding or run it came from and what broke without it. Inside it, a heredoc (`cat >\"$driver_tmp/driver.js\" <<'JS' ... JS`) writes a Node driver that loads a workflow script with `new AsyncFunction`, stubs `agent`, `log` and `phase`, and asserts on the labels dispatched, the prompts sent and the lines logged. The driver's shape: string markers in `DISJOINT_MARKERS` (a startup guard asserts no marker is a substring of another), fixture return objects, `contextFor(mode)` giving the per-mode stubs, `returnFor(label)` mapping a dispatch label to its fixture, then one `else if (mode === 'wN')` branch of assertions in `main()`. `assertEqualArrays(labels, expected, msg)` pins the exact dispatch sequence; `assertTrue(cond, msg)` everything else. A mode is wired up by a `run_driver \"$wf\" wN \"$wf_name: <sentence>\"` line inside the `for wf in loop.js agile-loop.js` loop near the end. `isAgile` is true for agile-loop.js; the closing label is `replan:i1` there and `close:i1` in the plain loop.\nRun it with: `bash test-repo.sh`\n\n(2) /home/user/uroboros/skills/agent-brief/assets/backlog.test.mjs — `node:test` with `node:assert/strict`. Each case is a top-level `test('<sentence describing the rule>', () => { ... })`. Helpers already in the file: `tmpDir()`, `writeJson(dir, name, value)`, `run(args)` (executes the CLI, returns stdout), `runFails(args)`, `backlogTemplate(increments)`, `incrementPayload(id, title)`. The pattern of every record case: make a temp dir, `run(['init', backlogPath, writeJson(...)])`, `run(['record', ...])`, then `JSON.parse(fs.readFileSync(backlogPath, 'utf8'))` and assert on the structure.\nRun it with: `node --test skills/agent-brief/assets/backlog.test.mjs`\n\nCASE A — a round whose every finding is a coverage gap runs the test-author and the reviewer only, and says so.\nProves: criteria 2 and 4 (coverage-only round skips researcher and implementer; the workflow log()s that it is correcting coverage only), and criterion 1 in use.\nLevel: integration, through the workflow driver. File: test-repo.sh. New driver mode `w17`, run against BOTH workflows inside the existing `for wf` loop.\nSetup: add markers `MARKER-COVERAGE-CLAIM` and `MARKER-COVERAGE-REPRODUCTION` to `DISJOINT_MARKERS`. Add a fixture beside `verdictReturnWithDirectFinding`:\n  const verdictReturnWithCoverageFinding = { findings: [{ claim: 'MARKER-COVERAGE-CLAIM', reproduction: 'MARKER-COVERAGE-REPRODUCTION', criterion: 'none', kind: 'coverage-gap', fix: 'needs-plan' }], reason: 'MARKER-VERDICT-REASON', questions: [], summary: 'verdict summary' }\nAdd to `contextFor`: case 'w17' returns `{ stateReturn: { exists: false, backlogJson: '', summary: '' }, decomposeReturn: decomposeReturnOne, researchReturn: planReturn, verdictFor: (label) => (label === 'review:i1.0' ? verdictReturnWithCoverageFinding : verdictReturnClean) }`.\nInput/state: a fresh run, round 0 clean, round 0's review returning that one coverage-gap finding.\nExpected:\n  - `assertEqualArrays(labels, ['load-state', 'decompose', 'research:i1.0', 'tests:i1.0', 'implement:i1.0', 'review:i1.0', 'tests:i1.1', 'review:i1.1', closeLabel, 'publish'], ...)` — no `research:i1.1` and no `implement:i1.1`.\n  - the `tests:i1.1` prompt contains `MARKER-COVERAGE-CLAIM` and `MARKER-COVERAGE-REPRODUCTION`.\n  - the `tests:i1.1` prompt contains `CHECK-MARKER` (the checks the round before closed).\n  - the `tests:i1.1` prompt does NOT contain `TESTPLAN_MARKER` — no researcher wrote one this round, so a stale plan must not be replayed into it.\n  - the `review:i1.1` prompt contains `CHECK-MARKER` and does NOT contain `MARKER-COVERAGE-CLAIM` (the reviewer stays independent of the finding it wrote).\n  - `logs.some((l) => l.includes('correcting coverage only'))` is true.\n  - `result.blockedOnHuman` is an empty array (the round runs to a clean close).\nrun_driver line: `run_driver \"$wf\" w17 \"$wf_name: a correction round whose findings are all coverage gaps runs the test-author and the reviewer alone, and logs that it is correcting coverage only\"`\nCommand that runs just it: `bash test-repo.sh` (its `ok`/`FAIL` line is the case).\n\nCASE B — a round with one coverage gap and one defect runs the full four-agent chain.\nProves: criterion 3 (at least one defect ⇒ the chain today).\nLevel and file: as case A. New driver mode `w18`, both workflows.\nSetup: a fixture whose `findings` array holds the coverage-gap finding of case A AND a defect finding `{ claim: 'MARKER-FINDING-CLAIM', reproduction: 'MARKER-FINDING-REPRODUCTION', criterion: 'MARKER-FINDING-CRITERION', kind: 'defect', fix: 'needs-plan' }`. `contextFor` case 'w18' mirrors w17 with that fixture.\nExpected:\n  - `assertEqualArrays(labels, ['load-state', 'decompose', 'research:i1.0', 'tests:i1.0', 'implement:i1.0', 'review:i1.0', 'research:i1.1', 'tests:i1.1', 'implement:i1.1', 'review:i1.1', closeLabel, 'publish'], ...)`.\n  - no line of `logs` contains `correcting coverage only`.\n  - the `research:i1.1` prompt contains BOTH `MARKER-FINDING-CLAIM` and `MARKER-COVERAGE-CLAIM` — a mixed round drops neither finding.\nrun_driver line: `run_driver \"$wf\" w18 \"$wf_name: a correction round with one defect among its coverage gaps runs the full chain\"`\n\nCASE C — a coverage gap the reviewer also marked a direct fix is not handed to the implementer alone.\nProves: the guard in `isDirectFixRound`; the repeat/conflict edge of criterion 2 against the existing fast path.\nLevel and file: as case A. New driver mode `w19`, both workflows.\nSetup: a fixture identical to case A's but with `fix: 'direct'` on the coverage-gap finding. `contextFor` case 'w19' mirrors w17 with it.\nExpected: the same label array as case A (`tests:i1.1` and `review:i1.1`, no `implement:i1.1`), and `logs.some((l) => l.includes('correcting coverage only'))` true.\nrun_driver line: `run_driver \"$wf\" w19 \"$wf_name: a coverage gap marked a direct fix still goes to the test-author, not to the implementer alone\"`\n\nCASE D — a recorded verdict keeps each finding's classification, under the label that carries the round.\nProves: criterion 5. Expected GREEN from the first run: `record` already stores the step return verbatim, and this case is what pins that the new field survives into the run state. Say exactly that in the case's `got` — do not hunt a failure for it.\nLevel: unit, against the CLI. File: /home/user/uroboros/skills/agent-brief/assets/backlog.test.mjs. New `test(...)` at the end of the record group (after the case at line 193).\nName: `test('record keeps each finding's classification in the verdict it stores under the round's label', ...)`.\nInput/state: `tmpDir()`; `run(['init', backlogPath, writeJson(dir, 'init.json', backlogTemplate([incrementPayload('i1', 'First')]))])`; a payload `{ findings: [{ claim: 'no guard', reproduction: 'delete the container, nothing goes red', criterion: 'c1', kind: 'coverage-gap', fix: 'needs-plan' }, { claim: 'wrong number', reproduction: 'x at line 3', criterion: 'c2', kind: 'defect', fix: 'direct' }], reason: 'another round', questions: [], summary: 'verdict summary' }` recorded with `run(['record', backlogPath, 'i1', 'review:i1.1', writeJson(dir, 'payload.json', payload)])`.\nExpected: reading the file back, the increment `i1` has exactly one step, its `label` is `review:i1.1` (the round is in the label), and `step.return.findings.map((f) => f.kind)` deep-equals `['coverage-gap', 'defect']`.\nCommand that runs just it: `node --test skills/agent-brief/assets/backlog.test.mjs`\n\nFIXTURE MAINTENANCE (not new cases — edits the existing ones need so they keep proving what they were written for)\n- `verdictReturnWithDirectFinding` (test-repo.sh ~line 381) gains `kind: 'defect'`, so w16 keeps proving the direct-fix path under the new field.\n- `verdictReturnWithFinding` (~line 365) deliberately keeps NO `kind` key at all: it is the missing-field guard, and w10's existing exact-label assertion already proves such a round runs the full chain. Add one assertion to w10: no line of `logs` contains `correcting coverage only`.\n\nCASE E — the reviewer's page states what makes a finding a coverage gap.\nProves: criterion 6.\nLevel: static, a grep case. File: test-repo.sh, in the block that already greps `$reviewer_page` (~lines 176-186), added directly after it with a comment saying why.\nExpected: one `ok`/`no` case that passes only when `agents/reviewer.md` contains all three of the literals `coverage-gap`, `defect` and `goes red`; the `no` branch names which of the three is missing.\nCommand that runs just it: `bash test-repo.sh`\n\nCASE F — each workflow's verdict schema offers the classification its routing reads.\nProves: criterion 1 (it is a value the reviewer sets, not a phrase greped out of prose). Without it, a script could route on `f.kind` while no reviewer could ever set it, and every driver mode above would still pass — the driver stubs never validate a schema.\nLevel: static, a grep case per workflow. File: test-repo.sh, in the existing `for f in loop.js agile-loop.js` grep loop area (~lines 161-170) or a new case beside it with its own comment.\nExpected: for each of `workflows/loop.js` and `workflows/agile-loop.js`, the file contains both `'coverage-gap'` and `'defect'` as quoted literals; failing names the file.\nCommand that runs just it: `bash test-repo.sh`\n\nLEFT UNTESTED, AND WHY\n- The README edits: no criterion of this increment asks for them, and a grep would pin wording without proving behaviour.\n- The exact prose of `coverageBlock` beyond the markers and the checks the driver asserts on: the rest is instruction for an LLM, and pinning its sentences would make every later rewording a red test.\n- Whether a reviewer classifies a given finding correctly: that is a judgment no test can make; the brief is what makes it repeatable, and case E proves the brief states it.\n- Resume of a coverage-only round from recorded state: the labels are unchanged (`tests:<id>.<round>`), so w2 and w9 already cover the resume mechanism.\n- The tools under tools/ : untouched by this increment.",
-            "checks": [
-              "bash test-repo.sh",
-              "./test.sh"
-            ],
-            "questions": []
-          }
-        },
-        {
-          "label": "tests:coverage-only-round.0",
-          "at": "2026-08-07T20:03:27.857Z",
-          "return": {
-            "cases": [
-              {
-                "case": "A — a round whose every finding is a coverage gap runs the test-author and the reviewer only, and says so.",
-                "file": "test-repo.sh",
-                "testName": "run_driver w17 (both loop.js and agile-loop.js): \"a correction round whose findings are all coverage gaps runs the test-author and the reviewer alone, and logs that it is correcting coverage only\"",
-                "expected": "labels are ['load-state','decompose','research:i1.0','tests:i1.0','implement:i1.0','review:i1.0','tests:i1.1','review:i1.1',closeLabel,'publish'] — no research:i1.1, no implement:i1.1; tests:i1.1 carries MARKER-COVERAGE-CLAIM, MARKER-COVERAGE-REPRODUCTION and CHECK-MARKER but not TESTPLAN_MARKER; review:i1.1 carries CHECK-MARKER but not MARKER-COVERAGE-CLAIM; some log line includes 'correcting coverage only'; result.blockedOnHuman is empty.",
-                "got": "FAIL for both workflows. loop.js: \"a correction round whose findings are all coverage gaps did not skip exactly the researcher and the implementer — expected [\\\"load-state\\\",\\\"decompose\\\",\\\"research:i1.0\\\",\\\"tests:i1.0\\\",\\\"implement:i1.0\\\",\\\"review:i1.0\\\",\\\"tests:i1.1\\\",\\\"review:i1.1\\\",\\\"close:i1\\\",\\\"publish\\\"] got [\\\"load-state\\\",\\\"decompose\\\",\\\"research:i1.0\\\",\\\"tests:i1.0\\\",\\\"implement:i1.0\\\",\\\"review:i1.0\\\",\\\"research:i1.1\\\",\\\"tests:i1.1\\\",\\\"implement:i1.1\\\",\\\"review:i1.1\\\",\\\"close:i1\\\",\\\"publish\\\"]\" plus \"the coverage-only round's test-author prompt does not carry MARKER-COVERAGE-CLAIM\", \"...MARKER-COVERAGE-REPRODUCTION\", \"...does not carry the checks the round before closed\", \"...carries a stale test plan no researcher wrote this round\", and \"the workflow never logged that it is correcting coverage only\". agile-loop.js failed the same five assertions with replan:i1 as the close label. The failures are the missing coverage-only routing itself, not an import error or typo."
-              },
-              {
-                "case": "B — a round with one coverage gap and one defect runs the full four-agent chain.",
-                "file": "test-repo.sh",
-                "testName": "run_driver w18 (both loop.js and agile-loop.js): \"a correction round with one defect among its coverage gaps runs the full chain\"",
-                "expected": "labels are the full chain ['load-state','decompose','research:i1.0','tests:i1.0','implement:i1.0','review:i1.0','research:i1.1','tests:i1.1','implement:i1.1','review:i1.1',closeLabel,'publish']; no log line contains 'correcting coverage only'; research:i1.1 carries both MARKER-FINDING-CLAIM and MARKER-COVERAGE-CLAIM.",
-                "got": "PASS on both workflows already, before any implementation change: `ok — loop.js: a correction round with one defect among its coverage gaps runs the full chain` and the same for agile-loop.js. This is not a mistake in the case — today's code has no coverage-only shortcut at all, so every correction round already runs the unabridged chain and the researcher already receives every finding's claim regardless of a 'kind' field nobody reads yet. Criterion 3 only asks that this stay true once the shortcut exists, so the case is a real regression guard, not a false pass; but it contradicts the plan's opening claim that every case below (bar D) is red until the implementation lands. Recorded verbatim in openQuestions."
-              },
-              {
-                "case": "C — a coverage gap the reviewer also marked a direct fix is not handed to the implementer alone.",
-                "file": "test-repo.sh",
-                "testName": "run_driver w19 (both loop.js and agile-loop.js): \"a coverage gap marked a direct fix still goes to the test-author, not to the implementer alone\"",
-                "expected": "same label array as case A (tests:i1.1 and review:i1.1, no implement:i1.1), and some log line includes 'correcting coverage only'.",
-                "got": "FAIL for both workflows. loop.js: \"a coverage gap marked a direct fix was routed to the implementer alone instead of the test-author — expected [...,\\\"tests:i1.1\\\",\\\"review:i1.1\\\",\\\"close:i1\\\",\\\"publish\\\"] got [...,\\\"implement:i1.1\\\",\\\"review:i1.1\\\",\\\"close:i1\\\",\\\"publish\\\"]\" plus \"the workflow never logged that it is correcting coverage only\". agile-loop.js failed the same two assertions with replan:i1. This confirms today's existing direct-fix fast path (built for w16) still swallows a coverage-gap finding that happens to carry fix:'direct', exactly the conflict the case is written to catch."
-              },
-              {
-                "case": "D — a recorded verdict keeps each finding's classification, under the label that carries the round.",
-                "file": "skills/agent-brief/assets/backlog.test.mjs",
-                "testName": "record keeps each finding's classification in the verdict it stores under the round's label",
-                "expected": "reading backlog.json back after `record ... i1 review:i1.1 <payload>`, increment i1 has exactly one step, its label is 'review:i1.1', and step.return.findings.map(f => f.kind) deep-equals ['coverage-gap', 'defect'].",
-                "got": "PASS from the first run, as the plan says it must be: `ok 8 - record keeps each finding's classification in the verdict it stores under the round's label`. `record` already stores the step return object verbatim with no field-level filtering, so a 'kind' key on each finding survives into the file untouched — this case pins that fact rather than hunting a failure that does not exist."
-              },
-              {
-                "case": "Fixture maintenance — verdictReturnWithDirectFinding gains kind: 'defect' (w16 keeps proving the direct-fix path under the new field).",
-                "file": "test-repo.sh",
-                "testName": "run_driver w16 (both loop.js and agile-loop.js): \"a correction round whose findings are all direct fixes skips the researcher and the test-author, and is still reviewed\"",
-                "expected": "w16 still passes with the fixture carrying kind: 'defect' alongside fix: 'direct'.",
-                "got": "PASS on both workflows, unchanged: `ok — loop.js: a correction round whose findings are all direct fixes skips the researcher and the test-author, and is still reviewed` and the same for agile-loop.js. No regression from adding the field."
-              },
-              {
-                "case": "Fixture maintenance — add to w10 an assertion that no line of logs contains 'correcting coverage only' (verdictReturnWithFinding deliberately carries no kind key at all, the missing-field guard).",
-                "file": "test-repo.sh",
-                "testName": "run_driver w10 (both loop.js and agile-loop.js): \"a correction round carries the reviewer's findings to the researcher and the reason to the human\"",
-                "expected": "the added assertion holds: a finding with no 'kind' key does not trigger the coverage-only log line.",
-                "got": "PASS on both workflows: `ok — loop.js: a correction round carries the reviewer's findings to the researcher and the reason to the human` and the same for agile-loop.js, with the new assertion included and passing — nothing today produces that log line for any fixture, so the missing-field guard holds trivially and will keep holding once the feature exists, since this fixture's finding carries no kind at all."
-              },
-              {
-                "case": "E — the reviewer's page states what makes a finding a coverage gap.",
-                "file": "test-repo.sh",
-                "testName": "grep case added directly after the existing reviewer_page block: \"the reviewer's page states what makes a finding a coverage gap rather than a defect\"",
-                "expected": "agents/reviewer.md contains all three literals 'coverage-gap', 'defect' and 'goes red'; the no branch names which of the three is missing.",
-                "got": "FAIL — `the reviewer's page is missing: 'coverage-gap' 'goes red'`. 'defect' already appears in the page in an unrelated sense; the classification rule itself (with the 'coverage-gap' term and the 'goes red' phrasing this plan's own findings use to describe a coverage gap) is not there yet."
-              },
-              {
-                "case": "F — each workflow's verdict schema offers the classification its routing reads.",
-                "file": "test-repo.sh",
-                "testName": "grep case added after the existing backlog.json/load-state loop, once per workflow: \"$name's verdict schema offers 'coverage-gap' and 'defect' as literal values\"",
-                "expected": "each of workflows/loop.js and workflows/agile-loop.js contains both 'coverage-gap' and 'defect' as quoted literals; failing names the file.",
-                "got": "FAIL for both files: `loop.js's verdict schema is missing 'coverage-gap' or 'defect' as a quoted literal` and the same for agile-loop.js — neither literal exists in either workflow script yet."
-              }
-            ],
-            "openQuestions": [
-              "The plan's preamble says every new case below is expected red except case D, which it calls out as green from the start — but case B (w18, both workflows) is already green on the current checkout, before any implementation change: today's chain has no coverage-only shortcut at all, so a round with a mixed coverage-gap/defect finding already runs the unabridged four-agent chain and the researcher already receives every finding's claim. The case is written correctly against criterion 3 and stays a real regression guard once the shortcut ships, but the plan's blanket 'red until implemented' claim does not hold for it the way it does for A, C, E and F. Left as written since the case still proves what criterion 3 asks; flagging the mismatch rather than guessing whether the plan meant B to be a second green-from-the-start case it forgot to name.",
-              "Case E asks for the literal 'goes red' inside agents/reviewer.md without saying in what sentence or context it belongs — the plan supplies the three literals to grep for but not the rule's wording itself (deliberately, per 'Left untested' notes elsewhere in the plan about not pinning prose). The grep is written exactly as specified; whether an implementer's eventual sentence satisfies it in spirit as well as in the three literals is not something this case can settle beyond the literals themselves."
-            ],
-            "questions": [],
-            "summary": "Wrote driver modes w17 (case A), w18 (case B), w19 (case C) in test-repo.sh with three new verdict fixtures and DISJOINT_MARKERS entries, added a case D test to backlog.test.mjs, applied the two named fixture-maintenance edits to w16 and w10, and added the two grep cases E and F; ran both suites and confirmed every case is red except B and D, which are green for reasons recorded in openQuestions and in case D's own field."
-          }
-        },
-        {
-          "label": "implement:coverage-only-round.0",
-          "at": "2026-08-07T20:08:27.336Z",
-          "return": {
-            "deviations": [],
-            "commands": [
-              {
-                "command": "bash test-repo.sh",
-                "exitCode": 0,
-                "note": "67 cases, nothing skipped. Before the change the same run was 7 of 67 red: the two verdict-schema greps, the reviewer-page grep, and w17 and w19 on both workflows."
-              },
-              {
-                "command": "node --test skills/agent-brief/assets/backlog.test.mjs",
-                "exitCode": 0,
-                "note": "16 cases. Run before the change only, to confirm case D was already green as the test plan recorded; ./test.sh runs it again as part of the full sweep."
-              },
-              {
-                "command": "./test.sh",
-                "exitCode": 0,
-                "note": "all 6 suites, nothing skipped or excluded."
-              }
-            ],
-            "blockers": [],
-            "questions": [],
-            "summary": "Both workflow scripts gained the finding's `kind` classification and the coverage-only correction round it routes, and the reviewer's page and the README document the new field."
-          }
-        },
-        {
-          "label": "review:coverage-only-round.0",
-          "at": "2026-08-07T20:14:04.631Z",
-          "return": {
-            "findings": [
-              {
-                "claim": "The shortened round dispatches the test-author against orders its own page forbids: its brief has no coverage-only mode, so the agent is told both that every case must fail and that every case must pass.",
-                "reproduction": "State: a round whose findings are all kind 'coverage-gap' dispatches uroboros:test-author with coverageBlock (workflows/loop.js:512-533, the same function in workflows/agile-loop.js), which says 'each case passes against the code as it stands and would fail if that behaviour were removed: confirm both'. The same agent holds agents/test-author.md, which at line 26 says 'you do not open production code at all', at lines 38-42 says 'confirm each fails because the behaviour is missing ... Quote the failure in your return', and at line 52 says 'You never make a test pass'. Wrong result: the test-author has two contradicting instructions on whether its new cases may be green and on whether it may read the behaviour it must guard, and the prompt itself states the consequence — 'a red test reaching the reviewer ends the increment blocked'. Criterion 6 applied exactly this remedy to the reviewer's page; the test-author's page is the only other brief the shortened round runs on and was left unchanged.",
-                "criterion": "none",
-                "fix": "needs-plan"
-              },
-              {
-                "claim": "agents/reviewer.md still enumerates only two ways a correction round is worked, which this change made stale.",
-                "reproduction": "agents/reviewer.md:140 reads 'whoever works that round — a researcher, or the builder alone — has these fields and nothing else', while line 124 of the same page, added by this diff, says a round whose findings are all coverage-gap is worked by the test-author alone. Reading the page top to bottom, the reviewer meets a list of round-working paths that omits the third path this change introduced. Right result: extend that enumeration to name the test-author-alone path.",
-                "criterion": "The reviewer's own brief states what makes a finding a coverage gap rather than a defect, so the classification is decided the same way twice.",
-                "fix": "direct"
-              }
-            ],
-            "reason": "The coverage-only round works in the workflow, but the test-author it now runs alone still carries a brief that forbids opening production code and demands every case fail, so the shortened round hands that agent contradictory orders; the reviewer's page also still lists only a researcher or the builder as the ones who work a correction round.",
-            "questions": [],
-            "summary": "bash test-repo.sh: 67 cases, exit 0; ./test.sh: exit 0 (repo 67 cases, backlog recorder 16, tools/argus 159, tools/argus-ui 234, tools/log-parser 23, 0 failures). The routing criteria are met and pinned: 'kind' is a required enum ('coverage-gap'/'defect') per finding in both workflows' VERDICT schema; w17 pins that an all-coverage-gap round runs exactly load-state, decompose, research.0, tests.0, implement.0, review.0, tests.1, review.1, close, publish and logs 'correcting coverage only'; w18 pins the full four-agent chain when one finding is a defect and pins that the log line is absent; w19 pins that a coverage gap marked fix 'direct' still goes to the test-author; the new backlog.test.mjs case pins that both kinds survive into the step recorded under 'review:i1.1'; test-repo.sh pins the reviewer page's coverage-gap rule and the literal enum values. Both findings are defects rather than coverage gaps. Two observations that need no round: the README paragraph at lines 79-81 was left unwrapped by the insertion above it, and the TESTS schema's 'got' description ('The failure it produced') still assumes a failing case, which the coverage prompt overrides in prose only."
-          }
-        },
-        {
-          "label": "research:coverage-only-round.1",
-          "at": "2026-08-07T20:19:17.758Z",
-          "return": {
-            "needsTests": true,
-            "summary": "Give the test-author's page a coverage-only mode, extend the reviewer's enumeration of who works a correction round, and let the coverage-only prompt permit the sandbox the page prescribes, guarded by three new grep cases in test-repo.sh.",
-            "plan": "Both findings are prose-coherence defects in the briefs the shortened round runs on. Nothing about the routing changes: `isCoverageOnlyRound`, the third branch in both round loops, the `log()` line, the `kind` enum in both VERDICT schemas and the backlog recording stay exactly as they are, and no driver mode (w17-w19) changes.\n\nFINDING 1 - the test-author's page has no coverage-only mode, so the shortened round tells the same agent both that every case must fail and that every case must pass.\n\nEdit `agents/test-author.md`:\n\n1. Add one section between the correction-round paragraph (lines 44-47) and `## Boundaries`, headed `## A coverage-only round`. State each of these once, in the imperative:\n   - Your prompt names the round a coverage-only one: every finding says the behaviour is already there and right, and only the guard for it is missing. The findings replace the test plan.\n   - Read the production code each reproduction names. You are guarding behaviour that already exists, and a case that assumes what that code produces instead of reading it is the trap this round exists to close.\n   - Expect every case to pass against the code as it stands. No implementer follows you, and a red case reaching the reviewer ends the increment blocked.\n   - Prove each case can fail instead of proving that it does: add a `git worktree` on a temporary path outside the checkout, copy your new test files into it, remove the behaviour there, run the case with the command the round's checks name, confirm it goes red, and remove the worktree afterwards. Put both runs - the green one in the checkout, the red one in the sandbox - in `got`.\n   - Production code in the checkout stays untouched; the sandbox copy is the only place you change it.\n   The literals `coverage-only`, `goes red` and `worktree` have to appear verbatim somewhere on the page.\n2. Qualify the three sentences that would otherwise contradict that section, in place, each with a short clause pointing at it - not with a second wording of the rule:\n   - Step 1, line 26, \"so you do not open production code at all\" gains \"except in a coverage-only round\".\n   - Step 4, lines 38-42 (\"Prove the failures\" ... \"confirm each fails because the behaviour is missing\") gains a clause saying a coverage-only round proves the opposite and the section below says how.\n   - Boundaries, lines 51-53: keep \"You never make a test pass\" as the rule that you never write production code to make a case pass, and say the cases of a coverage-only round are green when you write them because the behaviour is already there. Let \"Test files only. Production code is off limits\" read as the checkout, with the sandbox named as its one exception.\n3. Frontmatter `description`: the clause \"it does NO research in the codebase\" is now stale. Add that a coverage-only correction round is the exception, where the reviewer's findings are its brief and it reads the behaviour it guards.\n\nTwo repository-wide guards constrain the new prose: `test-repo.sh` greps every agent page for the strings `researcher.md`, `test-author.md`, `implementer.md`, `reviewer.md`, `planner.md` and for `hand-?off` in any case, and fails on a hit. Write neither.\n\nFINDING 2 - the reviewer's page still enumerates two ways a correction round is worked. In `agents/reviewer.md`, the sentence at lines 138-142 reads \"... and whoever works that round - a researcher, or the builder alone - has these fields and nothing else.\" Extend that dash list to the three paths, e.g. \"- a researcher, the test-author alone, or the builder alone -\". Keep the phrase \"has these fields and nothing else\" verbatim and keep the words \"test-author\" within three lines above it; the guard reads exactly that window. Change nothing else on the page - the `kind` paragraph at lines 116-126 already carries the coverage-gap standard criterion 6 asked for.\n\nCOHERENCE WITH THE PROMPT - `coverageBlock` in both workflows ends \"Touch test files only - no production code.\", which forbids the sandbox mutation the page now prescribes, so the contradiction would simply move. Replace that clause in `workflows/loop.js` (`coverageBlock`, lines 512-533, the sentence at line 530) and in the identical function in `workflows/agile-loop.js` (from line 521) with one that keeps the checkout's production code off limits and names the sandbox - for instance \"Touch no production code in the checkout - prove the go-red in a `git worktree` sandbox outside it and remove it afterwards.\" The word `worktree` has to appear in both files. Leave every other sentence of that block, both function signatures and both round loops untouched.\n\nREJECTED: dropping the \"confirm both\" demand from `coverageBlock` so the test-author never mutates anything - that removes the only evidence that a new guard can fail, which is the standard this whole increment is built on and which the issue puts out of scope to soften. REJECTED: dispatching some other agent for the shortened round - the workflow already dispatches `uroboros:test-author`, and the finding asks for that agent's page, not for a fourth agent. NOT IN THIS ROUND: the TESTS schema's `got` description (\"the failure it produced\") and the unwrapped README paragraph - the reviewer filed both as observations rather than findings, so leave them exactly as they are.",
-            "moduleMap": "agents/test-author.md - the test-author's whole brief: frontmatter `description`, the four numbered \"How you work\" steps (lines 22-42), the correction-round paragraph (44-47), `## Boundaries` (49-53), `## What you return` (55-71). Entry points for this change: the `description` line, line 26, lines 38-42, the gap before `## Boundaries` where the new section goes, and line 52.\nagents/reviewer.md - the reviewer's brief; the `findings` bullet of `## What you return` holds the `kind` paragraph (116-126), the `fix` paragraph (128-136) and the triage sentence to extend (138-142).\nworkflows/loop.js - the plain loop; `coverageBlock(verdict, round)` at lines 512-533 builds the shortened round's test-author prompt, `isCoverageOnlyRound` at 488-491 routes to it, the round loop at 676-782 dispatches it. Only the last sentence of `coverageBlock` changes.\nworkflows/agile-loop.js - the incremental loop; the same `coverageBlock` from line 521 and the same round loop from line 784. Only the same sentence changes.\ntest-repo.sh - the repository's own suite: `ok`/`no` helpers at lines 11-12, `reviewer_page` defined at line 192, the criterion-6 classification case at lines 204-215. The three new cases go directly after that block.",
-            "environment": "Everything runs from the repository root, /home/user/uroboros. Prerequisites: `bash` and `node` (Node 18 or newer; the suites use `node --test` and `node:test`). No install step and no network - every suite here is zero-dependency and the npm ones run through their own package's `test` script.\n\nCommands this test plan asks anyone to run:\n- `bash test-repo.sh` - the repository's own suite; it holds every grep case and every workflow driver mode, prints one `ok`/`FAIL` line per case, and exits non-zero when any case failed.\n- `./test.sh` - every suite in the repository one after another; it runs `test-repo.sh` first.\n\nThere is no linter and no formatter in this repository. `test-repo.sh` has no single-case filter and no watch mode: a single case is judged by reading its `ok`/`FAIL` line in the full run.",
-            "testPlan": "Three cases, all of them grep cases in the repository's own suite, one per correction this round makes. That is the level the repository already tests agent-page prose at: the criterion-6 case at test-repo.sh:204-215 checks the reviewer's page for literals the same way. No case dispatches a real agent - nothing in this repository can - so each case proves that the brief carries the instruction, not that an agent obeys it.\n\nWhat I ran and did not run: I ran no suite. I did run `grep -n 'worktree' workflows/*.js agents/*.md skills/agent-brief/SKILL.md` to settle whether the literal already exists anywhere the new cases look; it appears only at agents/reviewer.md:105. From reading, all three cases below are red on the current checkout and every other case in `test-repo.sh` and `./test.sh` was green at the end of round 0 (the reviewer reported `bash test-repo.sh`, 67 cases, exit 0, and `./test.sh` exit 0). Leave the first run of the list to whoever runs it downstream.\n\nTest file for all three: /home/user/uroboros/test-repo.sh. Framework: none - it is a bash script with `set -u` that counts through two helpers, `ok \"<what holds>\"` and `no \"<what is wrong, with the offending value>\"`, and exits non-zero when `failed` is greater than zero. Conventions of that file: each case opens with a comment naming the finding or criterion it exists for and why the case is not redundant; a case over several files loops `for f in \"$root/workflows/loop.js\" \"$root/workflows/agile-loop.js\"` and names `$(basename \"$f\")` in its message; a case over several required strings accumulates the missing ones into a `missing_*` variable and reports the list. Reuse the existing `reviewer_page` variable (line 192) and add `test_author_page=\"$root/agents/test-author.md\"`. Place all three cases directly after the criterion-6 block that ends at line 215 with `fi`, before the `# Decision 5:` comment. Command that runs them: `bash test-repo.sh` (no per-case filter exists; read the three new `ok`/`FAIL` lines).\n\nCase A - the test-author's page carries a coverage-only mode.\n  Criterion it proves: finding 1 - the shortened round must not dispatch the test-author against orders its own page forbids.\n  Input/state: `agents/test-author.md` as it stands in the checkout.\n  Assertion: the file contains all three literals `coverage-only`, `goes red` and `worktree`, checked with `grep -qF --`; accumulate the missing ones and report them. Model the loop on lines 207-215.\n  Expected result: red now - the page contains none of the three - and green once the section described in the plan is added.\n\nCase B - the reviewer's page names the test-author-alone path where it enumerates who works a correction round.\n  Criterion it proves: \"The reviewer's own brief states what makes a finding a coverage gap rather than a defect, so the classification is decided the same way twice\" - finding 2 against it.\n  Input/state: `agents/reviewer.md` as it stands.\n  Assertion: `grep -B3 -F 'has these fields and' \"$reviewer_page\" | grep -q 'test-author'`. The window is what makes this case about the enumeration rather than about the word appearing anywhere: `test-author` already occurs twice elsewhere on the page, so a plain file-wide grep would be green today and prove nothing.\n  Expected result: red now - the three lines above that phrase read \"That list is the whole triage: empty means the change is accepted, / anything else sends your caller into another correction round, and whoever / works that round - a researcher, or the builder alone - has these fields and\" - and green once the dash list names the test-author.\n\nCase C - the shortened round's prompt permits the sandbox its agent's page prescribes.\n  Criterion it proves: finding 1 again, on the other side of the same contradiction - the prompt must not forbid the go-red proof the page requires.\n  Input/state: `workflows/loop.js` and `workflows/agile-loop.js` as they stand.\n  Assertion: loop over the two files, `grep -qF 'worktree' \"$f\"`, and name `$(basename \"$f\")` in both messages, in the style of the loop at lines 179-186.\n  Expected result: red now - neither file contains the string - and green once `coverageBlock` names the sandbox in both.\n\nEdges: none of these three has an empty, limit or repeat edge - each is one file read against fixed literals, and a second run reads the same bytes. \n\nLeft untested, and why: (1) that a live test-author actually obeys the new section - no harness in this repository dispatches a real agent, and the workflow driver stubs every agent's return; (2) the wording of the new prose beyond the literals named above - a grep can settle that the page says `goes red` and `worktree`, not that the sentence around them reads well, and pinning whole sentences would make every future edit a failure; this settles the open question the last round's test-author left about literals versus intent, for these cases too; (3) the routing itself - w17, w18 and w19 already pin that an all-coverage-gap round runs test-author and reviewer alone, that a mixed round runs the full chain, and that a coverage gap marked `direct` still goes to the test-author, and this round changes no routing code, so those cases are re-run rather than rewritten; the last round's open question about w18 being green from the start is settled here: it was green before the shortcut shipped and stays a regression guard, and no case in this plan is claimed red except A, B and C.",
-            "checks": [
-              "bash test-repo.sh",
-              "./test.sh"
-            ],
-            "questions": []
-          }
-        },
-        {
-          "label": "tests:coverage-only-round.1",
-          "at": "2026-08-07T20:21:14.682Z",
-          "return": {
-            "summary": "Added the three planned grep cases to test-repo.sh, directly after the criterion-6 block (line 215) and before the 'Decision 5' comment, reusing reviewer_page and a new test_author_page variable; ran `bash test-repo.sh` and confirmed all three go red for the missing content while all 67 pre-existing cases stay green (71 total, exit non-zero, 4 FAIL lines because the third case loops over two files).",
-            "cases": [
-              {
-                "case": "Case A - the test-author's page carries a coverage-only mode.",
-                "file": "/home/user/uroboros/test-repo.sh",
-                "testName": "the test-author's page carries a coverage-only mode",
-                "expected": "agents/test-author.md contains all three literals 'coverage-only', 'goes red' and 'worktree'; missing ones are accumulated and reported, modelled on the loop at lines 207-215.",
-                "got": "FAIL — the test-author's page is missing: 'coverage-only' 'goes red' 'worktree' — none of the three literals are present in agents/test-author.md today."
-              },
-              {
-                "case": "Case B - the reviewer's page names the test-author-alone path where it enumerates who works a correction round.",
-                "file": "/home/user/uroboros/test-repo.sh",
-                "testName": "the reviewer's page names the test-author-alone path in its round-worker enumeration",
-                "expected": "`grep -B3 -F 'has these fields and' \"$reviewer_page\" | grep -q 'test-author'` is true, so the enumeration of who works a correction round names the test-author-alone path (not just any occurrence of the word, since it already appears twice elsewhere on the page).",
-                "got": "FAIL — the reviewer's page does not name the test-author-alone path where it enumerates who works a correction round — the three lines above 'has these fields and' currently read 'a researcher, or the builder alone', not the test-author."
-              },
-              {
-                "case": "Case C - the shortened round's prompt permits the sandbox its agent's page prescribes.",
-                "file": "/home/user/uroboros/test-repo.sh",
-                "testName": "$name's coverage-only prompt names the worktree sandbox (looped over loop.js and agile-loop.js)",
-                "expected": "Both workflows/loop.js and workflows/agile-loop.js contain the literal 'worktree' (via `grep -qF`), named per-file in the style of the loop at lines 179-186, once coverageBlock names the sandbox in both.",
-                "got": "FAIL — loop.js's coverage-only prompt does not name the worktree sandbox; FAIL — agile-loop.js's coverage-only prompt does not name the worktree sandbox — neither file contains the string today (only agents/reviewer.md:105 has it)."
-              }
-            ],
-            "openQuestions": [],
-            "questions": []
-          }
-        },
-        {
-          "label": "implement:coverage-only-round.1",
-          "at": "2026-08-07T20:24:27.390Z",
-          "return": {
-            "deviations": [],
-            "commands": [
-              {
-                "command": "bash test-repo.sh",
-                "exitCode": 0,
-                "note": "71 cases, all green; the four cases that were red before this change (the test-author's coverage-only mode, the reviewer's round-worker enumeration, and the worktree sandbox in each of loop.js and agile-loop.js) now pass. Nothing skipped or excluded."
-              },
-              {
-                "command": "./test.sh",
-                "exitCode": 0,
-                "note": "All 6 suites, test-repo.sh first; the node --test suites report 23 tests, 0 failures. Nothing skipped or excluded."
-              }
-            ],
-            "blockers": [],
-            "questions": [],
-            "summary": "Gave the test-author's page a coverage-only mode with the worktree go-red proof, qualified the three sentences that contradicted it, extended the reviewer's round-worker enumeration with the test-author-alone path, and replaced the 'test files only' clause of coverageBlock in both workflows with one that names the sandbox."
-          }
-        },
-        {
-          "label": "review:coverage-only-round.1",
-          "at": "2026-08-07T20:30:10.236Z",
-          "return": {
-            "findings": [
-              {
-                "claim": "The README still states that the researcher is the only agent that reads the codebase and that the test-author is given the test plan and nothing else, which the coverage-only round this change adds makes false.",
-                "reproduction": "README.md lines 83-87 read \"Whether, what and how to test is decided once, by the researcher — the only agent that reads the codebase — in the test plan it returns. The test-author is given that plan and nothing else about the change\". In a coverage-only round no researcher runs and the reviewer's findings decide the cases (README.md:73-77, workflows/loop.js coverageBlock, workflows/agile-loop.js coverageBlock), and the test-author is instructed to open production code (agents/test-author.md:56, \"Read the production code each reproduction names\"). The README therefore contradicts itself two paragraphs apart and states two facts that are wrong for the new path. Right result: qualify both clauses at README.md:83-87 so they hold outside the coverage-only round, e.g. name that round as the exception where the reviewer's findings replace the test plan and the test-author reads the behaviour it guards.",
-                "criterion": "none",
-                "fix": "direct"
-              }
-            ],
-            "reason": "The README still says the researcher is the only agent that reads the codebase and that the test-author gets the test plan and nothing else, which the new coverage-only round contradicts — in that round no plan exists and the test-author is told to read production code.",
-            "questions": [],
-            "summary": "Ran the two listed commands in one call: `bash test-repo.sh` exit 0 (all repo cases ok, including the six new coverage-only greps and w17/w18/w19 drivers against both workflows) and `./test.sh` exit 0 (PASS: all 6 suites, 23 node:test cases in the parser suite, 0 fail). All seven criteria of the increment are met and guarded: the `kind` enum is a required per-finding field in both workflows' VERDICT schemas (criterion 1, guarded by the literal-value greps plus w17/w18/w19, whose fixtures carry no 'coverage' wording in prose so a grep-the-prose implementation would fail w17); w17 pins the exact label sequence load-state, decompose, research:i1.0, tests:i1.0, implement:i1.0, review:i1.0, tests:i1.1, review:i1.1, close/replan, publish (criterion 2); w18 pins the full chain for a mixed round (criterion 3); the 'correcting coverage only' log() is asserted present in w17/w19 and absent in w10 and w18 (criterion 4); backlog.test.mjs proves each finding's `kind` survives into the step stored under label review:i1.1 (criterion 5); agents/reviewer.md:116-126 states the coverage-gap/defect rule in the same words as the schema description, which test-repo.sh greps for (criterion 6); both suites are green (criterion 7). Blast radius: no other consumer of the verdict shape exists in bin/, skills/ or tools/, and isDirectFixRound's new `f.kind !== 'coverage-gap'` guard keeps the mixed direct/coverage case on the full chain, which w19 covers from the other side. One finding, on stale README prose. Observations that need no round: agents/test-author.md:16-18 still opens with the absolute \"You have never seen an implementation\" although steps 1, the new section and the boundaries all carve out the coverage-only round, so a reader still gets the exception; the TESTS schema's `got` description still says \"The failure it produced\" while a coverage-only round records a green run and a sandboxed red one, which the prompt overrides explicitly; agents/reviewer.md:141 and README.md:79 wrap oddly for the surrounding prose width."
-          }
-        },
-        {
-          "label": "implement:coverage-only-round.2",
-          "at": "2026-08-07T20:32:28.712Z",
-          "return": {
-            "deviations": [],
-            "commands": [
-              {
-                "command": "bash test-repo.sh",
-                "exitCode": 0,
-                "note": "all repo checks pass, 0 failures"
-              },
-              {
-                "command": "./test.sh",
-                "exitCode": 0,
-                "note": "all suites pass, 0 failures"
-              }
-            ],
-            "blockers": [],
-            "questions": [],
-            "summary": "Qualified README.md:83-87 so the researcher-decides-testing and test-author-sees-only-the-plan clauses name the coverage-only round as the exception where the reviewer's findings replace the test plan and the test-author reads the behaviour it guards."
-          }
-        },
-        {
-          "label": "review:coverage-only-round.2",
-          "at": "2026-08-07T20:37:19.325Z",
-          "return": {
-            "findings": [],
-            "reason": "",
-            "questions": [],
-            "summary": "Accepted. `bash test-repo.sh` (71 cases, exit 0) and `./test.sh` (all 6 suites, exit 0) both green, nothing skipped. All seven criteria are met and each has a case that would go red: `kind` is a required enum ('coverage-gap'|'defect') on every finding in both workflows' VERDICT schema, so the classification is a value the reviewer sets rather than prose the workflow greps; `isCoverageOnlyRound` routes a round whose findings are all coverage gaps to test-author and reviewer alone (driver mode w17 pins the exact label sequence load-state, decompose, research:i1.0, tests:i1.0, implement:i1.0, review:i1.0, tests:i1.1, review:i1.1, close, publish, and asserts the reviewer is still handed no finding it wrote); w18 pins the full four-agent chain for a mixed coverage-gap/defect round; w19 pins the conflict edge where a coverage gap also marked fix:'direct' still goes to the test-author, matching the new `f.kind !== 'coverage-gap'` guard in `isDirectFixRound`; the 'correcting coverage only' log() is asserted present in w17/w19 and absent in w18 and in w10, whose fixture carries no `kind` at all and so exercises the missing-field-is-a-defect fallback; `backlog.mjs record` stores the return verbatim and the new backlog.test.mjs case asserts both findings' `kind` survive under the round's label, which also matters for resume, since the workflow re-derives `coverageOnly` from the verdict it replays out of the recorded step; and agents/reviewer.md now states the rule (correcting it touches test files alone, and anything you hesitate over is a defect) in the same words as the schema description. Blast radius traced and nothing found: `findingsBlock` is unchanged, so agents/researcher.md's enumeration of what a correction round hands it (claim, reproduction, criterion) stays accurate; no other file consumes `verdict.findings`; both workflows' coverage branches compose the same blocks as their sibling branches (agile-loop keeps `scope()`), and the README and agents/test-author.md were updated so no page describes the chain in a way this change made false. Two observations that need no round: agents/test-author.md's frontmatter description still ends 'its caller runs the implementer next', which is not true of the coverage-only round its own body now describes; and README.md line 79 starts a paragraph mid-wrap ('A remark that leaves every criterion met and'), leaving a ragged short first line."
-          }
-        }
-      ]
+      "status": "done",
+      "note": "Accepted at review round 2 with no findings: the per-finding kind enum, the coverage-only routing in both workflows, the log line, the recorded classification and the reviewer's stated rule are all pinned by test-repo.sh drivers w17/w18/w19 and a backlog recorder case; bash test-repo.sh 71 cases exit 0 and ./test.sh all 6 suites exit 0.",
+      "steps": []
     },
     {
       "id": "ui-harness-null",
@@ -301,26 +43,40 @@
         "That report carries per-agent-type totals, per-agent rows in the journal's order, a tool breakdown that shows failures, and which agents started without returning.",
         "The existing single-transcript behaviour of the tool still works.",
         "The retro skill's instructions tell the session to use the run-directory mode and no longer tell it to loop the tool over each transcript and re-join the results by hand.",
+        "No page left in the repository still describes the tool as transcript-at-a-time only or still asks a reader to re-join results by hand; the report names each page that documents the tool and says whether it needed correcting.",
         "The new mode has test coverage that goes red when the report drops a section or miscounts, and the test run is reported with its case count."
       ],
       "status": "todo",
-      "note": "",
+      "note": "Added the stale-page criterion: two of this increment's three review rounds spent themselves on pages that described the old chain after the behaviour changed, so an increment that changes documented behaviour now has to account for every page that documents it.",
       "steps": []
     },
     {
       "id": "agent-affordances",
-      "title": "Recording a step return and running a collector stop being improvisations",
-      "goal": "Let backlog.mjs record read the step return from stdin, give agents a documented way to start and stop a collector for ad-hoc inspection, and name both in the agent brief so no agent has to survive a heredoc or invent a pkill.",
+      "title": "backlog.mjs record takes the step return on stdin",
+      "goal": "Let the recorder read a step return from stdin as well as from a file path, and instruct agents to use the stdin form, so no agent has to survive a heredoc to record a summary containing quotes or markup.",
       "criteria": [
         "backlog.mjs record accepts the step return on stdin as well as from a file path, and a return containing quotes, HTML attributes and newlines records correctly through the stdin form.",
         "The file-path form of backlog.mjs record keeps working unchanged.",
         "The agent brief instructs agents to record their step return through the stdin form.",
-        "A documented way to start and stop a collector for ad-hoc inspection exists — a script or an existing test helper made reachable — and starting and stopping it leaves no process holding the port.",
-        "The agent brief names that way, so an agent needing a live instance is told what to run instead of improvising a pkill.",
-        "Both changes have test coverage that goes red when they break, and the test runs are reported with their case counts."
+        "Every other page that tells an agent how to record a step return says the same thing as the brief; the report names each page checked and each corrected.",
+        "The change has test coverage that goes red when the stdin form breaks or when the file-path form regresses, and the test run is reported with its case count."
       ],
       "status": "todo",
-      "note": "",
+      "note": "Split: the collector fixture left this increment for collector-fixture, because the two share only a mention in the agent brief and a finding against either would otherwise force a full correction round on both. Added the stale-page criterion for the same reason as run-report — the record instruction is repeated outside the brief.",
+      "steps": []
+    },
+    {
+      "id": "collector-fixture",
+      "title": "An agent that needs a live collector has a documented way to start and stop one",
+      "goal": "Make starting and stopping a collector for ad-hoc inspection a documented, reachable thing rather than something an agent improvises with a pkill, and name it where agents will find it.",
+      "criteria": [
+        "A documented way to start and stop a collector for ad-hoc inspection exists — a script or an existing test helper made reachable.",
+        "Starting and then stopping it leaves no process holding the port, and the report shows that checked.",
+        "The agent brief names that way, so an agent needing a live instance is told what to run instead of improvising a pkill.",
+        "The change has test coverage that goes red when start or stop breaks, and the test run is reported with its case count."
+      ],
+      "status": "todo",
+      "note": "New, split off agent-affordances: it is a process-lifecycle deliverable in the collector's own tooling, it fails for reasons the recorder change cannot cause, and closing one while the other is blocked is worth the separate chain.",
       "steps": []
     },
     {
@@ -345,10 +101,11 @@
         "The loop skill pages tell the invoking session to establish whether the run is alive from the task's own status, and say plainly that transcript file timestamps do not establish it.",
         "The pages say that an ordinary user turn kills a running workflow, and that the killed agent restarts from zero rather than resuming mid-flight, so an interruption costs a whole agent.",
         "The pages tell a session that takes a message mid-run to check liveness and resume rather than to report progress from stale files.",
-        "The pages do not describe the periodic self check-in or the resumeFromRunId re-entry, which another issue owns."
+        "The pages do not describe the periodic self check-in or the resumeFromRunId re-entry, which another issue owns.",
+        "No loop skill page is left saying something the coverage-only correction round made false, such as an enumeration of the agents a correction round runs; the report names each page checked."
       ],
       "status": "todo",
-      "note": "",
+      "note": "Added the last criterion: the coverage-only round changed which agents a correction round runs, and this increment is the run's last pass over the loop pages, so it is where a page left stale by that change gets caught.",
       "steps": []
     }
   ],
@@ -356,96 +113,44 @@
     "steps": [
       {
         "label": "decompose",
-        "at": "2026-08-07T19:51:17.607Z",
+        "at": "2026-08-07T19:51:17.607Z"
+      },
+      {
+        "label": "replan:coverage-only-round",
+        "at": "2026-08-07T20:40:19.155Z",
         "return": {
+          "questions": [],
+          "summary": "Closed coverage-only-round as done: the review accepted it with no findings after two correction rounds, both of them stale-prose defects rather than coverage gaps. Re-cut the six remaining increments against that. One split: agent-affordances bundled the recorder's stdin form with the collector start/stop fixture, and this increment showed what a bundle costs — a single finding on one half forces a full four-agent round on the whole increment, and those two halves share nothing but a mention in the agent brief. The recorder keeps the id agent-affordances; the collector fixture is the new collector-fixture and follows it, since neither blocks the other. One sharpening, applied to run-report, agent-affordances and liveness-docs: both correction rounds of coverage-only-round were spent on pages that still described the behaviour the change had just replaced (the README twice, the test-author's page, the reviewer's own enumeration), so every increment that changes a documented contract now carries a criterion that no page is left stale and that the report names the pages it checked. ui-harness-null and signing-check are unchanged: nothing this increment showed touches them, and churn there would cost a reader the ability to see what moved. Order is unchanged otherwise, risk first: ui-harness-null next, because correcting installFakes may turn an unknown number of the suite's 234 cases red and that is the run's biggest unknown; then run-report, the largest new build; then the two affordances; then signing-check; then liveness-docs, pure prose and cheapest, which is also where a loop page left stale by the coverage-only round gets caught. Issue criteria map one-to-one: coverage routing and its visibility to coverage-only-round (done); installFakes returning null and the harness proof case to ui-harness-null; parse-agent-log's run mode and the retro skill to run-report; record-on-stdin and the brief instruction to agent-affordances; the documented collector start/stop and its mention in the brief to collector-fixture; the signing check and 'test.sh is green' to signing-check; the loop-page liveness correction to liveness-docs. Two observations the reviewer explicitly said need no round — the test-author page's frontmatter description still ending 'its caller runs the implementer next', and a ragged wrap at README.md line 79 — are left unraised rather than turned into work nobody asked for.",
           "increments": [
             {
               "id": "coverage-only-round",
-              "title": "A correction round of pure coverage gaps runs test-author and reviewer only",
-              "goal": "Let the reviewer classify each finding it returns as a coverage gap or a defect, and have the workflow run a round whose findings are all coverage gaps through test-author and reviewer alone, visibly and on the record.",
-              "criteria": [
-                "The reviewer's structured return carries a per-finding classification field that says whether the finding is a coverage gap or a defect; it is a value the reviewer sets, not a phrase the workflow greps out of prose.",
-                "When every finding of a round is classified a coverage gap, that correction round runs the test-author and the reviewer only, and does not run the researcher or the implementer.",
-                "A round with at least one finding classified a defect runs the full four-agent chain exactly as it does today.",
-                "The workflow log()s that it is correcting coverage only when it takes the shortened path.",
-                "The reviewer's classification of each finding is recorded in backlog.json alongside the round it belongs to.",
-                "The reviewer's own brief states what makes a finding a coverage gap rather than a defect, so the classification is decided the same way twice.",
-                "The test suite passes."
-              ],
-              "status": "todo",
-              "note": ""
+              "status": "done"
             },
             {
               "id": "ui-harness-null",
-              "title": "The UI test harness returns null for an id the rendered markup does not contain",
-              "goal": "Stop the argus-ui test harness conjuring an element for every id, so an assertion that reads a container the page never rendered fails the way a browser would, and prove the harness with a case in the suite.",
-              "criteria": [
-                "installFakes in tools/argus-ui/test/app.test.mjs resolves an id the rendered markup does not contain to null rather than to a created-and-cached fake element.",
-                "Every existing case in the suite still passes, or is corrected to assert what the page actually renders; the report says which cases were corrected and why each was passing against markup the page never wrote.",
-                "A case in the suite proves the harness itself: it removes a container from the rendered markup and shows at least one assertion going red as a result, so the guard is part of the run rather than a manual mutation check.",
-                "npm --prefix tools/argus-ui test passes, with the case count reported."
-              ],
-              "status": "todo",
-              "note": ""
+              "status": "todo"
             },
             {
               "id": "run-report",
-              "title": "parse-agent-log reports a whole workflow run",
-              "goal": "Give bin/parse-agent-log a mode that takes a workflow run directory and reports the run as one thing, and point the retro skill at that mode instead of at a hand-run loop.",
-              "criteria": [
-                "bin/parse-agent-log accepts a workflow run directory and reports the run as a single report rather than one transcript at a time.",
-                "That report carries per-agent-type totals, per-agent rows in the journal's order, a tool breakdown that shows failures, and which agents started without returning.",
-                "The existing single-transcript behaviour of the tool still works.",
-                "The retro skill's instructions tell the session to use the run-directory mode and no longer tell it to loop the tool over each transcript and re-join the results by hand.",
-                "The new mode has test coverage that goes red when the report drops a section or miscounts, and the test run is reported with its case count."
-              ],
-              "status": "todo",
-              "note": ""
+              "status": "todo"
             },
             {
               "id": "agent-affordances",
-              "title": "Recording a step return and running a collector stop being improvisations",
-              "goal": "Let backlog.mjs record read the step return from stdin, give agents a documented way to start and stop a collector for ad-hoc inspection, and name both in the agent brief so no agent has to survive a heredoc or invent a pkill.",
-              "criteria": [
-                "backlog.mjs record accepts the step return on stdin as well as from a file path, and a return containing quotes, HTML attributes and newlines records correctly through the stdin form.",
-                "The file-path form of backlog.mjs record keeps working unchanged.",
-                "The agent brief instructs agents to record their step return through the stdin form.",
-                "A documented way to start and stop a collector for ad-hoc inspection exists — a script or an existing test helper made reachable — and starting and stopping it leaves no process holding the port.",
-                "The agent brief names that way, so an agent needing a live instance is told what to run instead of improvising a pkill.",
-                "Both changes have test coverage that goes red when they break, and the test runs are reported with their case counts."
-              ],
-              "status": "todo",
-              "note": ""
+              "status": "todo"
+            },
+            {
+              "id": "collector-fixture",
+              "status": "todo"
             },
             {
               "id": "signing-check",
-              "title": "test.sh catches a commit-signing misconfiguration before an agent commits",
-              "goal": "Make ./test.sh verify that commit signing actually works in the environment it runs in, so a signing failure surfaces before an agent's first commit rather than after its work is done.",
-              "criteria": [
-                "./test.sh verifies that commit signing works in the environment it runs in — a signed commit in a throwaway repository, or the equivalent check the setup allows.",
-                "The check fails loudly and says what is misconfigured when signing does not work, and leaves nothing behind in the repository under test.",
-                "The check does not make ./test.sh fail in an environment where signing is legitimately not configured for the run, and the report states which behaviour was chosen and why.",
-                "./test.sh is green, and the report names the command, what it covered and its exit code."
-              ],
-              "status": "todo",
-              "note": ""
+              "status": "todo"
             },
             {
               "id": "liveness-docs",
-              "title": "The loop skill pages tell the session how to tell a dead run from a live one",
-              "goal": "Correct the loop skill pages so the invoking session establishes liveness from the task's own status and knows that a user turn kills a running workflow.",
-              "criteria": [
-                "The loop skill pages tell the invoking session to establish whether the run is alive from the task's own status, and say plainly that transcript file timestamps do not establish it.",
-                "The pages say that an ordinary user turn kills a running workflow, and that the killed agent restarts from zero rather than resuming mid-flight, so an interruption costs a whole agent.",
-                "The pages tell a session that takes a message mid-run to check liveness and resume rather than to report progress from stale files.",
-                "The pages do not describe the periodic self check-in or the resumeFromRunId re-entry, which another issue owns."
-              ],
-              "status": "todo",
-              "note": ""
+              "status": "todo"
             }
-          ],
-          "questions": [],
-          "summary": "Opening cut of the seven-finding issue into six increments, ordered risky-first. Criterion-to-increment map, one criterion each: coverage-only-round takes the shortened-correction-round criterion and the visibility criterion (workflow log() plus the reviewer's classification recorded in backlog.json with the round); ui-harness-null takes the installFakes-returns-null criterion and the harness-proves-itself criterion; run-report takes the parse-agent-log workflow-run-directory criterion including the retro skill's instructions; agent-affordances takes the backlog.mjs record stdin criterion and the documented collector start/stop criterion; signing-check takes the ./test.sh signing-verification criterion and the './test.sh is green' criterion; liveness-docs takes the loop-skill liveness criterion.\n\nWhy this cut. Findings 1 and 2 of the issue are one delivery, not two: a classification the reviewer sets is worthless until the workflow branches on it, and a branch nobody can see in the log or the backlog is not reviewable, so the field, the branch, the log line and the record land together. It goes first because it is the largest and most load-bearing change and because it rewrites how every later correction round in this run behaves — learning it early is the point. Findings 2 of the issue (the UI harness) goes second: it is the other risky one, since making getElementById return null can turn existing green cases red and the increment has to decide, case by case, whether each was asserting against markup the page never wrote. I put the recorder-stdin fix and the collector fixture into one increment because they are one delivery from the reader's side — an agent stops improvising around missing tooling, and both are named in the same agent brief page — and because two separate chains editing that page would collide for no gain. I rejected splitting the UI harness into 'return null' and 'correct the cases', which is the classic half-increment that leaves the suite red; I rejected splitting parse-agent-log into a tool change and a retro-skill change, since a mode nothing points at is code nobody asked for; and I rejected merging the signing check with the agent-affordances increment, because verifying the environment and giving agents a tool are judged against different evidence.\n\nWhat the run has to settle that I could not. The shape of the reviewer's structured return and where the workflow decides to run a correction round are facts I do not have, so coverage-only-round is cut to make its researcher establish them first; the increment states the outcome the run needs and names no file or function. Likewise whether ./test.sh can sign a commit at all in this environment is unknown, so signing-check carries an explicit criterion asking the run to choose and justify the behaviour when signing is legitimately unconfigured, rather than putting that to the human and ending the run. The out-of-scope list is honoured: nothing here touches the resume mechanism, the reviewer's standard for rejecting a round, the two open findings of 2026-08-07-agile-loop-optimizations, or the timeline feature."
+          ]
         }
       }
     ]
