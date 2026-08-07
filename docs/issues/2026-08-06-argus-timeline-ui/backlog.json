@@ -592,6 +592,16 @@
             "questions": [],
             "summary": "No production change was needed: the check command is green on the unmodified tree, and a mutation check on a scratch copy confirms the six new cases genuinely pin the landing wiring in public/app.js rather than passing vacuously."
           }
+        },
+        {
+          "label": "review:timeline-landing.2",
+          "at": "2026-08-07T11:03:18.383Z",
+          "return": {
+            "findings": [],
+            "reason": "",
+            "questions": [],
+            "summary": "Ran the one listed command, `npm --prefix tools/argus-ui test` (39 cases over app/timeline/config/server/independence test files), exit 0; the diff meets all five increment criteria and I found no finding. Opening a session lands on the timeline (`state.view = DEFAULT_VIEW = null`, reset again in `selectSession`), the six previous technical views survive unchanged in `SUBORDINATE_VIEWS` and render below the timeline into `#view-body`, lanes are keyed per instance by `agent_id` (`store.getAgents`, `AGENT_LANE_PREFIX`) so two concurrent researchers get two lanes distinguished on screen by a short agent id, each lane spans first-span-start to last-span-end inside one shared window so a vertical slice is readable, the join is placed collector-side behind `GET /api/sessions/:id/agents` and documented in tools/argus/README.md, and spans whose parent chain resolves to nothing land on an explicit `unattributed` lane instead of being dropped or folded into main. Blast radius: nothing found — index.html already loads app.js with `type=\"module\"` so the new `format.js`/`timeline.js` imports resolve, the UI's static server has a `.js` MIME entry, no `state.tab`/`data-tab`/`renderTabBody` references survive anywhere, and both READMEs were updated. One fact, not a finding: increment 2 also added collector-side tests for `getAgents` and the new endpoint in tools/argus/test/{store,server}.test.mjs, and the listed command does not run them; I read them and they pin the per-instance, lifetime and unattributed behaviour, but no run of them happened in this review."
+          }
         }
       ]
     },
