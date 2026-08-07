@@ -315,6 +315,9 @@ const DISJOINT_MARKERS = [
   'MARKER-FINDING-CRITERION',
   'MARKER-VERDICT-REASON',
   'MARKER-CLOSE-QUESTION',
+  'MARKER-STALE-CUT',
+  'MARKER-FRESH-CUT',
+  'MARKER-CUT-QUESTION',
 ];
 
 const planReturn = {
@@ -434,6 +437,45 @@ function doneBacklog() {
   };
 }
 
+// Round 4, finding 1's fixtures: a state file that holds increments while
+// its decompose step is not replayable, which is the only case in which the
+// Decompose is dispatched again with a populated backlog behind it.
+// `carried` true is the run whose opening cut ended with a question for the
+// human — the increments are in the file and the step is recorded with the
+// question. `carried` false is the session that died between the planner's
+// `init` and its `record` — the same increments, and no decompose step at
+// all. Both make the resumed run work Decompose again, and both used to
+// throw away the cut it returned.
+function recutBacklog(carried) {
+  return {
+    version: 1,
+    issue: 'docs/issues/x',
+    workflow: isAgile ? 'agile-loop' : 'loop',
+    increments: [
+      { id: 'i1', title: 'MARKER-STALE-CUT', goal: 'Deliver i1.', criteria: ['does i1'], status: 'todo', note: '', steps: [] },
+      { id: 'i2', title: 'Deliver i2', goal: 'Deliver i2.', criteria: ['does i2'], status: 'todo', note: '', steps: [] },
+    ],
+    run: {
+      steps: carried
+        ? [{
+            label: 'decompose',
+            at: '2026-08-07T00:00:00.000Z',
+            return: Object.assign({}, decomposeReturnTwo, { questions: ['MARKER-CUT-QUESTION'] }),
+          }]
+        : [],
+    },
+  };
+}
+
+// The cut the human's answer bought: one increment under an id the stale
+// file does not hold, so a run that works the superseded cut instead shows
+// it in the labels it dispatches as well as in the prompts it sends.
+const decomposeReturnRecut = {
+  increments: [{ id: 'i3', title: 'MARKER-FRESH-CUT', goal: 'Deliver i3.', criteria: ['does i3'], status: 'todo', note: '' }],
+  questions: [],
+  summary: 'backlog summary',
+};
+
 function contextFor(m) {
   switch (m) {
     case 'w1':
@@ -472,6 +514,10 @@ function contextFor(m) {
         },
       };
     }
+    case 'w13':
+      return { stateReturn: { exists: true, backlogJson: JSON.stringify(recutBacklog(true), null, 2) + '\n', summary: '' }, decomposeReturn: decomposeReturnRecut, researchReturn: planReturn };
+    case 'w14':
+      return { stateReturn: { exists: true, backlogJson: JSON.stringify(recutBacklog(false), null, 2) + '\n', summary: '' }, decomposeReturn: decomposeReturnRecut, researchReturn: planReturn };
     default:
       throw new Error('unknown mode ' + m);
   }
@@ -660,6 +706,29 @@ async function main() {
       'the run stopped on the attempt backstop instead of working the increment again');
     assertTrue(!!result && result.delivered === 1 && Array.isArray(result.increments) && result.increments.length === 2,
       'the second attempt did not deliver the increment');
+  } else if (mode === 'w13' || mode === 'w14') {
+    // Round 4, finding 1: both scripts preferred the increments of the state
+    // snapshot they read at startup over the ones Decompose returned,
+    // unconditionally — including when Decompose was dispatched in this
+    // session rather than replayed. So a planner that read the human's answer,
+    // re-cut and rewrote backlog.json had its new cut thrown away, and the run
+    // worked the cut the answer had just replaced.
+    const closeLabel = isAgile ? 'replan:i3' : 'close:i3';
+    assertEqualArrays(labels,
+      ['load-state', 'decompose', 'research:i3.0', 'tests:i3.0', 'implement:i3.0', 'review:i3.0', closeLabel, 'publish'],
+      'the run worked the stale cut from the state file instead of the cut the re-dispatched Decompose returned');
+    assertTrue(!calls.some((c) => c.prompt.includes('MARKER-STALE-CUT')),
+      'a prompt of this run carries the superseded increment the state file still held');
+    const closeCall = calls.find((c) => c.label === closeLabel);
+    assertTrue(!!closeCall && closeCall.prompt.includes('MARKER-FRESH-CUT'),
+      'the closing planner was not told about the increment of the fresh cut');
+    assertTrue(!!result && Array.isArray(result.blockedOnHuman) && result.blockedOnHuman.length === 0,
+      'the run ended blocked on the human instead of working the fresh cut to a close');
+    if (mode === 'w13') {
+      const decomposeCall = calls.find((c) => c.label === 'decompose');
+      assertTrue(!!decomposeCall && decomposeCall.prompt.includes('MARKER-CUT-QUESTION'),
+        'the Decompose worked again does not carry the question that ended the last run');
+    }
   } else {
     throw new Error('unknown mode ' + mode);
   }
@@ -703,6 +772,8 @@ for wf in "$root/workflows/loop.js" "$root/workflows/agile-loop.js"; do
   run_driver "$wf" w9 "$wf_name: a run resumed after a question for the human works that step again with the question in its prompt"
   run_driver "$wf" w10 "$wf_name: a correction round carries the reviewer's findings to the researcher and the reason to the human"
   run_driver "$wf" w11 "$wf_name: a question from the closing planner ends the run and reaches the human"
+  run_driver "$wf" w13 "$wf_name: a Decompose worked again after the human's answer has its new cut worked, not the one the state file still held"
+  run_driver "$wf" w14 "$wf_name: a Decompose worked again after a session died before recording it has its new cut worked"
 done
 
 # Round 3, finding 2: only the incremental loop re-cuts, so an increment

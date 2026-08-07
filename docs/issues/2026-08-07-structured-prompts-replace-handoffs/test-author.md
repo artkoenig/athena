@@ -636,3 +636,125 @@ repository root; no setup beyond `git`, `node` and `mktemp`, all present.
 `bash test.sh` was not run — the plan's "What counts as done" for this round
 names it as the implementer's and the judgment's command, and `test-repo.sh`
 alone is where every case of this round lives.
+
+## Round 4
+
+The criterion this round is the reviewer's Round 3 reproduction spec, and the
+Test plan section of `researcher.md`'s `## Round 4` is my work order for it. I
+read `issue.md` and `researcher.md` (its top-level content and `## Round 4`)
+only. All work this round is in one file, `test-repo.sh`; I opened no
+production file — not `skills/agent-brief/assets/backlog.mjs`, not either
+workflow script, not any agent page.
+
+Two items were planned: one block of shared driver changes with no case of
+its own, and one shared mode branch for two new modes (`w13`, `w14`), each run
+against **both** workflow files, plus two new `run_driver` lines per workflow.
+All are written, in `test-repo.sh`, at the level the plan named.
+
+### A. `test-repo.sh` — the driver heredoc
+
+Run with `bash test-repo.sh`.
+
+1. **Shared driver changes** (no case of their own). Added exactly as the plan
+   specified: `DISJOINT_MARKERS` gained `'MARKER-STALE-CUT'`,
+   `'MARKER-FRESH-CUT'` and `'MARKER-CUT-QUESTION'`; a new fixture function
+   `recutBacklog(carried)`, placed after `doneBacklog()` as the plan's own
+   line reference asked, returning a state file holding two increments
+   (`i1` titled `MARKER-STALE-CUT`, `i2` plain) with `run.steps` either
+   carrying a `decompose` entry whose return is `decomposeReturnTwo` plus
+   `questions: ['MARKER-CUT-QUESTION']` (`carried` true) or empty
+   (`carried` false); a new fixture `decomposeReturnRecut`, one increment
+   `i3` titled `MARKER-FRESH-CUT`; `contextFor` gained `case 'w13':` and
+   `case 'w14':` arms, both feeding `recutBacklog(true)` /
+   `recutBacklog(false)` as the state loader's return and
+   `decomposeReturnRecut` as what a re-dispatched Decompose hands back. No
+   change was needed to `returnFor` — every label these two modes dispatch
+   was already covered by it, and neither mode sets `closeFor`, so the
+   close/replan label falls through to the fixed `{ summary: 'closed' }` as
+   the plan said it would.
+2. **`w13` and `w14` on both workflows** — one shared `mode === 'w13' ||
+   mode === 'w14'` branch, inserted after the `w12` branch and before the
+   closing `else`, exactly where the plan named. It asserts the label
+   sequence works `i3` (not `i1`), that no prompt of the run carries
+   `MARKER-STALE-CUT`, that the closing planner's prompt (`close:i3` /
+   `replan:i3`) carries `MARKER-FRESH-CUT`, that `blockedOnHuman` is empty,
+   and — `w13` only — that the re-dispatched Decompose's own prompt carries
+   `MARKER-CUT-QUESTION`, the question that ended the prior run. **Result:
+   red on all four combinations** (both modes, both workflows), exactly as
+   the plan predicted:
+
+   ```
+   FAIL — loop.js: a Decompose worked again after the human's answer has its new cut worked, not the one the state file still held:
+          the run worked the stale cut from the state file instead of the cut the re-dispatched Decompose returned — expected ["load-state","decompose","research:i3.0","tests:i3.0","implement:i3.0","review:i3.0","close:i3","publish"] got ["load-state","decompose","research:i1.0","tests:i1.0","implement:i1.0","review:i1.0","close:i1","publish"]
+          a prompt of this run carries the superseded increment the state file still held
+          the closing planner was not told about the increment of the fresh cut
+   FAIL — loop.js: a Decompose worked again after a session died before recording it has its new cut worked:
+          [same three lines, expected/got identical to the case above]
+   FAIL — agile-loop.js: a Decompose worked again after the human's answer has its new cut worked, not the one the state file still held:
+          the run worked the stale cut from the state file instead of the cut the re-dispatched Decompose returned — expected ["load-state","decompose","research:i3.0","tests:i3.0","implement:i3.0","review:i3.0","replan:i3","publish"] got ["load-state","decompose","research:i1.0","tests:i1.0","implement:i1.0","review:i1.0","replan:i1","research:i2.0","tests:i2.0","implement:i2.0","review:i2.0","replan:i2","publish"]
+          a prompt of this run carries the superseded increment the state file still held
+          the closing planner was not told about the increment of the fresh cut
+   FAIL — agile-loop.js: a Decompose worked again after a session died before recording it has its new cut worked:
+          [same three lines, expected/got identical to the case above]
+   ```
+
+   `loop.js` works `i1` from the stale file exactly as the plan's "What is
+   already red" predicted, and its `close:i1` prompt carries the superseded
+   title, which is what the second assertion catches. `agile-loop.js` works
+   `i1` and then `i2` — the longer sequence the plan also named — since its
+   real increments come from the stale file rather than the driver's
+   `decomposeReturn` context field; the `w13`/`w14` assertions fail on the
+   same three lines in both scripts. The `MARKER-CUT-QUESTION` assertion is
+   unreached in these failures — the label-sequence assertion fails first
+   and the driver reports all pushed failures together, so I confirmed by
+   reading that the fourth assertion would also fail today (the current
+   scripts never put a question inside the Decompose prompt at all) rather
+   than re-deriving it from a second run.
+3. **Two `run_driver` lines**, inside the existing two-workflow loop, after
+   the `w11` line — one for `w13`, one for `w14` — placed exactly where the
+   plan named, each prefixed `$wf_name` per the file's convention.
+
+Nothing else in `test-repo.sh` changes. No case is written against
+`skills/agent-brief/assets/`, no grep case is added or removed, and no
+existing mode, fixture, marker or assertion is edited beyond the insertions
+named above — I did not open `skills/agent-brief/assets/backlog.mjs`, either
+workflow script, or any agent page, `rulebook.md`, `README.md` or
+`skills/*/SKILL.md`, exactly as the plan said this round touches none of them.
+
+Full run: `bash test-repo.sh` → `FAIL: 4 of 54 cases` — the four failures are
+`w13` and `w14` on both `loop.js` and `agile-loop.js`, exactly as the
+researcher's "What is already red" predicted, and the 54-case count matches
+the plan's own sanity figure exactly. Every other case, from every earlier
+round, is still green — including `w11`, `w12` and everything under `=== the
+run state is the channel, and no prose handoff is left`, none of which this
+round's fixtures or mode branch touch.
+
+### Every case from the plan is written; none was skipped
+
+The shared driver changes and the shared `w13`/`w14` mode branch, plus the two
+`run_driver` lines per workflow, are all present, in `test-repo.sh` alone,
+exactly as the plan named. `skills/agent-brief/assets/backlog.mjs`, its suite,
+both workflow scripts, every agent page, `rulebook.md` and `README.md` were
+not touched — the plan said this round changes none of them in production,
+and I opened none of them at all.
+
+### Gaps and conflicts found in the test plan
+
+None. The plan's "What proves the finding" section named exactly two driver
+modes and left four things deliberately untested (the empty-Decompose-return
+fallback, the replayed-cut branch already covered by `w2`/`w3`/`w9`, the
+`init` merge that `backlog.mjs`'s own suite pins, and the Close/re-cut
+mechanics `w11`/`w12` already settled) — I wrote nothing beyond `w13`/`w14`
+and left those four exactly as named. Every assertion I wrote matched a
+concrete expected outcome the plan gave verbatim, and the observed red output
+matched the plan's own prediction line for line, including which increment
+each script works from the stale file and why the two workflows produce
+label sequences of different lengths.
+
+### Environment
+
+`node --version` → `v22.22.2`. `bash test-repo.sh` was run from the
+repository root; no setup beyond `git`, `node` and `mktemp`, all present.
+`bash test.sh` was not run — the plan's "What counts as done" for this round
+names it as the implementer's and the judgment's command, and `test-repo.sh`
+alone is where every case of this round lives.
