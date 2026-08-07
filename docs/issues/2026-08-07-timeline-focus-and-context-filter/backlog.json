@@ -401,6 +401,16 @@
             "questions": [],
             "summary": "Rewrote the eight spots in tools/argus/README.md that still described a deleted argus-ui view, replacing each with the collector's own verified API fact (span tree over /api/traces/:id, costSource/tokenSource, the three surviving page areas, resource on /api/sessions/:id, resultTokensEstimated, todos.unlinkedCreates, the store's task list, and a curl step in place of the \"tab Attributes\" instruction)."
           }
+        },
+        {
+          "label": "review:tabs-out.1",
+          "at": "2026-08-07T18:56:59.525Z",
+          "return": {
+            "findings": [],
+            "reason": "",
+            "questions": [],
+            "summary": "Increment 4 accepted: `bash test-repo.sh` (56 cases, exit 0) and `bash test.sh` (6 suites, exit 0; tools/argus-ui 234 tests, 0 failed, 0 skipped, 0 todo) both green; the six tabs are gone from timeline.js, app.js, its wiring, its state and its per-refresh fetches, no dead CSS selector or unused import survives (independent scan of styles.css against every class and data-attribute the renderers can emit found none), tools/argus-ui/src/server.mjs is untouched, both READMEs stop promising the removed views, and the context filter's change/input wiring plus the lane selection and the open-dropdown repaint all remain, each pinned by at least one test."
+          }
         }
       ]
     }
