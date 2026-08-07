@@ -243,6 +243,28 @@
             "questions": [],
             "summary": "Ran the two listed commands in one call: `bash test-repo.sh` exit 0 (all repo cases ok, including the six new coverage-only greps and w17/w18/w19 drivers against both workflows) and `./test.sh` exit 0 (PASS: all 6 suites, 23 node:test cases in the parser suite, 0 fail). All seven criteria of the increment are met and guarded: the `kind` enum is a required per-finding field in both workflows' VERDICT schemas (criterion 1, guarded by the literal-value greps plus w17/w18/w19, whose fixtures carry no 'coverage' wording in prose so a grep-the-prose implementation would fail w17); w17 pins the exact label sequence load-state, decompose, research:i1.0, tests:i1.0, implement:i1.0, review:i1.0, tests:i1.1, review:i1.1, close/replan, publish (criterion 2); w18 pins the full chain for a mixed round (criterion 3); the 'correcting coverage only' log() is asserted present in w17/w19 and absent in w10 and w18 (criterion 4); backlog.test.mjs proves each finding's `kind` survives into the step stored under label review:i1.1 (criterion 5); agents/reviewer.md:116-126 states the coverage-gap/defect rule in the same words as the schema description, which test-repo.sh greps for (criterion 6); both suites are green (criterion 7). Blast radius: no other consumer of the verdict shape exists in bin/, skills/ or tools/, and isDirectFixRound's new `f.kind !== 'coverage-gap'` guard keeps the mixed direct/coverage case on the full chain, which w19 covers from the other side. One finding, on stale README prose. Observations that need no round: agents/test-author.md:16-18 still opens with the absolute \"You have never seen an implementation\" although steps 1, the new section and the boundaries all carve out the coverage-only round, so a reader still gets the exception; the TESTS schema's `got` description still says \"The failure it produced\" while a coverage-only round records a green run and a sandboxed red one, which the prompt overrides explicitly; agents/reviewer.md:141 and README.md:79 wrap oddly for the surrounding prose width."
           }
+        },
+        {
+          "label": "implement:coverage-only-round.2",
+          "at": "2026-08-07T20:32:28.712Z",
+          "return": {
+            "deviations": [],
+            "commands": [
+              {
+                "command": "bash test-repo.sh",
+                "exitCode": 0,
+                "note": "all repo checks pass, 0 failures"
+              },
+              {
+                "command": "./test.sh",
+                "exitCode": 0,
+                "note": "all suites pass, 0 failures"
+              }
+            ],
+            "blockers": [],
+            "questions": [],
+            "summary": "Qualified README.md:83-87 so the researcher-decides-testing and test-author-sees-only-the-plan clauses name the coverage-only round as the exception where the reviewer's findings replace the test plan and the test-author reads the behaviour it guards."
+          }
         }
       ]
     },

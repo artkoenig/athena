@@ -80,9 +80,12 @@ A remark that leaves every criterion met and
 every behaviour unchanged is no finding at all; it goes into the review's
 summary and reaches the human through the pull request, costing no round.
 
-Whether, what and how to test is decided once, by the researcher — the only
-agent that reads the codebase — in the test plan it returns. The test-author is
-given that plan and nothing else about the change, the implementer is given the
+Outside the coverage-only round, whether, what and how to test is decided once,
+by the researcher — the only agent that reads the codebase — in the test plan it
+returns, and the test-author is given that plan and nothing else about the
+change. In the coverage-only round no researcher runs: the reviewer's findings
+replace the test plan, and the test-author reads the production code holding the
+behaviour it guards. Either way the implementer is given the
 implementation plan and never the test plan, and the reviewer is given neither,
 so it checks the result against the intent and remains the check on that plan.
 
