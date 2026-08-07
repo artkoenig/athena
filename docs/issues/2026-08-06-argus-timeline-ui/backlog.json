@@ -123,6 +123,259 @@
             ],
             "questions": []
           }
+        },
+        {
+          "label": "tests:context-at-time.0",
+          "at": "2026-08-07T13:47:43.284Z",
+          "return": {
+            "summary": "Wrote 34 failing test cases across four files (store.test.mjs, server.test.mjs, a new context.test.mjs, timeline.test.mjs, app.test.mjs) covering the collector's getLaneContext lookup and /context route, the pure context.js module, and the rendered page, all confirmed red against the pre-existing implementation for the missing behaviour and not for typos or import errors.",
+            "cases": [
+              {
+                "case": "A1 — nearest at or before, on the selected lane",
+                "file": "tools/argus/test/store.test.mjs",
+                "testName": "the nearest request body at or before the chosen time, on the selected lane",
+                "expected": "getLaneContext(SESSION,'agent:agt-a',NOW+25).record.timeMs===NOW+20 and .text equal to that body, not main's +25 body nor the later +30 one",
+                "got": "TypeError: store.getLaneContext is not a function"
+              },
+              {
+                "case": "A2 — nothing before the bound",
+                "file": "tools/argus/test/store.test.mjs",
+                "testName": "a bound before every record on the lane answers with a null record, echoing the query",
+                "expected": "record is null; sessionId/laneId/atMs echo the query",
+                "got": "TypeError: store.getLaneContext is not a function"
+              },
+              {
+                "case": "A3 — unknown session",
+                "file": "tools/argus/test/store.test.mjs",
+                "testName": "an unknown session answers null outright",
+                "expected": "store.getLaneContext('nope','main',NOW) === null",
+                "got": "TypeError: store.getLaneContext is not a function"
+              },
+              {
+                "case": "A4 — the main session's own context",
+                "file": "tools/argus/test/store.test.mjs",
+                "testName": "a body under a span with no agent attributes and no parent resolves to the main lane",
+                "expected": "main lane answers the body; the agent:agt-a lane's record is null for it",
+                "got": "TypeError: store.getLaneContext is not a function"
+              },
+              {
+                "case": "A5 — a body naming no span",
+                "file": "tools/argus/test/store.test.mjs",
+                "testName": "a body naming no span, or a span whose parent chain resolves to nothing, resolves to unattributed",
+                "expected": "looped over spanId 'gone' and '': unattributed lane answers, main lane's record is null",
+                "got": "TypeError: store.getLaneContext is not a function"
+              },
+              {
+                "case": "A6 — truncation",
+                "file": "tools/argus/test/store.test.mjs",
+                "testName": "a truncated body reports the untruncated length, not the delivered text's",
+                "expected": "record.length===120000, record.truncated===true, record.text==='{\"m\":1}'",
+                "got": "TypeError: store.getLaneContext is not a function"
+              },
+              {
+                "case": "A7 — a reported length with no text at all",
+                "file": "tools/argus/test/store.test.mjs",
+                "testName": "a reported length with no body text at all answers with text null and ref null",
+                "expected": "record.length===900, text===null, ref===null; queryContent({kinds:['request_body']}) returns [] for the same record, with a comment explaining the divergent predicate",
+                "got": "TypeError: store.getLaneContext is not a function"
+              },
+              {
+                "case": "A8 — a file reference",
+                "file": "tools/argus/test/store.test.mjs",
+                "testName": "a body recorded as a file reference is answered with the ref, no inline text",
+                "expected": "record.ref==='/tmp/body.json', text===null, length===5000",
+                "got": "TypeError: store.getLaneContext is not a function"
+              },
+              {
+                "case": "A9 — out-of-order arrival",
+                "file": "tools/argus/test/store.test.mjs",
+                "testName": "records arriving out of order still resolve to the nearest at-or-before, not the first backwards hit",
+                "expected": "logs ingested in order +30,+10,+20 still answer the +20 record at bound +25",
+                "got": "TypeError: store.getLaneContext is not a function"
+              },
+              {
+                "case": "A10 — only request bodies",
+                "file": "tools/argus/test/store.test.mjs",
+                "testName": "only request bodies answer the query, not response bodies or prompts under the same span",
+                "expected": "response_body at +30 and user_prompt at +20 under the same span as request_body at +10; answer at +40 is the +10 request",
+                "got": "TypeError: store.getLaneContext is not a function"
+              },
+              {
+                "case": "B1 — the context reaches a client, and the lanes payload stays free of it",
+                "file": "tools/argus/test/server.test.mjs",
+                "testName": "GET /api/sessions/:id/context answers with the lane context, and the lanes payload stays free of the text",
+                "expected": "/agents payload's JSON never contains the ingested marker text while lane.context[0].length carries the reported length; /context?lane=agent:agt-a&at=<t> is 200 with record.text equal to the ingested body and record.length the reported one",
+                "got": "AssertionError: 404 !== 200 (route not implemented)"
+              },
+              {
+                "case": "B2 — unknown session",
+                "file": "tools/argus/test/server.test.mjs",
+                "testName": "GET /api/sessions/:id/context for an unknown session is a 404",
+                "expected": "404 with {error:'unknown session'}",
+                "got": "AssertionError: deep-equal mismatch — actual {error:'unknown endpoint'} vs expected {error:'unknown session'} (route does not exist at all)"
+              },
+              {
+                "case": "B3 — no lane named",
+                "file": "tools/argus/test/server.test.mjs",
+                "testName": "GET /api/sessions/:id/context without a lane is a 400",
+                "expected": "400",
+                "got": "AssertionError: 404 !== 400"
+              },
+              {
+                "case": "B4 — a lane with nothing before the bound",
+                "file": "tools/argus/test/server.test.mjs",
+                "testName": "GET /api/sessions/:id/context for a lane with nothing before the bound answers with a null record",
+                "expected": "200 with record===null",
+                "got": "AssertionError: 404 !== 200"
+              },
+              {
+                "case": "C1 — the five block kinds",
+                "file": "tools/argus-ui/test/context.test.mjs",
+                "testName": "a request body parses into the five block kinds, in message order",
+                "expected": "kinds ['system','user','assistant','tool_call','tool_result'] in order; tool_call text contains pattern/needle; tool_result text is '42 hits'; every block.length===block.text.length",
+                "got": "ERR_MODULE_NOT_FOUND: '../public/context.js' does not exist yet"
+              },
+              {
+                "case": "C2 — a truncated body",
+                "file": "tools/argus-ui/test/context.test.mjs",
+                "testName": "a body the CLI truncated — or anything else unparseable — yields one raw block, text unchanged",
+                "expected": "one 'raw' block whose text is the unparseable input unchanged; empty string and a body parsing to a number also yield one raw block each",
+                "got": "ERR_MODULE_NOT_FOUND: '../public/context.js' does not exist yet"
+              },
+              {
+                "case": "C3 — the reported size wins",
+                "file": "tools/argus-ui/test/context.test.mjs",
+                "testName": "a truncated record shows the collector's reported size, not the delivered text's length",
+                "expected": "data-context-state=\"ready\", data-context-truncated=\"true\", data-context-length=\"120000\"; never presents the delivered text's length (7) as the size",
+                "got": "ERR_MODULE_NOT_FOUND: '../public/context.js' does not exist yet"
+              },
+              {
+                "case": "C4 — text absent",
+                "file": "tools/argus-ui/test/context.test.mjs",
+                "testName": "a reported length with no body text is shown as absent, not as an empty context",
+                "expected": "data-context-state=\"absent\", data-context-length=\"900\", matches /no body text/i, no <details",
+                "got": "ERR_MODULE_NOT_FOUND: '../public/context.js' does not exist yet"
+              },
+              {
+                "case": "C5 — a file reference is named",
+                "file": "tools/argus-ui/test/context.test.mjs",
+                "testName": "a file reference is named when there is no inline text",
+                "expected": "absent state, names the path /tmp/body.json",
+                "got": "ERR_MODULE_NOT_FOUND: '../public/context.js' does not exist yet"
+              },
+              {
+                "case": "C6 — no record",
+                "file": "tools/argus-ui/test/context.test.mjs",
+                "testName": "a lane with no api request at or before the chosen time says so, not another lane's context",
+                "expected": "data-context-state=\"none\", matches /no api request/i",
+                "got": "ERR_MODULE_NOT_FOUND: '../public/context.js' does not exist yet"
+              },
+              {
+                "case": "C7 — the agreement rule",
+                "file": "tools/argus-ui/test/context.test.mjs",
+                "testName": "the section only renders ready when the loaded state agrees with the lane and time asked for",
+                "expected": "a stale-shaped state rendered against a different atMs or a different lane, or a null state, all render data-context-state=\"loading\" and never leak the stale text",
+                "got": "ERR_MODULE_NOT_FOUND: '../public/context.js' does not exist yet"
+              },
+              {
+                "case": "C8 — a failed fetch",
+                "file": "tools/argus-ui/test/context.test.mjs",
+                "testName": "a failed fetch is shown as an error, with nothing to expand",
+                "expected": "data-context-state=\"error\", no <details",
+                "got": "ERR_MODULE_NOT_FOUND: '../public/context.js' does not exist yet"
+              },
+              {
+                "case": "C9 — one collapsed line, the whole text on expand",
+                "file": "tools/argus-ui/test/context.test.mjs",
+                "testName": "one collapsed line carries the size, and the whole text is there to expand",
+                "expected": "data-block-size=\"3000\", a human size (fmtNum(3000)) present, <details> has no ' open', <pre> contains all 3000 characters",
+                "got": "ERR_MODULE_NOT_FOUND: '../public/context.js' does not exist yet"
+              },
+              {
+                "case": "C10 — escaping",
+                "file": "tools/argus-ui/test/context.test.mjs",
+                "testName": "block text and tool names are escaped",
+                "expected": "no '<script' and no 'onerror=' in the rendered html",
+                "got": "ERR_MODULE_NOT_FOUND: '../public/context.js' does not exist yet"
+              },
+              {
+                "case": "C11 — the tool listing's class name is not borrowed",
+                "file": "tools/argus-ui/test/context.test.mjs",
+                "testName": "the tool listing's class name is not borrowed for a context block",
+                "expected": "rendered section holding a tool_call block never contains the substring 'tool-call'",
+                "got": "ERR_MODULE_NOT_FOUND: '../public/context.js' does not exist yet"
+              },
+              {
+                "case": "D1 — the panel holds both sections",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "the panel holds both the tool listing and the context section, context first",
+                "expected": "html contains data-lane-detail=\"main\", data-lane-context=\"main\", a data-block-kind=, and the tool call's name Read; the data-lane-detail opening tag precedes both",
+                "got": "AssertionError: input did not match the regular expression /data-lane-context=\"main\"/ — laneDetailHtml renders only the tool listing today, no context section"
+              },
+              {
+                "case": "D2 — three-argument calls still work",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "laneDetailHtml still works with three arguments: the tool listing is unchanged, the context is loading",
+                "expected": "tool listing renders unchanged; context section renders data-context-state=\"loading\"",
+                "got": "AssertionError: input did not match /data-context-state=\"loading\"/ — laneDetailHtml renders no context section at all today"
+              },
+              {
+                "case": "E1 — the context reaches the composed panel, beside the tool listing",
+                "file": "tools/argus-ui/test/app.test.mjs",
+                "testName": "the context reaches the composed panel, beside the tool listing",
+                "expected": "after selecting main and an ingest tick, the composed lane-detail slice carries data-lane-context=\"main\" and all five data-block-kind values plus the tool listing's /late.md; the page requested /api/sessions/sess-1/context",
+                "got": "settle() timed out waiting for data-context-state=\"ready\" in lane-detail — no context fetch or render happens today"
+              },
+              {
+                "case": "E2 — an expanded block carries the exact full text",
+                "file": "tools/argus-ui/test/app.test.mjs",
+                "testName": "an expanded block carries the exact full text",
+                "expected": "composed slice contains data-block-size=\"<EARLY_FILE_TEXT.length>\" and a <pre> containing that exact fixture string",
+                "got": "settle() timed out waiting for data-context-state=\"ready\" in lane-detail"
+              },
+              {
+                "case": "E3 — moving the chosen time moves the context, in place",
+                "file": "tools/argus-ui/test/app.test.mjs",
+                "testName": "moving the chosen time moves the context, in place, and it agrees with the tool listing",
+                "expected": "scrubbing to +5000 drops the tool_call block while staying ready and keeping the tool listing on /early.md not /late.md, without a wholesale render (range input value unchanged); scrubbing to +9500 brings the tool_call block back",
+                "got": "settle() timed out waiting for data-context-state=\"ready\" in lane-detail after selecting main"
+              },
+              {
+                "case": "E4 — a lane with no request says so",
+                "file": "tools/argus-ui/test/app.test.mjs",
+                "testName": "a lane with no api request at or before the chosen time says so, on the page",
+                "expected": "composed slice matches /no api request/i, has no data-block-kind=, and none of main's texts leak through",
+                "got": "settle() timed out waiting for data-context-state=\"none\" in lane-detail after selecting agent:agt-b"
+              },
+              {
+                "case": "E5 — a truncated body is marked",
+                "file": "tools/argus-ui/test/app.test.mjs",
+                "testName": "a truncated body is marked, on the page",
+                "expected": "composed slice carries data-context-truncated=\"true\" and data-context-length=\"65000\"",
+                "got": "settle() timed out waiting for data-context-state=\"ready\" in lane-detail after selecting agent:agt-a"
+              },
+              {
+                "case": "E6 — a reported size with no text",
+                "file": "tools/argus-ui/test/app.test.mjs",
+                "testName": "a reported size with no text is shown as absent, on the page",
+                "expected": "composed slice carries data-context-state=\"absent\", data-context-length=\"900\", matches /no body text/i, no data-block-kind=",
+                "got": "settle() timed out waiting for data-context-state=\"absent\" in lane-detail after selecting unattributed"
+              },
+              {
+                "case": "E7 — the page asks for the selected lane at the chosen time",
+                "file": "tools/argus-ui/test/app.test.mjs",
+                "testName": "the page asks for the selected lane at the chosen time",
+                "expected": "a recorded url ending in /context carries lane='agent:agt-a' and at=T0+10000",
+                "got": "settle() timed out waiting for data-context-state=\"ready\" in lane-detail after selecting agent:agt-a — the /context route is never requested"
+              }
+            ],
+            "openQuestions": [
+              "C9 asserts the human size (fmtNum(3000)) appears anywhere in the rendered section, not specifically inside the collapsed line's own summary element, since the plan does not pin which element carries it; a next round could tighten this to scope the check to the summary specifically.",
+              "A2's null-record answer is checked field-by-field (record/sessionId/laneId/atMs) rather than with a strict deepEqual, since the plan does not say whether the object may carry additional fields beyond those four.",
+              "Whether the data-lane-context=\"<laneId>\" attribute is emitted by contextSectionHtml itself or added by laneDetailHtml around it is never pinned by the C-suite (pure module tests); only D1/E1 (composed markup) require it to appear, so either placement satisfies the tests as written."
+            ],
+            "questions": []
+          }
         }
       ]
     },

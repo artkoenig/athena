@@ -1063,3 +1063,169 @@ test('a tool_result with no matching tool span invents no activity entry: no sec
   assert.deepEqual(items.map((item) => item.id), ['main'], 'the spans alone produce only the main lane');
   assert.equal(items[0].activity.length, 0, 'the orphan tool_result must not invent an activity entry');
 });
+
+/* --------------- getLaneContext --------------- */
+
+test('the nearest request body at or before the chosen time, on the selected lane', () => {
+  const store = new TelemetryStore();
+  store.ingest('traces', [
+    span('claude_code.interaction', {}, { spanId: 'root' }),
+    subagentSpan('claude_code.llm_request', 'agt-a', {}, { spanId: 'llm-a', parentSpanId: 'root' }),
+  ]);
+  store.ingest('logs', [
+    { ...log('claude_code.api_request_body', { body: '{"a":10}', body_length: '8' }, NOW + 10), spanId: 'llm-a' },
+    { ...log('claude_code.api_request_body', { body: '{"a":20}', body_length: '8' }, NOW + 20), spanId: 'llm-a' },
+    { ...log('claude_code.api_request_body', { body: '{"a":30}', body_length: '8' }, NOW + 30), spanId: 'llm-a' },
+    { ...log('claude_code.api_request_body', { body: '{"a":25}', body_length: '8' }, NOW + 25), spanId: 'root' },
+  ]);
+  const answer = store.getLaneContext(SESSION, 'agent:agt-a', NOW + 25);
+  assert.equal(answer.record.timeMs, NOW + 20, 'the later record at +30 and the main-lane record at +25 must both lose');
+  assert.equal(answer.record.text, '{"a":20}');
+});
+
+test('a bound before every record on the lane answers with a null record, echoing the query', () => {
+  const store = new TelemetryStore();
+  store.ingest('traces', [
+    span('claude_code.interaction', {}, { spanId: 'root' }),
+    subagentSpan('claude_code.llm_request', 'agt-a', {}, { spanId: 'llm-a', parentSpanId: 'root' }),
+  ]);
+  store.ingest('logs', [
+    { ...log('claude_code.api_request_body', { body: '{"a":10}', body_length: '8' }, NOW + 10), spanId: 'llm-a' },
+    { ...log('claude_code.api_request_body', { body: '{"a":20}', body_length: '8' }, NOW + 20), spanId: 'llm-a' },
+    { ...log('claude_code.api_request_body', { body: '{"a":30}', body_length: '8' }, NOW + 30), spanId: 'llm-a' },
+  ]);
+  const answer = store.getLaneContext(SESSION, 'agent:agt-a', NOW + 5);
+  assert.equal(answer.record, null);
+  assert.equal(answer.sessionId, SESSION);
+  assert.equal(answer.laneId, 'agent:agt-a');
+  assert.equal(answer.atMs, NOW + 5);
+});
+
+test('an unknown session answers null outright', () => {
+  const store = new TelemetryStore();
+  assert.equal(store.getLaneContext('nope', 'main', NOW), null);
+});
+
+test("a body under a span with no agent attributes and no parent resolves to the main lane", () => {
+  const store = new TelemetryStore();
+  store.ingest('traces', [
+    span('claude_code.interaction', {}, { spanId: 'root' }),
+    subagentSpan('claude_code.llm_request', 'agt-a', {}, { spanId: 'llm-a', parentSpanId: 'root' }),
+  ]);
+  store.ingest('logs', [
+    { ...log('claude_code.api_request_body', { body: '{"main":1}', body_length: '10' }, NOW + 25), spanId: 'root' },
+  ]);
+  const main = store.getLaneContext(SESSION, 'main', NOW + 25);
+  assert.equal(main.record.text, '{"main":1}');
+  assert.equal(main.record.timeMs, NOW + 25);
+  const agent = store.getLaneContext(SESSION, 'agent:agt-a', NOW + 25);
+  assert.equal(agent.record, null, 'the main-lane body must not answer the agent lane');
+});
+
+test('a body naming no span, or a span whose parent chain resolves to nothing, resolves to unattributed', () => {
+  // Repeated for spanId 'gone' (no such span exists) and '' (no span context at all, the
+  // fixture default) — both must land on unattributed, never on main.
+  for (const spanId of ['gone', '']) {
+    const store = new TelemetryStore();
+    store.ingest('traces', [span('claude_code.interaction', {}, { spanId: 'root' })]);
+    store.ingest('logs', [
+      { ...log('claude_code.api_request_body', { body: '{"o":1}', body_length: '7' }, NOW + 400), spanId },
+    ]);
+    const unattributed = store.getLaneContext(SESSION, 'unattributed', NOW + 400);
+    assert.equal(unattributed.record.text, '{"o":1}', `spanId ${JSON.stringify(spanId)} must resolve to unattributed`);
+    const main = store.getLaneContext(SESSION, 'main', NOW + 400);
+    assert.equal(main.record, null, `spanId ${JSON.stringify(spanId)} must not resolve to main`);
+  }
+});
+
+test('a truncated body reports the untruncated length, not the delivered text\'s', () => {
+  const store = new TelemetryStore();
+  store.ingest('traces', [
+    span('claude_code.interaction', {}, { spanId: 'root' }),
+    subagentSpan('claude_code.llm_request', 'agt-a', {}, { spanId: 'llm-a', parentSpanId: 'root' }),
+  ]);
+  store.ingest('logs', [
+    {
+      ...log(
+        'claude_code.api_request_body',
+        { body: '{"m":1}', body_truncated: 'true', body_length: '120000' },
+        NOW + 50,
+      ),
+      spanId: 'llm-a',
+    },
+  ]);
+  const answer = store.getLaneContext(SESSION, 'agent:agt-a', NOW + 50);
+  assert.equal(answer.record.length, 120000);
+  assert.equal(answer.record.truncated, true);
+  assert.equal(answer.record.text, '{"m":1}');
+});
+
+test('a reported length with no body text at all answers with text null and ref null', () => {
+  const store = new TelemetryStore();
+  store.ingest('traces', [
+    span('claude_code.interaction', {}, { spanId: 'root' }),
+    subagentSpan('claude_code.llm_request', 'agt-a', {}, { spanId: 'llm-a', parentSpanId: 'root' }),
+  ]);
+  store.ingest('logs', [
+    { ...log('claude_code.api_request_body', { body_length: '900' }, NOW + 50), spanId: 'llm-a' },
+  ]);
+  const answer = store.getLaneContext(SESSION, 'agent:agt-a', NOW + 50);
+  assert.equal(answer.record.length, 900);
+  assert.equal(answer.record.text, null);
+  assert.equal(answer.record.ref, null);
+  // queryContent's predicate is what the content list is built on, and a length-only record
+  // (no body, no body_ref) does not count as "content" there — while it does still count
+  // toward the curve on getAgents. So getLaneContext cannot be built on queryContent's
+  // predicate; it has to read the raw request_body records itself.
+  assert.deepEqual(store.queryContent({ sessionId: SESSION, kinds: ['request_body'] }), []);
+});
+
+test('a body recorded as a file reference is answered with the ref, no inline text', () => {
+  const store = new TelemetryStore();
+  store.ingest('traces', [
+    span('claude_code.interaction', {}, { spanId: 'root' }),
+    subagentSpan('claude_code.llm_request', 'agt-a', {}, { spanId: 'llm-a', parentSpanId: 'root' }),
+  ]);
+  store.ingest('logs', [
+    {
+      ...log('claude_code.api_request_body', { body_ref: '/tmp/body.json', body_length: '5000' }, NOW + 50),
+      spanId: 'llm-a',
+    },
+  ]);
+  const answer = store.getLaneContext(SESSION, 'agent:agt-a', NOW + 50);
+  assert.equal(answer.record.ref, '/tmp/body.json');
+  assert.equal(answer.record.text, null);
+  assert.equal(answer.record.length, 5000);
+});
+
+test('records arriving out of order still resolve to the nearest at-or-before, not the first backwards hit', () => {
+  const store = new TelemetryStore();
+  store.ingest('traces', [
+    span('claude_code.interaction', {}, { spanId: 'root' }),
+    subagentSpan('claude_code.llm_request', 'agt-a', {}, { spanId: 'llm-a', parentSpanId: 'root' }),
+  ]);
+  store.ingest('logs', [
+    { ...log('claude_code.api_request_body', { body: '{"a":30}', body_length: '8' }, NOW + 30), spanId: 'llm-a' },
+    { ...log('claude_code.api_request_body', { body: '{"a":10}', body_length: '8' }, NOW + 10), spanId: 'llm-a' },
+    { ...log('claude_code.api_request_body', { body: '{"a":20}', body_length: '8' }, NOW + 20), spanId: 'llm-a' },
+  ]);
+  const answer = store.getLaneContext(SESSION, 'agent:agt-a', NOW + 25);
+  assert.equal(answer.record.timeMs, NOW + 20);
+  assert.equal(answer.record.text, '{"a":20}');
+});
+
+test('only request bodies answer the query, not response bodies or prompts under the same span', () => {
+  const store = new TelemetryStore();
+  store.ingest('traces', [
+    span('claude_code.interaction', {}, { spanId: 'root' }),
+    subagentSpan('claude_code.llm_request', 'agt-a', {}, { spanId: 'llm-a', parentSpanId: 'root' }),
+  ]);
+  store.ingest('logs', [
+    { ...log('claude_code.api_request_body', { body: '{"a":1}', body_length: '7' }, NOW + 10), spanId: 'llm-a' },
+    { ...log('claude_code.user_prompt', { prompt: 'hi', prompt_length: '2' }, NOW + 20), spanId: 'llm-a' },
+    { ...log('claude_code.api_response_body', { body: '{"b":2}', body_length: '7' }, NOW + 30), spanId: 'llm-a' },
+  ]);
+  const answer = store.getLaneContext(SESSION, 'agent:agt-a', NOW + 40);
+  assert.equal(answer.record.timeMs, NOW + 10);
+  assert.equal(answer.record.text, '{"a":1}');
+});

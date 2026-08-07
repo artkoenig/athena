@@ -719,6 +719,92 @@ test('the drawn data actually reaches a client over HTTP, decoded from the wire'
   });
 });
 
+test('GET /api/sessions/:id/context answers with the lane context, and the lanes payload stays free of the text', async () => {
+  await withServer({}, async ({ base }) => {
+    // Assert the ingest itself, so a failed POST reports as a failed POST rather
+    // than as a confusing empty-context assertion further down.
+    const ingestedTrace = await fetch(`${base}/v1/traces`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-protobuf' },
+      body: agentsTracePayload('s-context'),
+    });
+    assert.equal(ingestedTrace.status, 200);
+
+    const toolASpanId = '33'.repeat(8); // the tool span id agentsTracePayload uses for agt-a
+    const t = Date.now();
+    const bodyText = JSON.stringify({ messages: [{ role: 'user', content: 'needle-in-the-body' }] });
+    const reportedLength = bodyText.length + 50_000; // larger than the delivered text, on purpose
+    const ingestedLogs = await fetch(`${base}/v1/logs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: contentLogsPayloadJson('s-context', [
+        {
+          eventName: 'claude_code.api_request_body',
+          timeMs: t,
+          spanId: toolASpanId,
+          attrs: { body: bodyText, body_length: String(reportedLength) },
+        },
+      ]),
+    });
+    assert.equal(ingestedLogs.status, 200);
+
+    const lanes = await fetch(`${base}/api/sessions/s-context/agents`);
+    assert.equal(lanes.status, 200);
+    const lanesPayload = await lanes.json();
+    assert.ok(
+      !JSON.stringify(lanesPayload).includes('needle-in-the-body'),
+      'the lanes payload must not carry the whole body text',
+    );
+    const lane = lanesPayload.items.find((item) => item.id === 'agent:agt-a');
+    assert.equal(lane.context[0].length, reportedLength);
+
+    const response = await fetch(`${base}/api/sessions/s-context/context?lane=agent:agt-a&at=${t}`);
+    assert.equal(response.status, 200);
+    const result = await response.json();
+    assert.equal(result.record.text, bodyText);
+    assert.equal(result.record.length, reportedLength);
+  });
+});
+
+test('GET /api/sessions/:id/context for an unknown session is a 404', async () => {
+  await withServer({}, async ({ base }) => {
+    const response = await fetch(`${base}/api/sessions/nope/context?lane=main`);
+    assert.equal(response.status, 404);
+    assert.deepEqual(await response.json(), { error: 'unknown session' });
+  });
+});
+
+test('GET /api/sessions/:id/context without a lane is a 400', async () => {
+  await withServer({}, async ({ base }) => {
+    const ingested = await fetch(`${base}/v1/traces`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-protobuf' },
+      body: agentsTracePayload('s-context-400'),
+    });
+    assert.equal(ingested.status, 200);
+
+    const response = await fetch(`${base}/api/sessions/s-context-400/context`);
+    assert.equal(response.status, 400);
+  });
+});
+
+test('GET /api/sessions/:id/context for a lane with nothing before the bound answers with a null record', async () => {
+  await withServer({}, async ({ base }) => {
+    const ingested = await fetch(`${base}/v1/traces`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-protobuf' },
+      body: agentsTracePayload('s-context-none'),
+    });
+    assert.equal(ingested.status, 200);
+
+    const t = Date.now();
+    const response = await fetch(`${base}/api/sessions/s-context-none/context?lane=agent:agt-b&at=${t}`);
+    assert.equal(response.status, 200);
+    const result = await response.json();
+    assert.equal(result.record, null);
+  });
+});
+
 test('DELETE /api/data resets the store', async () => {
   await withServer({}, async ({ base, store }) => {
     await fetch(`${base}/v1/traces`, {

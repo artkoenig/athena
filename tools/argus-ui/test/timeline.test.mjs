@@ -901,3 +901,46 @@ test('the in-place repaint cannot drift, extended to the selected lane', () => {
   const html = timelineHtml(items, window, { atMs, selectedLaneId });
   assert.ok(html.includes(laneRowsHtml(items, window, atMs, selectedLaneId)));
 });
+
+/* ------- the lane detail panel holds the context section beside the tool listing ------- */
+
+test('the panel holds both the tool listing and the context section, context first', () => {
+  const l = lane({
+    id: 'main',
+    kind: 'main',
+    firstMs: 0,
+    lastMs: 500,
+    activity: [{ atMs: 100, kind: 'tool', name: 'Read', params: null }],
+  });
+  const body = JSON.stringify({ messages: [{ role: 'user', content: 'hi' }] });
+  const context = {
+    laneId: 'main',
+    atMs: 500,
+    status: 'ready',
+    record: { text: body, length: body.length, truncated: false, ref: null },
+  };
+  const html = laneDetailHtml([l], 500, 'main', context);
+  assert.match(html, /data-lane-detail="main"/);
+  assert.match(html, /data-lane-context="main"/);
+  assert.match(html, /data-block-kind=/);
+  assert.match(html, /Read/);
+
+  const detailIndex = html.indexOf('data-lane-detail="main"');
+  const contextIndex = html.indexOf('data-lane-context="main"');
+  const readIndex = html.indexOf('Read');
+  assert.ok(detailIndex < contextIndex, 'the panel opening tag must come before the context section');
+  assert.ok(detailIndex < readIndex, 'the panel opening tag must come before the tool listing');
+});
+
+test('laneDetailHtml still works with three arguments: the tool listing is unchanged, the context is loading', () => {
+  const l = lane({
+    id: 'main',
+    kind: 'main',
+    firstMs: 0,
+    lastMs: 500,
+    activity: [{ atMs: 100, kind: 'tool', name: 'Read', params: null }],
+  });
+  const html = laneDetailHtml([l], 500, 'main');
+  assert.match(html, /Read/);
+  assert.match(html, /data-context-state="loading"/);
+});

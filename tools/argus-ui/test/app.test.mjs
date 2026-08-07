@@ -41,6 +41,7 @@ function fakeElement(id) {
 function installFakes(routes) {
   const elements = new Map();
   const paths = [];
+  const urls = [];
   const streamListeners = {};
 
   function el(id) {
@@ -80,6 +81,7 @@ function installFakes(routes) {
 
   globalThis.fetch = async (url) => {
     paths.push(url.pathname);
+    urls.push(url);
     const route = routes[url.pathname];
     if (route === undefined) {
       return { ok: false, status: 404, statusText: 'Not Found', json: async () => ({}) };
@@ -110,7 +112,7 @@ function installFakes(routes) {
     );
   }
 
-  return { el, fire, emit, paths, settle };
+  return { el, fire, emit, paths, urls, settle };
 }
 
 let n = 0;
@@ -281,12 +283,94 @@ const agentsTwo = {
   ],
 };
 
+/** The exact text of the user message the early main-session body carries, reused by the tests. */
+const EARLY_FILE_TEXT = 'read the early file';
+/** The exact text of the tool_result the late main-session body adds. */
+const LATE_TOOL_RESULT_TEXT = 'wrote 12 lines';
+
+/**
+ * Per-lane request bodies, oldest first, matching the times already in `agentsOne`'s
+ * activity/context — the fixture the `/context` route below answers from.
+ */
+const laneBodies = {
+  main: [
+    {
+      timeMs: T0 + 500,
+      length: 20_000,
+      text: JSON.stringify({
+        system: 'You are the main session.',
+        messages: [{ role: 'user', content: EARLY_FILE_TEXT }],
+      }),
+    },
+    {
+      timeMs: T0 + 8_000,
+      length: 90_000,
+      text: JSON.stringify({
+        system: 'You are the main session.',
+        messages: [
+          { role: 'user', content: EARLY_FILE_TEXT },
+          {
+            role: 'assistant',
+            content: [{ type: 'tool_use', name: 'Write', input: { file_path: '/late.md' } }],
+          },
+          {
+            role: 'user',
+            content: [{ type: 'tool_result', tool_use_id: 'tu_1', content: LATE_TOOL_RESULT_TEXT }],
+          },
+        ],
+      }),
+    },
+  ],
+  'agent:agt-a': [
+    {
+      timeMs: T0 + 1_500,
+      length: 65_000,
+      truncated: true,
+      text: '{"model":"m","messages":[{"role":"user","content":"…',
+    },
+  ],
+  unattributed: [{ timeMs: T0 + 6_500, length: 900, text: null }],
+  'agent:agt-b': [],
+};
+
+/**
+ * `/api/sessions/sess-1/context`: a function of the request url, so the page's own query
+ * (lane, at) is what selects the answer — the entries of that lane at or before `at`,
+ * newest first, filled out with the fields a collector record carries.
+ */
+function contextRoute(url) {
+  const laneId = url.searchParams.get('lane');
+  const at = Number(url.searchParams.get('at'));
+  const entries = (laneBodies[laneId] ?? []).filter((entry) => entry.timeMs <= at);
+  const last = entries.at(-1);
+  return {
+    sessionId: 'sess-1',
+    laneId,
+    atMs: at,
+    record: last
+      ? {
+          seq: 1,
+          timeMs: last.timeMs,
+          spanId: 'span',
+          traceId: 'trace',
+          length: last.length,
+          truncated: last.truncated ?? false,
+          text: last.text,
+          ref: last.ref ?? null,
+          model: 'claude-opus-5',
+          requestId: 'req_1',
+        }
+      : null,
+  };
+}
+
 const baseRoutes = {
   '/api/config': config,
   '/api/stats': stats,
   '/api/sessions': sessionsList,
   '/api/sessions/sess-1': sessionDetail('sess-1', 'first session'),
   '/api/sessions/sess-1/agents': agentsOne,
+  '/api/sessions/sess-1/context': contextRoute,
   '/api/sessions/sess-2': sessionDetail('sess-2', null),
   '/api/sessions/sess-2/agents': agentsTwo,
 };
@@ -704,4 +788,118 @@ test('switching sessions drops the selection', async () => {
     () => handle.paths.includes('/api/sessions/sess-2/agents') && handle.el('detail').innerHTML.includes('agent:agt-c'),
   );
   assert.equal(handle.el('lane-detail').innerHTML, '');
+});
+
+/* ------- the selected lane's context at the chosen time, as a message list ------- */
+
+test('the context reaches the composed panel, beside the tool listing', async () => {
+  const handle = await bootApp({ ...baseRoutes });
+  handle.fire('detail', 'click', clickOn('[data-lane-id]', { dataset: { laneId: 'main' } }));
+  await handle.settle(() => handle.el('lane-detail').innerHTML.includes('data-context-state="ready"'));
+
+  // The in-place repaint the tool listing already uses writes only into the lane-detail
+  // element, and the fake DOM does not reflect that back into detail.innerHTML — so the
+  // composed-markup assertions below are made after the next wholesale render (an ingest
+  // tick), the way every other composed-markup case in this section already has to.
+  handle.emit('ingest');
+  await handle.settle(() => laneDetailSlice(handle.el('detail').innerHTML).includes('data-context-state="ready"'));
+
+  const slice = laneDetailSlice(handle.el('detail').innerHTML);
+  assert.match(slice, /data-lane-context="main"/);
+  assert.match(slice, /data-block-kind="system"/);
+  assert.match(slice, /data-block-kind="user"/);
+  assert.match(slice, /data-block-kind="tool_call"/);
+  assert.match(slice, /data-block-kind="tool_result"/);
+  assert.match(slice, /\/late\.md/);
+  assert.ok(handle.paths.includes('/api/sessions/sess-1/context'));
+});
+
+test('an expanded block carries the exact full text', async () => {
+  const handle = await bootApp({ ...baseRoutes });
+  handle.fire('detail', 'click', clickOn('[data-lane-id]', { dataset: { laneId: 'main' } }));
+  await handle.settle(() => handle.el('lane-detail').innerHTML.includes('data-context-state="ready"'));
+
+  handle.emit('ingest');
+  await handle.settle(() => laneDetailSlice(handle.el('detail').innerHTML).includes('data-context-state="ready"'));
+
+  const slice = laneDetailSlice(handle.el('detail').innerHTML);
+  assert.match(slice, new RegExp(`data-block-size="${EARLY_FILE_TEXT.length}"`));
+  const pre = slice.match(/<pre[^>]*>([\s\S]*?)<\/pre>/);
+  assert.ok(pre && pre[1].includes(EARLY_FILE_TEXT), 'the exact full text must be present to expand into');
+});
+
+test('moving the chosen time moves the context, in place, and it agrees with the tool listing', async () => {
+  const handle = await bootApp({ ...baseRoutes });
+  handle.fire('detail', 'click', clickOn('[data-lane-id]', { dataset: { laneId: 'main' } }));
+  await handle.settle(() => handle.el('lane-detail').innerHTML.includes('data-context-state="ready"'));
+
+  handle.fire('detail', 'input', { target: { id: 'timeline-scrub', value: String(T0 + 5_000) } });
+  await handle.settle(
+    () =>
+      handle.el('lane-detail').innerHTML.includes('data-context-state="ready"') &&
+      !handle.el('lane-detail').innerHTML.includes('data-block-kind="tool_call"'),
+  );
+  let panel = handle.el('lane-detail').innerHTML;
+  assert.match(panel, /\/early\.md/);
+  assert.ok(!panel.includes('/late.md'), 'the tool listing must agree with the context on the bound');
+  assert.match(
+    handle.el('detail').innerHTML,
+    new RegExp(`value="${T0 + 10_000}"`),
+    'the wholesale render did not run, which keeps the range input alive mid-drag',
+  );
+
+  handle.fire('detail', 'input', { target: { id: 'timeline-scrub', value: String(T0 + 9_500) } });
+  await handle.settle(() => handle.el('lane-detail').innerHTML.includes('data-block-kind="tool_call"'));
+});
+
+test('a lane with no api request at or before the chosen time says so, on the page', async () => {
+  const handle = await bootApp({ ...baseRoutes });
+  handle.fire('detail', 'click', clickOn('[data-lane-id]', { dataset: { laneId: 'agent:agt-b' } }));
+  await handle.settle(() => handle.el('lane-detail').innerHTML.includes('data-context-state="none"'));
+
+  handle.emit('ingest');
+  await handle.settle(() => laneDetailSlice(handle.el('detail').innerHTML).includes('data-context-state="none"'));
+
+  const slice = laneDetailSlice(handle.el('detail').innerHTML);
+  assert.match(slice, /no api request/i);
+  assert.ok(!slice.includes('data-block-kind='));
+  assert.ok(!slice.includes(EARLY_FILE_TEXT), 'no other lane\'s context may show through');
+});
+
+test('a truncated body is marked, on the page', async () => {
+  const handle = await bootApp({ ...baseRoutes });
+  handle.fire('detail', 'click', clickOn('[data-lane-id]', { dataset: { laneId: 'agent:agt-a' } }));
+  await handle.settle(() => handle.el('lane-detail').innerHTML.includes('data-context-state="ready"'));
+
+  handle.emit('ingest');
+  await handle.settle(() => laneDetailSlice(handle.el('detail').innerHTML).includes('data-context-state="ready"'));
+
+  const slice = laneDetailSlice(handle.el('detail').innerHTML);
+  assert.match(slice, /data-context-truncated="true"/);
+  assert.match(slice, /data-context-length="65000"/);
+});
+
+test('a reported size with no text is shown as absent, on the page', async () => {
+  const handle = await bootApp({ ...baseRoutes });
+  handle.fire('detail', 'click', clickOn('[data-lane-id]', { dataset: { laneId: 'unattributed' } }));
+  await handle.settle(() => handle.el('lane-detail').innerHTML.includes('data-context-state="absent"'));
+
+  handle.emit('ingest');
+  await handle.settle(() => laneDetailSlice(handle.el('detail').innerHTML).includes('data-context-state="absent"'));
+
+  const slice = laneDetailSlice(handle.el('detail').innerHTML);
+  assert.match(slice, /data-context-length="900"/);
+  assert.match(slice, /no body text/i);
+  assert.ok(!slice.includes('data-block-kind='));
+});
+
+test('the page asks for the selected lane at the chosen time', async () => {
+  const handle = await bootApp({ ...baseRoutes });
+  handle.fire('detail', 'click', clickOn('[data-lane-id]', { dataset: { laneId: 'agent:agt-a' } }));
+  await handle.settle(() => handle.el('lane-detail').innerHTML.includes('data-context-state="ready"'));
+
+  const url = handle.urls.find((candidate) => candidate.pathname.endsWith('/context'));
+  assert.ok(url, 'expected a request for the context route');
+  assert.equal(url.searchParams.get('lane'), 'agent:agt-a');
+  assert.equal(Number(url.searchParams.get('at')), T0 + 10_000);
 });
