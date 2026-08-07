@@ -362,6 +362,76 @@
             ],
             "questions": []
           }
+        },
+        {
+          "label": "tests:lane-select.1",
+          "at": "2026-08-07T13:13:04.618Z",
+          "return": {
+            "summary": "Added the laneDetailSlice helper and one new regression-guard test (A1), and extended the eight existing lane-selection cases (A2-A8, plus the new A1) in tools/argus-ui/test/app.test.mjs with assertions that read the composed detail markup rather than only the fake lane-detail element; per the plan's own declaration all 23 cases in the affected block pass against the current production code (node --test tools/argus-ui/test/app.test.mjs: 23/23 pass, exit 0), so none of these assertions are red — they are regression guards the plan states were missing, not new failing behaviour.",
+            "cases": [
+              {
+                "case": "A1 — the lane detail panel is part of the rendered session view, between the timeline and the technical views (new regression guard)",
+                "file": "/home/user/uroboros/tools/argus-ui/test/app.test.mjs",
+                "testName": "the lane detail panel is part of the rendered session view, between the timeline and the technical views",
+                "expected": "After clicking a lane row and settling on 'Grep' appearing in lane-detail, the composed `detail` markup contains id=\"lane-detail\" positioned after id=\"timeline-lanes\" and before role=\"tablist\", and laneDetailSlice(html) contains data-lane-detail=\"agent:agt-a\", Grep, needle and tool-call.",
+                "got": "Passes as written (node --test tools/argus-ui/test/app.test.mjs, test 15 of 23: ok). The plan stated in advance ('Already red: nothing') that this holds against today's production code, since app.js:190 already renders the container and its content into the composed markup; this run confirms that claim rather than contradicting it."
+              },
+              {
+                "case": "A2 — clicking a lane row records the selection and marks it on the timeline: add composed-markup assertions to the existing case",
+                "file": "/home/user/uroboros/tools/argus-ui/test/app.test.mjs",
+                "testName": "clicking a lane row records the selection and marks it on the timeline",
+                "expected": "All prior assertions kept; additionally laneDetailSlice(detailHtml) matches /Grep/ and /needle/, i.e. the selection reaches the composed detail markup, not only the conjured lane-detail element.",
+                "got": "Passes as written (test 17 of 23: ok), consistent with the plan's declaration that no assertion in this round goes red against current production code."
+              },
+              {
+                "case": "A3 — the unattributed lane answers too: selecting it lists its tool calls: add composed-markup assertions",
+                "file": "/home/user/uroboros/tools/argus-ui/test/app.test.mjs",
+                "testName": "the unattributed lane answers too: selecting it lists its tool calls",
+                "expected": "All prior assertions kept; additionally laneDetailSlice(handle.el('detail').innerHTML) matches /Bash/ and /ls -la/, proving the guard against a second lane of the vocabulary, not one hard-coded id.",
+                "got": "Passes as written (test 19 of 23: ok)."
+              },
+              {
+                "case": "A4 — a lane with no tool calls before the chosen time says so: tighten the negative assertion and add composed-markup assertions",
+                "file": "/home/user/uroboros/tools/argus-ui/test/app.test.mjs",
+                "testName": "a lane with no tool calls before the chosen time says so",
+                "expected": "assert.ok(!panel.includes('tool-call-name')) replaced with assert.ok(!panel.includes('tool-call')); /no tool calls/i kept; laneDetailSlice(handle.el('detail').innerHTML) matches /no tool calls/i and does not include 'tool-call', so the empty-lane answer reaches the composed page markup too.",
+                "got": "Passes as written (test 20 of 23: ok)."
+              },
+              {
+                "case": "A5 — the listing is bounded by the chosen time and follows it as it moves, repainted in place: add a pre-scrub composed-markup check and a comment explaining why post-scrub reads stay on the element",
+                "file": "/home/user/uroboros/tools/argus-ui/test/app.test.mjs",
+                "testName": "the listing is bounded by the chosen time and follows it as it moves, repainted in place",
+                "expected": "All existing assertions kept in order; immediately after the first settle, laneDetailSlice(handle.el('detail').innerHTML) matches both /\\/early\\.md/ and /\\/late\\.md/ before any scrub is fired; the post-scrub assertions keep reading handle.el('lane-detail').innerHTML directly (never a fresh composed slice), with a one-line comment stating the in-place repaint touches only the container element by design so the composed string stays frozen at the pre-scrub moment on purpose.",
+                "got": "Passes as written (test 18 of 23: ok)."
+              },
+              {
+                "case": "A6 — the selection survives new data arriving, and the panel keeps following it: add a composed-markup assertion",
+                "file": "/home/user/uroboros/tools/argus-ui/test/app.test.mjs",
+                "testName": "the selection survives new data arriving, and the panel keeps following it",
+                "expected": "All prior assertions kept; additionally laneDetailSlice(detailHtml) matches /Grep/ after the ingest-triggered wholesale re-render, proving the panel is put back into the composed markup, not only into the element.",
+                "got": "Passes as written (test 21 of 23: ok)."
+              },
+              {
+                "case": "A7 — clicking the selected lane a second time closes the panel: add composed-markup assertions for the emptied, but still-present, container",
+                "file": "/home/user/uroboros/tools/argus-ui/test/app.test.mjs",
+                "testName": "clicking the selected lane a second time closes the panel",
+                "expected": "All prior assertions kept; additionally laneDetailSlice(handle.el('detail').innerHTML) is truthy (the container stays in the page with nothing selected) and does not include 'tool-call'.",
+                "got": "Passes as written (test 22 of 23: ok)."
+              },
+              {
+                "case": "A8 — with no lane selected the session view renders as it does today: no lane detail, no aria-current, no tool-call listing: add composed-markup assertions for the resting container",
+                "file": "/home/user/uroboros/tools/argus-ui/test/app.test.mjs",
+                "testName": "with no lane selected the session view renders as it does today: no lane detail, no aria-current, no tool-call listing",
+                "expected": "All existing assertions kept; additionally html matches /id=\"lane-detail\"/, the container sits after the lane rows (data-lane-id=) and before role=\"tablist\", and laneDetailSlice(html) does not include 'lane-detail-head' (no panel body is rendered with nothing selected).",
+                "got": "Passes as written (test 16 of 23: ok)."
+              }
+            ],
+            "openQuestions": [
+              "The test plan's own review declares the suite already green against production code for every case in this round ('Already red: nothing'), which is the opposite of the usual expectation that a tester's cases start failing; I ran node --test tools/argus-ui/test/app.test.mjs and confirmed 23/23 pass, exit 0, matching that declaration exactly, so I did not treat any case as a bug to chase — flagging this so the next reader does not mistake an all-green run for a mistake on my part.",
+              "This round only touches tools/argus-ui/test/app.test.mjs; I did not run the full suite (`npm --prefix tools/argus-ui test` or `./test.sh`) since the brief reserves that for the implementer, so I cannot independently confirm the plan's claim of '89 of 89 passing' project-wide, only the 23/23 in the single file the plan names."
+            ],
+            "questions": []
+          }
         }
       ]
     },

@@ -544,12 +544,48 @@ test('the live control returns to live mode, and following actually resumes', as
 
 /* ------- selecting a lane, and its tool use up to the chosen time ------- */
 
+/**
+ * The slice of rendered detail markup that holds the lane detail panel: from the
+ * container's id to the start of the view strip that follows it. Returns '' when the
+ * container is not in the markup at all, which is the failure this guards.
+ */
+function laneDetailSlice(html) {
+  const start = html.indexOf('id="lane-detail"');
+  if (start === -1) return '';
+  const end = html.indexOf('role="tablist"', start);
+  return end === -1 ? html.slice(start) : html.slice(start, end);
+}
+
+test('the lane detail panel is part of the rendered session view, between the timeline and the technical views', async () => {
+  const handle = await bootApp({ ...baseRoutes });
+  handle.fire('detail', 'click', clickOn('[data-lane-id]', { dataset: { laneId: 'agent:agt-a' } }));
+  await handle.settle(() => handle.el('lane-detail').innerHTML.includes('Grep'));
+
+  const html = handle.el('detail').innerHTML;
+  assert.match(html, /id="lane-detail"/);
+  assert.ok(html.indexOf('id="timeline-lanes"') < html.indexOf('id="lane-detail"'));
+  assert.ok(html.indexOf('id="lane-detail"') < html.indexOf('role="tablist"'));
+
+  const slice = laneDetailSlice(html);
+  assert.match(slice, /data-lane-detail="agent:agt-a"/);
+  assert.match(slice, /Grep/);
+  assert.match(slice, /needle/);
+  assert.match(slice, /tool-call/);
+});
+
 test('with no lane selected the session view renders as it does today: no lane detail, no aria-current, no tool-call listing', async () => {
   const handle = await bootApp({ ...baseRoutes });
   assert.equal(handle.el('lane-detail').innerHTML, '');
   const html = handle.el('detail').innerHTML;
   assert.ok(!html.includes('aria-current="true"'));
   assert.ok(!html.includes('tool-call'));
+  assert.match(html, /id="lane-detail"/);
+  assert.ok(html.indexOf('data-lane-id=') < html.indexOf('id="lane-detail"'));
+  assert.ok(html.indexOf('id="lane-detail"') < html.indexOf('role="tablist"'));
+  assert.ok(
+    !laneDetailSlice(html).includes('lane-detail-head'),
+    'no panel is rendered with nothing selected',
+  );
 });
 
 test('clicking a lane row records the selection and marks it on the timeline', async () => {
@@ -564,6 +600,10 @@ test('clicking a lane row records the selection and marks it on the timeline', a
   const panel = handle.el('lane-detail').innerHTML;
   assert.match(panel, /Grep/);
   assert.match(panel, /needle/);
+
+  const rendered = laneDetailSlice(detailHtml);
+  assert.match(rendered, /Grep/);
+  assert.match(rendered, /needle/);
 });
 
 test('the listing is bounded by the chosen time and follows it as it moves, repainted in place', async () => {
@@ -573,6 +613,10 @@ test('the listing is bounded by the chosen time and follows it as it moves, repa
   assert.match(handle.el('lane-detail').innerHTML, /\/early\.md/);
   assert.match(handle.el('lane-detail').innerHTML, /\/late\.md/);
 
+  const firstRender = laneDetailSlice(handle.el('detail').innerHTML);
+  assert.match(firstRender, /\/early\.md/);
+  assert.match(firstRender, /\/late\.md/);
+
   handle.fire('detail', 'input', { target: { id: 'timeline-scrub', value: String(T0 + 5_000) } });
   assert.match(handle.el('lane-detail').innerHTML, /\/early\.md/);
   assert.ok(!handle.el('lane-detail').innerHTML.includes('/late.md'), 'a call after the chosen time must drop out');
@@ -581,6 +625,9 @@ test('the listing is bounded by the chosen time and follows it as it moves, repa
     new RegExp(`value="${T0 + 10_000}"`),
     'the wholesale render did not run, which keeps the range input alive mid-drag',
   );
+  // The in-place repaint touches only the lane-detail element by design, so the composed
+  // `detail` markup stays frozen at the pre-scrub moment on purpose; what follows the scrub
+  // is read off `handle.el('lane-detail').innerHTML`, not off a fresh composed slice.
 
   handle.fire('detail', 'input', { target: { id: 'timeline-scrub', value: String(T0 + 9_500) } });
   assert.match(handle.el('lane-detail').innerHTML, /\/late\.md/);
@@ -593,6 +640,10 @@ test('the unattributed lane answers too: selecting it lists its tool calls', asy
   const panel = handle.el('lane-detail').innerHTML;
   assert.match(panel, /Bash/);
   assert.match(panel, /ls -la/);
+
+  const rendered = laneDetailSlice(handle.el('detail').innerHTML);
+  assert.match(rendered, /Bash/);
+  assert.match(rendered, /ls -la/);
 });
 
 test('a lane with no tool calls before the chosen time says so', async () => {
@@ -601,7 +652,11 @@ test('a lane with no tool calls before the chosen time says so', async () => {
   await handle.settle(() => /no tool calls/i.test(handle.el('lane-detail').innerHTML));
   const panel = handle.el('lane-detail').innerHTML;
   assert.match(panel, /no tool calls/i);
-  assert.ok(!panel.includes('tool-call-name'));
+  assert.ok(!panel.includes('tool-call'));
+
+  const rendered = laneDetailSlice(handle.el('detail').innerHTML);
+  assert.match(rendered, /no tool calls/i);
+  assert.ok(!rendered.includes('tool-call'));
 });
 
 test('the selection survives new data arriving, and the panel keeps following it', async () => {
@@ -621,6 +676,7 @@ test('the selection survives new data arriving, and the panel keeps following it
   const detailHtml = handle.el('detail').innerHTML;
   assert.match(laneRow(detailHtml, 'agent:agt-a'), /aria-current="true"/);
   assert.match(handle.el('lane-detail').innerHTML, /Grep/);
+  assert.match(laneDetailSlice(detailHtml), /Grep/);
 });
 
 test('clicking the selected lane a second time closes the panel', async () => {
@@ -632,6 +688,10 @@ test('clicking the selected lane a second time closes the panel', async () => {
   await handle.settle(() => handle.el('lane-detail').innerHTML === '');
   assert.equal(handle.el('lane-detail').innerHTML, '');
   assert.ok(!handle.el('detail').innerHTML.includes('aria-current="true"'));
+
+  const rendered = laneDetailSlice(handle.el('detail').innerHTML);
+  assert.ok(rendered, 'the container stays in the page with nothing selected');
+  assert.ok(!rendered.includes('tool-call'));
 });
 
 test('switching sessions drops the selection', async () => {
