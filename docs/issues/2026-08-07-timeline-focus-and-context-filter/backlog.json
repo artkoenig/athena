@@ -337,6 +337,16 @@
             "questions": [],
             "summary": "No source change was needed this round: the plan's sole edit (widening the two lanePanelInput deep-equal expectations to include hidden: [] and filterOpen: false) was already committed as e8c0da0 by the round-1 test step, no file under tools/argus-ui/public/ was touched, and npm --prefix tools/argus-ui test passes 230/230 at exit 0."
           }
+        },
+        {
+          "label": "review:filter-core.1",
+          "at": "2026-08-07T15:37:11.485Z",
+          "return": {
+            "findings": [],
+            "reason": "",
+            "questions": [],
+            "summary": "Increment 1 accepted: `npm --prefix tools/argus-ui test` ran once over the whole suite, 230 cases, exit 0, nothing skipped; every criterion of the increment is met by public/context.js (entryIdOf, contextFilterEntries, visibleBlocks, contextEntryIds, hiddenAfterAll, renderContextFilter — all pure, no document/fetch/location, now guarded by a new case in test/independence.test.mjs) with only the click and change wiring in app.js (state.contextHidden, state.contextFilterOpen, both page-wide, never reset on a lane change, a scrub, a live refresh or a session change, never persisted, and neither branch fetches); the filter markup carries no data-lane and its summary no data-block, the dropdown is re-rendered open from the remembered flag so a repaint does not shut it, and each criterion has at least one case that goes red when its behaviour is removed; the only files this increment touches are app.js, context.js, styles.css and the three test files, no dependency was added, and the blast radius (lanePanelInput callers, blockChunks-based block assertions, the tool panel below, the existing change/input listeners) is clean."
+          }
         }
       ]
     },
