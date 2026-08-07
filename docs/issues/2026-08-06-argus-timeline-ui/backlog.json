@@ -1,0 +1,187 @@
+{
+  "version": 1,
+  "issue": "docs/issues/2026-08-06-argus-timeline-ui/issue.md",
+  "workflow": "agile-loop",
+  "increments": [
+    {
+      "id": "content-pipeline",
+      "title": "Content-bearing telemetry is captured by default and served over the API",
+      "goal": "Turn the content flags on by default in `argus env` and make the collector store and serve what the resulting events carry, so a caller can ask for the conversation content belonging to a point in time.",
+      "criteria": [
+        "`argus env` includes the content flags by default in both output formats: user prompts, tool details, tool content, and the flag or flags the CLI requires to emit `api_request_body`/`api_response_body` events.",
+        "The exact flag names are verified against the CLI's monitoring documentation rather than assumed.",
+        "If the current CLI turns out not to emit request/response body events at all, that is reported as an explicit finding, naming the best content the available flags do provide.",
+        "What attribution actually arrives for subagent activity and for request bodies is established and reported, including any gap, so later increments know which records can be assigned to which agent.",
+        "The collector stores the content those events carry and exposes those content-bearing records over the JSON API like the existing signals, such that the content belonging to a point in time can be asked for.",
+        "Recordings made without the content flags are out of contract: no fallback rendering, no compatibility notice, and no test pins behavior for them.",
+        "`./test.sh` is green."
+      ],
+      "status": "todo",
+      "note": "",
+      "steps": []
+    },
+    {
+      "id": "timeline-landing",
+      "title": "A session opens on the timeline, with a lane per agent",
+      "goal": "Make opening a session in the argus UI land on a timeline view that draws one lane for the main session and one per subagent across each agent's lifetime, with the existing technical views reachable from it but subordinate.",
+      "criteria": [
+        "Opening a session in the argus UI lands on the timeline view.",
+        "The previous technical views — event tail, traces, raw inspectors — remain reachable from the timeline view and are subordinate to it, not the other way round.",
+        "The timeline draws one lane for the main session and one lane per subagent the telemetry attributes.",
+        "Each agent lane spans that agent's lifetime, so any vertical slice answers which agents are running at that moment."
+      ],
+      "status": "todo",
+      "note": "",
+      "steps": []
+    },
+    {
+      "id": "lane-activity",
+      "title": "Activity and context growth drawn on each lane",
+      "goal": "Draw each lane's activity over time and, behind it, that agent's context size over time, so where token consumption grows is visible on the timeline itself.",
+      "criteria": [
+        "Each lane shows its activity over time — tool calls and API requests — placed at the times they occurred.",
+        "Each lane carries, as a curve or area behind that activity, the context size over time for that agent.",
+        "Growth in context size is readable from the timeline alone, without opening any detail."
+      ],
+      "status": "todo",
+      "note": "",
+      "steps": []
+    },
+    {
+      "id": "scrub-live",
+      "title": "Scrubbing the timeline, and a live mode that follows the head",
+      "goal": "Give the timeline a chosen time that can be moved to any point of the recorded session, plus a live mode that follows the newest data as it arrives.",
+      "criteria": [
+        "The timeline can be scrubbed backward and forward to any point of the recorded session.",
+        "A live mode follows the newest data as it arrives.",
+        "Scrubbing away from the head leaves live mode.",
+        "A control returns to live mode."
+      ],
+      "status": "todo",
+      "note": "",
+      "steps": []
+    },
+    {
+      "id": "context-at-time",
+      "title": "The selected agent's context as of the chosen time",
+      "goal": "Show, for the lane selected at the chosen time, that agent's or the main session's context at that moment as a structured, expandable message list.",
+      "criteria": [
+        "Selecting a lane at the chosen time shows that agent's — or the main session's — context as of that moment.",
+        "The context shown is the body of the nearest API request at or before the chosen time.",
+        "It is rendered as a structured message list distinguishing system prompt, user, assistant, tool call and tool result blocks.",
+        "Each block is collapsed to one line carrying its size.",
+        "Each block expands to the exact full text."
+      ],
+      "status": "todo",
+      "note": "",
+      "steps": []
+    },
+    {
+      "id": "tools-at-time",
+      "title": "The selected agent's tool use up to the chosen time",
+      "goal": "Show, for the lane selected at the chosen time, the tools that agent has used up to that moment together with the parameters of each call.",
+      "criteria": [
+        "Selecting a lane at the chosen time also shows the tools that agent has used up to that moment.",
+        "Each entry carries the tool name and that call's parameters.",
+        "The listing is per agent and per time, so \"which tools, and what for\" is answerable for any agent at any point of the session."
+      ],
+      "status": "todo",
+      "note": "",
+      "steps": []
+    }
+  ],
+  "run": {
+    "steps": [
+      {
+        "label": "decompose",
+        "at": "2026-08-07T09:12:30.164Z",
+        "return": {
+          "increments": [
+            {
+              "id": "content-pipeline",
+              "title": "Content-bearing telemetry is captured by default and served over the API",
+              "goal": "Turn the content flags on by default in `argus env` and make the collector store and serve what the resulting events carry, so a caller can ask for the conversation content belonging to a point in time.",
+              "criteria": [
+                "`argus env` includes the content flags by default in both output formats: user prompts, tool details, tool content, and the flag or flags the CLI requires to emit `api_request_body`/`api_response_body` events.",
+                "The exact flag names are verified against the CLI's monitoring documentation rather than assumed.",
+                "If the current CLI turns out not to emit request/response body events at all, that is reported as an explicit finding, naming the best content the available flags do provide.",
+                "What attribution actually arrives for subagent activity and for request bodies is established and reported, including any gap, so later increments know which records can be assigned to which agent.",
+                "The collector stores the content those events carry and exposes those content-bearing records over the JSON API like the existing signals, such that the content belonging to a point in time can be asked for.",
+                "Recordings made without the content flags are out of contract: no fallback rendering, no compatibility notice, and no test pins behavior for them.",
+                "`./test.sh` is green."
+              ],
+              "status": "todo",
+              "note": "Opening cut."
+            },
+            {
+              "id": "timeline-landing",
+              "title": "A session opens on the timeline, with a lane per agent",
+              "goal": "Make opening a session in the argus UI land on a timeline view that draws one lane for the main session and one per subagent across each agent's lifetime, with the existing technical views reachable from it but subordinate.",
+              "criteria": [
+                "Opening a session in the argus UI lands on the timeline view.",
+                "The previous technical views — event tail, traces, raw inspectors — remain reachable from the timeline view and are subordinate to it, not the other way round.",
+                "The timeline draws one lane for the main session and one lane per subagent the telemetry attributes.",
+                "Each agent lane spans that agent's lifetime, so any vertical slice answers which agents are running at that moment."
+              ],
+              "status": "todo",
+              "note": "Opening cut."
+            },
+            {
+              "id": "lane-activity",
+              "title": "Activity and context growth drawn on each lane",
+              "goal": "Draw each lane's activity over time and, behind it, that agent's context size over time, so where token consumption grows is visible on the timeline itself.",
+              "criteria": [
+                "Each lane shows its activity over time — tool calls and API requests — placed at the times they occurred.",
+                "Each lane carries, as a curve or area behind that activity, the context size over time for that agent.",
+                "Growth in context size is readable from the timeline alone, without opening any detail."
+              ],
+              "status": "todo",
+              "note": "Opening cut."
+            },
+            {
+              "id": "scrub-live",
+              "title": "Scrubbing the timeline, and a live mode that follows the head",
+              "goal": "Give the timeline a chosen time that can be moved to any point of the recorded session, plus a live mode that follows the newest data as it arrives.",
+              "criteria": [
+                "The timeline can be scrubbed backward and forward to any point of the recorded session.",
+                "A live mode follows the newest data as it arrives.",
+                "Scrubbing away from the head leaves live mode.",
+                "A control returns to live mode."
+              ],
+              "status": "todo",
+              "note": "Opening cut."
+            },
+            {
+              "id": "context-at-time",
+              "title": "The selected agent's context as of the chosen time",
+              "goal": "Show, for the lane selected at the chosen time, that agent's or the main session's context at that moment as a structured, expandable message list.",
+              "criteria": [
+                "Selecting a lane at the chosen time shows that agent's — or the main session's — context as of that moment.",
+                "The context shown is the body of the nearest API request at or before the chosen time.",
+                "It is rendered as a structured message list distinguishing system prompt, user, assistant, tool call and tool result blocks.",
+                "Each block is collapsed to one line carrying its size.",
+                "Each block expands to the exact full text."
+              ],
+              "status": "todo",
+              "note": "Opening cut."
+            },
+            {
+              "id": "tools-at-time",
+              "title": "The selected agent's tool use up to the chosen time",
+              "goal": "Show, for the lane selected at the chosen time, the tools that agent has used up to that moment together with the parameters of each call.",
+              "criteria": [
+                "Selecting a lane at the chosen time also shows the tools that agent has used up to that moment.",
+                "Each entry carries the tool name and that call's parameters.",
+                "The listing is per agent and per time, so \"which tools, and what for\" is answerable for any agent at any point of the session."
+              ],
+              "status": "todo",
+              "note": "Opening cut."
+            }
+          ],
+          "questions": [],
+          "summary": "Opening cut of the argus timeline issue into six increments, all todo, within the run's budget of eight.\n\nWhere each acceptance criterion landed. Criterion 1 (`argus env` carries the content flags, flag names verified) and criterion 2 (the collector stores and serves content-bearing records over the JSON API) both went to `content-pipeline`: turning the flags on delivers nothing until the collector keeps what arrives, and the collector cannot be shaped without knowing what the flags actually make the CLI emit, so they are one change. Criterion 9 (recordings without the content flags are out of contract, nothing tests them) is recorded there too, because the collector is the one place tempted to write a fallback; it is a standing prohibition that every later increment's review re-applies. Criterion 10 (`./test.sh` green) is likewise recorded on `content-pipeline` so the gate binds from the first increment onward, and every increment must leave it green as the price of standing on its own. Criterion 3 (the session opens on the timeline, technical views subordinate) and criterion 4 (a lane per agent, spanning its lifetime) went to `timeline-landing`. Criterion 5 (activity plus a context-size curve per lane) is `lane-activity`. Criterion 6 (scrub plus live mode) is `scrub-live`. Criterion 7 (context as a structured, expandable message list) is `context-at-time`. Criterion 8 (tools used up to that moment, with parameters) is `tools-at-time`.\n\nWhy this order. `content-pipeline` is first because it is both the load-bearing one and the one carrying the run's open questions: the exact flag names, whether the CLI emits request/response bodies at all, and how completely subagent traffic is attributed. Every UI increment depends on the answers, and if bodies turn out not to be emittable the later cut has to change — so the run has to learn that before it draws anything. I made those unknowns explicit criteria of that increment rather than questions for the human, because the issue already tells the researcher to verify them against the CLI's documentation and against the telemetry itself; nothing here needs a human decision, so `questions` is empty. Then the timeline is built outside in: the view and its lanes, the drawing inside the lanes, the time control, and finally the two detail panels that need a chosen time to mean anything.\n\nWhat I rejected. Splitting the `argus env` flags from the collector work — half of it is a config change nobody can judge. Merging `timeline-landing` with `lane-activity` — that one increment would carry the whole navigation restructure plus the lane rendering plus the context-size curve, too much for a single review, while \"the session opens on a timeline that shows which agents ran when\" is already judgeable on its own. Merging `context-at-time` with `tools-at-time` — they share the selection and the chosen time, but the message list with per-block sizes and expansion is substantial on its own, and the two answer different questions from the issue (\"what fills the context\" versus \"which tools, and what for\"); splitting them costs one extra chain and keeps both reviewable, with the tool list riding on selection plumbing the context increment will already have.\n\nOne fact the cut turns on that I do not have: how completely the telemetry attributes subagent activity. If attribution is thin, `timeline-landing` may deliver fewer lanes than hoped. Rather than guess, `content-pipeline` is cut to answer it first and report the gap, and I will re-cut the lane increments against that finding on the next call."
+        }
+      }
+    ]
+  }
+}
