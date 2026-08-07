@@ -216,7 +216,7 @@ addition for whoever touches that path next. Details in `researcher.md`
 
 ## tool-usage — Selecting a lane at a time also shows the tools used up to that moment
 
-**Status:** todo
+**Status:** done
 
 **Delivers:** The same lane-at-time selection also answers "which tools, and
 what for": every tool the agent has used up to that moment, with name and
@@ -229,3 +229,19 @@ green.
   used up to that moment, with tool name and the call's parameters, so
   "which tools, and what for" is answerable per agent and per time.
 - `./test.sh` is green.
+
+**Outcome:** Accepted on round 1 with zero findings, after one correction
+round (round 0 found the increment-6 pin on the context panel's lane wiring
+disarmed by the new single-assignment repaint; the correction re-armed it,
+and the reviewer re-ran that mutation plus three more in a sandbox — all
+four caught). Selecting a lane paints, under that lane's context, the tools
+it had called by the cursor's moment, newest first, each row with name,
+one-line preview, character count, and the parameters expandable
+(pretty-printed, capped at a declared 2000 characters with the full size on
+the row). Attribution follows increment 3's measured rule: a call belongs to
+the lane whose `spanId` it carries, span-less calls to main, computed from
+the same `spanLaneKeys` map the density badge uses. Verification: 45 page
+cases pass, and `bash test.sh` reports `PASS: all 5 suites`, exit 0 —
+nothing skipped. With this the run closes: every issue criterion is
+delivered and demonstrated. Details in `researcher.md` (Increment 7) and
+`reviewer.md` (Increment 7, rounds 0–1).

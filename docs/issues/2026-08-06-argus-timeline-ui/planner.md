@@ -408,3 +408,50 @@ replacement, and 1 ms arrow-key steps.
 Budget: 6 of at most 8 increments spent; one remains planned, with one
 increment of slack — enough to split tool-usage once if it proves larger
 than it reads, and no reason to spend the slack pre-emptively.
+
+## After increment 7
+
+**Closed.** tool-usage is `done` — the review accepted it on round 1 with
+zero findings, after one correction round. The reviewer's own words close
+the run with it: "The increment is accepted, and with it the issue."
+`bash test.sh` reports `PASS: all 5 suites`, exit 0, nothing skipped, so
+the closing criterion this increment carried is met by measurement.
+
+**The backlog is finished, not re-cut.** This was the last open increment;
+with it done, every issue criterion in the map under "The cut" (as amended
+after increment 5, when context-pinning took over the blocked
+context-inspector's criterion) has landed in exactly one accepted
+increment. There is nothing left to split, merge, reorder or sharpen, and
+inventing an eighth increment to spend the slack would be work the issue
+never asked for. The run ends at 7 of 8: six accepted increments and one
+blocked-and-succeeded pair, which is the shape the backlog now records.
+
+**What the round-0 finding confirmed, for the record.** The one correction
+round was exactly the hazard the increment-6 outcome had flagged: the new
+panel renders through the same click-to-markup path, and the first cut of
+its single-assignment repaint disarmed the increment-6 pin on the context
+panel's lane wiring (wiring the context panel to no lane went green). The
+correction re-armed it, and the reviewer re-ran that mutation himself plus
+three more — all four caught. The M-K' observation from increment 6 played
+out as predicted there: the shared path fell inside increment 7's own
+chain, where its reviewer probed it, rather than needing an increment of
+its own.
+
+**What stays out, at the end.** The recorded-not-scheduled list closes with
+the run, none of its entries ever having violated a criterion or shown a
+demonstrated failure. The two entries from this final review: the
+parameters cap at a declared 2000 characters (the criterion asks for "the
+call's parameters", not increment 6's "exact full text"; the cut is
+printed, not silent), and a session holding more than 2000 tool results
+never fetches the oldest ones (increment 3's poll and watermark, unchanged
+by this diff). Carried from earlier, unchanged: the 2000-record content
+ceilings, span-carried tool content unbudgeted, `search=` walking bodies,
+the 32 MB ingest cap, the unused `subagent_completed` end-marker, the
+mid-drag slider replacement, 1 ms arrow-key steps, the expansion set
+collapsing on a live refresh, the whole body refetched every refresh
+cycle, and the cross-boundary parameter names agreeing by reading only.
+Any of these that matters later is a new issue, with this run's handoffs
+as its evidence.
+
+Budget: 7 of at most 8 increments spent, zero remaining. The run is
+complete.
