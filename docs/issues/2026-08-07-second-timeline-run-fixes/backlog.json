@@ -292,6 +292,16 @@
             "questions": [],
             "summary": "No code change was needed: the plan's whole correction was already committed in tools/argus/test/with-collector.test.mjs by the test-author, so this step verified all five corrections against the tree and ran the two commands that count, both exit 0 (argus suite 166 cases, test-repo.sh 82 cases)."
           }
+        },
+        {
+          "label": "review:collector-fixture.1",
+          "at": "2026-08-07T23:05:37.891Z",
+          "return": {
+            "findings": [],
+            "reason": "",
+            "questions": [],
+            "summary": "Increment 5 accepted. Ran the two listed commands in one call: `npm --prefix tools/argus test --silent` — 166 cases, 0 failures, exit 0, including the seven new with-collector cases (160-166, ~9.6 s of the 78 s suite); `bash test-repo.sh` — 82 cases, 0 failures, exit 0, including the five new cases under \"an agent has a documented way to start and stop a collector\". Increment 5's non-backlog diff is exactly tools/argus/scripts/with-collector.mjs, tools/argus/test/with-collector.test.mjs, tools/argus/CLAUDE.md, the brief's new \"A live collector\" section and the test-repo.sh section; nothing outside the criteria. The way exists and is reachable (`node tools/argus/scripts/with-collector.mjs [--port <n>] -- <cmd>`, ARGUS_URL/ARGUS_PORT, SIGTERM then SIGKILL, verdict taken on the port rather than the pid, --exit-with as the backstop), the brief and tools/argus/CLAUDE.md name it, and coverage goes red if start breaks (case 160), if stop breaks (161, 162, 163, 164 — each asserts a refused connect on the port and a gone pid), or if the brief stops naming the fixture or ARGUS_URL (test-repo.sh greps). Blast radius traced: no page anywhere still tells an agent to pkill a collector; the brief's claim that the plugin ships only skills/, workflows/ and agents/ matches .claude-plugin/plugin.json; the new script's mode (100644) matches bin/argus.mjs and demo-emit.mjs. Two observations that need no round: (1) the brief's flat \"Never start a collector by hand\" sits beside skills/argus/SKILL.md, whose documented measuring procedure is `argus start --background` — a collector that must outlive one command — and it leaves an agent in a plugin-only project (no tools/argus/) with no named alternative; (2) tools/argus/README.md's Architecture listing enumerates every source file plus scripts/demo-emit.mjs and does not list scripts/with-collector.mjs, and each successful run leaves an empty /tmp/argus-with-collector-<pid>.log behind. Boundary of this review: the criteria that speak of \"the report\" (the port checked, the pages checked and corrected, where the tree differs from the issue's account) live in step returns inside backlog.json, which I do not read, so I judged them by what the tree and the diff show instead."
+          }
         }
       ]
     },
