@@ -1331,3 +1331,102 @@ acted on:
   it filters are the same objects page state holds, shared by reference with
   `buildDensity`'s marks; nothing mutates them, and U6 pins that the held array
   itself is not reordered.
+
+## Increment 7 — Round 1
+
+**No code changed this round, and none was meant to.** The plan's implementation
+section is one sentence — "One edit, in one file: `tools/argus-ui/test/page.test.mjs`"
+— and that file is a test, which the test-author had already written and
+committed at `8b5dadf` before I was dispatched. The finding was a test defect,
+not a behaviour defect: `renderLanePanel`'s single call became a concatenation of
+two, and an increment-6 pin that sliced to the first `;` swallowed the sibling
+call's arguments. The repair is entirely inside the suite. `public/` is
+byte-identical to `8b5dadf`, as the plan's module map requires ("read only,
+unchanged"). My work this round was to run the tests, confirm they pass for the
+right reason rather than by accident, and report.
+
+### Files changed
+
+Only this handoff. `git status --porcelain` over the repository is empty apart
+from it; no file under `tools/` was written, and no file under `public/` was
+opened for editing at any point.
+
+### The planned tests, and that they were already green
+
+The plan's own "what is already red" says *nothing* is, and that the correction
+"is expected to be green the moment it lands". It was. There was therefore no
+red-first state for me to observe — the state the plan predicts at `HEAD` is
+green, and it is green.
+
+What I verified instead is the thing the round exists for: that the repaired
+pins discriminate. The plan's bar is that the context panel's `key:`/`expanded:`
+wired to anything else turns the suite red while the tool panel's own arguments
+sit untouched, and the mirror for the tool panel. I checked all four mutations
+the test plan lists (F1-b, F1-c, F1-d, F1-g) **without touching the repository**:
+each run copied `tools/argus-ui/public` and `tools/argus-ui/test` into the
+scratchpad, mutated the copy, and ran `node --test test/page.test.mjs` there —
+the suite resolves `PUBLIC` from `import.meta.url`, so a copied tree works and
+the tracked `app.js` is never modified. `git status --porcelain` was empty after
+every run.
+
+| Case | Mutation, in the copy | Result |
+| --- | --- | --- |
+| F1-b | delete `key: state.selectedLane,` from the `lanePanelInput({…})` call | `not ok 35 - the panel is drawn from the lane the reader selected and the answer held for it`, 45 tests / 44 pass / 1 fail, exit 1 |
+| F1-c | `key: state.selectedLane` → `key: null`, same call | `not ok 35`, same case, 45 / 44 / 1, exit 1 |
+| F1-d | `expanded: state.expanded` → `expanded: {}`, same call | `not ok 35`, same case, 45 / 44 / 1, exit 1 |
+| F1-g | delete `key: state.selectedLane,` from the `laneToolInput({…})` call | `not ok 45 - the tool list is drawn for the selected lane, at the cursor's moment, from the calls the page holds`, 45 / 44 / 1, exit 1 |
+
+Each mutation fails exactly one case, and it is the case that owns that call: the
+context-panel mutations never touch case 45, the tool-panel mutation never
+touches case 35. That is the cross-contamination the round was called to remove,
+and it is gone. F1-a, F1-e, F1-f and F1-h are the unmutated `HEAD` run below —
+the two `assert.doesNotMatch` guards (`page.test.mjs:512-516` and `:627-631`)
+pass there, which is what F1-e and F1-h ask for.
+
+I also read the landed helper (`page.test.mjs:38-51`) and both rewritten cases
+(`:494-517`, `:617-632`) against the plan's steps 1-3: the helper sits directly
+after `detailListener` above the first section comment, the two `indexOf(';', …)`
+slices are gone, all five and all six pre-existing assertions are present with
+their messages verbatim, the `const view = laneView();` assertion still matches
+the whole function, and the two new guards are in place. The three other
+`indexOf(';', …)` slices the plan names (`wireEvents`' click listener,
+`loadLaneContext`) are untouched.
+
+### Commands run — the closed list, both from the repository root
+
+- `node --test tools/argus-ui/test/page.test.mjs` — 45 tests, 45 pass, 0 fail,
+  0 skipped, 0 todo, exit 0. Same case count as the test-author reported; the two
+  cases were rewritten, not added.
+- `bash test.sh` — five suites (`test-repo.sh`, `test-worktree.sh`,
+  `tools/argus`, `tools/argus-ui`, `tools/log-parser`), `PASS: all 5 suites`,
+  exit 0. Nothing skipped, nothing excluded.
+
+Spelled `bash test.sh`, not `./test.sh`: the plan records the file as mode
+`100644` in the tree and in `main`, so the `./` spelling exits 126 on permissions
+alone, and the plan explicitly forbids chmod-ing it as scope this increment was
+not given. The four mutation runs above are outside the closed list and were run
+against scratchpad copies, never against the repository.
+
+I ran nothing else — no linter and no formatter exist in this repository, and
+`npm --prefix tools/argus-ui test` is not on the list because `bash test.sh`
+already covers that suite.
+
+### Notes for the reviewer
+
+- **Nothing is blocked and I have no question.** The plan was complete enough
+  that its implementation section had no production work in it at all.
+- **One assertion in the landed suite carries no message**, contrary to the
+  file's own convention that the plan restates ("every `assert.match` carries a
+  message saying what breaks in the product"): `page.test.mjs:626`,
+  `assert.match(slice, /expanded:\s*state\.expanded\b/);` in the tool-list case.
+  It is pre-existing and the plan orders the six assertions kept "verbatim", so
+  the test-author was right to leave it; recorded so it reads as known. Not mine
+  to edit either way.
+- **`page.test.mjs:545-550` is still the loose whole-function `state.expanded`
+  match** the plan decided to leave alone. My F1-d run confirms the decision
+  holds: the mutation it exists for is caught by the repaired case 35, so the
+  suite loses no discrimination by its looseness.
+- **The two observations the plan carried forward stay open and out of scope**:
+  tool parameters capped at `TOOL_PARAM_CHARS` (2000), and tool calls older than
+  the 2000-event poll window never being fetched. Both are recorded upstream as
+  observations, not findings; neither is touched here.
