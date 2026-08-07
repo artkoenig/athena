@@ -42,6 +42,7 @@ flowchart LR
         REV["reviewer<br/>checks the diff against main"]
         RES --> TEST --> IMPL --> REV
         REV -.->|"findings: correction<br/>round, at most two"| RES
+        REV -.->|"every finding a direct fix:<br/>no plan, no test"| IMPL
     end
 
     REV ==>|"accepted, or<br/>two rounds spent"| CLOSE["planner<br/>closes the increment"]
@@ -57,6 +58,18 @@ and [`reviewer`](agents/reviewer.md), run by a script
 workflow `uroboros:loop`) and not by an agent, because a subagent cannot start
 another one. Findings from the
 review open a correction round; after two the loop stops and hands back.
+
+A finding says how much of the chain its correction needs. Where the
+reproduction already names the file, the line and the right result — a typo, a
+stale reference, a wrong number in prose — the reviewer marks it a direct fix,
+and a round whose findings are all direct is worked by the implementer alone,
+off the findings themselves, with the commands the last round closed. Two agents
+instead of four, and the review still runs: the fix is in the diff the next
+round judges. That is also why the reviewer never makes the fix itself — its
+own edit would reach the pull request unread, and every later round would be
+judging a diff it had written into. A remark that leaves every criterion met and
+every behaviour unchanged is no finding at all; it goes into the review's
+summary and reaches the human through the pull request, costing no round.
 
 Whether, what and how to test is decided once, by the researcher — the only
 agent that reads the codebase — in the test plan it returns. The test-author is
