@@ -23,6 +23,13 @@ run "the repository itself" \
 run "parallel runs: worktrees" \
   bash "$root/test-worktree.sh"
 
+# The backlog recorder, the only writer of a run's `backlog.json`. Named as a
+# file rather than as the `skills/agent-brief/assets` directory because
+# `node --test <dir>` resolves the bare directory as a module in this Node
+# build instead of scanning it for `*.test.mjs`.
+run "skills/agent-brief/assets: the backlog recorder" \
+  node --test "$root/skills/agent-brief/assets/backlog.test.mjs"
+
 # Through the package's own `test` script rather than a `node --test` line
 # repeated here, so the suite this runs stays the suite the tool declares.
 # Zero-dependency, so no install step is needed first.

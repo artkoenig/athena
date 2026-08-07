@@ -26,8 +26,12 @@ When invoked to run a retro for an issue, follow these steps:
      - Where did the agent apply rules too rigidly or incorrectly, causing unnecessary overhead?
 
    - **Subagent Efficiency & Delegation**
-     - Did delegating to subagents conserve context, or was the handoff/briefing overhead larger than the gain?
+     - Did delegating to subagents conserve context, or was the briefing overhead larger than the gain?
      - Were there redundancies or repeated research between the main conversation and subagent runs?
+
+   A run of either workflow leaves the session log, the issue directory's
+   `backlog.json` and the git history, and those are the whole record: no agent
+   writes a prose report of its own, so do not go looking for one.
 
    - **Specification & Planning Quality**
      - Were all critical requirement gaps uncovered upfront during grilling/specifying, or did ambiguities surface late during implementation?

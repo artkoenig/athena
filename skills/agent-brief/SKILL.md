@@ -1,6 +1,6 @@
 ---
 name: agent-brief
-description: The rules every uroboros subagent works by, whatever its role — how it takes its brief, how it spends its tools, how it reports a command run, how it writes and commits its handoff, and the check mode that makes it enumerate its startup context instead of working. The researcher, test-author, implementer and reviewer preload it, so it reaches them wherever uroboros is installed; a session has no use for it.
+description: The rules every uroboros subagent works by, whatever its role — how it takes its brief, how it spends its tools, how it reports a command run, how it records, commits and pushes its step return, and the check mode that makes it enumerate its startup context instead of working. Every uroboros agent preloads it, so it reaches them wherever uroboros is installed; a session has no use for it.
 ---
 
 # The shared brief
@@ -12,21 +12,27 @@ repeat it. Where the two disagree about your role, your page wins.
 ## What holds whatever you were dispatched for
 
 **Write English.** Everything you land in the repository is English, whatever
-language the issue is in: your handoff, your code comments, your commit
+language the issue is in: your step return, your code comments, your commit
 messages.
 
-**Commit, never push.** You commit your work where your page says to. Pushing
-belongs to your caller, and the default branch moves only through a pull
-request a human merges.
+**Commit your step, then push it.** You commit your work where your page says
+to, and you push that commit straight away — an unpushed commit dies with the
+container that made it, and the run state it carries dies with it. Retry a
+failed `git push` up to four times, waiting 2s, 4s, 8s and 16s; a push that
+still fails is a line in your return's summary, not a stopped step. The default
+branch moves only through a pull request a human merges, and opening that pull
+request is your caller's, never yours.
 
 ## Your brief
 
-Your caller gives you the issue directory under `docs/issues/`. Your page
-names the files in it you may read, and those are everything you get: nothing
-about the project reaches you except through them, and a fact your brief omits
-is a fact you do not have. Where you need one it does not carry, write the gap
-into your handoff as a question and return; do not go looking for it, and do
-not guess.
+Your caller gives you the issue directory under `docs/issues/`, and your prompt
+carries the slice of the earlier steps' returns your role needs. That prompt
+and the files your page names are everything you get: nothing about the project
+reaches you except through them, and a fact your brief omits is a fact you do
+not have. Where you need one it does not carry, put the gap in your return's
+`questions` and return; do not go looking for it, and do not guess. A
+non-empty `questions` ends the run and puts the gap to the human, so keep it
+for decisions only a human can make.
 
 Paths are inferred, never handed to you beyond that directory. An agent that
 needs the history runs `git log` itself.
@@ -65,33 +71,42 @@ Report the command, what it covered, and its exit code — "`npm test --
 src/api`, 104 cases, exit 0", never "green" alone. Say so if a run skipped or
 excluded anything.
 
-## Your handoff
+## Your step return
 
-Write it as a Markdown file in the issue directory, under the name your page
-gives it, and commit it with whatever else you produced. Write it out in full:
-no placeholders, no summaries that drop detail.
+You return one structured object, and your page names its fields. That object
+is the whole channel: your caller hands the next role the slice of it that role
+needs, and nothing else you produce reaches anyone. So the substance goes in
+the fields, in full — no placeholders, no summaries that drop detail — and no
+file of your own carries it.
 
-One role writes one file, however many times it is dispatched. On a second
-dispatch you do not start a second file and you do not rewrite the first: open
-the file your page names, append the section your prompt names — `## Round 1`,
-`## Increment 2 — Round 1`, whatever heading it gives you — and leave every
-earlier section exactly as it stands. The file grows with the run, so a reader
-pointed at it gets the whole history of that role and never has to work out
-which copy is current.
+Every word of it is context the next agent pays for. So put one instruction in
+one sentence, write that sentence in the imperative, and state each thing once:
+two wordings of one rule disagree after the first edit, and the reader follows
+whichever it saw last.
 
-Reading someone else's file follows from that: the section your prompt points
-you at is what binds now, and where it points at none, the last section does.
-Everything above it is how the change got here — context you may consult, never
-a work order you carry out again.
+**Record it before you finish.** Write your return to a JSON file outside the
+repository, then run
 
-It is the next agent's whole brief, and every word in it is context that agent
-pays for. So put one instruction in one sentence, write that sentence in the
-imperative, and state each rule once — two wordings of one rule disagree after
-the first edit, and the reader follows whichever it saw last.
+```
+node "<base>/assets/backlog.mjs" record <issueDir>/backlog.json <incrementId> <label> <thatFile>
+```
 
-Then return what your caller needs to pick the next step — the path of the
-file, one sentence, and whatever else your page names. The file carries the
-rest.
+with the increment id and the label your prompt gives you. `<base>` is the base
+directory of the `agent-brief` skill, which your context names on its `Base
+directory for this skill:` line; where no such line is there, find the helper
+with `find "$HOME/.claude/plugins" -path '*agent-brief/assets/backlog.mjs' |
+head -1`. That helper is the only writer of `backlog.json`, so you never edit
+that file by hand.
+
+`backlog.json` is the whole durable state of the run: a session that dies
+resumes from it, a step it holds is never worked twice, and a step it does not
+hold is worked again from the start. Record your step, commit it with your
+work, and push the commit.
+
+A step you work again may meet what its interrupted first run
+already committed: tests that exist and fail, code that half-exists. Read the
+working tree and `git log` before you start, then finish or correct what is
+there instead of writing it a second time.
 
 ## You do not hand over
 
