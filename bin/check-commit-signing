@@ -1,0 +1,101 @@
+#!/bin/bash
+# Checks that a commit this repository's signing configuration asks to be
+# signed can actually be signed, before an agent does any work. Every agent
+# commits its step return, so a signing misconfiguration costs a whole
+# agent's work — the commit fails at the end, after the thinking is done and
+# with nowhere to put it. Making a throwaway signed commit up front turns
+# that into a message you get before the work rather than after it.
+#
+# Nothing here writes outside its own temporary directory: the repository the
+# check guards is only ever read from. Exit 0 = signed fine, or signing is
+# not configured for this run; exit 1 = configured but broken.
+set -u
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# The effective configuration of the repository under test — what git would
+# use for a commit made in this checkout, global and system config included.
+# `git config --get` exits 1 for a key that is not set, so every read is
+# allowed to come back empty.
+cfg() { git -C "$root" config --get "$1" 2>/dev/null || true; }
+
+gpgsign="$(cfg commit.gpgsign)"
+format="$(cfg gpg.format)"
+signingkey="$(cfg user.signingkey)"
+program="$(cfg gpg.program)"
+ssh_program="$(cfg gpg.ssh.program)"
+ssh_key_command="$(cfg gpg.ssh.defaultKeyCommand)"
+user_name="$(cfg user.name)"
+user_email="$(cfg user.email)"
+
+# The decision is keyed on commit.gpgsign alone, because that is the setting
+# git itself uses to decide whether a plain `git commit` signs. A machine
+# that carries a user.signingkey in its global config with signing switched
+# off is one where no agent commit will be signed, and failing there would
+# make this check cry wolf on every such machine.
+if [ "$(git -C "$root" config --get --bool commit.gpgsign 2>/dev/null || true)" != "true" ]; then
+  echo "SKIP: commit signing is not configured here — commit.gpgsign is not true, so no agent commit will be signed"
+  exit 0
+fi
+
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+
+git init -q -b signing-check "$tmp/repo"
+
+# Copied into the throwaway repository's local config rather than left to be
+# inherited: it picks up global and system config by itself, but not the
+# repository-local config of the checkout an agent commits in — which a
+# worktree shares. Copying the effective values makes this the commit the
+# agent will actually make.
+set_local() { [ -n "$2" ] && git -C "$tmp/repo" config "$1" "$2"; }
+
+set_local commit.gpgsign "$gpgsign"
+set_local gpg.format "$format"
+set_local user.signingkey "$signingkey"
+set_local gpg.program "$program"
+set_local gpg.ssh.program "$ssh_program"
+set_local gpg.ssh.defaultKeyCommand "$ssh_key_command"
+set_local user.name "$user_name"
+set_local user.email "$user_email"
+
+# An identity of last resort, so the commit below cannot fail for a missing
+# name or email instead of for signing.
+[ -n "$user_name" ] || git -C "$tmp/repo" config user.name "Uroboros signing check"
+[ -n "$user_email" ] || git -C "$tmp/repo" config user.email "signing-check@example.invalid"
+
+echo "signing check" >"$tmp/repo/file.txt"
+git -C "$tmp/repo" add file.txt
+commit_out="$(git -C "$tmp/repo" commit -m "signing check" 2>&1)"
+commit_code=$?
+
+# What is misconfigured, one setting per line, so the message names the thing
+# to change rather than only the symptom.
+report() {
+  value() { if [ -n "$1" ]; then printf '%s' "$1"; else printf '(unset)'; fi; }
+  {
+    echo "FAIL: $1"
+    echo "  commit.gpgsign = $(value "$gpgsign")"
+    echo "  gpg.format = $(value "$format")"
+    echo "  user.signingkey = $(value "$signingkey")"
+    echo "  gpg.program = $(value "$program")"
+    echo "  gpg.ssh.program = $(value "$ssh_program")"
+    echo "  git said:"
+    printf '%s\n' "$commit_out" | while IFS= read -r line; do echo "    $line"; done
+  } >&2
+}
+
+if [ "$commit_code" -ne 0 ]; then
+  report "commit signing is configured but signing a commit failed"
+  exit 1
+fi
+
+# A commit git reports as made but that carries no signature header is the
+# silent version of the same failure.
+if ! git -C "$tmp/repo" cat-file commit HEAD | grep -q '^gpgsig'; then
+  report "git reported success but the commit carries no signature"
+  exit 1
+fi
+
+echo "OK: a signed commit succeeded in a throwaway repository"
+exit 0

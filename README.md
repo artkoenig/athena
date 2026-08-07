@@ -266,8 +266,9 @@ procedure. It all runs on your own machine — no account, no third-party servic
 
 ## Tests
 
-`bash test.sh` — five suites, one command: the repository's own rules, what a
-parallel run in a worktree needs, and the three tools.
+`bash test.sh` — every suite, one command: that commit signing works here, the
+repository's own rules, what a parallel run in a worktree needs, the backlog
+recorder, and the three tools.
 
 ## Licence
 

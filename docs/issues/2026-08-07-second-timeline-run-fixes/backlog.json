@@ -234,6 +234,28 @@
             "questions": [],
             "summary": "Wrote /home/user/uroboros/test-signing.sh, a hand-rolled bash suite copying test-worktree.sh's header/helpers/footer verbatim, with all 12 planned cases (16 ok/no assertions) spawning the real bin/check-commit-signing under a fabricated HOME/TMPDIR/GIT_CONFIG_GLOBAL/GIT_CONFIG_SYSTEM against fabricated bad-signer/good-signer fakes and gitconfigs, exactly as the plan specified verbatim scripts and config shapes. `bash test-signing.sh` from the repository root: 16 cases, 11 FAIL / 5 ok, exit 1 — every failure is bin/check-commit-signing not existing (exit 127, 'No such file or directory'), which is the plan's own predicted already-red state; the 5 passing cases are the three 'leaves no temporary directory/process/repository-status-change behind' assertions that hold vacuously when nothing runs, which the plan's own fixtures make true either way. I additionally built a throwaway, uncommitted stub implementation matching the research plan's spec, copied it to bin/check-commit-signing together with the two run lines in test.sh, reran test-signing.sh and got all 16 cases green (exit 0) confirming the assertions are not tautological, then deleted the stub and reverted test.sh via git checkout — git status --porcelain now shows only test-signing.sh untracked, no other file touched. I did not write or touch bin/check-commit-signing or test.sh; those are the implementer's to write. What is left untested is exactly what the plan marked out of scope: the copy of repository-local signing config into the throwaway repository, the defensive 'git reported success but no signature' branch, the live environment's own run.\"test.sh\" entry, and a gpg-agent daemon started outside the sandbox path."
           }
+        },
+        {
+          "label": "implement:signing-check.0",
+          "at": "2026-08-07T23:25:25.816Z",
+          "return": {
+            "deviations": [],
+            "commands": [
+              {
+                "command": "bash test-signing.sh",
+                "exitCode": 0,
+                "note": "16 cases, all pass. Run before the change it was 11 of 16 red with code=127 (the checker did not exist); the only non-checker case, the test.sh registration grep, went green with the test.sh edit."
+              },
+              {
+                "command": "bash test.sh",
+                "exitCode": 0,
+                "note": "All 8 suites pass, nothing skipped or excluded: commit signing in this environment (OK, the configured path), the commit-signing check itself (16 cases), the repository itself (82), worktrees (4), the backlog recorder, tools/argus, tools/argus-ui, tools/log-parser. Run with /opt/node22/bin on PATH so npm resolves."
+              }
+            ],
+            "blockers": [],
+            "questions": [],
+            "summary": "Added bin/check-commit-signing (mode 755), which skips with exit 0 when commit.gpgsign is not true and otherwise makes a signed commit in a throwaway repository seeded with the checkout's effective signing config, failing with exit 1 and a block naming commit.gpgsign, gpg.format, user.signingkey, gpg.program, gpg.ssh.program and git's own output; registered it and test-signing.sh as the first two run entries in test.sh; replaced the stale suite count in README.md's Tests section with what the command covers."
+          }
         }
       ]
     },

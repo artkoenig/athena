@@ -17,6 +17,15 @@ run() {
   echo
 }
 
+# First, because every agent commits its step return: a signing
+# misconfiguration costs a whole agent's work, and this is the one line of
+# output that says so before the work rather than after it.
+run "commit signing in this environment" \
+  bash "$root/bin/check-commit-signing"
+
+run "the commit-signing check itself" \
+  bash "$root/test-signing.sh"
+
 run "the repository itself" \
   bash "$root/test-repo.sh"
 
