@@ -288,6 +288,32 @@
             ],
             "questions": []
           }
+        },
+        {
+          "label": "implement:tabs-out.0",
+          "at": "2026-08-07T18:27:08.446Z",
+          "return": {
+            "summary": "Deleted the six pre-timeline tabs from tools/argus-ui — DETAIL_VIEWS and renderDetailViews from timeline.js, the nine renderers, six helpers, eight state fields, wiring and per-refresh fetches from app.js, the rules only those renderers could emit from styles.css, and the bullets that promised them from README.md — with both named commands green at exit 0.",
+            "deviations": [
+              "The plan's step 3 (run the planned tests first and confirm they fail for the right reason) could not be performed: this step was resumed after a session restart, and HEAD (c1a9dc2, 'Increment 4: the six technical tabs go out of the code') already carried the full edit that the interrupted first run had finished but not committed. I verified the committed tree against the plan clause by clause instead of re-deriving it, and confirmed the seventeen planned cases pass. No test file was written or edited by me.",
+              "`./test.sh` exits 126 (Permission denied) in this sandbox — the file is committed without the executable bit. I ran the same script as `bash test.sh`, which is the same 6 suites and exits 0. Flagged rather than chmod'd: changing the file mode is outside this increment's scope.",
+              "One byte beyond the committed tree: reflowed the README **Timeline** bullet, where deleting the clause '; the views below it are reachable from there' had left a ragged two-word line ('returns to. Clicking a lane' / 'opens that agent's context…'). Prose only, in the exact bullet the plan named, no wording changed."
+            ],
+            "commands": [
+              {
+                "command": "npm --prefix tools/argus-ui test",
+                "exitCode": 0,
+                "note": "234 cases over config/context/independence/page/server/timeline, 0 fail, 0 skipped. Includes all seventeen new cases of this increment."
+              },
+              {
+                "command": "bash test.sh",
+                "exitCode": 0,
+                "note": "The repository-wide gate: 6 suites (test-repo.sh, test-worktree.sh, the backlog recorder, argus, argus-ui, log-parser), all pass, none skipped. Invoked as `bash test.sh` because `./test.sh` exits 126 — the script lacks its executable bit in this checkout."
+              }
+            ],
+            "blockers": [],
+            "questions": []
+          }
         }
       ]
     }
