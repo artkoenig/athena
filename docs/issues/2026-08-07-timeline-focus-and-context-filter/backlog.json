@@ -256,6 +256,22 @@
             ],
             "questions": []
           }
+        },
+        {
+          "label": "review:filter-core.0",
+          "at": "2026-08-07T15:26:07.556Z",
+          "return": {
+            "findings": [
+              {
+                "claim": "The suite is red: adding `hidden` and `filterOpen` to `lanePanelInput`'s return broke two existing deep-equal cases that were green before this increment.",
+                "reproduction": "Run `npm --prefix tools/argus-ui test`: exit 1, 230 cases, 228 pass, 2 fail. `not ok 53 - the panel input is built from the lane whose key the reader selected` at tools/argus-ui/test/context.test.mjs:670 (assert.deepEqual at line 679 expects `{ lane, item, pending: false, expanded: ['12:0'] }`, actual now also carries `filterOpen: false, hidden: []`) and `not ok 54 - a key no lane carries, and no key at all, leave nothing to draw` at tools/argus-ui/test/context.test.mjs:695 (assert.deepEqual at line 704 expects `{ lane: null, item: null, pending: true, expanded: [] }`, actual now also carries `filterOpen: false, hidden: []`). Cause is tools/argus-ui/public/context.js:381 — `return { lane, ...laneContextInput(key, held), expanded, hidden, filterOpen }`. The two expectations must be widened to the builder's new shape, keeping what they pin (lane lookup by key, and the no-lane/no-key defaults).",
+                "criterion": "`npm --prefix tools/argus-ui test` passes after this increment"
+              }
+            ],
+            "reason": "The context filter itself is built and covered, but the suite does not pass: widening the lane panel's input value with the hidden set and the open flag left two older whole-object assertions on `lanePanelInput` asserting the old four-key shape, so two cases fail.",
+            "questions": [],
+            "summary": "Reviewed the whole increment-1 diff (context.js filter derivation and markup, app.js state and click/change wiring, styles.css, the new context/page/independence cases) against the ten criteria; `npm --prefix tools/argus-ui test` covered 230 cases and exited 1 with 2 failures, both caused by this change, and every other criterion is met and has a test that would go red if its behaviour were removed."
+          }
         }
       ]
     },
