@@ -462,6 +462,16 @@
             "questions": [],
             "summary": "No production or test file changed this round: the test-author's guards had already landed and the production code was already right, so I verified the planned cases pass for the right reason (90 of 90, exit 0) and proved the new assertions catch the deleted lane-detail container that previously slipped through."
           }
+        },
+        {
+          "label": "review:lane-select.1",
+          "at": "2026-08-07T13:20:09.452Z",
+          "return": {
+            "findings": [],
+            "reason": "",
+            "questions": [],
+            "summary": "Ran the one listed command, `npm --prefix tools/argus-ui test` (90 cases, exit 0, nothing skipped); the diff meets all eight lane-select criteria — the selection lives in `state.selectedLaneId` beside `state.atMs`, lane ids are the existing `main`/`agent:<id>`/`unattributed` keys, tool parameters are newly exposed on the span-derived activity entry (joined by `tool_use_id`, so attribution stays the span's lane) and stated in `tools/argus/README.md`, the listing is inclusive-bounded by the chosen time, the scrub path repaints only `#lane-detail` so the range input survives a drag, main/subagent/unattributed/empty lanes all answer, and the rendered-markup tests in `app.test.mjs` assert the panel's container and content inside the composed detail markup rather than only the builder. Blast radius checked: parameters are attached before `thinEvenly`, so the cap does not drop them; `.lane-row` becoming a `<button>` follows the existing `.span-row` pattern and, under the global `box-sizing: border-box`, its new 1px transparent border shifts the track column by about 1px against the scrub slider — visually immaterial; no caller, document or adjacent behaviour is left stale. Two facts, neither a defect of this change: `tools/argus/src/store.mjs` and `tools/argus/test/store.test.mjs` changed but the collector suite `npm --prefix tools/argus test` was not on the command list, so I did not run it; and `scripts/demo-emit.mjs` emits `claude_code.tool_result` without `tool_input`, so a demo session renders every call as 'no parameters recorded' — that was already true before this increment and no criterion asks the emitter to carry parameters."
+          }
         }
       ]
     },
