@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 const PUBLIC = fileURLToPath(new URL('../public/', import.meta.url));
 const TEST_DIR = fileURLToPath(new URL('./', import.meta.url));
+const PROJECT = fileURLToPath(new URL('../', import.meta.url));
 
 /** Every file under public/, recursively. */
 function walk(dir, found = []) {
@@ -68,58 +69,6 @@ test('app.js imports the timeline module, and index.html loads app.js as a modul
     (tag) => /src=["']\/app\.js["']/.test(tag) && /type=["']module["']/.test(tag),
   );
   assert.ok(loadsAppAsModule, 'index.html must load /app.js as a module, so its import of timeline.js can resolve');
-});
-
-test('the page loads with no technical view open', () => {
-  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
-  const start = appJs.indexOf('const state = {');
-  assert.ok(start >= 0, 'app.js must still declare the state literal');
-  const end = appJs.indexOf('\n};', start);
-  assert.ok(end >= 0, 'the state literal must still close with `\\n};`');
-  const stateSlice = appJs.slice(start, end);
-
-  assert.match(
-    stateSlice,
-    /\btab:\s*null\b/,
-    'the initial state must open on the timeline, with no technical view selected',
-  );
-  assert.doesNotMatch(
-    stateSlice,
-    /\btab:\s*['"]/,
-    'a string default (e.g. "overview") would open a technical view on load instead of the timeline',
-  );
-});
-
-test('selecting a session returns to the timeline', () => {
-  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
-  const selectSession = functionSource(appJs, 'selectSession');
-
-  assert.match(
-    selectSession,
-    /state\.tab\s*=\s*null/,
-    'every session must open on its timeline, whatever technical view the previous session was left on',
-  );
-});
-
-test('the timeline is rendered above the technical views', () => {
-  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
-  const renderDetail = functionSource(appJs, 'renderDetail');
-
-  const timelineIdx = renderDetail.indexOf('renderTimeline(');
-  assert.ok(timelineIdx >= 0, 'renderDetail must call renderTimeline(...)');
-  const viewsIdx = renderDetail.indexOf('renderDetailViews(');
-  assert.ok(viewsIdx >= 0, 'renderDetail must call renderDetailViews(...)');
-  const tabBodyIdx = renderDetail.indexOf('id="tab-body"');
-  assert.ok(tabBodyIdx >= 0, 'renderDetail must render the tab-body container');
-
-  assert.ok(
-    timelineIdx < viewsIdx,
-    'the timeline must be composed before the technical-views nav, so it sits above it',
-  );
-  assert.ok(
-    viewsIdx < tabBodyIdx,
-    'the technical-views nav must be composed before the tab-body container it controls',
-  );
 });
 
 // Criterion 4 — the UI no longer advises a flag argus env sets by default.
@@ -334,10 +283,6 @@ test('the scrub control\'s input reaches the scrub', () => {
   const slice = detailListener(appJs, 'input');
   assert.match(slice, /timeline-scrub/, 'the slider must route its input event to the scrub, or dragging it does nothing');
   assert.match(slice, /scrubTo\(/, 'a drag must call scrubTo with the control it came from');
-  assert.ok(
-    slice.indexOf('timeline-scrub') < slice.indexOf('event-search'),
-    'the slider branch must come before the event-search early return, which would otherwise swallow it',
-  );
 });
 
 test('a drag is registered before the next refresh can fire', () => {
@@ -370,15 +315,13 @@ test('app.js takes the context panel from its module', () => {
   }
 });
 
-test('the context panel has a container of its own, between the timeline and the technical views', () => {
+test('the context panel has a container of its own, below the timeline', () => {
   const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
   const renderDetail = functionSource(appJs, 'renderDetail');
   assert.ok(renderDetail.includes('id="lane-panel"'), 'renderDetail must render a container for the lane panel');
   const timelineIdx = renderDetail.indexOf('renderTimeline(');
   const panelIdx = renderDetail.indexOf('id="lane-panel"');
-  const viewsIdx = renderDetail.indexOf('renderDetailViews(');
   assert.ok(timelineIdx >= 0 && timelineIdx < panelIdx, 'the lane panel must sit after the timeline');
-  assert.ok(panelIdx >= 0 && panelIdx < viewsIdx, 'the lane panel must sit before the technical-views nav');
 });
 
 test('a full render repaints the panel', () => {
@@ -736,5 +679,330 @@ test('the selection survives a lane change and a session change', () => {
     click,
     /state\.contextHidden\s*=\s*new Set\(\)/,
     'the lane-change branch resets state.expanded and must leave the filter selection alone',
+  );
+});
+
+// Increment 4 — the six technical tabs go out of the code.
+
+// Criterion 1 — DETAIL_VIEWS and renderDetailViews are gone, and no tab nav is
+// rendered anywhere. (the timeline module's own half of this is in timeline.test.mjs)
+
+test('no file under public renders a tab nav', () => {
+  const needles = ['data-tab', 'role="tablist"', 'tab-body', 'class="tabs"', 'aria-label="Technical views"'];
+  const problems = [];
+  for (const file of walk(PUBLIC)) {
+    const source = fs.readFileSync(file, 'utf8');
+    const relative = path.relative(PUBLIC, file);
+    for (const needle of needles) {
+      if (source.includes(needle)) problems.push(`${relative} names ${needle}`);
+    }
+  }
+  assert.deepEqual(problems, [], 'no file under public/ may render, style or wire a tab nav that no longer exists');
+});
+
+// Criterion 2 — the renderers, helpers, container and state fields are gone
+// from app.js.
+
+test('app.js declares none of the tab renderers', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const names = [
+    'renderTabBody',
+    'renderOverviewTab',
+    'renderTodosTab',
+    'renderTracesTab',
+    'renderWaterfall',
+    'renderSpanInspector',
+    'renderEventsTab',
+    'renderMetricsTab',
+    'renderRawTab',
+    'loadTabData',
+    'kpi',
+    'formatValue',
+    'spanKind',
+    'spanNote',
+    'todoStatusChip',
+  ];
+  const problems = [];
+  for (const name of names) {
+    if (appJs.includes(`function ${name}(`) || appJs.includes(`async function ${name}(`)) {
+      problems.push(`app.js still declares ${name}()`);
+    }
+  }
+  if (/\bSPAN_KINDS\b/.test(appJs)) problems.push('app.js still names SPAN_KINDS');
+  assert.deepEqual(problems, [], 'a renderer or helper only the removed tabs used must go with them');
+});
+
+test('the page state carries no tab, trace, event or metric field', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const start = appJs.indexOf('const state = {');
+  assert.ok(start >= 0, 'app.js must still declare the state literal');
+  const end = appJs.indexOf('\n};', start);
+  assert.ok(end >= 0, 'the state literal must still close with `\\n};`');
+  const stateSlice = appJs.slice(start, end);
+
+  const literalFields = [
+    /\btab:/,
+    /\btrace:/,
+    /\bselectedTraceId:/,
+    /\bselectedSpanId:/,
+    /\bevents:/,
+    /\beventFilters:/,
+    /\bmetrics:/,
+    /\bfacets:/,
+  ];
+  for (const re of literalFields) {
+    assert.doesNotMatch(stateSlice, re, `the state literal must carry no field matching ${re} — the tabs took it with them`);
+  }
+
+  // The whole-file half is what catches a field taken out of the literal but
+  // still written to somewhere else — a leak the literal alone cannot see.
+  const wholeFileFields = [
+    /\bstate\.tab\b/,
+    /\bstate\.trace\b/,
+    /\bstate\.selectedTraceId\b/,
+    /\bstate\.selectedSpanId\b/,
+    /\bstate\.events\b/,
+    /\bstate\.eventFilters\b/,
+    /\bstate\.metrics\b/,
+    /\bstate\.facets\b/,
+  ];
+  for (const re of wholeFileFields) {
+    assert.doesNotMatch(appJs, re, `app.js must read or write no field matching ${re} anywhere, not merely in the literal`);
+  }
+
+  // The deletion must not take the context filter's own state with it.
+  assert.match(stateSlice, /\bcontextHidden:\s*new Set\(\)/, 'the context filter\'s hidden set must survive the deletion');
+  assert.match(stateSlice, /\bcontextFilterOpen:\s*false\b/, 'the context filter\'s open flag must survive the deletion');
+});
+
+// Criterion 3 — the wiring is gone, and the interval no longer repaints a tab
+// body.
+
+test('the click handler acts on no tab, trace, span or event row', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const slice = detailListener(appJs, 'click');
+  for (const re of [/data-tab/, /data-trace/, /data-span/, /data-event-seq/, /data-detail-seq/]) {
+    assert.doesNotMatch(slice, re, `the click handler must act on no ${re} branch the removed tabs left behind`);
+  }
+  assert.match(slice, /data-lane/, 'the lane-selection branch must survive the removal, not be taken out with it');
+  assert.match(slice, /data-ctx-all/, 'the context filter\'s all on / all off branch must survive the removal');
+  assert.match(
+    slice,
+    /summary\[data-ctx-filter\]/,
+    'the context filter\'s dropdown-toggle branch must survive the removal',
+  );
+});
+
+test('the change handler is the filter\'s alone', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const slice = detailListener(appJs, 'change');
+  assert.doesNotMatch(slice, /event-filter/, 'the removed events tab\'s event-name filter must go from the change handler');
+  assert.doesNotMatch(slice, /event-errors/, 'the removed events tab\'s errors-only toggle must go from the change handler');
+  assert.match(slice, /input\[data-ctx-entry\]/, 'the context filter\'s checkbox branch must survive the removal');
+  assert.match(slice, /renderLanePanel\(/, 'the context filter\'s repaint must survive the removal');
+});
+
+test('the input handler is the scrub\'s alone', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const slice = detailListener(appJs, 'input');
+  assert.doesNotMatch(slice, /event-search/, 'the removed events tab\'s search box must go from the input handler');
+  assert.doesNotMatch(slice, /searchTimer/, 'the debounce timer only the events search used must go with it');
+  assert.match(slice, /timeline-scrub/, 'the scrub branch must survive the removal');
+  assert.match(slice, /scrubTo\(/, 'the scrub branch must survive the removal');
+});
+
+test('the slow interval repaints the session list and nothing else', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const boot = functionSource(appJs, 'boot');
+  assert.match(boot, /setInterval\(/, 'boot must still schedule the slow repaint');
+  assert.match(boot, /renderSessionList\(\)/, 'the slow repaint must still refresh the session list');
+  assert.doesNotMatch(boot, /renderTabBody/, 'the slow interval must no longer repaint a tab body that no longer exists');
+  assert.doesNotMatch(boot, /state\.tab/, 'the slow interval must no longer branch on a tab that no longer exists');
+});
+
+// Criterion 4 — no counts object, and no refresh asks for traces, facets or
+// metrics.
+
+test('renderDetail builds no counts object', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const renderDetail = functionSource(appJs, 'renderDetail');
+  assert.doesNotMatch(
+    renderDetail,
+    /\bconst\s+counts\b/,
+    'renderDetail must no longer build the counts object only the removed tab nav read',
+  );
+  assert.match(renderDetail, /renderTimeline\(/, 'renderDetail must still compose the timeline');
+  assert.match(renderDetail, /id="lane-panel"/, 'renderDetail must still render the lane panel container');
+  assert.match(renderDetail, /renderLanePanel\(/, 'renderDetail must still repaint the lane panel');
+});
+
+test('no refresh asks the collector for traces, facets or metrics', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  assert.doesNotMatch(appJs, /\/api\/traces/, 'no refresh may ask the collector for traces any more');
+  assert.doesNotMatch(appJs, /\/api\/facets/, 'no refresh may ask the collector for facets any more');
+  assert.doesNotMatch(appJs, /\/api\/metrics/, 'no refresh may ask the collector for metrics any more');
+});
+
+// Criterion 5 — no unused import and no dead helper is left behind.
+
+test('every name a module under public imports is used below the import', () => {
+  const problems = [];
+  for (const name of ['app.js', 'timeline.js', 'context.js']) {
+    const source = fs.readFileSync(path.join(PUBLIC, name), 'utf8');
+    const importStatements = [...source.matchAll(/import\s*\{([^}]*)\}\s*from\s*['"][^'"]+['"];/g)];
+    for (const statement of importStatements) {
+      const names = statement[1]
+        .split(',')
+        .map((piece) => piece.trim())
+        .filter(Boolean)
+        .map((piece) => piece.split(/\s+as\s+/)[0].trim());
+      for (const imported of names) {
+        const count = (source.match(new RegExp(`\\b${imported}\\b`, 'g')) ?? []).length;
+        if (count < 2) problems.push(`${name} imports ${imported} but nothing below the import uses it`);
+      }
+    }
+  }
+  assert.deepEqual(problems, [], 'an import used nowhere below it is the ballast the deletion must take with it');
+});
+
+test('every function app.js declares is called somewhere in it', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const names = [...appJs.matchAll(/^(?:async )?function (\w+)\(/gm)].map((match) => match[1]);
+  const problems = [];
+  for (const name of names) {
+    const count = (appJs.match(new RegExp(`\\b${name}\\b`, 'g')) ?? []).length;
+    if (count < 2) problems.push(`${name}() is declared but called nowhere`);
+  }
+  assert.deepEqual(problems, [], 'a function whose only caller left with the tabs is dead weight the deletion must take too');
+});
+
+// Criterion 6 — the stylesheet keeps no rule only a removed view could
+// produce.
+
+test('the stylesheet has no rule for the removed views', () => {
+  const css = fs.readFileSync(path.join(PUBLIC, 'styles.css'), 'utf8');
+  const removed = [
+    /^\.tabs\b/m,
+    /^\.tab\b/m,
+    /\.tab .count/,
+    /\bkpi/,
+    /\.table-scroll/,
+    /^table\s*\{/m,
+    /^th\s*\{/m,
+    /^td\s*\{/m,
+    /^tbody\b/m,
+    /\.panel > h3/,
+    /\.trace-pill/,
+    /\.trace-picker/,
+    /\.waterfall/,
+    /\.axis-tick/,
+    /\.span-row/,
+    /\.span-bar/,
+    /\.span-label/,
+    /\.span-track/,
+    /\.span-duration/,
+    /\.span-inspector/,
+    /\.detail-note/,
+    /\.filters/,
+    /\.event-row/,
+    /\.event-time/,
+    /\.event-name/,
+    /\.event-summary/,
+    /\.attr-table/,
+    /data-tone="ok"/,
+    /data-tone="warn"/,
+    /\.mono\b/,
+    /\.bad\b/,
+    /\.good\b/,
+  ];
+  const problems = [];
+  for (const re of removed) {
+    if (re.test(css)) problems.push(`styles.css still matches ${re}`);
+  }
+  assert.deepEqual(problems, [], 'no rule a removed view alone could produce may survive its deletion');
+
+  for (const needle of ['.panel {', '.timeline', '.lane', '.ctx-filter', '.ctx-block']) {
+    assert.ok(css.includes(needle), `styles.css must still carry ${needle} — the deletion must not overshoot into what stays`);
+  }
+  assert.match(css, /\.chip\[data-tone="live"\]/, 'the live chip rule must survive the deletion — it is not a removed view');
+  assert.match(css, /\.chip\[data-tone="error"\]/, 'the error chip rule must survive the deletion — it is not a removed view');
+});
+
+test('no class the stylesheet styles is one no source can emit', () => {
+  const css = fs.readFileSync(path.join(PUBLIC, 'styles.css'), 'utf8');
+  const cssClasses = new Set([...css.matchAll(/\.([A-Za-z][\w-]*)/g)].map((match) => match[1]));
+
+  const emitted = new Set();
+  for (const file of walk(PUBLIC)) {
+    const source = fs.readFileSync(file, 'utf8');
+    for (const match of source.matchAll(/class="([^"]*)"/g)) {
+      for (const token of match[1].split(/\s+/)) if (token) emitted.add(token);
+    }
+    // A class emitted through a ternary — `${cond ? 'a' : 'b'}` — never sits
+    // inside a class="…" attribute in the source text, so a bare quoted string
+    // literal counts too. The two quote kinds are matched separately: a combined
+    // alternation lets an outer `"…"` (the class attribute wrapping the ternary)
+    // swallow the single-quoted literals inside it before they can be seen.
+    for (const match of source.matchAll(/'([^']*)'/g)) {
+      if (/^[A-Za-z][\w-]*$/.test(match[1])) emitted.add(match[1]);
+    }
+    for (const match of source.matchAll(/"([^"]*)"/g)) {
+      if (/^[A-Za-z][\w-]*$/.test(match[1])) emitted.add(match[1]);
+    }
+  }
+
+  const problems = [...cssClasses]
+    .filter((cls) => !emitted.has(cls))
+    .map((cls) => `styles.css styles .${cls}, which no source under public/ can emit`);
+  assert.deepEqual(problems, [], 'a selector no renderer can ever emit is dead weight the deletion must take with it');
+});
+
+// Criterion 7 — the documentation stops promising the removed views.
+
+test('no page under tools/argus-ui promises a removed view', () => {
+  const files = fs
+    .readdirSync(PROJECT, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.md'))
+    .map((entry) => entry.name);
+  const patterns = [
+    /- \*\*Overview\*\*/,
+    /- \*\*Tasks\*\*/,
+    /- \*\*Traces\*\*/,
+    /- \*\*Events\*\*/,
+    /- \*\*Metrics\*\*/,
+    /- \*\*Attributes\*\*/,
+    /\btabs?\b/i,
+    /the views below it/,
+  ];
+  const problems = [];
+  for (const name of files) {
+    const source = fs.readFileSync(path.join(PROJECT, name), 'utf8');
+    for (const pattern of patterns) {
+      if (pattern.test(source)) problems.push(`${name} matches ${pattern}`);
+    }
+  }
+  assert.deepEqual(
+    problems,
+    [],
+    'no page under tools/argus-ui may still promise a technical view the deletion removed, or call the timeline a tab',
+  );
+});
+
+// Criterion 8 — the listeners the rest of the page needs survive the removal.
+
+test('a live refresh still repaints the timeline and the lane panel, dropdown left open', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const refresh = functionSource(appJs, 'refresh');
+  assert.match(refresh, /renderDetail\(\)/, 'a live refresh must still repaint the whole detail pane');
+
+  const renderDetail = functionSource(appJs, 'renderDetail');
+  assert.match(renderDetail, /renderTimeline\(/, 'renderDetail must still compose the timeline');
+  assert.match(renderDetail, /renderLanePanel\(/, 'renderDetail must still repaint the lane panel');
+
+  const renderLanePanel = functionSource(appJs, 'renderLanePanel');
+  assert.match(
+    renderLanePanel,
+    /filterOpen:\s*state\.contextFilterOpen\b/,
+    'renderLanePanel must still pass the remembered open state, or a live refresh would snap the dropdown shut',
   );
 });

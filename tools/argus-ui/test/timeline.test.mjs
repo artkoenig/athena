@@ -5,8 +5,6 @@ import {
   buildLanes,
   laneGeometry,
   renderTimeline,
-  DETAIL_VIEWS,
-  renderDetailViews,
   buildDensity,
   contextPoints,
   areaPolygon,
@@ -91,35 +89,14 @@ const toolEvent = (over = {}) => ({
   ...over,
 });
 
-// Criterion 1 — opening a session lands on the timeline, the technical views stay
-// reachable and subordinate.
+// Increment 4 — the six technical tabs go out of the code.
 
-test('the timeline names exactly six technical views, each with a label', () => {
-  assert.equal(DETAIL_VIEWS.length, 6);
-  const ids = DETAIL_VIEWS.map((view) => view.id);
-  assert.deepEqual([...ids].sort(), ['events', 'metrics', 'overview', 'raw', 'todos', 'traces']);
-  for (const view of DETAIL_VIEWS) {
-    assert.ok(typeof view.label === 'string' && view.label.length > 0, `${view.id} must have a non-empty label`);
-  }
-});
-
-test('opening a session with nothing selected offers every technical view and opens none', () => {
-  const html = renderDetailViews({ selected: null, counts: {} });
-  const tabIds = [...html.matchAll(/data-tab="([^"]+)"/g)].map((m) => m[1]);
-  assert.deepEqual(
-    [...tabIds].sort(),
-    DETAIL_VIEWS.map((view) => view.id).sort(),
+test('the timeline module exports no tab nav', () => {
+  assert.ok(!('DETAIL_VIEWS' in timeline), 'the tab nav was deleted from timeline.js, not merely left unreferenced');
+  assert.ok(
+    !('renderDetailViews' in timeline),
+    'the tab nav was deleted from timeline.js, not merely left unreferenced',
   );
-  assert.ok(!html.includes('aria-selected="true"'), 'a freshly opened session must open no technical view');
-});
-
-test('selecting one technical view marks exactly that one as selected', () => {
-  const html = renderDetailViews({ selected: 'events', counts: {} });
-  const selectedCount = (html.match(/aria-selected="true"/g) ?? []).length;
-  assert.equal(selectedCount, 1, 'exactly one view is open at a time');
-  const eventsTagMatch = html.match(/<[^>]*data-tab="events"[^>]*>/);
-  assert.ok(eventsTagMatch, 'the events button must be in the markup');
-  assert.match(eventsTagMatch[0], /aria-selected="true"/, 'the selected view is the one that was asked for');
 });
 
 // Criterion 2 — one lane for the main session, one per subagent, each spanning its

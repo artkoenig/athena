@@ -91,6 +91,203 @@
             "needsTests": true,
             "summary": "Delete the six pre-timeline tabs whole — DETAIL_VIEWS and renderDetailViews from timeline.js, nine renderers, six helpers, eight state fields, four wiring branches and loadTabData from app.js, the stylesheet rules and README bullets only they could produce — and pin the deletion with seventeen new cases in page.test.mjs, timeline.test.mjs and server.test.mjs while deleting the six cases that held the removed views in place."
           }
+        },
+        {
+          "label": "tests:tabs-out.0",
+          "at": "2026-08-07T16:48:28.844Z",
+          "return": {
+            "summary": "Wrote the failing tests for increment 4 (tabs-out) across tools/argus-ui/test/timeline.test.mjs, test/page.test.mjs and test/server.test.mjs: deleted the three superseded cases in each of the first two files, amended two more, and added the 17 new cases the plan named — 13 of them currently red against the untouched app.js/timeline.js/styles.css/README.md (`node --test tools/argus-ui/test/timeline.test.mjs`: 77 tests, 1 fail, exit 1; `node --test tools/argus-ui/test/page.test.mjs`: 63 tests, 12 fail, exit 1), the remaining 4 (imports-used, functions-called, live-refresh-survives, server-proxy-unnamed) pass today because they pin behaviour this increment does not touch or that already holds, and stand as regression guards (`node --test tools/argus-ui/test/server.test.mjs`: 9 tests, 0 fail, exit 0).",
+            "cases": [
+              {
+                "case": "Remove DETAIL_VIEWS, and renderDetailViews, from the timeline.test.mjs import; keep the unused `import * as timeline` line.",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "",
+                "expected": "The two names are dropped from the named import; `import * as timeline` stays for the new case.",
+                "got": "Done — the import block now reads buildLanes, laneGeometry, renderTimeline, buildDensity, contextPoints, areaPolygon, activityMarks, MIN_CURVE_WIDTH_PCT, ACTIVITY_BUCKETS, mergeToolMarks, liveCursor, scrubCursor, resolveCursor, toolCallOf, spanLaneKeys, laneByKey; `import * as timeline from '../public/timeline.js';` is unchanged."
+              },
+              {
+                "case": "Delete 'the timeline names exactly six technical views, each with a label'",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "",
+                "expected": "Case removed rather than skipped.",
+                "got": "Deleted."
+              },
+              {
+                "case": "Delete 'opening a session with nothing selected offers every technical view and opens none'",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "",
+                "expected": "Case removed rather than skipped.",
+                "got": "Deleted."
+              },
+              {
+                "case": "Delete 'selecting one technical view marks exactly that one as selected'; replace the banner comment at 94-95 with the new one",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "",
+                "expected": "Case removed, banner replaced with '// Increment 4 — the six technical tabs go out of the code.'",
+                "got": "Deleted and banner replaced."
+              },
+              {
+                "case": "the timeline module exports no tab nav",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "the timeline module exports no tab nav",
+                "expected": "assert.ok(!('DETAIL_VIEWS' in timeline)) and assert.ok(!('renderDetailViews' in timeline)), each with a message saying the tab nav was deleted rather than merely unreferenced.",
+                "got": "Red today: AssertionError 'the tab nav was deleted from timeline.js, not merely left unreferenced' (expected true, actual false) — DETAIL_VIEWS is still exported by public/timeline.js."
+              },
+              {
+                "case": "Delete 'the page loads with no technical view open' (asserts tab: null in the state literal)",
+                "file": "tools/argus-ui/test/page.test.mjs",
+                "testName": "",
+                "expected": "Case removed rather than skipped.",
+                "got": "Deleted."
+              },
+              {
+                "case": "Delete 'selecting a session returns to the timeline' (asserts state.tab = null in selectSession)",
+                "file": "tools/argus-ui/test/page.test.mjs",
+                "testName": "",
+                "expected": "Case removed rather than skipped.",
+                "got": "Deleted."
+              },
+              {
+                "case": "Delete 'the timeline is rendered above the technical views' (asserts renderDetailViews( and id=\"tab-body\" in renderDetail)",
+                "file": "tools/argus-ui/test/page.test.mjs",
+                "testName": "",
+                "expected": "Case removed rather than skipped.",
+                "got": "Deleted."
+              },
+              {
+                "case": "Amend 'the context panel has a container of its own, between the timeline and the technical views': rename to say the container sits below the timeline, drop the viewsIdx lookup and its assertion, keep timelineIdx < panelIdx",
+                "file": "tools/argus-ui/test/page.test.mjs",
+                "testName": "the context panel has a container of its own, below the timeline",
+                "expected": "Only the timelineIdx < panelIdx assertion remains, under the renamed title.",
+                "got": "Amended as asked; still green (currently true, untouched by this increment's remaining work) — `node --test tools/argus-ui/test/page.test.mjs` shows it passing."
+              },
+              {
+                "case": "Amend \"the scrub control's input reaches the scrub\": drop the third assertion ordering timeline-scrub before event-search",
+                "file": "tools/argus-ui/test/page.test.mjs",
+                "testName": "the scrub control's input reaches the scrub",
+                "expected": "The first two assertions (timeline-scrub present, scrubTo( called) stay; the ordering assertion against event-search is gone.",
+                "got": "Amended as asked; still green."
+              },
+              {
+                "case": "no file under public renders a tab nav",
+                "file": "tools/argus-ui/test/page.test.mjs",
+                "testName": "no file under public renders a tab nav",
+                "expected": "walk(PUBLIC) over every public/ file finds none of data-tab, role=\"tablist\", tab-body, class=\"tabs\", aria-label=\"Technical views\"; problems collected as `${relative} names ${needle}` and asserted empty.",
+                "got": "Red today: problems = ['app.js names data-tab', 'app.js names tab-body', 'app.js names class=\"tabs\"' (via renderDetailViews call site text), 'timeline.js names data-tab', 'timeline.js names role=\"tablist\"', 'timeline.js names class=\"tabs\"', 'timeline.js names aria-label=\"Technical views\"', and 'styles.css names class=\"tabs\"'-style survivors] — the tab nav is still rendered and styled."
+              },
+              {
+                "case": "app.js declares none of the tab renderers",
+                "file": "tools/argus-ui/test/page.test.mjs",
+                "testName": "app.js declares none of the tab renderers",
+                "expected": "For renderTabBody, renderOverviewTab, renderTodosTab, renderTracesTab, renderWaterfall, renderSpanInspector, renderEventsTab, renderMetricsTab, renderRawTab, loadTabData, kpi, formatValue, spanKind, spanNote, todoStatusChip, app.js matches neither `function <name>(` nor `async function <name>(`; app.js also does not match /\\bSPAN_KINDS\\b/. Matched on the declaration form, not the bare word.",
+                "got": "Red today: problems lists every one of the fifteen names plus SPAN_KINDS as still declared in public/app.js."
+              },
+              {
+                "case": "the page state carries no tab, trace, event or metric field",
+                "file": "tools/argus-ui/test/page.test.mjs",
+                "testName": "the page state carries no tab, trace, event or metric field",
+                "expected": "The state literal slice matches none of tab:, trace:, selectedTraceId:, selectedSpanId:, events:, eventFilters:, metrics:, facets:; the whole file matches none of state.tab, state.trace, state.selectedTraceId, state.selectedSpanId, state.events, state.eventFilters, state.metrics, state.facets; the literal still carries contextHidden: new Set() and contextFilterOpen: false.",
+                "got": "Red today: 'the state literal must carry no field matching /\\btab:/ — the tabs took it with them' — app.js's state literal still declares tab: null and the other seven fields."
+              },
+              {
+                "case": "the click handler acts on no tab, trace, span or event row",
+                "file": "tools/argus-ui/test/page.test.mjs",
+                "testName": "the click handler acts on no tab, trace, span or event row",
+                "expected": "detailListener(appJs, 'click') matches none of data-tab, data-trace, data-span, data-event-seq, data-detail-seq, and still matches data-lane, data-ctx-all and summary[data-ctx-filter].",
+                "got": "Red today: 'the click handler must act on no /data-tab/ branch the removed tabs left behind' — the [data-tab] branch is still in wireEvents()'s click listener."
+              },
+              {
+                "case": "the change handler is the filter's alone",
+                "file": "tools/argus-ui/test/page.test.mjs",
+                "testName": "the change handler is the filter's alone",
+                "expected": "detailListener(appJs, 'change') has no event-filter and no event-errors; still matches input[data-ctx-entry] and renderLanePanel(.",
+                "got": "Red today: \"the removed events tab's event-name filter must go from the change handler\" — event-filter is still handled."
+              },
+              {
+                "case": "the input handler is the scrub's alone",
+                "file": "tools/argus-ui/test/page.test.mjs",
+                "testName": "the input handler is the scrub's alone",
+                "expected": "detailListener(appJs, 'input') has no event-search and no searchTimer; still matches timeline-scrub and scrubTo(.",
+                "got": "Red today: \"the removed events tab's search box must go from the input handler\" — event-search is still handled and searchTimer still exists."
+              },
+              {
+                "case": "the slow interval repaints the session list and nothing else",
+                "file": "tools/argus-ui/test/page.test.mjs",
+                "testName": "the slow interval repaints the session list and nothing else",
+                "expected": "functionSource(appJs, 'boot') matches setInterval( and renderSessionList(); matches neither renderTabBody nor state.tab.",
+                "got": "Red today: 'the slow interval must no longer repaint a tab body that no longer exists' — boot()'s setInterval still calls renderTabBody() when state.tab === 'overview'."
+              },
+              {
+                "case": "renderDetail builds no counts object",
+                "file": "tools/argus-ui/test/page.test.mjs",
+                "testName": "renderDetail builds no counts object",
+                "expected": "functionSource(appJs, 'renderDetail') does not match /\\bconst\\s+counts\\b/; still matches renderTimeline(, id=\"lane-panel\" and renderLanePanel(.",
+                "got": "Red today: 'renderDetail must no longer build the counts object only the removed tab nav read' — renderDetail still builds `const counts = { traces: …, events: …, metrics: … }`."
+              },
+              {
+                "case": "no refresh asks the collector for traces, facets or metrics",
+                "file": "tools/argus-ui/test/page.test.mjs",
+                "testName": "no refresh asks the collector for traces, facets or metrics",
+                "expected": "app.js matches none of /\\/api\\/traces/, /\\/api\\/facets/, /\\/api\\/metrics/.",
+                "got": "Red today: 'no refresh may ask the collector for traces any more' — loadTabData() still fetches /api/traces/<id>, /api/facets and /api/metrics."
+              },
+              {
+                "case": "every name a module under public imports is used below the import",
+                "file": "tools/argus-ui/test/page.test.mjs",
+                "testName": "every name a module under public imports is used below the import",
+                "expected": "For app.js, timeline.js and context.js, every imported name occurs at least twice (import plus one use). Empty today for timeline.js/context.js; goes red for app.js once renderDetailViews and fmtDur stop being used elsewhere but are left in the import.",
+                "got": "Green today (not red): renderDetailViews and fmtDur are both still used at least once beyond their import (renderDetailViews in renderDetail, fmtDur across renderOverviewTab/renderWaterfall/renderSpanInspector), so no dangling import exists yet. This is a forward-looking regression guard rather than a currently-failing case — its purpose is to catch the implementer if the two imports are left behind once their only callers are deleted."
+              },
+              {
+                "case": "every function app.js declares is called somewhere in it",
+                "file": "tools/argus-ui/test/page.test.mjs",
+                "testName": "every function app.js declares is called somewhere in it",
+                "expected": "Every `(?:async )?function (\\w+)(` at the start of a line occurs at least twice in the file. boot qualifies through its boot(); call.",
+                "got": "Green today (not red): every function app.js currently declares is still called at least once, since nothing has been deleted yet — this is a regression guard against a helper (e.g. kpi() or formatValue()) surviving its only caller's removal, not a case pinning missing behaviour today."
+              },
+              {
+                "case": "the stylesheet has no rule for the removed views",
+                "file": "tools/argus-ui/test/page.test.mjs",
+                "testName": "the stylesheet has no rule for the removed views",
+                "expected": "styles.css matches none of the closed list of 31 removed-view selectors; still carries .panel {, .timeline, .lane, .ctx-filter, .ctx-block, .chip[data-tone=\"live\"] and .chip[data-tone=\"error\"].",
+                "got": "Red today: problems lists most of the 31 patterns as still present (.tabs, .tab, .tab .count, kpi, .table-scroll, table {, th {, td {, tbody, .panel > h3, .trace-pill, .trace-picker, .waterfall, .axis-tick, .span-row, .span-bar, .span-label, .span-track, .span-duration, .span-inspector, .detail-note, .filters, .event-row, .event-time, .event-name, .event-summary, .attr-table, data-tone=\"ok\", data-tone=\"warn\", .mono, .bad, .good) — the removed views' rules are all still in styles.css."
+              },
+              {
+                "case": "no class the stylesheet styles is one no source can emit",
+                "file": "tools/argus-ui/test/page.test.mjs",
+                "testName": "no class the stylesheet styles is one no source can emit",
+                "expected": "Every class token styles.css defines is emittable by some file under public/, via class=\"…\" attributes or a bare quoted string literal.",
+                "got": "Red today: problems = ['styles.css styles .mono, which no source under public/ can emit', 'styles.css styles .bad, which no source under public/ can emit', 'styles.css styles .good, which no source under public/ can emit'] — these three are already dead before this increment touches anything, exactly as the plan notes ('.mono already is today'). Implementing note: the two quote kinds must be scanned with separate matchAll passes rather than one alternation regex — a combined `/'([^']*)'|\"([^\"]*)\"/g` lets an outer double-quoted class attribute (`class=\"${cond ? 'a' : 'b'}\"`) swallow the single-quoted literals inside it before they can be matched, which produced a false positive on .session-id/.session-name until split into two passes."
+              },
+              {
+                "case": "no page under tools/argus-ui promises a removed view",
+                "file": "tools/argus-ui/test/page.test.mjs",
+                "testName": "no page under tools/argus-ui promises a removed view",
+                "expected": "No *.md file directly under tools/argus-ui matches the six removed-view bullets, /\\btabs?\\b/i, or /the views below it/.",
+                "got": "Red today: README.md matches all six bullet patterns (- **Overview**, - **Tasks**, - **Traces**, - **Events**, - **Metrics**, - **Attributes**). Note: README.md's current sentence 'the\\n  views below it are reachable from there' is line-wrapped, so the literal /the views below it/ does not match it as written today — the bullets alone already turn this case red, so the case still proves the point, but this literal-phrase check will not catch a reworded multi-line variant of that sentence; flagged in openQuestions."
+              },
+              {
+                "case": "a live refresh still repaints the timeline and the lane panel, dropdown left open",
+                "file": "tools/argus-ui/test/page.test.mjs",
+                "testName": "a live refresh still repaints the timeline and the lane panel, dropdown left open",
+                "expected": "refresh matches renderDetail(); renderDetail matches renderTimeline( and renderLanePanel(; renderLanePanel matches filterOpen: state.contextFilterOpen.",
+                "got": "Green today (not red): all three already hold in the current app.js, since criterion 8 asks only that this increment's deletion not take these listeners with it — the untouched code already satisfies it. It stands as the regression guard the plan asks for; the rest of criterion 8 is covered by the untouched pre-existing cases the plan names, which were left in place."
+              },
+              {
+                "case": "the proxy knows no collector route by name",
+                "file": "tools/argus-ui/test/server.test.mjs",
+                "testName": "the proxy knows no collector route by name",
+                "expected": "src/server.mjs matches /pathname\\.startsWith\\('\\/api\\/'\\)/ and matches no /\\/api\\/\\w/ — it may name the prefix and nothing under it.",
+                "got": "Green today (not red): src/server.mjs already satisfies this — its PROXIED constant checks pathname.startsWith('/api/') and names no route under it — because this criterion asks that server.mjs stay unchanged by this increment, which it already is. This is the regression guard the plan describes ('it goes red the moment the deletion teaches the proxy a route'), added with the two fs/url imports server.test.mjs needed."
+              }
+            ],
+            "openQuestions": [
+              "Four of the seventeen new cases (case 11 'every name … used below the import', case 12 'every function app.js declares is called', case 16 the live-refresh/lane-panel survival case, and case 17 the server.mjs route-naming case) pass today rather than fail — each pins behaviour this increment does not touch or that already holds, matching the plan's own framing ('it goes red the moment …'), but this differs from the general instruction to confirm every new case fails today; flagging so the implementer round doesn't read a passing regression guard as a sign the test is wrong.",
+              "Case 15's /the views below it/ literal does not match README.md's current wording because the phrase is line-wrapped across two lines in the source; the case still goes red today on the six bullet patterns alone, but if the implementer rewords the timeline description without deleting the exact bullets, this sub-check could pass even though the reworded sentence still promises 'the views below it' with different line-wrapping — worth a human glance at the rewritten README rather than trusting this one regex.",
+              "Case 14 depends on a source-scanning heuristic (bare-token quoted-literal scan) that can only approximate what a template literal actually emits; it is exactly as the plan specifies, but a class name that happens to coincide with an unrelated bare string literal anywhere under public/ would be wrongly counted as emittable — an acceptable false-negative risk the plan already accepts by name."
+            ],
+            "questions": []
+          }
         }
       ]
     }
