@@ -856,6 +856,36 @@ node -e '
     catch (e) { problems.push(file + " does not parse: " + e.message); continue; }
     const meta = /export const meta = \{[\s\S]*?\bname:\s*.([\w-]+)./.exec(src);
     if (!meta) { problems.push(file + ": no meta.name"); continue; }
+    // Parsing is not enough. The harness reads `meta` before it runs a line of
+    // the script and rejects any value it would have to evaluate — a
+    // concatenated string, a variable, a template, a spread. A workflow that
+    // trips that rule is valid JavaScript, compiles here, and is still never
+    // listed and never dispatchable, which is how agile-loop shipped unusable.
+    // Strings go first and comments after them, so a brace inside either is not
+    // read as structure; then the keys go, and what is left is the values.
+    const from = src.indexOf("{", src.indexOf("export const meta ="));
+    // The apostrophe is spelled \u0027 below, and named nowhere in this
+    // comment, because the whole program is one single-quoted argument to
+    // `node -e`: a bare apostrophe anywhere in it ends the argument.
+    const bare = src.slice(from)
+      .replace(/\u0027(?:[^\u0027\\]|\\.)*\u0027/g, "0")
+      .replace(/"(?:[^"\\]|\\.)*"/g, "0")
+      .replace(/\/\/.*$/gm, "");
+    let depth = 0, end = -1;
+    for (let i = 0; i < bare.length; i++) {
+      if (bare[i] === "{") depth++;
+      else if (bare[i] === "}" && --depth === 0) { end = i; break; }
+    }
+    const values = bare.slice(0, end + 1).replace(/[A-Za-z_$][\w$]*\s*:/g, ":");
+    const bad = [];
+    if (end < 0) bad.push("it is never closed");
+    if (/`/.test(values)) bad.push("a template literal");
+    if (/\+/.test(values)) bad.push("a concatenation");
+    if (/\.\.\./.test(values)) bad.push("a spread");
+    for (const id of values.match(/[A-Za-z_$][\w$]*/g) || []) {
+      if (id !== "true" && id !== "false" && id !== "null") { bad.push(id); break; }
+    }
+    if (bad.length) problems.push(file + ": meta is not a pure literal (" + bad.join(", ") + ")");
     if (names.has(meta[1])) problems.push(meta[1] + " is declared by " + names.get(meta[1]) + " and " + file);
     names.set(meta[1], file);
   }
@@ -865,9 +895,9 @@ node -e '
   if (problems.length) { console.error(problems.join("; ")); process.exit(1); }
 ' "$root"
 if [ $? -eq 0 ]; then
-  ok "every workflow script parses and declares its own name, loop and agile-loop among them"
+  ok "every workflow script parses, keeps meta a pure literal, and declares its own name, loop and agile-loop among them"
 else
-  no "a workflow script does not parse, or two of them claim one name"
+  no "a workflow script does not parse, its meta is not a pure literal, or two of them claim one name"
 fi
 
 # The incremental loop is the one that hands an agent a slice of the issue, and

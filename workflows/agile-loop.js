@@ -10,17 +10,16 @@
 // and cannot import a sibling. Anything changed in one of the two chains
 // belongs in the other; `test-repo.sh` guards the parts of that where a
 // divergence would be silent.
+//
+// Every value in `meta` is one whole literal: the harness parses this object
+// before it runs a line of the script and rejects anything it has to evaluate,
+// concatenated strings included, so a `+` here costs the whole workflow its
+// registration — it is never listed and never dispatchable. The lines below
+// run long for that reason.
 export const meta = {
   name: 'agile-loop',
-  description:
-    'Runs the issue as a backlog: cut it into increments, work one per iteration through ' +
-    'research, tests, implementation and review, and re-cut the increments still open after each.',
-  whenToUse:
-    'When an issue file with confirmed acceptance criteria describes work worth delivering ' +
-    'in steps — several criteria, or a change whose later parts depend on what the earlier ' +
-    'ones turn up. For a single change use uroboros:loop instead; the backlog costs an extra ' +
-    'agent per iteration and buys nothing when there is nothing to re-cut. Pass the issue ' +
-    'directory as args.issueDir.',
+  description: 'Runs the issue as a backlog: cut it into increments, work one per iteration through research, tests, implementation and review, and re-cut the increments still open after each.',
+  whenToUse: 'When an issue file with confirmed acceptance criteria describes work worth delivering in steps — several criteria, or a change whose later parts depend on what the earlier ones turn up. For a single change use uroboros:loop instead; the backlog costs an extra agent per iteration and buys nothing when there is nothing to re-cut. Pass the issue directory as args.issueDir.',
   phases: [
     { title: 'Load state', detail: 'the run state is read, so a restart resumes where it stopped' },
     { title: 'Decompose', detail: 'planner cuts the issue into a backlog of increments' },
