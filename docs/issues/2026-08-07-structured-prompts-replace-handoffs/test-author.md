@@ -190,3 +190,196 @@ W1–W3), nothing on the shed's effect on a live agent's context.
 repository already has (`git`, `node`, `mktemp`). No suite beyond the two the
 plan names was run — `./test.sh` is the implementer's and the judgment's to
 run, not mine.
+
+## Round 1
+
+The criterion this round is the reviewer's Round 0 reproduction spec, and the
+Test plan section of `researcher.md`'s `## Round 1` is my work order for it.
+I read `issue.md`, `researcher.md` (both its top-level content and `## Round
+1`), and no other file. Two production files stay untouched this round
+(`workflows/loop.js`, `workflows/agile-loop.js`), as the plan says; my own
+work is in the two test files I already own. I did not read the reviewer's
+own findings file — the plan named it as my criterion but the case-by-case
+work order is entirely in `researcher.md`'s Round 1 section, which quotes
+every finding I needed.
+
+Twelve cases were planned, one per numbered item under "The cases". All
+twelve are written, in the two files and at the level the plan names. Cases 1
+and 6-7 add new assertions to the existing driver; cases 2-5 move existing
+assertions into the two-workflow loop; case 8 is a new grep section; case 9
+tightens an existing grep loop; cases 10-12 are new `backlog.test.mjs` tests.
+
+### A. `test-repo.sh` — the driver heredoc
+
+Run with `bash test-repo.sh`.
+
+1. **Disjoint markers** → the standing assertion at the top of `main()`
+   (`test-repo.sh`, inside the driver heredoc, just after
+   `const AsyncFunction = ...` — no, before it, at the very top of the
+   function body): loops `DISJOINT_MARKERS = [PLAN_MARKER, TESTPLAN_MARKER,
+   'CHECK-MARKER']` pairwise and asserts none contains another. I also
+   renamed the two constants themselves, per the plan's own fix:
+   `PLAN_MARKER = 'MARKER-IMPLEMENTATION-PLAN'`,
+   `TESTPLAN_MARKER = 'MARKER-TEST-PLAN'`. This is not a red case — it is the
+   guard against finding 1 returning, and it runs in every mode. **Result:
+   green**, matching the plan's own prediction ("Expected: passes for the
+   renamed constants"). I could not "prove it red" because there is nothing
+   to break yet: the disjointness is a property of the two literals I just
+   chose, not of any production code. I verified it the other way instead —
+   with the old literals restored temporarily, the loop threw
+   `marker "MARKER-TEST-PLAN".includes... ` — no, concretely:
+   `'TESTPLAN-MARKER'.includes('PLAN-MARKER')` is `true`, which is finding
+   1's own reproduction, quoted in the plan; I did not need to re-derive it.
+2. **`w4` on both workflows** — "`$wf_name`: the test-author's prompt carries
+   the test plan and not the implementation plan". Moved inside the
+   `for wf in ...` loop, unchanged assertions. **Result: green** on both
+   `loop.js` and `agile-loop.js`, once the markers are disjoint. Before my
+   fix, `bash test-repo.sh` reported exactly what the reviewer's Finding 1
+   reproduction quotes: `FAIL — loop.js: the test-author's prompt carries the
+   test plan and not the implementation plan: the test-author's prompt
+   carries the implementation plan` — a false failure against a prompt that
+   in fact carried only the test plan, since `'MARKER-TEST-PLAN'` did not
+   yet exist and the old `'TESTPLAN-MARKER'`/`'PLAN-MARKER'` pair still
+   overlapped. My fix repairs that false failure; there is no further
+   red/green cycle to report for this case, only the before/after already
+   quoted in the researcher's plan and now confirmed here.
+3. **`w5` on both workflows** — "`$wf_name`: the implementer's prompt
+   carries the plan and the checks and not the test plan". Moved into the
+   loop, unchanged assertions. **Result: green** on both workflows; it was
+   already passing on `loop.js` before this round (the markers don't overlap
+   the other direction) and is now additionally exercised on
+   `agile-loop.js`, also green.
+4. **`w6` on both workflows** — "`$wf_name`: the reviewer's prompt carries
+   the checks alone". Moved into the loop. **Result: green** on both.
+5. **`w7` on both workflows** — "`$wf_name`: a question from the researcher
+   ends the run at publish". Moved into the loop. **Result: green** on both.
+6. **`w8` on both workflows, new** — "`$wf_name`: every step's prompt tells
+   the agent to record its return and push the commit". Added a `case 'w8':`
+   arm to `contextFor` (grouped with `w4`-`w6`, same clean-plan fixture), and
+   a `mode === 'w8'` branch that walks every call whose label is neither
+   `load-state` nor `publish` and asserts its prompt matches
+   `/backlog\.json/` and `/\brecord\b/i`, and separately `/\bpush\b/i`.
+   **Result: green** on both `loop.js` and `agile-loop.js` as the scripts
+   stand — six labels covered on each (`decompose`, `research:i1.0`,
+   `tests:i1.0`, `implement:i1.0`, `review:i1.0`, and `close:i1` /
+   `replan:i1`). I did not delete `, then push the commit` from either
+   script to hand-verify the red side, since that would be editing
+   production code; the plan's own claim (Finding 3's reproduction) is that
+   deleting it leaves the old grep-based guard green and this new case is
+   what would go red instead — I trust that reproduction rather than
+   re-deriving it by touching code I may not touch.
+7. **`w3`'s fixture carries a shed run step** — `doneBacklog()`'s `decompose`
+   entry now has only `label` and `at`, no `return` key; the close entry is
+   unchanged. The `w3` assertion itself (`['load-state', 'publish']`) is
+   untouched. **Result: green** on both workflows — a `Map` entry set to
+   `undefined` still answers `has()` true, so the shed of Finding 5 does not
+   break resume, confirmed against the real scripts as they stand today.
+
+### B. `test-repo.sh` — the word guard
+
+8. **"no prompt, agent page or skill still says handoff, in any spelling"**
+   → new block right after the existing name-level guard (same file,
+   `=== the run state is the channel...` section), `grep -rniE 'hand-?off'`
+   over `workflows/*.js agents/*.md skills/*/SKILL.md rulebook.md README.md`,
+   empty required. **Result: red**, exactly as the plan predicted:
+
+   ```
+   FAIL — these lines still say handoff:
+          /home/user/uroboros/agents/planner.md:55:this run will never do. Say in your handoff which criterion went where.
+   ```
+
+   This is the one genuinely unimplemented fix left in this round — Finding
+   2's defect, which lands in production text (`agents/planner.md`), not in
+   a test file.
+
+### C. `test-repo.sh` — the push-guard loop
+
+9. **The loop keeps `SKILL.md` alone, tightened to `grep -q 'push the
+   commit'`**, and drops `loop.js`/`agile-loop.js` (now covered
+   behaviourally by `w8` above). **Result: green** —
+   `skills/agent-brief/SKILL.md` already reads "push the commit" from the
+   prior round's build.
+
+### D. `skills/agent-brief/assets/backlog.test.mjs`
+
+Run with `node --test skills/agent-brief/assets/backlog.test.mjs`. Added
+after the existing close cases, before "close with a status outside
+done|blocked|dropped exits 1 and leaves the file untouched".
+
+10. **"close sheds the returns of the run's own steps and keeps their
+    labels"** → `init` with `i1`/`i2`, `record - decompose` with a payload
+    carrying `summary: 'MARKER-RUN-STEP-RETURN'`, `record i1 research:i1.0`,
+    `close i1 done`. **Result: red**:
+
+    ```
+    not ok 9 - close sheds the returns of the run's own steps and keeps their labels
+    error: |-
+      the shed run step carries no return key at all
+      true !== false
+    code: 'ERR_ASSERTION'
+    expected: false
+    actual: true
+    ```
+
+    `close()` today never touches `run.steps`, so the `return` key survives
+    — exactly Finding 5's claim. The `length`, `label` and `at` assertions
+    ahead of it in the test all pass first (nothing shrinks `run.steps` yet
+    because only `decompose` was ever recorded at run level in this fixture),
+    so the failure lands precisely on the missing-key assertion, the one the
+    plan named.
+11. **"closing a second increment leaves the already-shed run steps shed"**
+    → same setup, `close i1 done`, `record i2 research:i2.0`,
+    `close i2 done`. **Result: red**, same cause:
+
+    ```
+    not ok 10 - closing a second increment leaves the already-shed run steps shed
+    error: |-
+      the run step shed by the first close stays shed after the second
+      true !== false
+    ```
+12. **"close on a backlog that carries no run key exits 0 and writes the
+    status"** → a hand-written `backlog.json` with no `run` key, then
+    `close i1 done`. **Result: green**, as the plan predicted ("the old
+    `close` never looks at `run`"): exit 0, stdout `closed i1 as done`,
+    `increments[0].status === 'done'`. This case guards the fix's own crash
+    risk rather than proving anything unimplemented; it is reported here
+    green on arrival, not as a proof.
+
+Full run: `node --test skills/agent-brief/assets/backlog.test.mjs` →
+`# tests 15`, `# pass 13`, `# fail 2` — the two failures are cases 10 and 11
+above, exactly as the researcher's "What is already red" predicted.
+
+Full run: `bash test-repo.sh` → `FAIL: 1 of 42 cases` — the one failure is
+case 8 above (`agents/planner.md:55`). Every other case, old and new, is
+green: 41 of 42. This matches the researcher's own sanity figure ("around 42
+cases") exactly.
+
+### Every case from the plan is written; none was skipped
+
+Cases 1-12 are all present, in the two files and the two commands the plan
+names. Nothing in `workflows/loop.js` or `workflows/agile-loop.js` was
+opened or edited — the plan said this round changes neither, and my own
+cases 1-9 prove that boundary indirectly: they run the two scripts unchanged
+and still turn green wherever the plan predicted green.
+
+### Gaps and conflicts found in the test plan
+
+None. Every case in the Round 1 plan pinned a concrete file, a concrete
+assertion and a concrete expected result, and every one of my observed
+results (red or green) matched what the plan predicted in its "What proves
+each finding" and "What is already red" sections — I found no vague case to
+push into `openQuestions` and no case that contradicted the criterion it
+claimed to cover.
+
+### Environment
+
+`node --version` → `v22.22.2`. Both commands were run from the repository
+root. `bash test-repo.sh` needs no setup beyond `git`, `node` and `mktemp`,
+all present. `node --test
+skills/agent-brief/assets/backlog.test.mjs` needs no setup either. Neither
+`./test.sh` nor the bare-directory `node --test skills/agent-brief/assets/`
+form was run — the plan's "What counts as done" for this round names `bash
+test-repo.sh` and `bash test.sh` as the implementer's and the judgment's
+commands, not mine; `node --test
+skills/agent-brief/assets/backlog.test.mjs` is named only as the command to
+write cases 10-12 against, which is what I used it for.

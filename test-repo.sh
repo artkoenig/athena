@@ -142,6 +142,22 @@ else
   echo "$handoff_refs" | sed 's/^/       /'
 fi
 
+# Finding 2 (round 1): a page can point at "your handoff" without naming any
+# of the five files above, and the guard above matches file *names*, not the
+# word — agents/planner.md line 55 said "Say in your handoff which criterion
+# went where" and slipped through untouched. hand-?off, not a plain "hand":
+# "hand over", which the shared brief and the agent pages say more than
+# once, must not match. .claude/rules/agents.md stays outside this file set,
+# same as above — it names agent pages as examples for whoever writes them.
+handoff_word="$(grep -rniE 'hand-?off' \
+  "$root"/workflows/*.js "$root"/agents/*.md "$root"/skills/*/SKILL.md "$root/rulebook.md" "$root/README.md" 2>/dev/null || true)"
+if [ -z "$handoff_word" ]; then
+  ok "no prompt, agent page or skill still says handoff, in any spelling"
+else
+  no "these lines still say handoff:"
+  echo "$handoff_word" | sed 's/^/       /'
+fi
+
 # Both workflows open every run with the same cheap dispatch, so a diverging
 # script would be a second re-entry mechanism no one asked for.
 for f in "$root/workflows/loop.js" "$root/workflows/agile-loop.js"; do
@@ -197,16 +213,19 @@ else
   no "the shared brief does not name backlog.mjs"
 fi
 
-# Step-level granularity is theater without a push per step: an unpushed
-# commit takes the state with it on a container reset.
-for f in "$root/skills/agent-brief/SKILL.md" "$root/workflows/loop.js" "$root/workflows/agile-loop.js"; do
-  name="$(basename "$f")"
-  if grep -qi 'push' "$f"; then
-    ok "$name instructs pushing the step's commit"
-  else
-    no "$name does not instruct pushing"
-  fi
-done
+# Finding 3 (round 1): step-level granularity is theater without a push per
+# step, and a plain `grep -qi 'push'` over the two workflow scripts survives
+# even if the per-step push instruction is deleted from noDispatch — both
+# scripts also say "push" in their unrelated Publish prompt. That behavioural
+# fact is now guarded by driver mode w8 above, per step, per workflow. What
+# stays a grep is the shared brief's own sentence, tightened to its exact
+# words so the frontmatter description ("pushes its step return") cannot
+# satisfy it by accident.
+if grep -q 'push the commit' "$root/skills/agent-brief/SKILL.md"; then
+  ok "the shared brief instructs pushing the step's commit"
+else
+  no "the shared brief does not instruct pushing the step's commit"
+fi
 
 # The plain loop's one-increment shape is enforced in the schema, not just
 # asked for in a prompt an agent could misread.
@@ -265,9 +284,16 @@ function assertEqualArrays(actual, expected, msg) {
 
 const isAgile = path.basename(file) === 'agile-loop.js';
 
-const PLAN_MARKER = 'PLAN-MARKER';
-const TESTPLAN_MARKER = 'TESTPLAN-MARKER';
+// Finding 1 (round 1): the two literals used to be 'PLAN-MARKER' and
+// 'TESTPLAN-MARKER', and 'TESTPLAN-MARKER'.includes('PLAN-MARKER') is true —
+// so the w4 assertion that the test-author's prompt does NOT carry
+// PLAN_MARKER failed against a prompt that in fact carried only the test
+// plan. Renamed so neither contains the other; DISJOINT_MARKERS below is the
+// standing guard against the same class of bug coming back unnoticed.
+const PLAN_MARKER = 'MARKER-IMPLEMENTATION-PLAN';
+const TESTPLAN_MARKER = 'MARKER-TEST-PLAN';
 const CHECK_MARKER = 'echo CHECK-MARKER';
+const DISJOINT_MARKERS = [PLAN_MARKER, TESTPLAN_MARKER, 'CHECK-MARKER'];
 
 const planReturn = {
   needsTests: true,
@@ -330,7 +356,11 @@ function doneBacklog() {
     ],
     run: {
       steps: [
-        { label: 'decompose', at: '2026-08-07T00:00:00.000Z', return: decomposeReturnOne },
+        // Finding 5 (round 1): a real closed run has already shed the
+        // return of a run-level step — the `close` CLI drops the key but
+        // keeps the label and the timestamp — so this fixture now matches
+        // that shape instead of a full BACKLOG return surviving forever.
+        { label: 'decompose', at: '2026-08-07T00:00:00.000Z' },
         { label: closeLabel, at: '2026-08-07T00:00:02.000Z', return: { summary: 'closed' } },
       ],
     },
@@ -348,6 +378,7 @@ function contextFor(m) {
     case 'w4':
     case 'w5':
     case 'w6':
+    case 'w8':
       return { stateReturn: { exists: false, backlogJson: '', summary: '' }, decomposeReturn: decomposeReturnOne, researchReturn: planReturn };
     case 'w7':
       return { stateReturn: { exists: false, backlogJson: '', summary: '' }, decomposeReturn: decomposeReturnOne, researchReturn: planReturnWithQuestion };
@@ -371,6 +402,16 @@ function returnFor(label) {
 }
 
 async function main() {
+  // Guards finding 1 from returning: if any two of the three markers stop
+  // being disjoint, a slice assertion built on them can pass for the wrong
+  // reason, so this fires before a single dispatch happens, in every mode.
+  for (const a of DISJOINT_MARKERS) {
+    for (const b of DISJOINT_MARKERS) {
+      if (a === b) continue;
+      assertTrue(!a.includes(b), 'marker "' + a + '" contains marker "' + b + '" as a substring, so a slice assertion built on them cannot be trusted');
+    }
+  }
+
   const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
   const src = fs.readFileSync(file, 'utf8').replace(/^export const meta =/m, 'const meta =');
   const fn = new AsyncFunction('args', 'agent', 'log', 'phase', src);
@@ -427,6 +468,18 @@ async function main() {
     assertEqualArrays(labels, ['load-state', 'decompose', 'research:i1.0', 'publish'], 'a question from the researcher does not stop the run at publish');
     assertTrue(!!result && !!result.blockedOnHuman, 'the returned result does not carry blockedOnHuman');
     assertTrue(!!result && JSON.stringify(result.blockedOnHuman).includes('ask the human'), 'blockedOnHuman does not carry the question');
+  } else if (mode === 'w8') {
+    // Finding 3 (round 1): a plain grep for the word "push" over the whole
+    // script survives even if the per-step push instruction is deleted,
+    // because the unrelated Publish prompt in both scripts also says
+    // "push". This asserts on every recorded step's own prompt instead.
+    for (const c of calls) {
+      if (c.label === 'load-state' || c.label === 'publish') continue;
+      assertTrue(/backlog\.json/.test(c.prompt) && /\brecord\b/i.test(c.prompt),
+        c.label + ' is not told to record its return into backlog.json');
+      assertTrue(/\bpush\b/i.test(c.prompt),
+        c.label + " is not told to push its step's commit");
+    }
   } else {
     throw new Error('unknown mode ' + mode);
   }
@@ -453,17 +506,21 @@ run_driver() {
   fi
 }
 
+# Finding 4 (round 1): w4-w7 used to run against loop.js alone, so the same
+# per-role slicing and the same human-question exit could break in
+# agile-loop.js with this whole section still green. w8 (finding 3) is new
+# and joins the loop for the same reason from the start.
 for wf in "$root/workflows/loop.js" "$root/workflows/agile-loop.js"; do
   wf_name="$(basename "$wf")"
   run_driver "$wf" w1 "$wf_name: a fresh run dispatches load-state, decompose, the chain, the close and publish, in order"
   run_driver "$wf" w2 "$wf_name: a resumed run skips the recorded researcher and test-author and starts at the implementer"
   run_driver "$wf" w3 "$wf_name: a backlog whose increments are all closed dispatches only the state loader and publish"
+  run_driver "$wf" w4 "$wf_name: the test-author's prompt carries the test plan and not the implementation plan"
+  run_driver "$wf" w5 "$wf_name: the implementer's prompt carries the plan and the checks and not the test plan"
+  run_driver "$wf" w6 "$wf_name: the reviewer's prompt carries the checks alone"
+  run_driver "$wf" w7 "$wf_name: a question from the researcher ends the run at publish"
+  run_driver "$wf" w8 "$wf_name: every step's prompt tells the agent to record its return and push the commit"
 done
-
-run_driver "$root/workflows/loop.js" w4 "loop.js: the test-author's prompt carries the test plan and not the implementation plan"
-run_driver "$root/workflows/loop.js" w5 "loop.js: the implementer's prompt carries the plan and the checks and not the test plan"
-run_driver "$root/workflows/loop.js" w6 "loop.js: the reviewer's prompt carries the checks alone"
-run_driver "$root/workflows/loop.js" w7 "loop.js: a question from the researcher ends the run at publish"
 
 rm -rf "$driver_tmp"
 

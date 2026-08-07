@@ -213,6 +213,79 @@ test("close sets status and note and empties only the closed increment's steps",
   assert.equal(i2.steps.length, 1, "closing one increment leaves another increment's steps alone");
 });
 
+test("close sheds the returns of the run's own steps and keeps their labels", () => {
+  const dir = tmpDir();
+  const backlogPath = path.join(dir, 'backlog.json');
+  run(['init', backlogPath, writeJson(dir, 'init.json', backlogTemplate([
+    incrementPayload('i1', 'First'),
+    incrementPayload('i2', 'Second'),
+  ]))]);
+  // A run-level step return (decompose's, the whole cut) is the largest
+  // payload backlog.json ever holds and belongs to no single increment, so
+  // it is the one this case marks and checks for.
+  const decomposePayload = {
+    increments: [incrementPayload('i1', 'First'), incrementPayload('i2', 'Second')],
+    summary: 'MARKER-RUN-STEP-RETURN',
+  };
+  run(['record', backlogPath, '-', 'decompose', writeJson(dir, 'decompose.json', decomposePayload)]);
+  run(['record', backlogPath, 'i1', 'research:i1.0', writeJson(dir, 'research.json', { plan: 'x' })]);
+
+  run(['close', backlogPath, 'i1', 'done', 'the review accepted it']);
+
+  const raw = fs.readFileSync(backlogPath, 'utf8');
+  const backlog = JSON.parse(raw);
+  assert.equal(backlog.run.steps.length, 1, "closing sheds the run step's return, not the entry itself — the label stays so resume still skips it");
+  assert.equal(backlog.run.steps[0].label, 'decompose');
+  assert.match(backlog.run.steps[0].at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/, 'at is still an ISO timestamp after the shed');
+  assert.equal(Object.prototype.hasOwnProperty.call(backlog.run.steps[0], 'return'), false, 'the shed run step carries no return key at all');
+  assert.equal(raw.includes('MARKER-RUN-STEP-RETURN'), false, 'the sizable run-level payload is gone from the file on disk, not just absent from one parsed field');
+});
+
+test('closing a second increment leaves the already-shed run steps shed', () => {
+  const dir = tmpDir();
+  const backlogPath = path.join(dir, 'backlog.json');
+  run(['init', backlogPath, writeJson(dir, 'init.json', backlogTemplate([
+    incrementPayload('i1', 'First'),
+    incrementPayload('i2', 'Second'),
+  ]))]);
+  const decomposePayload = {
+    increments: [incrementPayload('i1', 'First'), incrementPayload('i2', 'Second')],
+    summary: 'MARKER-RUN-STEP-RETURN',
+  };
+  run(['record', backlogPath, '-', 'decompose', writeJson(dir, 'decompose.json', decomposePayload)]);
+  run(['record', backlogPath, 'i1', 'research:i1.0', writeJson(dir, 'research1.json', { plan: 'x' })]);
+  run(['close', backlogPath, 'i1', 'done']);
+
+  run(['record', backlogPath, 'i2', 'research:i2.0', writeJson(dir, 'research2.json', { plan: 'y' })]);
+  run(['close', backlogPath, 'i2', 'done']);
+
+  const backlog = JSON.parse(fs.readFileSync(backlogPath, 'utf8'));
+  assert.equal(backlog.run.steps.length, 1, 'a second close does not re-grow the run steps the first close already shed');
+  assert.equal(Object.prototype.hasOwnProperty.call(backlog.run.steps[0], 'return'), false, 'the run step shed by the first close stays shed after the second');
+});
+
+test('close on a backlog that carries no run key exits 0 and writes the status', () => {
+  const dir = tmpDir();
+  const backlogPath = path.join(dir, 'backlog.json');
+  // Written by hand, not by init, so it matches a backlog that predates the
+  // run key entirely — the crash risk the shed's own fix could introduce.
+  fs.writeFileSync(backlogPath, JSON.stringify({
+    version: 1,
+    issue: 'docs/issues/x',
+    workflow: 'loop',
+    increments: [
+      { id: 'i1', title: 'First', goal: 'First.', criteria: ['does i1'], status: 'todo', note: '', steps: [] },
+    ],
+  }));
+
+  const stdout = run(['close', backlogPath, 'i1', 'done']);
+
+  assert.equal(stdout.trim().split('\n').length, 1, 'close prints exactly one confirmation line');
+  assert.match(stdout, /closed i1 as done/, 'the confirmation names the increment and the status it was closed with');
+  const backlog = JSON.parse(fs.readFileSync(backlogPath, 'utf8'));
+  assert.equal(backlog.increments[0].status, 'done');
+});
+
 test('close with a status outside done|blocked|dropped exits 1 and leaves the file untouched', () => {
   const dir = tmpDir();
   const backlogPath = path.join(dir, 'backlog.json');
