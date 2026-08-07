@@ -83,415 +83,28 @@
         "With no lane selected the session view renders as it does today.",
         "What proves this increment is the rendered page: a change that stops a lane selection reaching the panel, or leaves the panel showing the previous moment after the chosen time moves, is caught, not only a builder function checked in isolation."
       ],
-      "status": "todo",
-      "note": "Split out of context-at-time after scrub-live. Scrub-live left the selection question untouched and added a constraint that lands squarely on this panel: scrubbing repaints the lanes in place through fixed ids instead of re-rendering the detail, so anything bound to the chosen time has to join that repaint path. That plumbing plus the selection mechanism is the load-bearing half of the old eleven-criterion increment and is worth its own review; it goes first because the context message list cannot be selected before a lane can be, and it delivers a whole acceptance criterion of the issue on its own.",
-      "steps": [
-        {
-          "label": "research:lane-select.0",
-          "at": "2026-08-07T12:31:56.944Z",
-          "return": {
-            "needsTests": true,
-            "summary": "Add a selected lane to the session view and a panel that lists, for that lane, the tool calls up to the chosen time with their parameters, exposing the parameters for the first time on the existing per-lane activity entries of GET /api/sessions/:id/agents.",
-            "plan": "## The finding this increment turns on\n\nThe call parameters do NOT arrive with the per-lane tool activity today; they have to be exposed for the first time. `store.getAgents()` builds each lane's `activity` entry as `{atMs, kind, name}` only (tools/argus/src/store.mjs, the span loop at ~line 995), where `name` is `attrs.tool_name` for a `claude_code.tool` span. The parameters live nowhere on that span: the CLI carries them on the `claude_code.tool_result` **log event**, in `tool_input` (JSON string, `tool_parameters` on CLIs before 2.1.x), which `toolParametersOf(attrs)` in tools/argus/src/claude.mjs already parses and which `store.mjs` already imports. `OTEL_LOG_TOOL_DETAILS=1` is on by default since the content-pipeline increment, so the attribute arrives.\n\nExpose them on the existing activity entry, through the lane attribution already in place — no second join from records to agents, no new endpoint.\n\n## Collector: tools/argus/src/store.mjs, `getAgents()`\n\n1. Add a module constant next to `MAX_LANE_ACTIVITY`: `const MAX_ACTIVITY_PARAMS_CHARS = 1000;` with a comment saying why it is capped (the payload is refetched on every coalesced ingest, and a single `Write` call's parameters are tens of kilobytes) and where the full text stays reachable (`GET /api/content?kind=tool_input&body=1`).\n2. Give every activity entry a uniform shape: `{atMs, kind, name, params: null, paramsTruncated: false}`. `llm_request` entries keep `params: null` forever; only tool entries can gain params.\n3. In the span loop, when a `SPAN.tool` entry is pushed and the span carries `attrs.tool_use_id`, register the pushed entry object in a local `Map` keyed by that id (`toolCallsByUseId`). Last registration wins for a repeated id; say so in a comment.\n4. In the existing walk over `this.logs` (the one that builds the context curve), branch on `log.eventName` instead of `continue`-ing on everything that is not `EVENT.apiRequestBody`: keep the request-body arm exactly as it is, and add an arm for `EVENT.toolResult` that looks up `log.attrs?.tool_use_id` in `toolCallsByUseId`, reads `toolParametersOf(log.attrs)`, and — when both a matching entry and a parsed object exist — sets `entry.params = JSON.stringify(value)` truncated to `MAX_ACTIVITY_PARAMS_CHARS` with `entry.paramsTruncated = true` when it was longer. Do not add a second walk over `this.logs`: one scan is what the existing code costs and one is what it must keep costing.\n5. A `tool_result` whose `tool_use_id` matches no tool span in the buffer adds nothing: no invented activity entry, no lane of its own. The mark comes from the span, so an unmatched result has no mark to decorate.\n6. Ordering is already safe: the logs walk runs before the finalize loop that sorts and thins, and `thinEvenly` keeps the same objects, so an entry decorated in the logs walk is the entry that ships.\n7. `params` is text, never a parsed object: a truncated JSON string is not valid JSON and nothing downstream may `JSON.parse` it.\n\nRejected: attaching the parameters to a second per-lane list built by resolving `tool_result` logs to a lane through `log.spanId` — that is a second way of joining records to agents for data the span-derived activity entry already owns, and it would duplicate every tool call on the timeline. Rejected: a new `GET /api/sessions/:id/tools?lane=&at=` route — a second fetch on every scrub tick and a second attribution surface to keep in step with `getAgents`.\n\n## View model: tools/argus-ui/public/timeline.js\n\n1. Export `const MAX_LANE_TOOL_CALLS = 50;`.\n2. Export `toolCallsUpTo(lane, atMs, limit = MAX_LANE_TOOL_CALLS)` returning `{total, items}`. It filters `lane?.activity ?? []` to `kind === 'tool'` entries whose `Number(atMs)` is finite, greater than 0 and `<=` the chosen time (a non-finite chosen time bounds to nothing, so `{total: 0, items: []}`), counts them into `total`, and returns at most `limit` of them newest-first. It must not throw on a lane with no `activity` key at all.\n3. Export `laneDetailHtml(items = [], atMs = null, selectedLaneId = null)`. It returns `''` when `selectedLaneId` is null or matches no lane in `items` — that is what makes \"no lane selected renders as it does today\" true. Otherwise it returns a `<div class=\"panel lane-detail\" data-lane-detail=\"<lane id>\">` holding: a head with the lane's `agentLabel(lane)`, its short agent id when it has one (`shortId(lane.agentId, 10)`, the same as the lane row), the count of tool calls up to the moment, and the moment itself via `fmtClock(atMs)`; then either a `<p class=\"placeholder\">` saying no tool calls were made on this lane before that moment, or an `<ol class=\"tool-calls\">` of `<li class=\"tool-call\">` entries. Each entry carries `<span class=\"tool-call-time\">` (`fmtClock(entry.atMs)`), `<span class=\"tool-call-name\">` (the tool name, or `tool` when the payload has none) and the parameters: `<code class=\"tool-call-params\">` with the escaped `params` text, `data-truncated=\"true\"` on it plus a trailing ellipsis marker when `paramsTruncated`, or `<span class=\"tool-call-params\" data-empty=\"true\">no parameters recorded</span>` when `params` is null. When the cap bites, the head also says the list shows the most recent `MAX_LANE_TOOL_CALLS` of `total`. Everything from the payload goes through `esc`, exactly as the rest of this module does.\n4. `laneRowsHtml(items, window, atMs, selectedLaneId = null)` gains the fourth argument, and the lane row becomes a real control: `<button type=\"button\" class=\"lane-row\" data-lane-id=\"…\" aria-current=\"<true|false>\">`, matching `.trace-pill` and `.span-row`, which are already grid `<button>`s selected with `aria-current`. Do not use `aria-pressed` or `aria-selected` on a lane row: `aria-pressed` is the Live control's and `aria-selected` is the view strip's, and both are asserted against the whole rendered detail elsewhere.\n5. `timelineHtml(items, window, {atMs, following, selectedLaneId})` takes the selection in its options object and passes it straight to `laneRowsHtml`, so the in-place repaint cannot drift from the full render.\n\nRejected: a new `public/lane-detail.js` module — sixty lines of the same view model, sharing this module's escaping and formatting helpers and its window arithmetic, would buy a second file and a second test file.\n\n## Page: tools/argus-ui/public/app.js\n\n1. Add `selectedLaneId: null` to `state`, in the block that already documents `atMs`/`following`, described as the selection the session view holds beside the chosen time.\n2. Reset it to `null` in `selectSession()` and on both paths of `loadSession()` that clear `state.agents`.\n3. In the delegated `detail` click handler, after the `[data-timeline-live]` arm and before the `[data-view]` arm, add: `const lane = event.target.closest('[data-lane-id]');` — on a hit set `state.selectedLaneId` to `lane.dataset.laneId`, or to `null` when that lane is already the selected one (clicking the selected lane closes the panel, the same toggle the view strip has), then call `renderDetail()` and return. A full render is right here: nobody is mid-drag when they click a lane, and the slider has to keep its value, which `renderDetail` gives it from `state.atMs`.\n4. In `renderDetail()`, pass `selectedLaneId: state.selectedLaneId` in the `timelineHtml` options, and render `<div id=\"lane-detail\">${laneDetailHtml(state.agents, state.atMs, state.selectedLaneId)}</div>` between the timeline panel and `viewStripHtml(...)`. The container is a bare div and stays empty when nothing is selected, so the unselected page keeps rendering as it does today and the lane/tablist/view-body order is unchanged.\n5. In `renderChosenTime()`, repaint that container in place alongside the lanes and the scrub readout: `const laneDetail = document.getElementById('lane-detail'); if (laneDetail) laneDetail.innerHTML = laneDetailHtml(state.agents, state.atMs, state.selectedLaneId);`. This is the whole of \"the listing follows the chosen time\" on the scrub path; a full `renderDetail()` there would destroy the range input mid-drag.\n\n## Styles: tools/argus-ui/public/styles.css\n\nGive `.lane-row` the button reset the neighbouring `.span-row` already uses (`width: 100%`, `background: none`, `border: none`, `text-align: left`, inherited font and colour, `cursor: pointer`) while keeping its existing grid, add a hover and an `aria-current=\"true\"` treatment (the `--accent` border/`--accent-soft` background pair `.trace-pill[aria-current=\"true\"]` uses) so the selected lane is visibly marked, and style `.lane-detail`, `.tool-calls`, `.tool-call` and `.tool-call-params` (monospace, wrapping, faint when `data-empty`).\n\n## Documentation\n\nExtend the Timeline bullet in tools/argus-ui/README.md with one sentence: a lane can be selected, and the selection lists that agent's tool calls up to the chosen time with each call's parameters. Add one bullet to the Limits section of tools/argus/README.md: the lanes payload caps each call's parameters at 1000 characters and marks a capped one, with the untruncated text still served by `GET /api/content?kind=tool_input&body=1`.",
-            "moduleMap": "tools/argus/src/store.mjs — the in-memory store; `getAgents(sessionId)` (~line 912) builds the lanes, their `activity` marks and their `context` samples; this is where `params`/`paramsTruncated` and the `tool_use_id` join are added, plus the new `MAX_ACTIVITY_PARAMS_CHARS` constant beside `MAX_LANE_ACTIVITY` (line 52).\ntools/argus/src/claude.mjs — read-only here: `EVENT.toolResult` and `toolParametersOf(attrs)` (line 59, reads `tool_input` with a `tool_parameters` fallback); both are already imported by store.mjs.\ntools/argus/src/server.mjs — read-only: `GET /api/sessions/:id/agents` (line 230) serves `getAgents` verbatim, so no route change.\ntools/argus-ui/public/timeline.js — the pure view model; `laneRowsHtml` (line 202) and `timelineHtml` (line 276) change, and `toolCallsUpTo`, `laneDetailHtml` and `MAX_LANE_TOOL_CALLS` are new.\ntools/argus-ui/public/app.js — the page; `state` (line 22), `renderDetail` (line 145), `renderChosenTime` (line 201), `loadSession` (line 848), `selectSession` (line 969) and the delegated detail click handler (line 1033) change.\ntools/argus-ui/public/format.js — read-only: `esc`, `fmtClock`, `fmtNum`, `shortId`, already imported by timeline.js.\ntools/argus-ui/public/styles.css — `.lane-row` (line 804) becomes a button; new `.lane-detail` / `.tool-call*` rules.\ntools/argus/test/store.test.mjs — the collector cases; `getAgents: activity and context per lane` starts at line 751 and the `deepEqual` on `lane.activity` at line 773 has to be updated to the new entry shape.\ntools/argus-ui/test/timeline.test.mjs — the view-model cases, with the `lane()` fixture at line 31.\ntools/argus-ui/test/app.test.mjs — the fake-DOM boot harness (`bootApp`, `clickOn`, `laneRow`, `playheads`) and the `agentsOne` fixture at line 222.\ntools/argus/README.md — the Limits section.\ntools/argus-ui/README.md — the Timeline bullet (line 61).",
-            "environment": "Node >= 20.11, no install step: both projects are zero-dependency, so `npm --prefix … test` runs straight from a checkout without `npm install`. There is no linter, no formatter and no build step in this repository. Every command below runs from the repository root.\n\n- `npm --prefix tools/argus test` — the collector suite (`node --test \"test/*.test.mjs\"`).\n- `npm --prefix tools/argus-ui test` — the UI suite (`node --test \"test/*.test.mjs\"`).\n- `node --test tools/argus/test/store.test.mjs` — the store file alone.\n- `node --test tools/argus-ui/test/timeline.test.mjs` — the view-model file alone.\n- `node --test tools/argus-ui/test/app.test.mjs` — the booted-page file alone.",
-            "testPlan": "Tests are needed. Three files, all `node:test` + `node:assert/strict`, no framework and no DOM library.\n\nNothing was run for this plan: no command below has been executed, not as a baseline either, and no case is known to be red beyond the one existing case this increment deliberately changes (see A0). The first run belongs to whoever runs it downstream.\n\n### A. Collector — /home/user/uroboros/tools/argus/test/store.test.mjs\n\nFramework `node:test`; run with `node --test tools/argus/test/store.test.mjs`. Conventions of this file: module-level `span(name, attrs, extra)`, `subagentSpan(name, agentId, extraAttrs, extra)` and `log(eventName, attrs, timeMs)` factories over `NOW = Date.now()` and `SESSION = 'sess-1'`; a case builds a fresh `new TelemetryStore()`, calls `store.ingest('traces', [...])` and `store.ingest('logs', [...])`, then asserts on `store.getAgents(SESSION)`; a log that needs a span context is spread as `{ ...log(...), spanId: 'llm-a' }`; test names are lowercase sentences saying what must hold. Put the new cases in a section comment `/* --------------- getAgents: tool call parameters --------------- */` after the existing `getAgents: activity and context per lane` block (line 751).\n\n- A0 (existing case, must be updated, not added): `activity is placed on the lane of the agent instance it belongs to, at the time it occurred` (line 753) asserts `deepEqual(lane.activity, [{atMs, kind, name}, …])`. The entry shape gains two keys, so update both expected entries to `{atMs, kind, name, params: null, paramsTruncated: false}`. This is the contract change, not a regression. Also update the `lane with no tool/llm spans` case at line 873 only if it starts failing — it asserts empty arrays and should not.\n- A1 — criterion \"the parameters are read through the attribution already in place\". Ingest an interaction root span, a `subagentSpan('claude_code.tool', 'agt-a', {tool_name: 'Read', tool_use_id: 'tu-1'}, {spanId: 'tool-a', parentSpanId: 'root', startMs: 100})`, and a log `{...log('claude_code.tool_result', {tool_name: 'Read', tool_use_id: 'tu-1', tool_input: JSON.stringify({file_path: '/a.md'})}, NOW + 150)}`. Expect the `agent:agt-a` lane's single activity entry to be `{atMs: NOW + 100, kind: 'tool', name: 'Read', params: '{\"file_path\":\"/a.md\"}', paramsTruncated: false}`, and the `main` lane's activity to stay `[]` — the parameters must land on the agent's lane and nowhere else.\n- A2 — the older CLI attribute name. Same as A1 but the event carries `tool_parameters` instead of `tool_input`. Expect the same `params` text.\n- A3 — a call whose result never arrived. A tool span with `tool_use_id` and no `tool_result` log. Expect the activity entry still to exist with `params: null` and `paramsTruncated: false`: a missing result must not delete a mark.\n- A4 — the cap, the limit case. A `tool_input` whose JSON is longer than 1000 characters (e.g. `{command: 'x'.repeat(5000)}`). Expect `paramsTruncated === true` and `params.length === 1000`. Assert the length, not the exact text.\n- A5 — the unattributed lane answers too. A `span('claude_code.tool', {tool_name: 'Bash', tool_use_id: 'tu-9'}, {spanId: 'orphan-tool', parentSpanId: 'ghost', startMs: 50})` plus its `tool_result` log with `tool_input`. Expect the unattributed lane's tool entry to carry the params and `main.activity` to stay `[]`.\n- A6 — no second attribution path. A `tool_result` log carrying `tool_use_id: 'tu-nothing'` and a `tool_input`, with no matching tool span. Expect the lane set and every lane's `activity.length` to be exactly what the spans alone produce: no entry is invented for it.\n- A7 — an `llm_request` activity entry keeps `params: null` (folded into A1's assertions if the fixture already has one; otherwise its own case).\n\nNot covered here on purpose: the `GET /api/sessions/:id/agents` route (it serialises `getAgents` verbatim and is unchanged), and the exact JSON key order of `params` (it is `JSON.stringify` of the parsed object; asserting more would pin the CLI's attribute order).\n\n### B. View model — /home/user/uroboros/tools/argus-ui/test/timeline.test.mjs\n\nFramework `node:test`; run with `node --test tools/argus-ui/test/timeline.test.mjs`. Conventions of this file: import the named exports from `../public/timeline.js` at the top (add `toolCallsUpTo`, `laneDetailHtml`, `MAX_LANE_TOOL_CALLS`); build lanes with the module-level `lane({id, kind, agentId, agentType, firstMs, lastMs, activity, context})` fixture (extend its `activity` entries with `params`/`paramsTruncated` inline — the fixture passes `activity` through untouched); no DOM anywhere, assertions are regexes and substring checks over returned markup, with helpers `laneRow(html, id)`, `playheads(html)` and `activityMarkTags(row)` already defined in the file. Add a section comment `/* ------- selecting a lane, and its tool use up to the chosen time ------- */`.\n\n- B1 — bounded by the chosen time. A lane with activity `[{atMs: 100, kind: 'tool', name: 'Read', params: '{\"a\":1}'}, {atMs: 200, kind: 'llm_request', name: 'claude-opus-5', params: null}, {atMs: 300, kind: 'tool', name: 'Write', params: '{\"b\":2}'}]`. `toolCallsUpTo(lane, 200)` returns `total === 1` and one item, the `Read`; `toolCallsUpTo(lane, 300)` returns `total === 2` with `Write` first (newest first); the `llm_request` entry never appears.\n- B2 — the edges. `toolCallsUpTo(lane, 100)` includes the call exactly at the chosen time (inclusive bound); `toolCallsUpTo(lane, 50)` returns `{total: 0, items: []}`; `toolCallsUpTo(lane, null)` and `toolCallsUpTo(lane, NaN)` return `{total: 0, items: []}`; `toolCallsUpTo({}, 1000)` and `toolCallsUpTo(lane({id: 'main', kind: 'main', firstMs: 0, lastMs: 1}), 1000)` return `{total: 0, items: []}` without throwing (the payload shape with no `activity` key).\n- B3 — the cap. A lane with `MAX_LANE_TOOL_CALLS + 10` tool entries before the chosen time: `items.length === MAX_LANE_TOOL_CALLS`, `total === MAX_LANE_TOOL_CALLS + 10`, and `items[0]` is the newest call.\n- B4 — no selection renders nothing. `laneDetailHtml(items, 500, null) === ''` and `laneDetailHtml(items, 500, 'agent:nope') === ''`.\n- B5 — the listing names the lane and carries name plus parameters. `laneDetailHtml([mainLane, subLane], 300, 'agent:agt-a')` contains the lane's label (`agentLabel`) and, for each listed call, its tool name and its params text; a call after the chosen time appears nowhere in the markup.\n- B6 — an empty lane says so. `laneDetailHtml([laneWithNoToolCalls], 500, 'main')` matches `/no tool calls/i` and renders no `<li class=\"tool-call\"`.\n- B7 — a call with no recorded parameters. An entry with `params: null` renders with its tool name and a `data-empty=\"true\"` parameters element, not an empty gap.\n- B8 — a truncated call is marked. An entry with `paramsTruncated: true` renders `data-truncated=\"true\"` on its parameters element.\n- B9 — escaping, the convention this file already has for hostile input. A tool name `<script>x</script>` and a params text `{\"a\":\"<script>y</script>\"}` must not put `<script` into the output of `laneDetailHtml`.\n- B10 — the selected lane is visibly marked. `timelineHtml(items, window, {atMs: 250, selectedLaneId: 'agent:agt-a'})`: the row sliced by `laneRow(html, 'agent:agt-a')` contains `aria-current=\"true\"`, every other lane row contains `aria-current=\"false\"`, and with no `selectedLaneId` the whole markup contains no `aria-current=\"true\"`.\n- B11 — the in-place repaint cannot drift, extending the existing case of that name: `timelineHtml(items, window, {atMs, selectedLaneId})` contains `laneRowsHtml(items, window, atMs, selectedLaneId)` verbatim.\n\nNot covered here on purpose: the CSS (no styling assertion exists anywhere in this project), and the exact wording of the head line and the empty-lane sentence beyond the `/no tool calls/i` shape — the wording is the implementer's.\n\n### C. The rendered page — /home/user/uroboros/tools/argus-ui/test/app.test.mjs\n\nThis is what proves the increment: the criterion says a change that stops a lane selection reaching the panel, or leaves the panel on the previous moment after the chosen time moves, must be caught. Framework `node:test`; run with `node --test tools/argus-ui/test/app.test.mjs`. Conventions of this file: `installFakes(routes)` stubs `document`/`window`/`location`/`EventSource`/`setInterval`/`fetch`; `bootApp(routes, predicate)` imports a fresh `../public/app.js?case=n` and settles; `handle.el(id)` returns the fake element (created on demand, so `el('lane-detail')` works), `handle.fire(id, type, event)` fires a delegated listener, `handle.emit('ingest')` fires the SSE stream, `handle.settle(pred)` waits; `clickOn(sel, match)` builds a click whose `target.closest` resolves exactly one selector; `laneRow(html, id)` slices one lane row out of the markup. Add a section comment `/* ------- selecting a lane, and its tool use up to the chosen time ------- */`.\n\nFixture work first: extend the `agentsOne` fixture (line 222) so the parameters exist on the page's data. Give `main` two tool calls — `{atMs: T0 + 3_000, kind: 'tool', name: 'Read', params: '{\"file_path\":\"/early.md\"}', paramsTruncated: false}` and `{atMs: T0 + 9_000, kind: 'tool', name: 'Write', params: '{\"file_path\":\"/late.md\"}', paramsTruncated: false}` — plus its existing `llm_request` entry with `params: null`; give `agent:agt-a` its `Grep` call `params: '{\"pattern\":\"needle\"}'`; give `unattributed` its `Bash` call `params: '{\"command\":\"ls -la\"}'`; leave `agent:agt-b` with no activity. Bump `activityTotal` per lane to match. Existing cases assert lane counts, mark presence and playhead percentages, none of which these additions change.\n\n- C1 — the resting page. After `bootApp({...baseRoutes})`: `handle.el('lane-detail').innerHTML === ''`, the detail markup contains no `aria-current=\"true\"` and no `tool-call` entry — with no lane selected the session view renders as it does today.\n- C2 — a lane selection reaches the panel and the timeline. Fire `clickOn('[data-lane-id]', {dataset: {laneId: 'agent:agt-a'}})` on `detail`; then `laneRow(handle.el('detail').innerHTML, 'agent:agt-a')` contains `aria-current=\"true\"` while `laneRow(…, 'main')` contains `aria-current=\"false\"`, and the detail markup contains the tool name `Grep` and the params text `pattern` (assert on the escaped-safe substring `needle`, which survives escaping unchanged).\n- C3 — the listing is bounded by the chosen time and follows it, repainted in place. Select `main` (its `Write` call is at `T0 + 9_000`, the chosen time starts at the head `T0 + 10_000`, so both calls are listed). Then fire `{target: {id: 'timeline-scrub', value: String(T0 + 5_000)}}` as an `input` on `detail`. Assert `handle.el('lane-detail').innerHTML` now contains `/early.md` and does not contain `/late.md`, and that `handle.el('detail').innerHTML` still contains `value=\"${T0 + 10_000}\"` — the wholesale render did not run, which is what keeps the range input alive mid-drag. Then scrub back to `T0 + 9_500` and assert `/late.md` is in `lane-detail` again.\n- C4 — the unattributed lane answers too. Select `unattributed`; the panel lists `Bash` and its `ls -la`.\n- C5 — a lane with no tool calls before the chosen time says so. Select `agent:agt-b`; `handle.el('lane-detail').innerHTML` matches `/no tool calls/i` and contains no `tool-call-name`.\n- C6 — the selection survives new data. Select `agent:agt-a`, then `handle.emit('ingest')` with a route function that moves `lastMs` (the shape the existing live-mode cases use), settle on the new `max=` reaching the detail markup, and assert the refreshed detail still marks `agent:agt-a` with `aria-current=\"true\"` and still lists `Grep`.\n- C7 — clicking the selected lane closes the panel again. Select `agent:agt-a`, fire the same click a second time, and assert `handle.el('lane-detail').innerHTML === ''` and no `aria-current=\"true\"` anywhere in the detail markup.\n- C8 — switching sessions drops the selection. Select `agent:agt-a`, then click `[data-session]` for `sess-2`, settle on `agent:agt-c` reaching the page, and assert `handle.el('lane-detail').innerHTML === ''`. (`agentsTwo` has no `activity` key at all, so this also pins that the old payload shape does not throw on the selection path.)\n\nNot covered here on purpose: mouse-drag ergonomics and focus restoration (the harness has no real DOM), keyboard activation of the lane row (it is a real `<button>`, so the platform owns it), and pixel appearance of the selected-lane marking.",
-            "checks": [
-              "npm --prefix tools/argus test",
-              "npm --prefix tools/argus-ui test"
-            ],
-            "questions": []
-          }
-        },
-        {
-          "label": "tests:lane-select.0",
-          "at": "2026-08-07T12:48:49.066Z",
-          "return": {
-            "summary": "Wrote 26 failing/pinning node:test cases across tools/argus/test/store.test.mjs (collector: params on activity entries), tools/argus-ui/test/timeline.test.mjs (toolCallsUpTo/laneDetailHtml/MAX_LANE_TOOL_CALLS view-model exports and the aria-current lane marker), and tools/argus-ui/test/app.test.mjs (lane selection reaching the rendered page and the in-place repaint on scrub), and confirmed each fails or passes for the reason the plan intends by running the three single-file commands the plan names.",
-            "cases": [
-              {
-                "case": "A0 (existing case, must be updated): activity entry shape gains params/paramsTruncated",
-                "file": "tools/argus/test/store.test.mjs",
-                "testName": "activity is placed on the lane of the agent instance it belongs to, at the time it occurred",
-                "expected": "deepEqual(lane.activity, [{atMs, kind, name, params: null, paramsTruncated: false}, ...]) for both the tool and the llm_request entries",
-                "got": "AssertionError (deepStrictEqual): actual entries carry only {atMs, kind, name}; expected adds params:null, paramsTruncated:false to both entries. `node --test tools/argus/test/store.test.mjs`, test 48 of 62, fails as intended."
-              },
-              {
-                "case": "A1: the parameters are read through the attribution already in place (subagent tool call, tool_input)",
-                "file": "tools/argus/test/store.test.mjs",
-                "testName": "the parameters are read through the attribution already in place: a subagent tool call carries its params on the agent lane, not on main",
-                "expected": "agent:agt-a lane's single activity entry is {atMs: NOW+100, kind:'tool', name:'Read', params:'{\"file_path\":\"/a.md\"}', paramsTruncated:false}; main.activity stays []",
-                "got": "AssertionError (deepStrictEqual): actual entry is {atMs, kind:'tool', name:'Read'} with no params/paramsTruncated keys at all. `node --test tools/argus/test/store.test.mjs`, test 57 of 62, fails as intended."
-              },
-              {
-                "case": "A2: the older CLI attribute name tool_parameters",
-                "file": "tools/argus/test/store.test.mjs",
-                "testName": "the older CLI attribute name tool_parameters is read the same as tool_input",
-                "expected": "lane.activity[0].params === '{\"file_path\":\"/a.md\"}' when the event carries tool_parameters instead of tool_input",
-                "got": "AssertionError (strictEqual): actual is undefined (no params key exists on the entry yet). `node --test tools/argus/test/store.test.mjs`, test 58 of 62, fails as intended."
-              },
-              {
-                "case": "A3: a call whose result never arrived",
-                "file": "tools/argus/test/store.test.mjs",
-                "testName": "a tool call whose result never arrived still leaves its activity mark, with params null",
-                "expected": "the activity entry still exists with params: null, paramsTruncated: false",
-                "got": "AssertionError (deepStrictEqual): actual entry has no params/paramsTruncated keys. `node --test tools/argus/test/store.test.mjs`, test 59 of 62, fails as intended."
-              },
-              {
-                "case": "A4: the cap, the limit case (>1000 chars truncated)",
-                "file": "tools/argus/test/store.test.mjs",
-                "testName": "parameters longer than 1000 characters are truncated to the cap",
-                "expected": "paramsTruncated === true and params.length === 1000",
-                "got": "AssertionError (strictEqual): actual paramsTruncated is undefined, not true. `node --test tools/argus/test/store.test.mjs`, test 60 of 62, fails as intended."
-              },
-              {
-                "case": "A5: the unattributed lane answers too",
-                "file": "tools/argus/test/store.test.mjs",
-                "testName": "the unattributed lane answers too: an orphan tool call carries its params",
-                "expected": "unattributed lane's tool entry carries params '{\"command\":\"ls -la\"}'; main.activity stays []",
-                "got": "AssertionError (strictEqual): actual is undefined (no params key on the unattributed entry). `node --test tools/argus/test/store.test.mjs`, test 61 of 62, fails as intended."
-              },
-              {
-                "case": "A6: no second attribution path (tool_result with no matching tool span invents no entry)",
-                "file": "tools/argus/test/store.test.mjs",
-                "testName": "a tool_result with no matching tool span invents no activity entry: no second attribution path",
-                "expected": "the lane set and every lane's activity.length is exactly what the spans alone produce (just the main lane, with activity.length 0); no entry is invented",
-                "got": "Passes today: the store already never invents an activity entry from a bare tool_result, so this negative case holds before the increment lands too. `node --test tools/argus/test/store.test.mjs`, test 62 of 62, passes (not a regression to fix, a guard the implementer must keep true)."
-              },
-              {
-                "case": "A7: an llm_request activity entry keeps params: null (folded into A1's assertions if the fixture already has one)",
-                "file": "",
-                "testName": "",
-                "expected": "an llm_request activity entry carries params: null",
-                "got": "Folded into A0's updated fixture, not written as a separate case: the existing case being updated (line 753) already has an llm_request entry ({atMs: NOW+300, kind:'llm_request', name:'claude-opus-5'}), and its updated expectation now asserts params: null, paramsTruncated: false on it too, matching the plan's own instruction to fold this into the fixture that already has one."
-              },
-              {
-                "case": "B1: bounded by the chosen time, newest first, llm_request never appears",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "toolCallsUpTo bounds the listing by the chosen time and orders newest first, never including llm_request",
-                "expected": "toolCallsUpTo(lane, 200) -> {total:1, items:[Read]}; toolCallsUpTo(lane, 300) -> {total:2, items:[Write, Read]}; llm_request entry never in items",
-                "got": "The whole file fails to load: `SyntaxError: The requested module '../public/timeline.js' does not provide an export named 'MAX_LANE_TOOL_CALLS'`. `node --test tools/argus-ui/test/timeline.test.mjs` exits 1, 0 tests run — the missing export is itself proof the behaviour does not exist yet, not an import typo on the test's side (toolCallsUpTo/laneDetailHtml/MAX_LANE_TOOL_CALLS are exactly the plan's named new exports)."
-              },
-              {
-                "case": "B2: the edges (inclusive bound at exactly atMs; empty before firstMs; null/NaN atMs; missing lane/activity)",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "toolCallsUpTo: the chosen time is an inclusive bound, and a missing lane or activity answers empty without throwing",
-                "expected": "toolCallsUpTo(lane, 100) includes the call exactly at 100; toolCallsUpTo(lane, 50), (lane, null), (lane, NaN), ({}, 1000) and (laneWithNoActivityData, 1000) all return {total:0, items:[]} without throwing",
-                "got": "Same module-load SyntaxError as B1 (missing MAX_LANE_TOOL_CALLS export) prevents this file from running at all."
-              },
-              {
-                "case": "B3: the cap, the limit case (MAX_LANE_TOOL_CALLS+10 entries)",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "toolCallsUpTo caps the returned items at MAX_LANE_TOOL_CALLS while total still counts every call",
-                "expected": "items.length === MAX_LANE_TOOL_CALLS, total === MAX_LANE_TOOL_CALLS+10, items[0] is the newest call",
-                "got": "Same module-load SyntaxError as B1 prevents this file from running at all."
-              },
-              {
-                "case": "B4: no selection renders nothing",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "laneDetailHtml renders nothing with no selection, or a selection naming a lane that is not in the list",
-                "expected": "laneDetailHtml(items, 500, null) === '' and laneDetailHtml(items, 500, 'agent:nope') === ''",
-                "got": "Same module-load SyntaxError as B1 prevents this file from running at all."
-              },
-              {
-                "case": "B5: the listing names the lane and carries name plus parameters",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "laneDetailHtml names the selected lane and lists each call by name and parameters, bounded by the chosen time",
-                "expected": "the markup contains the lane's agentLabel and, for each listed call, its tool name and params text; a call after the chosen time appears nowhere",
-                "got": "Same module-load SyntaxError as B1 prevents this file from running at all."
-              },
-              {
-                "case": "B6: an empty lane says so",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "an empty lane says so and renders no tool-call entries",
-                "expected": "matches /no tool calls/i and renders no <li class=\"tool-call\"",
-                "got": "Same module-load SyntaxError as B1 prevents this file from running at all."
-              },
-              {
-                "case": "B7: a call with no recorded parameters",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "a call with no recorded parameters renders its name with an empty-params marker, not a gap",
-                "expected": "renders the tool name and a data-empty=\"true\" parameters element",
-                "got": "Same module-load SyntaxError as B1 prevents this file from running at all."
-              },
-              {
-                "case": "B8: a truncated call is marked",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "a truncated call is marked data-truncated",
-                "expected": "renders data-truncated=\"true\" on its parameters element",
-                "got": "Same module-load SyntaxError as B1 prevents this file from running at all."
-              },
-              {
-                "case": "B9: escaping, hostile tool name and params",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "a hostile tool name or parameters text is escaped in laneDetailHtml",
-                "expected": "the output of laneDetailHtml never contains the literal substring '<script'",
-                "got": "Same module-load SyntaxError as B1 prevents this file from running at all."
-              },
-              {
-                "case": "B10: the selected lane is visibly marked",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "the selected lane is marked aria-current, and every other lane is marked aria-current=\"false\"",
-                "expected": "the selected lane's row contains aria-current=\"true\", every other row aria-current=\"false\", and with no selectedLaneId no row contains aria-current=\"true\" anywhere",
-                "got": "Same module-load SyntaxError as B1 prevents this file from running at all."
-              },
-              {
-                "case": "B11: the in-place repaint cannot drift (extended to the selected lane)",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "the in-place repaint cannot drift, extended to the selected lane",
-                "expected": "timelineHtml(items, window, {atMs, selectedLaneId}) contains laneRowsHtml(items, window, atMs, selectedLaneId) verbatim",
-                "got": "Same module-load SyntaxError as B1 prevents this file from running at all."
-              },
-              {
-                "case": "C1: the resting page (with no lane selected the session view renders as it does today)",
-                "file": "tools/argus-ui/test/app.test.mjs",
-                "testName": "with no lane selected the session view renders as it does today: no lane detail, no aria-current, no tool-call listing",
-                "expected": "handle.el('lane-detail').innerHTML === '' and the detail markup contains no aria-current=\"true\" and no 'tool-call'",
-                "got": "Passes today: booting the app with no selection made already satisfies this baseline before the increment lands, since app.js does not yet touch a lane-detail element or aria-current at all. `node --test tools/argus-ui/test/app.test.mjs`, test 15 of 22, passes (a guard the implementer must keep true, not a case to make go green)."
-              },
-              {
-                "case": "C2: a lane selection reaches the panel and the timeline",
-                "file": "tools/argus-ui/test/app.test.mjs",
-                "testName": "clicking a lane row records the selection and marks it on the timeline",
-                "expected": "after clicking [data-lane-id] for agent:agt-a on 'detail', laneRow(detail html, 'agent:agt-a') contains aria-current=\"true\", laneRow(..., 'main') contains aria-current=\"false\", and lane-detail's markup contains 'Grep' and 'needle'",
-                "got": "settle() timed out after 2s waiting for lane-detail's innerHTML to include 'Grep' — the click never populates handle.el('lane-detail'), which stays '' throughout, because there is no click handling for [data-lane-id] yet. `node --test tools/argus-ui/test/app.test.mjs`, test 16 of 22, fails as intended."
-              },
-              {
-                "case": "C3: the listing is bounded by the chosen time and follows it, repainted in place",
-                "file": "tools/argus-ui/test/app.test.mjs",
-                "testName": "the listing is bounded by the chosen time and follows it as it moves, repainted in place",
-                "expected": "after selecting main and scrubbing to T0+5_000, lane-detail contains /early.md and not /late.md, and detail's outer markup still shows value=\"T0+10_000\" (the wholesale render did not run); scrubbing forward to T0+9_500 brings /late.md back",
-                "got": "settle() timed out after 2s waiting for lane-detail's innerHTML to include '/late.md' from the very first click (selecting 'main' never populates lane-detail at all). `node --test tools/argus-ui/test/app.test.mjs`, test 17 of 22, fails as intended."
-              },
-              {
-                "case": "C4: the unattributed lane answers too",
-                "file": "tools/argus-ui/test/app.test.mjs",
-                "testName": "the unattributed lane answers too: selecting it lists its tool calls",
-                "expected": "selecting the unattributed lane, the panel lists 'Bash' and its 'ls -la'",
-                "got": "settle() timed out after 2s waiting for lane-detail's innerHTML to include 'Bash'. `node --test tools/argus-ui/test/app.test.mjs`, test 18 of 22, fails as intended."
-              },
-              {
-                "case": "C5: a lane with no tool calls before the chosen time says so",
-                "file": "tools/argus-ui/test/app.test.mjs",
-                "testName": "a lane with no tool calls before the chosen time says so",
-                "expected": "selecting agent:agt-b (no activity), lane-detail matches /no tool calls/i and contains no 'tool-call-name'",
-                "got": "settle() timed out after 2s waiting for /no tool calls/i to appear in lane-detail's innerHTML. `node --test tools/argus-ui/test/app.test.mjs`, test 19 of 22, fails as intended."
-              },
-              {
-                "case": "C6: the selection survives new data",
-                "file": "tools/argus-ui/test/app.test.mjs",
-                "testName": "the selection survives new data arriving, and the panel keeps following it",
-                "expected": "selecting agent:agt-a, then emitting 'ingest' that moves lastMs and settling on the new max= reaching the detail markup, the refreshed detail still marks agent:agt-a with aria-current=\"true\" and still lists 'Grep'",
-                "got": "settle() timed out after 2s waiting for lane-detail's innerHTML to include 'Grep' from the initial selection click, before the ingest step is even reached. `node --test tools/argus-ui/test/app.test.mjs`, test 20 of 22, fails as intended."
-              },
-              {
-                "case": "C7: clicking the selected lane closes the panel again",
-                "file": "tools/argus-ui/test/app.test.mjs",
-                "testName": "clicking the selected lane a second time closes the panel",
-                "expected": "selecting agent:agt-a, then clicking it a second time, lane-detail.innerHTML === '' and no aria-current=\"true\" anywhere in the detail markup",
-                "got": "settle() timed out after 2s waiting for lane-detail's innerHTML to include 'Grep' from the first click. `node --test tools/argus-ui/test/app.test.mjs`, test 21 of 22, fails as intended."
-              },
-              {
-                "case": "C8: switching sessions drops the selection",
-                "file": "tools/argus-ui/test/app.test.mjs",
-                "testName": "switching sessions drops the selection",
-                "expected": "after selecting agent:agt-a, clicking [data-session] for sess-2 and settling on agent:agt-c reaching the page, lane-detail.innerHTML === ''",
-                "got": "settle() timed out after 2s waiting for lane-detail's innerHTML to include 'Grep' from the first click, before the session switch is reached. `node --test tools/argus-ui/test/app.test.mjs`, test 22 of 22, fails as intended."
-              }
-            ],
-            "openQuestions": [
-              "B2/plan text is internally slightly ambiguous about whether the 'payload shape with no activity key' parenthetical describes only toolCallsUpTo({}, 1000) or also the lane(...) fixture case, since the module-level `lane()` fixture always sets `activity: []` (never omits the key) — I wrote one case covering both forms (a bare {} object and a lane() built with no activity supplied, which still gets activity: [] from the fixture default) so both are exercised, but a lane with a truly absent `activity` key was not constructible from the fixture as given.",
-              "C5 asks for a substring check against a class name 'tool-call-name' while B6/B7 use 'tool-call' (li) and 'data-empty'/'data-truncated' attributes — the plan does not reconcile these two vocabularies for the empty-lane marker, so both literal strings were kept as the plan wrote them (B uses 'tool-call', C uses 'tool-call-name'); the implementer should treat both plan-given substrings as binding rather than assume they are the same token."
-            ],
-            "questions": []
-          }
-        },
-        {
-          "label": "implement:lane-select.0",
-          "at": "2026-08-07T12:59:13.810Z",
-          "return": {
-            "deviations": [
-              "Plan said renderDetail renders `<div id=\"lane-detail\">${laneDetailHtml(...)}</div>` inline and renderChosenTime repaints it with an inline getElementById lookup. I kept the inline template but factored the repaint into a shared `renderLaneDetail()` helper called from both renderDetail (after the innerHTML assignment) and renderChosenTime. Reason: the app-test fake DOM resolves elements by id independently of any parent's innerHTML string, so cases C2/C4-C8 only see the panel if renderDetail also writes the container by id; in a browser the second write is idempotent and the markup is identical.",
-              "Plan said the truncated params element carries `data-truncated=\"true\"` plus a trailing ellipsis marker. I put the ellipsis in a sibling `<span class=\"tool-call-cut\">…</span>` after the `<code class=\"tool-call-params\" data-truncated=\"true\">`, so the code element holds exactly the collector's characters and nothing invented."
-            ],
-            "commands": [
-              {
-                "command": "npm --prefix tools/argus test",
-                "exitCode": 0,
-                "note": "192 cases, all pass; before the change 6 failed (the A0-A5 store cases)."
-              },
-              {
-                "command": "npm --prefix tools/argus-ui test",
-                "exitCode": 0,
-                "note": "89 cases, all pass; before the change timeline.test.mjs would not load (missing MAX_LANE_TOOL_CALLS export) and 7 app cases timed out."
-              }
-            ],
-            "blockers": [],
-            "questions": [],
-            "summary": "The collector now carries each tool call's parameters on its lane activity entry (capped at 1000 chars, joined from the tool_result log through tool_use_id in the existing single logs walk), and the UI turns a lane row into a selectable control whose selection lists that agent's tool calls with their parameters up to the chosen time, repainted in place as the time moves."
-          }
-        },
-        {
-          "label": "review:lane-select.0",
-          "at": "2026-08-07T13:05:32.512Z",
-          "return": {
-            "summary": "Reviewed the whole diff against main for increment 5 (lane selection and per-lane tool use); ran the two listed commands — `npm --prefix tools/argus test`, 192 cases, exit 0, and `npm --prefix tools/argus-ui test`, 89 cases, exit 0, nothing skipped — and found every acceptance criterion met in the code, with one gap in what the rendered-page test actually pins.",
-            "reason": "The criterion that the rendered page is what proves this increment is not met by the tests: the lane detail panel's container can vanish from the session view's markup without a single test going red, so a page that never shows the selected lane's tool calls would still ship green.",
-            "findings": [
-              {
-                "claim": "No test notices if the lane detail panel's container is missing from the rendered session view, so a page on which a lane selection never reaches the panel still passes green.",
-                "reproduction": "Delete the single line `<div id=\"lane-detail\">${laneDetailHtml(state.agents, state.atMs, state.selectedLaneId)}</div>` from renderDetail in /home/user/uroboros/tools/argus-ui/public/app.js:190, then run `npm --prefix tools/argus-ui test`: 89 of 89 cases still pass (verified in a throwaway git worktree, exit 0). The panel is then in no rendered markup at all — in a browser, selecting a lane would show nothing — yet the suite is silent, because the fake DOM's document.getElementById (/home/user/uroboros/tools/argus-ui/test/app.test.mjs:46-54) conjures an element for any id whether or not the rendered HTML contains it, and every lane-panel assertion in the new cases reads handle.el('lane-detail') rather than the detail element's own markup. Closing the gap needs the rendered detail markup itself asserted to carry the panel: after clicking a lane, `handle.el('detail').innerHTML` must contain the listing (e.g. 'Grep' and 'needle' for lane agent:agt-a), not only `handle.el('lane-detail').innerHTML`.",
-                "criterion": "What proves this increment is the rendered page: a change that stops a lane selection reaching the panel, or leaves the panel showing the previous moment after the chosen time moves, is caught, not only a builder function checked in isolation."
-              }
-            ],
-            "questions": []
-          }
-        },
-        {
-          "label": "research:lane-select.1",
-          "at": "2026-08-07T13:09:48.647Z",
-          "return": {
-            "needsTests": true,
-            "summary": "Close the review's gap by asserting the lane detail panel in the rendered detail markup itself (not only through the fake DOM's conjured element), a test-only correction with no production change.",
-            "plan": "This correction round is test-only. The production code is already right: /home/user/uroboros/tools/argus-ui/public/app.js:190 renders `<div id=\"lane-detail\">${laneDetailHtml(state.agents, state.atMs, state.selectedLaneId)}</div>` inside `renderDetail`, between the timeline panel and the view strip, and both `renderDetail` and `renderChosenTime` repaint it through `renderLaneDetail()` (app.js:204-207, 221-230). Change nothing in public/app.js and nothing in public/timeline.js.\n\nWhat the review found is a hole in the test suite, not in the page: the fake DOM's `document.getElementById` (test/app.test.mjs:46-54, 51-58) conjures an element for any id on demand, so `renderLaneDetail()` writes the listing into a fake `lane-detail` element whether or not the rendered markup ever contained that container. Every lane-panel assertion in the current cases reads `handle.el('lane-detail').innerHTML`, so deleting app.js:190 leaves 89 of 89 cases green while the panel is in no markup at all.\n\nThe fix is to assert the rendered markup: after a lane click, `handle.el('detail').innerHTML` — the string `renderDetail` composed — must carry the container and the listing. That string is fresh on every path that calls `renderDetail` (boot, lane click, ingest refresh, session switch), so it is the honest witness for \"a lane selection reaches the panel\". The scrub path deliberately does not touch it (that is the whole point of the in-place repaint), so the \"follows the chosen time\" half stays asserted on `handle.el('lane-detail')`, which is the element `renderChosenTime` actually repaints; dropping `renderLaneDetail()` from `renderChosenTime` leaves that element stale and the existing case red. The two together pin both halves of the criterion, and they also pin that the id in the markup and the id `renderLaneDetail` looks up are the same id: if they diverged, the markup assertion or the element assertion fails, one or the other.\n\nRejected: rewriting the fake DOM so `getElementById` resolves only ids that appear in already-rendered markup, with a parent's `innerHTML` getter splicing its children's current content back in. That would catch this class of bug for every container on the page (`timeline-lanes`, `view-body`, `span-inspector`, `timeline-scrub-state`) instead of one, but it is a miniature DOM implementation: the top-level ids come from public/index.html, which the fake never loads, so the fake would have to carry a second list of ids that exist by fiat, and every one of the 89 existing cases is exposed to the rewrite. The cost is a suite-wide rewrite to close one named finding; the string assertions close it for the price of a helper.\n\nRejected: making the container conditional on a selection, or giving it a data attribute of its own. Neither is asked for, and the container has to exist whenever the detail is rendered because `renderChosenTime` looks it up by id mid-drag.\n\nSettling the two questions the test-author left open:\n\n1. `toolCallsUpTo` and an absent `activity` key. Nothing more is needed. test/timeline.test.mjs:791 already passes a bare `{}` — an object with no `activity` key at all — and :792-793 passes a `lane()` whose fixture default supplies `activity: []`. Between them the guard `(lane?.activity ?? [])` is covered for both the absent key and the empty array, and the parenthetical in the earlier plan meant exactly the bare `{}` case. Leave those lines as they are; do not extend the `lane()` fixture to omit the key.\n\n2. `tool-call-name` versus `tool-call`. Use `tool-call` and only `tool-call` in the app-level absence checks. `class=\"tool-call\"` is the `<li>` of one entry and `tool-call-name` is a span inside it (public/timeline.js:382-386), so `tool-call` is a prefix of every entry token the panel emits and its absence proves no entry was rendered; the empty branch emits `<p class=\"placeholder\">` and the head's plain text \"tool calls\" carries a space, so it never matches. The earlier plan's `tool-call-name` was a second name for one thing; drop it. The unit-level case at test/timeline.test.mjs:841 keeps its own literal `'<li class=\"tool-call\"'` — that one is fine as written.",
-            "moduleMap": "/home/user/uroboros/tools/argus-ui/test/app.test.mjs — the only file this round changes: boots the real public/app.js against a fake DOM; holds the fake DOM (`fakeElement`, `installFakes`, `bootApp`, `clickOn`), the fixtures (`agentsOne`, `baseRoutes`, `T0`), the `laneRow(html, id)`/`playheads(html)` helpers, and the seven lane-selection cases at lines 545-647.\n/home/user/uroboros/tools/argus-ui/public/app.js — read-only context: `renderDetail` (line 149) emits the `<div id=\"lane-detail\">` container at line 190, `renderLaneDetail` (line 204) repaints it, `renderChosenTime` (line 221) calls that on every scrub, and the lane click branch is in `wireEvents` at lines 1076-1084. Do not edit.\n/home/user/uroboros/tools/argus-ui/public/timeline.js — read-only context: `laneDetailHtml` (line 400), `toolCallsUpTo` (line 360) and `toolCallHtml` (line 374) build the listing markup the assertions match. Do not edit.\n/home/user/uroboros/tools/argus-ui/test/timeline.test.mjs — read-only context: the unit cases for `toolCallsUpTo`/`laneDetailHtml` at lines 747-880, already covering both open questions. Do not edit.",
-            "environment": "Node >= 20.11, already installed. This project has zero runtime dependencies and its tests use only `node:test` and `node:assert/strict`, so no `npm install` is needed and none has run. There is no linter and no formatter in tools/argus-ui.\n\nCommands used by this plan, both runnable from the repository root:\n- `npm --prefix tools/argus-ui test` — the project suite (`node --test \"test/*.test.mjs\"`, 89 cases across app/timeline/server/config/independence).\n- `node --test tools/argus-ui/test/app.test.mjs` — the single file this round changes, for the test-author's own loop.",
-            "testPlan": "Tests are needed: the finding is a missing assertion, and the whole of this round's work is writing it.\n\nAll work is in /home/user/uroboros/tools/argus-ui/test/app.test.mjs. Framework: `node:test` with `node:assert/strict`, already imported at the top of the file. Conventions of that file: one `test('lowercase sentence describing the behaviour', async () => {...})` per case; a case boots with `const handle = await bootApp({ ...baseRoutes })`, drives the page with `handle.fire(id, type, event)` and `clickOn(selector, match)`, waits with `await handle.settle(predicate)`, and asserts on markup strings with `assert.match` / `assert.ok(!html.includes(...))`. Fixtures are module-level constants (`T0`, `agentsOne`, `baseRoutes`); do not add new ones — `agentsOne` already carries every lane and call this plan names. Nothing is mocked beyond the fakes `installFakes` installs; the real public/app.js and public/timeline.js run.\n\nAdd one helper beside the existing `laneRow(html, id)` helper (test/app.test.mjs:379), in the `/* ------- selecting a lane... ------- */` section or directly above it:\n\n```js\n/**\n * The slice of rendered detail markup that holds the lane detail panel: from the\n * container's id to the start of the view strip that follows it. Returns '' when the\n * container is not in the markup at all, which is the failure this guards.\n */\nfunction laneDetailSlice(html) {\n  const start = html.indexOf('id=\"lane-detail\"');\n  if (start === -1) return '';\n  const end = html.indexOf('role=\"tablist\"', start);\n  return end === -1 ? html.slice(start) : html.slice(start, end);\n}\n```\n\nThe cases, all against the criterion \"What proves this increment is the rendered page: a change that stops a lane selection reaching the panel, or leaves the panel showing the previous moment after the chosen time moves, is caught, not only a builder function checked in isolation.\" Every one is integration level — the real app.js booted against the fake DOM — and every one runs under `node --test tools/argus-ui/test/app.test.mjs`.\n\nA1 — NEW case, the named regression guard. Name: `test('the lane detail panel is part of the rendered session view, between the timeline and the technical views', ...)`. Input/state: `await bootApp({ ...baseRoutes })`, then `handle.fire('detail', 'click', clickOn('[data-lane-id]', { dataset: { laneId: 'agent:agt-a' } }))`, then `await handle.settle(() => handle.el('lane-detail').innerHTML.includes('Grep'))`. Expected, all on `const html = handle.el('detail').innerHTML`: `assert.match(html, /id=\"lane-detail\"/)`; the container sits after the lane rows and before the view strip — `assert.ok(html.indexOf('id=\"timeline-lanes\"') < html.indexOf('id=\"lane-detail\"'))` and `assert.ok(html.indexOf('id=\"lane-detail\"') < html.indexOf('role=\"tablist\"'))`; and on `const slice = laneDetailSlice(html)`: `assert.match(slice, /data-lane-detail=\"agent:agt-a\"/)`, `assert.match(slice, /Grep/)`, `assert.match(slice, /needle/)`, `assert.match(slice, /tool-call/)`. This is the case that goes red when app.js:190 is deleted.\n\nA2 — MODIFY the existing case at line 555, `'clicking a lane row records the selection and marks it on the timeline'`. Keep every existing assertion. Add, after the existing `panel` assertions, on the same `detailHtml` the case already reads: `const rendered = laneDetailSlice(detailHtml); assert.match(rendered, /Grep/); assert.match(rendered, /needle/);` — the selection has to reach the markup, not only the conjured element.\n\nA3 — MODIFY the existing case at line 589, `'the unattributed lane answers too: selecting it lists its tool calls'`. Keep the existing assertions. Add: `const rendered = laneDetailSlice(handle.el('detail').innerHTML); assert.match(rendered, /Bash/); assert.match(rendered, /ls -la/);` — a second lane of the vocabulary, proving the guard is not one hard-coded id.\n\nA4 — MODIFY the existing case at line 598, `'a lane with no tool calls before the chosen time says so'`. Replace `assert.ok(!panel.includes('tool-call-name'))` with `assert.ok(!panel.includes('tool-call'))` (question 2, settled above). Keep `assert.match(panel, /no tool calls/i)`. Add: `const rendered = laneDetailSlice(handle.el('detail').innerHTML); assert.match(rendered, /no tool calls/i); assert.ok(!rendered.includes('tool-call'));` — the empty-lane answer reaches the page too.\n\nA5 — MODIFY the existing case at line 569, `'the listing is bounded by the chosen time and follows it as it moves, repainted in place'`. Keep every existing assertion, in order. Add, immediately after the first `settle` and before the scrub is fired: `const firstRender = laneDetailSlice(handle.el('detail').innerHTML); assert.match(firstRender, /\\/early\\.md/); assert.match(firstRender, /\\/late\\.md/);`. Do not re-read `handle.el('detail').innerHTML` for the listing after the scrub: the in-place repaint touches only the container element by design, so the composed detail string stays at the pre-scrub moment on purpose — write that as a one-line comment above the post-scrub assertions, and leave those reading `handle.el('lane-detail').innerHTML`. Those are what catches a panel left showing the previous moment: they go red if `renderChosenTime` stops calling `renderLaneDetail`.\n\nA6 — MODIFY the existing case at line 607, `'the selection survives new data arriving, and the panel keeps following it'`. Keep the existing assertions. Add: `assert.match(laneDetailSlice(detailHtml), /Grep/);` — the wholesale re-render an ingest triggers must put the panel back into the markup, not only into the element.\n\nA7 — MODIFY the existing case at line 626, `'clicking the selected lane a second time closes the panel'`. Keep the existing assertions. Add: `const rendered = laneDetailSlice(handle.el('detail').innerHTML); assert.ok(rendered, 'the container stays in the page with nothing selected'); assert.ok(!rendered.includes('tool-call'));` — deselecting empties the panel and keeps the container `renderChosenTime` needs.\n\nA8 — MODIFY the existing case at line 547, `'with no lane selected the session view renders as it does today: no lane detail, no aria-current, no tool-call listing'`. Keep every existing assertion. Add, on the `html` the case already reads: `assert.match(html, /id=\"lane-detail\"/)`, `assert.ok(html.indexOf('data-lane-id=') < html.indexOf('id=\"lane-detail\"'))`, `assert.ok(html.indexOf('id=\"lane-detail\"') < html.indexOf('role=\"tablist\"'))`, and `assert.ok(!laneDetailSlice(html).includes('lane-detail-head'), 'no panel is rendered with nothing selected')`. The resting page keeps the empty container.\n\nLeft untested, deliberately: the unit-level behaviour of `toolCallsUpTo`, `laneDetailHtml` and `toolCallHtml` — test/timeline.test.mjs:747-880 already pins the bound, the ordering, the cap, the escaping, the empty-parameters marker and the absent-`activity` shapes, and nothing in this round changes those functions, so no case there is added or edited. Also left untested: that a real browser's `detail.innerHTML` reflects a child's later repaint — the fake DOM cannot model it, which is exactly why A5 splits its assertions across the composed markup (before the scrub) and the container element (after it).\n\nAlready red: nothing. I ran no command this round; the review reports the suite at 89 of 89 passing, exit 0, and every assertion above holds against the production code as it stands today, since app.js:190 renders the container and its content. If a new assertion fails, the failure is in the assertion's literal, not in the page — do not change public/app.js to satisfy it without first showing the page is wrong.",
-            "checks": [
-              "npm --prefix tools/argus-ui test"
-            ],
-            "questions": []
-          }
-        },
-        {
-          "label": "tests:lane-select.1",
-          "at": "2026-08-07T13:13:04.618Z",
-          "return": {
-            "summary": "Added the laneDetailSlice helper and one new regression-guard test (A1), and extended the eight existing lane-selection cases (A2-A8, plus the new A1) in tools/argus-ui/test/app.test.mjs with assertions that read the composed detail markup rather than only the fake lane-detail element; per the plan's own declaration all 23 cases in the affected block pass against the current production code (node --test tools/argus-ui/test/app.test.mjs: 23/23 pass, exit 0), so none of these assertions are red — they are regression guards the plan states were missing, not new failing behaviour.",
-            "cases": [
-              {
-                "case": "A1 — the lane detail panel is part of the rendered session view, between the timeline and the technical views (new regression guard)",
-                "file": "/home/user/uroboros/tools/argus-ui/test/app.test.mjs",
-                "testName": "the lane detail panel is part of the rendered session view, between the timeline and the technical views",
-                "expected": "After clicking a lane row and settling on 'Grep' appearing in lane-detail, the composed `detail` markup contains id=\"lane-detail\" positioned after id=\"timeline-lanes\" and before role=\"tablist\", and laneDetailSlice(html) contains data-lane-detail=\"agent:agt-a\", Grep, needle and tool-call.",
-                "got": "Passes as written (node --test tools/argus-ui/test/app.test.mjs, test 15 of 23: ok). The plan stated in advance ('Already red: nothing') that this holds against today's production code, since app.js:190 already renders the container and its content into the composed markup; this run confirms that claim rather than contradicting it."
-              },
-              {
-                "case": "A2 — clicking a lane row records the selection and marks it on the timeline: add composed-markup assertions to the existing case",
-                "file": "/home/user/uroboros/tools/argus-ui/test/app.test.mjs",
-                "testName": "clicking a lane row records the selection and marks it on the timeline",
-                "expected": "All prior assertions kept; additionally laneDetailSlice(detailHtml) matches /Grep/ and /needle/, i.e. the selection reaches the composed detail markup, not only the conjured lane-detail element.",
-                "got": "Passes as written (test 17 of 23: ok), consistent with the plan's declaration that no assertion in this round goes red against current production code."
-              },
-              {
-                "case": "A3 — the unattributed lane answers too: selecting it lists its tool calls: add composed-markup assertions",
-                "file": "/home/user/uroboros/tools/argus-ui/test/app.test.mjs",
-                "testName": "the unattributed lane answers too: selecting it lists its tool calls",
-                "expected": "All prior assertions kept; additionally laneDetailSlice(handle.el('detail').innerHTML) matches /Bash/ and /ls -la/, proving the guard against a second lane of the vocabulary, not one hard-coded id.",
-                "got": "Passes as written (test 19 of 23: ok)."
-              },
-              {
-                "case": "A4 — a lane with no tool calls before the chosen time says so: tighten the negative assertion and add composed-markup assertions",
-                "file": "/home/user/uroboros/tools/argus-ui/test/app.test.mjs",
-                "testName": "a lane with no tool calls before the chosen time says so",
-                "expected": "assert.ok(!panel.includes('tool-call-name')) replaced with assert.ok(!panel.includes('tool-call')); /no tool calls/i kept; laneDetailSlice(handle.el('detail').innerHTML) matches /no tool calls/i and does not include 'tool-call', so the empty-lane answer reaches the composed page markup too.",
-                "got": "Passes as written (test 20 of 23: ok)."
-              },
-              {
-                "case": "A5 — the listing is bounded by the chosen time and follows it as it moves, repainted in place: add a pre-scrub composed-markup check and a comment explaining why post-scrub reads stay on the element",
-                "file": "/home/user/uroboros/tools/argus-ui/test/app.test.mjs",
-                "testName": "the listing is bounded by the chosen time and follows it as it moves, repainted in place",
-                "expected": "All existing assertions kept in order; immediately after the first settle, laneDetailSlice(handle.el('detail').innerHTML) matches both /\\/early\\.md/ and /\\/late\\.md/ before any scrub is fired; the post-scrub assertions keep reading handle.el('lane-detail').innerHTML directly (never a fresh composed slice), with a one-line comment stating the in-place repaint touches only the container element by design so the composed string stays frozen at the pre-scrub moment on purpose.",
-                "got": "Passes as written (test 18 of 23: ok)."
-              },
-              {
-                "case": "A6 — the selection survives new data arriving, and the panel keeps following it: add a composed-markup assertion",
-                "file": "/home/user/uroboros/tools/argus-ui/test/app.test.mjs",
-                "testName": "the selection survives new data arriving, and the panel keeps following it",
-                "expected": "All prior assertions kept; additionally laneDetailSlice(detailHtml) matches /Grep/ after the ingest-triggered wholesale re-render, proving the panel is put back into the composed markup, not only into the element.",
-                "got": "Passes as written (test 21 of 23: ok)."
-              },
-              {
-                "case": "A7 — clicking the selected lane a second time closes the panel: add composed-markup assertions for the emptied, but still-present, container",
-                "file": "/home/user/uroboros/tools/argus-ui/test/app.test.mjs",
-                "testName": "clicking the selected lane a second time closes the panel",
-                "expected": "All prior assertions kept; additionally laneDetailSlice(handle.el('detail').innerHTML) is truthy (the container stays in the page with nothing selected) and does not include 'tool-call'.",
-                "got": "Passes as written (test 22 of 23: ok)."
-              },
-              {
-                "case": "A8 — with no lane selected the session view renders as it does today: no lane detail, no aria-current, no tool-call listing: add composed-markup assertions for the resting container",
-                "file": "/home/user/uroboros/tools/argus-ui/test/app.test.mjs",
-                "testName": "with no lane selected the session view renders as it does today: no lane detail, no aria-current, no tool-call listing",
-                "expected": "All existing assertions kept; additionally html matches /id=\"lane-detail\"/, the container sits after the lane rows (data-lane-id=) and before role=\"tablist\", and laneDetailSlice(html) does not include 'lane-detail-head' (no panel body is rendered with nothing selected).",
-                "got": "Passes as written (test 16 of 23: ok)."
-              }
-            ],
-            "openQuestions": [
-              "The test plan's own review declares the suite already green against production code for every case in this round ('Already red: nothing'), which is the opposite of the usual expectation that a tester's cases start failing; I ran node --test tools/argus-ui/test/app.test.mjs and confirmed 23/23 pass, exit 0, matching that declaration exactly, so I did not treat any case as a bug to chase — flagging this so the next reader does not mistake an all-green run for a mistake on my part.",
-              "This round only touches tools/argus-ui/test/app.test.mjs; I did not run the full suite (`npm --prefix tools/argus-ui test` or `./test.sh`) since the brief reserves that for the implementer, so I cannot independently confirm the plan's claim of '89 of 89 passing' project-wide, only the 23/23 in the single file the plan names."
-            ],
-            "questions": []
-          }
-        },
-        {
-          "label": "implement:lane-select.1",
-          "at": "2026-08-07T13:15:09.755Z",
-          "return": {
-            "deviations": [
-              "The plan names this correction round test-only and forbids edits to public/app.js and public/timeline.js; the test-author's commit 14239bd had already landed every case A1-A8 in test/app.test.mjs, so there was no code left for me to write and I changed no file. My work was verification: I confirmed the planned cases pass for the right reason and that the new guards actually bite.",
-              "The plan describes the suite as 89 cases; it now runs 90, because case A1 is a net-new test the test-author added to app.test.mjs (23 cases in that file, up from 22). No case was removed or renamed."
-            ],
-            "commands": [
-              {
-                "command": "npm --prefix tools/argus-ui test",
-                "exitCode": 0,
-                "note": "The full project suite, 90 cases across app/timeline/server/config/independence, all passing, nothing skipped or excluded. The plan says 89; the extra one is the new regression guard A1."
-              },
-              {
-                "command": "node --test tools/argus-ui/test/app.test.mjs",
-                "exitCode": 0,
-                "note": "The single file this round touches, 23 of 23 passing. Run first, before any change, to establish the starting state the test-author declared ('Already red: nothing')."
-              },
-              {
-                "command": "node --test tools/argus-ui/test/app.test.mjs (with the `<div id=\"lane-detail\">` line temporarily deleted from public/app.js, then reverted with git checkout)",
-                "exitCode": 1,
-                "note": "Mutation check, not a change I landed. The review's finding was that deleting app.js:190 left the whole suite green; with the new composed-markup assertions in place that same deletion fails 8 of 23 cases in app.test.mjs. This is the evidence that the round's purpose is met and that the all-green run is not a vacuous pass. public/app.js was restored immediately and `git status` is clean."
-              }
-            ],
-            "blockers": [],
-            "questions": [],
-            "summary": "No production or test file changed this round: the test-author's guards had already landed and the production code was already right, so I verified the planned cases pass for the right reason (90 of 90, exit 0) and proved the new assertions catch the deleted lane-detail container that previously slipped through."
-          }
-        },
-        {
-          "label": "review:lane-select.1",
-          "at": "2026-08-07T13:20:09.452Z",
-          "return": {
-            "findings": [],
-            "reason": "",
-            "questions": [],
-            "summary": "Ran the one listed command, `npm --prefix tools/argus-ui test` (90 cases, exit 0, nothing skipped); the diff meets all eight lane-select criteria — the selection lives in `state.selectedLaneId` beside `state.atMs`, lane ids are the existing `main`/`agent:<id>`/`unattributed` keys, tool parameters are newly exposed on the span-derived activity entry (joined by `tool_use_id`, so attribution stays the span's lane) and stated in `tools/argus/README.md`, the listing is inclusive-bounded by the chosen time, the scrub path repaints only `#lane-detail` so the range input survives a drag, main/subagent/unattributed/empty lanes all answer, and the rendered-markup tests in `app.test.mjs` assert the panel's container and content inside the composed detail markup rather than only the builder. Blast radius checked: parameters are attached before `thinEvenly`, so the cap does not drop them; `.lane-row` becoming a `<button>` follows the existing `.span-row` pattern and, under the global `box-sizing: border-box`, its new 1px transparent border shifts the track column by about 1px against the scrub slider — visually immaterial; no caller, document or adjacent behaviour is left stale. Two facts, neither a defect of this change: `tools/argus/src/store.mjs` and `tools/argus/test/store.test.mjs` changed but the collector suite `npm --prefix tools/argus test` was not on the command list, so I did not run it; and `scripts/demo-emit.mjs` emits `claude_code.tool_result` without `tool_input`, so a demo session renders every call as 'no parameters recorded' — that was already true before this increment and no criterion asks the emitter to carry parameters."
-          }
-        }
-      ]
+      "status": "done",
+      "note": "Review accepted with no findings after one correction round, which was a test gap and not a defect. What shipped: state.selectedLaneId beside state.atMs, lane rows turned into selectable controls marked with aria-current, tool call parameters newly exposed on the span-derived per-lane activity entries of GET /api/sessions/:id/agents (joined from the tool_result log through tool_use_id in the existing single logs walk, capped at 1000 characters because that payload is refetched on every ingest tick), and a #lane-detail panel listing the selected lane's tool calls with parameters up to the chosen time, repainted in place by renderLaneDetail from both renderDetail and the scrub path so the range input survives a drag. npm --prefix tools/argus test 192 cases exit 0, npm --prefix tools/argus-ui test 90 cases exit 0. The correction round went on the same trap as timeline-landing's: the fake DOM conjures an element for any id, so panel assertions that read only that element stayed green when the container was deleted from the rendered markup; the fix asserts the composed detail markup, and a mutation check proved 8 of 23 cases now fail when the container is removed.",
+      "steps": []
     },
     {
       "id": "context-at-time",
-      "title": "The selected lane's context at the chosen time as a structured message list",
-      "goal": "Show, in the panel the lane selection already opens, the selected agent's or the main session's context as of the chosen time, rendered as a message list whose blocks collapse to one line with a size and expand to the exact text.",
+      "title": "The selected lane context at the chosen time as a structured message list",
+      "goal": "Show, in the lane detail panel the selection already opens, the selected agent or main session context as of the chosen time, rendered as a message list whose blocks collapse to one line with a size and expand to the exact full text.",
       "criteria": [
-        "Selecting a lane at the chosen time shows that agent's - or the main session's - context as of that moment, in the same panel the selection already opens.",
-        "The context shown is the body of the nearest API request at or before the chosen time on the selected lane, chosen by the lane vocabulary already in place.",
+        "Selecting a lane at the chosen time shows that agent - or the main session - context as of that moment, in the same lane detail panel the selection already opens, beside the tool listing that is already there.",
+        "The context shown is the body of the nearest API request at or before the chosen time on the selected lane, resolved through the lane attribution already in place; the body records carry no agent_id of their own, so where their lane comes from is stated rather than joined a second way.",
         "It is rendered as a structured message list distinguishing system prompt, user, assistant, tool call and tool result blocks.",
-        "Each block is collapsed to one line carrying its size.",
-        "Each block expands to the exact full text the record carries, and a body the CLI truncated is marked as truncated instead of being presented as the whole context.",
+        "Each block is collapsed to one line carrying its size, and expands to the exact full text the record carries.",
+        "A body the CLI truncated is marked as truncated instead of being presented as the whole context, and the size shown is the reported untruncated length rather than the delivered length.",
         "A record that reports a body length but carries no body text at all is shown as its reported size with the text stated to be absent, rather than as an empty context.",
-        "A lane with no API request at or before the chosen time says so, rather than showing another lane's context or the nearest later one.",
-        "Moving the chosen time moves the context shown, and the context and the tool listing in the panel agree about lane and time bound at every moment.",
-        "What proves this increment is the rendered panel: a change that stops the context reaching the panel, or stops an expanded block showing the full text, is caught, not only a builder function checked in isolation."
+        "A lane with no API request at or before the chosen time says so, rather than showing another lane context or the nearest later one.",
+        "Moving the chosen time moves the context shown, and the context and the tool listing agree about lane and time bound at every moment; the context joins the same in-place repaint path the tool listing already uses, so a scrub drag is not interrupted.",
+        "Where the full body text is fetched from is established and stated: the per-lane payload the page refetches on every ingest tick caps its inline text at a thousand characters for exactly this size reason, so the context body must not inflate that payload.",
+        "What proves this increment is the rendered page: the assertions read the composed session markup and not only an element the fake DOM conjures by id, so a change that stops the context reaching the panel, or stops an expanded block showing the full text, is caught."
       ],
       "status": "todo",
-      "note": "Kept its id and kept last, but reduced to the context half: the selection mechanism and the tool listing moved to lane-select, so nothing is built twice. The earlier merge of tools-at-time assumed the tool list would come second and repeat the selection work; putting the selection in the increment before it removes that reason. What stays here is the part the run still knows least about - the shape of a request body and what a truncated or text-free record can be rendered as - which is why it is worth its own research-test-build-review chain rather than eleven criteria in one.",
+      "note": "Kept as one increment and kept last, with its criteria sharpened by what lane-select showed. Four facts it now inherits instead of rediscovering: the panel, its container id and its in-place repaint from both the render path and the scrub path already exist, so this increment adds content to a panel rather than building one; body records are attributed to a lane through their span, which lane-activity already does for the context curve, so the nearest-request lookup has an attribution to reuse; the per-lane payload caps inline text at a thousand characters because it is refetched on every ingest tick, which is why the criteria now ask where the full body text is fetched from instead of assuming it rides along; and both UI increments that lost a correction round lost it to the same trap, a fake DOM that conjures an element for any id, so the proof criterion now names the composed markup explicitly. Nothing was split off: the collapsed line with its size and the expansion to full text are one deliverable, and half of it - a list of blocks nobody can open - is not worth a review of its own. This is the last open increment, so the run ends with it and the whole ./test.sh belongs in its final report; lane-select changed the collector but ran only the UI suite, and that gap should not repeat.",
       "steps": []
     },
     {
@@ -524,117 +137,44 @@
       },
       {
         "label": "replan:scrub-live",
-        "at": "2026-08-07T12:10:44.051Z",
+        "at": "2026-08-07T12:10:44.051Z"
+      },
+      {
+        "label": "replan:lane-select",
+        "at": "2026-08-07T13:22:43.220Z",
         "return": {
+          "questions": [],
+          "summary": "Closed lane-select as done (review accepted, one correction round spent on a test gap, not a defect) and left one increment open, context-at-time, sharpened rather than re-cut. Six of the issue's ten acceptance criteria are delivered and closed; the structured-message-list criterion is the only one still open, and context-at-time carries it whole. No split: the collapsed line with its size and the expansion to the exact text are one deliverable, and a list of blocks nobody can open is not worth its own review chain. Four facts from lane-select changed its criteria: the lane detail panel, its container and its in-place repaint from both the render path and the scrub path already exist, so this increment adds content to an existing panel; body records are attributed to a lane through their span, which lane-activity already does for the context curve, so the nearest-request lookup reuses that attribution instead of inventing one; the per-lane payload caps inline text at a thousand characters because it is refetched on every ingest tick, so a new criterion asks where the full body text is fetched from instead of letting it ride along on that payload; and both UI increments that lost a correction round lost it to a fake DOM that conjures an element for any id, so the proof criterion now names the composed session markup explicitly. Three of at most eight increments remain unspent, which leaves room to re-cut if the request-body shape turns out worse than expected.",
           "increments": [
             {
               "id": "content-pipeline",
-              "title": "Content-bearing telemetry is captured by default and served over the API",
-              "goal": "Turn the content flags on by default in `argus env` and make the collector store and serve what the resulting events carry, so a caller can ask for the conversation content belonging to a point in time.",
-              "criteria": [
-                "`argus env` includes the content flags by default in both output formats: user prompts, tool details, tool content, and the flag or flags the CLI requires to emit `api_request_body`/`api_response_body` events.",
-                "The exact flag names are verified against the CLI's monitoring documentation rather than assumed.",
-                "If the current CLI turns out not to emit request/response body events at all, that is reported as an explicit finding, naming the best content the available flags do provide.",
-                "What attribution actually arrives for subagent activity and for request bodies is established and reported, including any gap, so later increments know which records can be assigned to which agent.",
-                "The collector stores the content those events carry and exposes those content-bearing records over the JSON API like the existing signals, such that the content belonging to a point in time can be asked for.",
-                "Recordings made without the content flags are out of contract: no fallback rendering, no compatibility notice, and no test pins behavior for them.",
-                "`./test.sh` is green."
-              ],
-              "status": "done",
-              "note": "Review accepted with no findings: the four content flags (OTEL_LOG_USER_PROMPTS, OTEL_LOG_TOOL_DETAILS, OTEL_LOG_TOOL_CONTENT, OTEL_LOG_RAW_API_BODIES=1) are on by default in all four env formats, contentOf plus store.queryContent plus GET /api/content store and serve the content-bearing records with an inclusive 'at' bound, and the suite is green (156 argus cases exit 0; bash ./test.sh PASS all 6 suites). The attribution gap is established: body events carry query_source and span context but no agent.name or agent_id."
+              "status": "done"
             },
             {
               "id": "timeline-landing",
-              "title": "A session opens on the timeline, with a lane per agent",
-              "goal": "Make opening a session in the argus UI land on a timeline view that draws one lane for the main session and one per subagent across each agent's lifetime, with the existing technical views reachable from it but subordinate.",
-              "criteria": [
-                "Opening a session in the argus UI lands on the timeline view.",
-                "The previous technical views — event tail, traces, raw inspectors — remain reachable from the timeline view and are subordinate to it, not the other way round.",
-                "The timeline draws one lane for the main session and one lane per subagent instance, so two concurrent subagents of the same type get two lanes; `query_source` names only the agent type, and per-instance identity has to come from the span attributes the previous increment reported (`agent_id`, `parent_agent_id`).",
-                "Each agent lane spans that agent's lifetime, so any vertical slice answers which agents are running at that moment.",
-                "Where the run places the record-to-agent join — collector side or UI side — that choice is stated, and activity that cannot be attributed to an agent instance is shown as unattributed rather than dropped or silently folded into the main session."
-              ],
-              "status": "done",
-              "note": "Review accepted with no findings after two correction rounds, both of them test gaps rather than defects. What shipped: a collector-side lane join in store.getAgents behind GET /api/sessions/:id/agents, giving every span of a session a lane key of 'main', 'agent:<agent_id>' or 'unattributed' by resolving agent_id first and the parent-span chain second; a timeline module in argus-ui drawing one bar per lane over one shared window; and the six technical views (overview, todos, traces, events, metrics, raw) moved into a strip below the timeline, closed by default. npm --prefix tools/argus test 176 cases exit 0, npm --prefix tools/argus-ui test 39 cases exit 0. Both correction rounds were spent because the visible behaviour was computed by a tested pure helper but never pinned in the rendered markup or the booted page; the round-2 fake-DOM harness in tools/argus-ui/test/app.test.mjs now boots public/app.js in-process, so later UI increments have a way to pin what the human sees."
+              "status": "done"
             },
             {
               "id": "lane-activity",
-              "title": "Activity and context growth drawn on each lane",
-              "goal": "Draw each lane's activity over time and, behind it, that agent's context size over time, so where token consumption grows is visible on the timeline itself.",
-              "criteria": [
-                "Each lane shows its activity over time - tool calls and API requests - placed at the times they occurred, on the lane of the agent instance the activity belongs to.",
-                "Activity is assigned to lanes with the lane vocabulary the session's agents endpoint already serves ('main', 'agent:<agent_id>', 'unattributed'), not a second attribution scheme; the records drawn here carry no agent_id of their own, so where their lane comes from is stated.",
-                "Activity that resolves to no agent instance stays visible on the unattributed lane rather than being dropped or folded into the main lane.",
-                "Each lane carries, as a curve or area behind that activity, the context size over time for that agent.",
-                "The curve is drawn from a size the telemetry actually records - the reported untruncated request-body length survives even when the body itself was truncated - and the view names which measure it is showing.",
-                "Growth in context size is readable from the timeline alone, without opening any detail.",
-                "What proves this increment is the drawn result in the page: a change that stops the activity marks or the curve reaching the rendered timeline is caught, not only a computation checked in isolation."
-              ],
-              "status": "done",
-              "note": "Review accepted with no findings on the first round. What shipped: store.getAgents now joins claude_code.tool and claude_code.llm_request spans into a per-lane activity list and api_request_body records into a per-lane context series, both on the existing 'main' / 'agent:<agent_id>' / 'unattributed' lane keys; the content records carry no agent_id, so their lane is resolved through their spanId and a record whose span is unknown lands on unattributed, never on main; a requestBodyLength helper prefers the reported body_length over the delivered body, so a truncated or body_ref-only record still reports its true size; timeline.js draws an SVG area per lane scaled to one session-wide peak with activity ticks over it and a legend naming the measure; and app.test.mjs boots the real page and pins that marks and a non-empty polygon reach the rendered timeline. npm --prefix tools/argus test 186 cases exit 0, npm --prefix tools/argus-ui test 54 cases exit 0. The fake-DOM harness plus the provability criterion cost this increment zero correction rounds, against two for the increment before it."
+              "status": "done"
             },
             {
               "id": "scrub-live",
-              "title": "Scrubbing the timeline, and a live mode that follows the head",
-              "goal": "Give the timeline a chosen time that can be moved to any point of the recorded session, plus a live mode that follows the newest data as it arrives.",
-              "criteria": [
-                "The timeline can be scrubbed backward and forward to any point of the recorded session, and the chosen time is visible on the timeline.",
-                "The chosen time is drawn against the same shared window the lanes are already drawn against, so its position lines up with the activity marks and the context curve at that instant.",
-                "A live mode follows the newest data as it arrives, and keeps following as later data extends the session's window.",
-                "Scrubbing away from the head leaves live mode.",
-                "A control returns to live mode.",
-                "The chosen time is one shared value the session view works from, so a later per-lane detail can be answered for exactly that moment.",
-                "What proves this increment is the behaviour of the page: a change that stops scrubbing moving the chosen time, or stops the live control returning to the head, is caught, not only a helper that maps a position to a time."
-              ],
-              "status": "done",
-              "note": "Review accepted with no findings on the first round. What shipped: state.atMs and state.following in app.js as the one chosen time the session view works from, chosenTimePct/clampChosenTime/laneRowsHtml/scrubStateHtml in timeline.js with a third options argument on timelineHtml, a playhead per lane placed by the same window arithmetic as the activity marks and the context curve, a range control that scrubs anywhere in the session, and a Live control that returns to the head; every refresh re-pins the chosen time to the head while following and only clamps a scrubbed time into the widened window. Two facts the next increment inherits: the scrub handler repaints the lanes and the readout in place through the ids timeline-lanes and timeline-scrub-state rather than re-rendering the detail, because a full render would destroy the range input mid-drag; and app.js's formatting helpers now live in public/format.js. npm --prefix tools/argus-ui test 70 cases exit 0."
+              "status": "done"
             },
             {
               "id": "lane-select",
-              "title": "Selecting a lane, and that agent's tool use up to the chosen time",
-              "goal": "Make a lane on the timeline selectable, and show for the selected lane the tools that agent has used up to the chosen time, each with its call parameters.",
-              "criteria": [
-                "Selecting a lane on the timeline records a selection the session view holds beside the chosen time, and the selected lane is visibly marked on the timeline.",
-                "The lane selected is one of the lanes the timeline already draws, named by the lane vocabulary already in place (main, agent:<agent_id>, unattributed), not a second attribution scheme.",
-                "The selection shows the tools that agent has used up to the chosen time, each entry carrying the tool name and that call's parameters.",
-                "Whether the call parameters already arrive with the per-lane tool activity or have to be exposed for the first time is established and stated, and either way the panel reads them through the attribution already in place rather than joining records to agents a second way.",
-                "The listing is bounded by the selected lane and by the chosen time and follows the chosen time as it moves, so it never carries a call from after that moment; the scrub path repaints it in place, since a full re-render of the detail would destroy the range input mid-drag.",
-                "Which tools an agent used, and what for, is answerable for any lane the timeline draws at any point of the session, the unattributed lane included, and a lane with no tool calls before the chosen time says so.",
-                "With no lane selected the session view renders as it does today.",
-                "What proves this increment is the rendered page: a change that stops a lane selection reaching the panel, or leaves the panel showing the previous moment after the chosen time moves, is caught, not only a builder function checked in isolation."
-              ],
-              "status": "todo",
-              "note": "Split out of context-at-time after scrub-live. Scrub-live left the selection question untouched and added a constraint that lands squarely on this panel: scrubbing repaints the lanes in place through fixed ids instead of re-rendering the detail, so anything bound to the chosen time has to join that repaint path. That plumbing plus the selection mechanism is the load-bearing half of the old eleven-criterion increment and is worth its own review; it goes first because the context message list cannot be selected before a lane can be, and it delivers a whole acceptance criterion of the issue on its own."
+              "status": "done"
             },
             {
               "id": "context-at-time",
-              "title": "The selected lane's context at the chosen time as a structured message list",
-              "goal": "Show, in the panel the lane selection already opens, the selected agent's or the main session's context as of the chosen time, rendered as a message list whose blocks collapse to one line with a size and expand to the exact text.",
-              "criteria": [
-                "Selecting a lane at the chosen time shows that agent's - or the main session's - context as of that moment, in the same panel the selection already opens.",
-                "The context shown is the body of the nearest API request at or before the chosen time on the selected lane, chosen by the lane vocabulary already in place.",
-                "It is rendered as a structured message list distinguishing system prompt, user, assistant, tool call and tool result blocks.",
-                "Each block is collapsed to one line carrying its size.",
-                "Each block expands to the exact full text the record carries, and a body the CLI truncated is marked as truncated instead of being presented as the whole context.",
-                "A record that reports a body length but carries no body text at all is shown as its reported size with the text stated to be absent, rather than as an empty context.",
-                "A lane with no API request at or before the chosen time says so, rather than showing another lane's context or the nearest later one.",
-                "Moving the chosen time moves the context shown, and the context and the tool listing in the panel agree about lane and time bound at every moment.",
-                "What proves this increment is the rendered panel: a change that stops the context reaching the panel, or stops an expanded block showing the full text, is caught, not only a builder function checked in isolation."
-              ],
-              "status": "todo",
-              "note": "Kept its id and kept last, but reduced to the context half: the selection mechanism and the tool listing moved to lane-select, so nothing is built twice. The earlier merge of tools-at-time assumed the tool list would come second and repeat the selection work; putting the selection in the increment before it removes that reason. What stays here is the part the run still knows least about - the shape of a request body and what a truncated or text-free record can be rendered as - which is why it is worth its own research-test-build-review chain rather than eleven criteria in one."
+              "status": "todo"
             },
             {
               "id": "tools-at-time",
-              "title": "The selected agent's tool use up to the chosen time",
-              "goal": "Show, for the lane selected at the chosen time, the tools that agent has used up to that moment together with the parameters of each call.",
-              "criteria": [],
-              "status": "dropped",
-              "note": "Dropped as its own increment and never revived under this id. Its criteria were folded into context-at-time after content-pipeline showed tool parameters arrive as the same content records as request bodies and lane-activity put each lane tool calls, with names and times, on the /agents payload; after scrub-live they moved on into lane-select, which now carries the selection plus the tool listing while context-at-time carries the context. The work happens, under those two ids."
+              "status": "dropped"
             }
-          ],
-          "questions": [],
-          "summary": "Closed scrub-live as done (review accepted, no findings, one round) and split the last open increment in two. The only substantive change to the open cut: context-at-time carried eleven criteria covering three distinct jobs - a lane selection mechanism, a tool listing per lane and time, and a structured expandable context message list - which is the largest remaining piece of the issue and larger than any increment worked so far. It is now lane-select (selection plus the tool use up to the chosen time) followed by context-at-time (the context message list in the panel that selection opens). Criteria stay disjoint: the issue bullet on tool use per agent and per time is lane-select's alone, the bullet on the context as a structured message list is context-at-time's alone, and no criterion sits in both. Selection goes first because nothing can be shown for a lane before a lane can be picked, and because scrub-live added a constraint that lands on exactly that plumbing - the scrub handler repaints the lanes and readout in place through fixed ids rather than re-rendering the detail, so any panel bound to the chosen time must join that path or go stale mid-drag; lane-select now names that as a criterion. Context-at-time keeps the part the run knows least about (request body shape, truncated bodies, records that report a length but carry no text) so that risk gets its own review round instead of sharing one. Rejected: keeping the merged eleven-criterion increment, since four of eight increments are spent and two remain spare after this split; and re-splitting the way the earlier merge feared, where the tool list would come second and repeat the selection work - putting selection in the first half removes that objection. The stale note on the dropped tools-at-time was updated to point at both successors. No questions: nothing in the remaining cut turns on a decision only a human can make, and the open data question (whether tool call parameters already reach the /agents payload or must be exposed) is written into lane-select for the researcher to answer first."
+          ]
         }
       }
     ]
