@@ -16,225 +16,9 @@
         "Recordings made without the content flags are out of contract: no fallback rendering, no compatibility notice, and no test pins behavior for them.",
         "`./test.sh` is green."
       ],
-      "status": "todo",
-      "note": "",
-      "steps": [
-        {
-          "label": "research:content-pipeline.0",
-          "at": "2026-08-07T09:26:48.855Z",
-          "return": {
-            "needsTests": true,
-            "summary": "Turn the four content flags on in `otelEnvFor` (the CLI's flag for request/response bodies is OTEL_LOG_RAW_API_BODIES, verified in the installed CLI 2.1.224 binary), classify content-bearing log events in claude.mjs, add store.queryContent plus GET /api/content with an `at` bound, and keep the raw body out of /api/events; bodies carry query_source and span context but no agent.name or agent_id, which is the attribution gap later increments must join through spans.",
-            "plan": "## What the CLI actually does (verified, not assumed)\n\nVerified twice: against the monitoring documentation at https://code.claude.com/docs/en/monitoring-usage (read 2026-08-07) and against the installed Claude Code binary at /opt/claude-code/bin/claude, version 2.1.224 (`claude --version`). The npm copy at /opt/node22/lib/node_modules/@anthropic-ai/claude-code is a stale 2.1.42 and was not used. Strings quoted below come from the 2.1.224 binary.\n\n1. **The flag for request/response bodies is `OTEL_LOG_RAW_API_BODIES`.** It exists in the binary and gates the emit path: `PFd()` reads `process.env.OTEL_LOG_RAW_API_BODIES`, `MO_()` maps `1`/true to `{mode:'inline'}` and `file:<dir>` to `{mode:'file'}`, anything else to `{mode:'disabled'}`. So the CLI does emit `claude_code.api_request_body` and `claude_code.api_response_body`: the finding the criteria ask for as a fallback (\"the CLI cannot emit bodies at all\") does not apply.\n2. **Set it to `1` (inline), not `file:<dir>`.** In file mode the CLI writes `<dir>/<id>.request.json` on the agent's own disk and the event carries only `body_ref` plus `body_length` — the collector would receive a path it cannot read whenever the agent is not on the collector's machine. Inline mode puts the body in the event, which is the only mode that makes the collector the store. Rejected: file mode, and rejected: setting `CLAUDE_CODE_OTEL_CONTENT_MAX_LENGTH` to raise the 60 KB truncation ceiling — no criterion asks for it and the ceiling exists because backends cap attribute values at 64 KB.\n3. **Inline body events carry exactly:** `body` (JSON string, truncated at the content limit, 61440 UTF-16 code units by default, with `body_truncated: \"true\"` when it was), `body_length` (untruncated length), `model`, `query_source`, plus what every event gets from the emitter `vu()`: the standard attributes (`session.id`, `user.*`, `organization.id`, `terminal.type`, resource attributes), `event.name`, `event.timestamp`, `event.sequence`, and `prompt.id` when a prompt is active. `api_response_body` additionally carries `request_id`. Extended-thinking blocks in the request's prior assistant turns are replaced with `<REDACTED>` by the CLI before serialisation.\n4. **Attribution — the gap, established.** The emit site is `oBo(request, i.querySource)` → `OFd('api_request_body', body, { model, query_source })`. It does **not** call the attribution builder `ahr()`, which is what attaches `agent.name`, `skill.name`, `plugin.name`, `marketplace.name`, `mcp_server.name`, `mcp_tool.name`. Only `api_request` (via the metric path `Lye`), `api_error` and `api_refusal` call it. So **no body event carries `agent.name`, and no log event of any kind carries `agent_id`**: `tool_result` is emitted as `vu('tool_result', {...}, n.agentContext)` and that third argument is folded by `mtn()` into `workflow.run_id`/`workflow.name` only. What bodies do carry for attribution:\n   - `query_source`, passed through raw: `repl_main_thread` (and `repl_main_thread:outputStyle:*`), `sdk`, `agent:builtin:<type>`, `agent:custom:<name>`, `agent:default`, `agent:custom`, `compact`, `hook_agent`, `hook_prompt`, `side_question`, `web_search_tool`, and similar. This names the agent **type**, never the agent instance: two concurrent subagents of the same type produce identical `query_source`.\n   - Span context. `vu()` calls `AAy()`, which returns the active OTel context when a valid span context is on it, and attaches it to the log record — so body events arrive with `traceId`/`spanId` set (argus already keeps both, see decode.mjs `normalizeLogs`). `claude_code.llm_request` and `claude_code.tool` spans carry `agent_id` and `parent_agent_id` (absent on the main session). **The join from a body to a concrete agent instance therefore runs body.spanId → span → span.attrs.agent_id, and needs traces switched on.** `argus env` already sets `CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1` and `OTEL_TRACES_EXPORTER=otlp` by default, so that path is available; with `--traces false` it is not, and only `query_source` remains.\n   - `prompt.id` groups every event of one interaction, and `event.sequence` orders events within a session. Both are already carried through by the decoder as plain attributes.\n   This is the whole attribution finding for later increments: lanes can be built per agent instance from spans, bodies can be assigned to a lane through their span, and where a body has no span it can only be assigned to an agent type.\n5. **`OTEL_LOG_ASSISTANT_RESPONSES` is deliberately not set.** The binary reads it as `ee.OTEL_LOG_ASSISTANT_RESPONSES ?? ee.OTEL_LOG_USER_PROMPTS`, so setting user prompts already turns assistant response text on. None of my criteria names it, and one variable that means one thing beats two that can disagree.\n\n## What gets built\n\n### 1. `otelEnvFor` turns the content flags on (src/claude.mjs)\n\nAdd to the base `env` object, unconditionally — not behind the `traces` option and not behind a new option:\n\n```\nOTEL_LOG_USER_PROMPTS: '1',\nOTEL_LOG_TOOL_DETAILS: '1',\nOTEL_LOG_TOOL_CONTENT: '1',\nOTEL_LOG_RAW_API_BODIES: '1',\n```\n\n`OTEL_LOG_TOOL_CONTENT` only does anything with tracing on, but it is inert otherwise, and tying it to the `traces` option would make the content block depend on an unrelated switch. Rejected: an `--content` opt-in or a `--no-content` opt-out — decision 1 of the issue chose \"on by default\" over an opt-in, and an opt-out was never decided; anyone who wants them off unsets the variables. All four output formats (`shell`, `json`, `dotenv`, `settings`) render the same object through `renderEnv`, so this one change covers every format the CLI offers.\n\n### 2. Content classification (src/claude.mjs)\n\nAdd one exported helper next to the other domain knowledge, so no other module string-matches attribute names:\n\n```\nexport function contentOf(log) -> null | {\n  kind: 'request_body' | 'response_body' | 'user_prompt' | 'assistant_response' | 'tool_input',\n  text: string | null,      // what the event actually carried, null in file mode\n  length: number,           // untruncated length the CLI reported, else text.length, else 0\n  truncated: boolean,       // body_truncated === 'true'\n  ref: string | null,       // body_ref path, null unless the CLI ran in file mode\n}\n```\n\nMapping, by `log.eventName`:\n- `claude_code.api_request_body` → `request_body`; text `attrs.body`, length `num(attrs.body_length)`, truncated `bool(attrs.body_truncated)`, ref `attrs.body_ref ?? null`.\n- `claude_code.api_response_body` → `response_body`; same attributes.\n- `claude_code.user_prompt` → `user_prompt`; text `attrs.prompt`, length `num(attrs.prompt_length)`.\n- `claude_code.assistant_response` → `assistant_response`; text `attrs.response`, length `num(attrs.response_length)`.\n- `claude_code.tool_result` → `tool_input`; text `attrs.tool_input ?? attrs.tool_parameters` (the existing `toolParametersOf` doc comment records why both names), length `num(attrs.tool_input_size_bytes)`.\n\nAny other event name, or one of these with neither a text nor a `body_ref`, returns `null`. **No redaction handling:** a `<REDACTED>` value is treated as ordinary text. That is deliberate — criterion \"recordings without the content flags are out of contract\" forbids a fallback, and special-casing the redaction marker would be exactly that.\n\nCareful: a log record has both a top-level `body` field (the OTLP LogRecord body, here the string `claude_code.api_request_body`) and an `attrs.body` attribute (the payload). `contentOf` reads `attrs`, never the record's own `body`.\n\n### 3. `queryContent` on the store (src/store.mjs)\n\n```\nqueryContent({ sessionId = null, kinds = null, atMs = null, limit = 100 } = {}) -> Array<{ log, content }>\n```\n\nWritten exactly like the existing `queryEvents`: walk `this.logs` from the newest backwards, skip anything `contentOf` returns null for, skip on `sessionId`, on `kinds` (an array of kind names) and on `atMs` (keep only `log.timeMs <= atMs`, inclusive), stop at `limit`, then `reverse()` so the result is oldest-first. Consequence worth stating: `atMs` plus `limit: 1` returns the nearest content record at or before that time, which is the query later increments need for \"the context as of this moment\".\n\nRejected: a parallel index array or a per-session map of content records. Both would have to be kept in step with `#trim` and `#dropSession`, and buy nothing over the same linear scan `/api/events` already does on every request. No new storage: `#applyLog` already pushes every log into `this.logs` with its attributes intact, and `persist.mjs` already writes every record whole, so bodies are stored and persisted with no change to either.\n\n### 4. `GET /api/content` (src/server.mjs)\n\nIn `handleApi`, beside `/api/events`:\n\n- Query parameters: `session` (session id, optional), `kind` (comma-separated kind names, optional), `at` (epoch milliseconds, optional, inclusive upper bound), `limit` (default 100, max 500, via the existing `intParam`), `body` (`1` to include the text).\n- Response: `{ items: [...] }`, oldest-first, each item:\n\n```\n{\n  seq, timeMs, sessionId, traceId, spanId, eventName,\n  kind, length, truncated, ref,\n  model: attrs.model ?? null,\n  querySource: attrs.query_source ?? null,\n  requestId: attrs.request_id ?? null,\n  attribution: attributionOf(attrs),\n  storedLength: text ? text.length : 0,\n  text            // present only when body=1; null when the event carried only a ref\n}\n```\n\nText is opt-in because a hundred inline bodies are six megabytes; a caller that wants one body asks for one. `attributionOf` is reused unchanged — it already picks up `query_source` and `model`.\n\n### 5. `/api/events` stops shipping raw bodies\n\nTurning the flags on by default makes the existing event tail enormous: `/api/events` returns whole records, and a page of 200 events can now contain dozens of 60 KB bodies on every poll. In the `/api/events` mapping only, drop the `body` attribute of `claude_code.api_request_body` and `claude_code.api_response_body` items, keeping `body_length`, `body_truncated` and everything else; full text stays available at `/api/content?body=1`. Build a copy — `{ ...event, attrs: { ...event.attrs, body: undefined } }` or an equivalent — and never `delete` on the stored record, which would destroy the stored content. No other event kind is touched: `tool_input` and `prompt` are bounded by the CLI's own per-value limits and the existing UI reads them.\n\n### 6. README (tools/argus/README.md)\n\nThree passages become false or incomplete and are corrected in the same change:\n- \"Sensitive data\" (~line 503) currently states `argus env` deliberately does **not** set these flags. Replace with: it now sets all four by default, name them, and state the consequence — prompts, tool arguments and whole conversation bodies live in the collector's memory and, with `--persist`, in the measurement directory.\n- The \"Wiring up an agent\" example block (~line 68) must show the four new exports.\n- The HTTP API table (~line 536) gets a `GET /api/content` row with its parameters.\n\n## Facts the later increments need, and things deliberately left alone\n\n- `tools/argus-ui/src/server.mjs` proxies every path under `/api/` (its `PROXIED` predicate), so `/api/content` is reachable from the UI without any change there. No file in `tools/argus-ui` is touched by this increment.\n- `tools/argus-ui/public/app.js` still tells the user to set `OTEL_LOG_TOOL_DETAILS=1` themselves (around line 398); that hint is stale after this change but the UI belongs to a later increment.\n- `scripts/demo-emit.mjs` emits no content-bearing events, so the synthetic demo produces nothing for `/api/content`. Left as is — no criterion asks for it — and named here because the UI increments will want a fixture.\n- Persistence rotates each signal at 64 MB and keeps two generations, so a measurement retains roughly 128 MB of log JSONL — on the order of two thousand 60 KB bodies. A long session replayed with `--open` will therefore have lost its earliest bodies. Left unchanged: it is the same order as the in-memory bound of 50,000 log records, and raising it trades a disk for a memory problem. Reported so a later increment can decide.\n- No byte budget is added to the in-memory log window. It stays bounded by count (`--max-logs`, default 50,000) and age; with bodies on, that window can hold hundreds of megabytes. Rejected an eviction pass that strips old bodies: it would make `/api/events` and `/api/content` disagree about the same record and no criterion asks for it. The README's Limits section is where `--max-logs` is named as the lever.\n- `describeEvent` is not extended for the body events; they fall through to the default branch, which returns the record's own body string (`claude_code.api_request_body`) — short, correct, and not the payload.",
-            "moduleMap": "/home/user/uroboros/tools/argus/src/claude.mjs — Claude Code domain knowledge: EVENT/SPAN/METRIC name constants (`EVENT.apiRequestBody` and `EVENT.apiResponseBody` already exist), `toolParametersOf`, `attributionOf`, `describeEvent`, and `otelEnvFor(endpoint, {traces, token, fastFlush})` at line 240 which builds the whole `argus env` block; entry points to change: `otelEnvFor` (add the four content flags) and a new exported `contentOf(log)`.\n/home/user/uroboros/tools/argus/src/store.mjs — `TelemetryStore`: `ingest`, `#applyLog` (pushes every log into the bounded `this.logs`), eviction, and the query methods `queryEvents` (line 816, the model to copy), `queryMetrics`, `facets`, `stats`; entry point: a new `queryContent({sessionId, kinds, atMs, limit})`.\n/home/user/uroboros/tools/argus/src/server.mjs — HTTP surface: OTLP ingest on `/v1/*`, the SSE stream, and `handleApi(req, res, url)` at line 161 holding the `/api/*` route table with `intParam` for numeric parameters; entry points: a new `/api/content` route and the `/api/events` item mapping at line 229.\n/home/user/uroboros/tools/argus/README.md — user-facing page; the passages to correct are the env example block near line 68, \"Sensitive data\" near line 503, and the HTTP API table near line 536.\n/home/user/uroboros/tools/argus/test/claude.test.mjs — unit tests for claude.mjs (`otelEnvFor`, `sessionNameOf`); gains the content-flag and `contentOf` cases.\n/home/user/uroboros/tools/argus/test/store.test.mjs — unit tests for the store, driven by local `metric`/`log`/`span` fixture factories; gains the `queryContent` cases.\n/home/user/uroboros/tools/argus/test/server.test.mjs — HTTP integration tests through a real listening server (`withServer` helper); gains the `/api/content` and `/api/events` cases.\n/home/user/uroboros/tools/argus/test/env.test.mjs — new file: runs `bin/argus.mjs env` as a subprocess and checks every output format.\n/home/user/uroboros/tools/argus/bin/argus.mjs — CLI; `renderEnv` (line 79) formats the block as shell/json/dotenv/settings and the `env` command (line 373) prints it. No change needed, but it is what test/env.test.mjs drives.\n/home/user/uroboros/tools/argus/src/persist.mjs — JSONL append and replay; writes every record whole, so bodies persist with no change. Not touched.\n/home/user/uroboros/tools/argus/src/otlp/decode.mjs — OTLP → flat records; already keeps log `attrs`, `traceId` and `spanId`. Not touched.",
-            "environment": "Node v22.22.2 is installed and the packages are zero-dependency by design: no `npm install` runs anywhere, and there is no build step. There is no linter and no formatter in this repository — nothing to run for style.\n\nCommands this plan asks anyone to run, all from the repository root /home/user/uroboros:\n- `node --test tools/argus/test/claude.test.mjs` — one test file.\n- `node --test tools/argus/test/store.test.mjs` — one test file.\n- `node --test tools/argus/test/server.test.mjs` — one test file; binds real servers on port 0.\n- `node --test tools/argus/test/env.test.mjs` — one test file; spawns `node tools/argus/bin/argus.mjs env`, which prints and exits without opening a port.\n- `npm --prefix tools/argus test` — the whole argus suite, `node --test \"test/*.test.mjs\"`, which picks up a newly added test file automatically.\n- `./test.sh` — every suite in the repository: test-repo.sh, test-worktree.sh (creates git worktrees), the backlog recorder, tools/argus, tools/argus-ui, tools/log-parser.",
-            "testPlan": "Tests are needed. Everything below is the whole work order; the framework everywhere is `node:test` with `node:assert/strict`, ESM `.mjs`, no helper library.\n\n## Case group A — `argus env` carries the content flags (criterion 1)\n\nFile: /home/user/uroboros/tools/argus/test/claude.test.mjs (unit). Conventions of that file: no describe blocks; each `test('sentence describing the fact', () => {...})` names the fact rather than the function; assertions are `assert.equal`/`assert.ok` on the object `otelEnvFor` returns; the existing cases carry a short comment saying *why* the fact matters, and that style is expected of new ones.\n\nA1. **The env block turns the content flags on by default.** Input: `otelEnvFor('http://localhost:4318')`. State: none. Expected: `OTEL_LOG_USER_PROMPTS`, `OTEL_LOG_TOOL_DETAILS`, `OTEL_LOG_TOOL_CONTENT` and `OTEL_LOG_RAW_API_BODIES` are each exactly the string `'1'`. `OTEL_LOG_RAW_API_BODIES` must be `'1'` and not a `file:` value — inline is what makes the body reach the collector.\n\nA2. **The content flags do not ride on the traces opt-in.** Input: `otelEnvFor('http://localhost:4318', { traces: false })`. Expected: the same four variables are still `'1'`, while `OTEL_TRACES_EXPORTER` is absent (the existing behaviour of the `traces` option).\n\nRun just this file: `node --test tools/argus/test/claude.test.mjs`\n\n## Case group B — every output format of `argus env` (criterion 1, \"both output formats\")\n\nFile: /home/user/uroboros/tools/argus/test/env.test.mjs — a new file. There is no test for the `env` command today; copy the subprocess conventions of /home/user/uroboros/tools/argus/test/version.test.mjs: a module-level `const BIN = fileURLToPath(new URL('../bin/argus.mjs', import.meta.url))`, a `runArgus(args, {cwd, env})` helper built on `promisify(execFile)` with `timeout: 10_000` and `encoding: 'utf8'` that resolves to `{stdout, stderr, code}` for both success and failure instead of rejecting, and a file-header comment saying what the criteria fix. Do not assert any wall-clock duration: /home/user/uroboros/tools/argus/CLAUDE.md forbids it and the per-command timeout is the only clock. Run the CLI with `env: { UROBOROS_OBS_PORT: '4318' }` so the printed endpoint does not depend on the machine's environment.\n\nB1. **Every format carries all four content flags.** Input: run `env`, `env --format json`, `env --format dotenv`, `env --format settings` — one case looping over the four, or four cases, whichever reads better. State: none; `argus env` starts no collector. Expected, per format: exit code 0, and each of the four variables present with the value `1` — in the `shell` output as the line `export OTEL_LOG_RAW_API_BODIES=\"1\"` (and likewise for the other three), in `dotenv` as `OTEL_LOG_RAW_API_BODIES=1`, in `json` as a top-level key of `JSON.parse(stdout)` whose value is `'1'`, in `settings` as a key of `JSON.parse(stdout).env` whose value is `'1'`. Parse the JSON forms rather than matching text on them.\n\nEdge deliberately covered here: `settings` is the format whose keys sit one level down under `env`, which is the only way this rendering can go wrong per-format.\n\nRun just this file: `node --test tools/argus/test/env.test.mjs`\n\n## Case group C — classifying a content-bearing event (criterion 5)\n\nFile: /home/user/uroboros/tools/argus/test/claude.test.mjs (unit), same conventions as group A. The subject is the new `contentOf(log)`, which takes a normalized log record `{ eventName, attrs, ... }` and returns `null` or `{ kind, text, length, truncated, ref }`.\n\nC1. **An inline request body is classified with its untruncated length.** Input: `{ eventName: 'claude_code.api_request_body', attrs: { body: '{\"messages\":[]}', body_length: '61440', body_truncated: 'true', model: 'claude-opus-5', query_source: 'agent:builtin:researcher' } }`. Expected: `kind === 'request_body'`, `text` is the exact `body` string, `length === 61440` (a number, though the CLI sends it as a string), `truncated === true`, `ref === null`.\n\nC2. **A body the CLI wrote to a file is classified by its reference, with no text.** Input: the same event name with `attrs: { body_ref: '/tmp/bodies/abc.request.json', body_length: '120000' }` and no `body`. Expected: `kind === 'request_body'`, `text === null`, `ref` is the path, `length === 120000`, `truncated === false`.\n\nC3. **A response body is its own kind.** Input: `{ eventName: 'claude_code.api_response_body', attrs: { body: '{\"id\":\"msg_1\"}', body_length: '13', request_id: 'req_1' } }`. Expected: `kind === 'response_body'`, `text` is the body string.\n\nC4. **Prompt, assistant response and tool input are content too.** Three inputs, one case or three: `claude_code.user_prompt` with `{ prompt: 'hello', prompt_length: '5' }` → `kind === 'user_prompt'`, `text === 'hello'`, `length === 5`; `claude_code.assistant_response` with `{ response: 'hi', response_length: '2' }` → `kind === 'assistant_response'`; `claude_code.tool_result` with `{ tool_name: 'Read', tool_input: '{\"file\":\"a\"}', tool_input_size_bytes: '12' }` → `kind === 'tool_input'`, `text` is the JSON string.\n\nC5. **The older attribute name for tool input is still read.** Input: `claude_code.tool_result` with `tool_parameters` instead of `tool_input`. Expected: `kind === 'tool_input'` and the text comes from `tool_parameters`. This mirrors the fallback `toolParametersOf` already documents for CLI versions before 2.1.x renamed it.\n\nC6. **An event that carries no content at all is not content.** Input: `{ eventName: 'claude_code.api_request', attrs: { model: 'claude-opus-5', input_tokens: 10 } }`. Expected: `null`. Use `api_request` and no other event: it carries no content under any configuration, so this case says \"this kind of event is not content\" and not \"the flags were off\", which nothing here may pin.\n\nRun just this file: `node --test tools/argus/test/claude.test.mjs`\n\n## Case group D — asking the store for content at a point in time (criterion 5)\n\nFile: /home/user/uroboros/tools/argus/test/store.test.mjs (unit). Conventions of that file: a module-level `const SESSION = 'sess-1'`, factory helpers `metric(...)`, `log(eventName, attributes = {}, timeMs = Date.now())` and `span(...)` at the top that build normalized records with `attrs: { 'session.id': SESSION, ...attributes }`; each case constructs `new TelemetryStore()`, calls `store.ingest('logs', [...])` and asserts on the query result; nothing is mocked and no server is involved. Records must sit near `Date.now()` — the store evicts anything older than the retention window on ingest, which the file's own comment records. Use a local `const T = Date.now()` and offsets of a few seconds.\n\nD1. **Content records come back oldest-first, only for the session asked for.** State: ingest into one store an `api_request_body` at `T` for `SESSION`, an `api_request_body` at `T + 1000` for a second session id, a `user_prompt` with a `prompt` at `T + 2000` for `SESSION`, and an `api_request` (no content) at `T + 3000` for `SESSION`. Input: `store.queryContent({ sessionId: SESSION })`. Expected: two results, in the order body-then-prompt, each carrying the log record and the classification (`kind` `'request_body'` then `'user_prompt'`); the other session's body and the contentless `api_request` are absent.\n\nD2. **The kind filter narrows to one kind.** Same state. Input: `store.queryContent({ sessionId: SESSION, kinds: ['request_body'] })`. Expected: one result, the body at `T`.\n\nD3. **`atMs` is an inclusive upper bound.** State: bodies at `T`, `T + 1000` and `T + 2000`. Input: `store.queryContent({ sessionId: SESSION, atMs: T + 1000 })`. Expected: two results — the record exactly at the bound is included, the later one is not.\n\nD4. **The nearest content at or before a time is `atMs` with `limit: 1`.** Same state as D3. Input: `store.queryContent({ sessionId: SESSION, kinds: ['request_body'], atMs: T + 1500, limit: 1 })`. Expected: exactly one result, the record at `T + 1000` — the limit keeps the newest match, not the oldest. This is the query the later increments build the context view on, so it is pinned here.\n\nD5. **A session with nothing content-bearing answers with an empty list.** State: ingest only an `api_request` event. Input: `store.queryContent({ sessionId: SESSION })`. Expected: an empty array, not null and not a throw.\n\nRun just this file: `node --test tools/argus/test/store.test.mjs`\n\n## Case group E — the content API over HTTP (criterion 5)\n\nFile: /home/user/uroboros/tools/argus/test/server.test.mjs (integration). Conventions of that file: the `withServer(options, run)` helper builds a real `TelemetryStore` and `createServer({ store, endpoint: 'http://test', log: () => {} })`, listens on port 0 — never a fixed port, which /home/user/uroboros/tools/argus/CLAUDE.md requires — and hands the case `{ base, store }`; cases drive it with `fetch` against `${base}/...`; payloads are built as OTLP/JSON strings by a local factory (see `logsPayloadJson`) or as protobuf via `encodeMessage`; the POST's own status is asserted before anything is read back, so a failed ingest reports as a failed ingest. Add a local payload factory for content events in the same shape as `logsPayloadJson`, with `attributes` as OTLP `{ key, value: { stringValue } }` pairs and `timeUnixNano` as a decimal string.\n\nE1. **Content-bearing records are listed over the API, without their text by default.** State: POST to `/v1/logs` one OTLP/JSON payload for session `s-content` holding an `api_request_body` (attributes `body` = a recognisable JSON string, `body_length`, `model`, `query_source: 'agent:builtin:researcher'`) at `T`, an `api_response_body` at `T + 500`, and a `user_prompt` with a `prompt` at `T + 1000`; assert that POST returned 200. Input: `GET ${base}/api/content?session=s-content`. Expected: 200, `items.length === 3`, oldest-first, kinds `['request_body', 'response_body', 'user_prompt']`; the first item carries `timeMs`, `length`, `truncated === false`, `querySource === 'agent:builtin:researcher'` and `attribution.query_source === 'agent:builtin:researcher'`; and it carries no `text` — assert the absence, since text is the opt-in.\n\nE2. **The content at a point in time is one request away.** Same state, with a second `api_request_body` at `T + 2000` carrying a different body string. Input: `GET ${base}/api/content?session=s-content&kind=request_body&at=<T+1500>&limit=1&body=1`. Expected: 200, exactly one item, `text` equal to the first body string exactly, `kind === 'request_body'`.\n\nE3. **The event tail no longer carries whole bodies.** Same state. Input: `GET ${base}/api/events?session=s-content`. Expected: the `api_request_body` item is present in `items` and its `attrs.body_length` is intact, while `attrs.body` is absent; and afterwards `GET ${base}/api/content?session=s-content&kind=request_body&limit=1&body=1` still returns the full text — proving the stored record was copied, not stripped.\n\nEdges covered here: a request without `session` (E4) and a bad `at`. E4. **Asking without a session asks across all of them, and a bad `at` is ignored rather than fatal.** Input: `GET ${base}/api/content` and `GET ${base}/api/content?session=s-content&at=nonsense`. Expected: both 200, both listing the session's content records (`intParam` already falls back on an unparseable value; assert the fallback, not an error).\n\nRun just this file: `node --test tools/argus/test/server.test.mjs`\n\n## What is left untested, and why\n\n- **Recordings made without the content flags.** Out of contract by the increment's own criterion. No case asserts what happens to a `user_prompt` without a `prompt`, to a `<REDACTED>` value, or to any pre-change measurement directory. Case C6 deliberately uses `claude_code.api_request` — an event that carries no content in any configuration — so that the negative case cannot be read as pinning flagless behaviour.\n- **That the CLI really emits these events with these flags.** Not runnable inside the suite: it needs a live Claude Code process. It was established instead by reading the installed 2.1.224 binary and the monitoring documentation, and the findings are in the plan.\n- **README prose.** No test; a reader checks it.\n- **Persistence of bodies.** The persistence path is unchanged — it serialises whole records already — and test/persist.test.mjs covers that round trip. Adding a body-shaped fixture there would re-test the same code.\n- **Memory behaviour with large bodies.** No bound was added, so there is nothing to assert; the consequence is documented in the README's Limits section.\n- **`tools/argus-ui`.** Untouched by this increment; its proxy already forwards `/api/*`.\n\n## What is already red\n\nNothing was run for this plan, and no baseline was taken: a run of the suite buys no fact that reading it does not already give. The suite is expected green before the change — the last commit is a docs-only decomposition of this issue — so the first run belongs to whoever runs the checks below.",
-            "checks": [
-              "npm --prefix tools/argus test",
-              "./test.sh"
-            ],
-            "questions": []
-          }
-        },
-        {
-          "label": "tests:content-pipeline.0",
-          "at": "2026-08-07T09:35:41.513Z",
-          "return": {
-            "cases": [
-              {
-                "case": "A1. The env block turns the content flags on by default.",
-                "file": "/home/user/uroboros/tools/argus/test/claude.test.mjs",
-                "testName": "the env block turns the content flags on by default",
-                "expected": "otelEnvFor('http://localhost:4318') returns OTEL_LOG_USER_PROMPTS, OTEL_LOG_TOOL_DETAILS, OTEL_LOG_TOOL_CONTENT and OTEL_LOG_RAW_API_BODIES each exactly '1', and OTEL_LOG_RAW_API_BODIES is not a 'file:' value.",
-                "got": "The whole file fails at import time: SyntaxError: The requested module '../src/claude.mjs' does not provide an export named 'contentOf' (node --test tools/argus/test/claude.test.mjs, exit 1). contentOf is required by case group C in the same file, so the file cannot load until it exists; once it does, this case's own assertions will run against the still-unimplemented content flags."
-              },
-              {
-                "case": "A2. The content flags do not ride on the traces opt-in.",
-                "file": "/home/user/uroboros/tools/argus/test/claude.test.mjs",
-                "testName": "the content flags do not ride on the traces opt-in",
-                "expected": "otelEnvFor('http://localhost:4318', { traces: false }) still carries all four flags as '1' while OTEL_TRACES_EXPORTER is absent.",
-                "got": "Same file-level import failure as A1 (missing 'contentOf' export) — the case did not get to run."
-              },
-              {
-                "case": "B1 (shell format). Every format carries all four content flags — shell.",
-                "file": "/home/user/uroboros/tools/argus/test/env.test.mjs",
-                "testName": "the shell format (the default) exports all four content flags as \"1\"",
-                "expected": "argus env exits 0 and stdout contains export OTEL_LOG_USER_PROMPTS=\"1\" (and likewise for the other three flags).",
-                "got": "AssertionError: expected the shell output to contain export OTEL_LOG_USER_PROMPTS=\"1\" — exit 0, stdout does not mention any of the four flags (only CLAUDE_CODE_ENABLE_TELEMETRY, OTEL_METRICS_EXPORTER, OTEL_LOGS_EXPORTER, OTEL_EXPORTER_OTLP_PROTOCOL, OTEL_EXPORTER_OTLP_ENDPOINT, CLAUDE_CODE_ENHANCED_TELEMETRY_BETA, OTEL_TRACES_EXPORTER, UROBOROS_OBS_URL, and the export-interval variables)."
-              },
-              {
-                "case": "B1 (dotenv format). Every format carries all four content flags — dotenv.",
-                "file": "/home/user/uroboros/tools/argus/test/env.test.mjs",
-                "testName": "the dotenv format sets all four content flags to 1",
-                "expected": "argus env --format dotenv exits 0 and stdout contains OTEL_LOG_USER_PROMPTS=1 (and likewise for the other three flags).",
-                "got": "AssertionError: expected the dotenv output to contain OTEL_LOG_USER_PROMPTS=1 — exit 0, stdout carries none of the four flags."
-              },
-              {
-                "case": "B1 (json format). Every format carries all four content flags — json.",
-                "file": "/home/user/uroboros/tools/argus/test/env.test.mjs",
-                "testName": "the json format carries all four content flags as top-level keys",
-                "expected": "argus env --format json exits 0 and JSON.parse(stdout)[flag] === '1' for each of the four flags.",
-                "got": "AssertionError: expected top-level OTEL_LOG_USER_PROMPTS to be \"1\" — undefined !== '1'; the parsed object carries none of the four flags."
-              },
-              {
-                "case": "B1 (settings format). Every format carries all four content flags — settings, one level down under env.",
-                "file": "/home/user/uroboros/tools/argus/test/env.test.mjs",
-                "testName": "the settings format carries all four content flags one level down, under \"env\"",
-                "expected": "argus env --format settings exits 0 and JSON.parse(stdout).env[flag] === '1' for each of the four flags.",
-                "got": "AssertionError: expected settings.env.OTEL_LOG_USER_PROMPTS to be \"1\" — undefined !== '1'; parsed.env carries none of the four flags."
-              },
-              {
-                "case": "C1. An inline request body is classified with its untruncated length.",
-                "file": "/home/user/uroboros/tools/argus/test/claude.test.mjs",
-                "testName": "an inline request body is classified with its untruncated length",
-                "expected": "contentOf({eventName: 'claude_code.api_request_body', attrs: {body, body_length: '61440', body_truncated: 'true', model, query_source}}) returns kind 'request_body', text equal to body, length 61440 (number), truncated true, ref null.",
-                "got": "Same file-level import failure as A1 (missing 'contentOf' export) — the case did not get to run."
-              },
-              {
-                "case": "C2. A body the CLI wrote to a file is classified by its reference, with no text.",
-                "file": "/home/user/uroboros/tools/argus/test/claude.test.mjs",
-                "testName": "a body the CLI wrote to a file is classified by its reference, with no text",
-                "expected": "contentOf with body_ref and body_length but no body returns kind 'request_body', text null, ref the path, length 120000, truncated false.",
-                "got": "Same file-level import failure as A1 — the case did not get to run."
-              },
-              {
-                "case": "C3. A response body is its own kind.",
-                "file": "/home/user/uroboros/tools/argus/test/claude.test.mjs",
-                "testName": "a response body is its own kind",
-                "expected": "contentOf on claude_code.api_response_body returns kind 'response_body' and text equal to the body string.",
-                "got": "Same file-level import failure as A1 — the case did not get to run."
-              },
-              {
-                "case": "C4. Prompt, assistant response and tool input are content too.",
-                "file": "/home/user/uroboros/tools/argus/test/claude.test.mjs",
-                "testName": "prompt, assistant response and tool input are content too",
-                "expected": "user_prompt -> kind 'user_prompt', text 'hello', length 5; assistant_response -> kind 'assistant_response', text 'hi', length 2; tool_result with tool_input -> kind 'tool_input', text the JSON string, length 12. Written as one case with three inputs, per the plan's own choice of 'one case or three'.",
-                "got": "Same file-level import failure as A1 — the case did not get to run."
-              },
-              {
-                "case": "C5. The older attribute name for tool input is still read.",
-                "file": "/home/user/uroboros/tools/argus/test/claude.test.mjs",
-                "testName": "the older attribute name for tool input is still read",
-                "expected": "contentOf on a tool_result carrying tool_parameters instead of tool_input returns kind 'tool_input' with text read from tool_parameters.",
-                "got": "Same file-level import failure as A1 — the case did not get to run."
-              },
-              {
-                "case": "C6. An event that carries no content at all is not content.",
-                "file": "/home/user/uroboros/tools/argus/test/claude.test.mjs",
-                "testName": "an event that carries no content at all is not content",
-                "expected": "contentOf on claude_code.api_request (no content attributes) returns null.",
-                "got": "Same file-level import failure as A1 — the case did not get to run."
-              },
-              {
-                "case": "D1. Content records come back oldest-first, only for the session asked for.",
-                "file": "/home/user/uroboros/tools/argus/test/store.test.mjs",
-                "testName": "content records come back oldest-first, only for the session asked for",
-                "expected": "store.queryContent({sessionId: SESSION}) returns two results ({log, content} pairs, oldest-first): content.kind 'request_body' then 'user_prompt'; the other session's body and the contentless api_request are absent.",
-                "got": "TypeError: store.queryContent is not a function (node --test tools/argus/test/store.test.mjs)."
-              },
-              {
-                "case": "D2. The kind filter narrows to one kind.",
-                "file": "/home/user/uroboros/tools/argus/test/store.test.mjs",
-                "testName": "the kind filter narrows to one kind",
-                "expected": "store.queryContent({sessionId: SESSION, kinds: ['request_body']}) returns one result, the body at T.",
-                "got": "TypeError: store.queryContent is not a function."
-              },
-              {
-                "case": "D3. atMs is an inclusive upper bound.",
-                "file": "/home/user/uroboros/tools/argus/test/store.test.mjs",
-                "testName": "atMs is an inclusive upper bound",
-                "expected": "store.queryContent({sessionId: SESSION, atMs: T + 1000}) with bodies at T, T+1000, T+2000 returns two results; the record exactly at the bound is included, the later one is not.",
-                "got": "TypeError: store.queryContent is not a function."
-              },
-              {
-                "case": "D4. The nearest content at or before a time is atMs with limit: 1.",
-                "file": "/home/user/uroboros/tools/argus/test/store.test.mjs",
-                "testName": "the nearest content at or before a time is atMs with limit: 1",
-                "expected": "store.queryContent({sessionId: SESSION, kinds: ['request_body'], atMs: T + 1500, limit: 1}) returns exactly one result, the record at T + 1000.",
-                "got": "TypeError: store.queryContent is not a function."
-              },
-              {
-                "case": "D5. A session with nothing content-bearing answers with an empty list.",
-                "file": "/home/user/uroboros/tools/argus/test/store.test.mjs",
-                "testName": "a session with nothing content-bearing answers with an empty list",
-                "expected": "store.queryContent({sessionId: SESSION}) after ingesting only an api_request event returns [].",
-                "got": "TypeError: store.queryContent is not a function."
-              },
-              {
-                "case": "E1. Content-bearing records are listed over the API, without their text by default.",
-                "file": "/home/user/uroboros/tools/argus/test/server.test.mjs",
-                "testName": "content-bearing records are listed over the API, without their text by default",
-                "expected": "After POSTing an api_request_body, api_response_body and user_prompt for session s-content, GET /api/content?session=s-content returns 200, items.length 3, kinds ['request_body','response_body','user_prompt'] oldest-first, first item carries timeMs/length/truncated=false/querySource/attribution.query_source, and carries no 'text' key.",
-                "got": "AssertionError: Expected values to be strictly equal: 404 !== 200 (node --test tools/argus/test/server.test.mjs) — /api/content does not exist yet."
-              },
-              {
-                "case": "E2. The content at a point in time is one request away.",
-                "file": "/home/user/uroboros/tools/argus/test/server.test.mjs",
-                "testName": "the content at a point in time is one request away",
-                "expected": "GET /api/content?session=s-content&kind=request_body&at=<T+1500>&limit=1&body=1 returns 200, exactly one item, text equal to the earlier body string, kind 'request_body'.",
-                "got": "AssertionError: Expected values to be strictly equal: 404 !== 200 — /api/content does not exist yet."
-              },
-              {
-                "case": "E3. The event tail no longer carries whole bodies.",
-                "file": "/home/user/uroboros/tools/argus/test/server.test.mjs",
-                "testName": "the event tail no longer carries whole bodies",
-                "expected": "GET /api/events?session=s-content lists the api_request_body item with attrs.body_length intact and attrs.body absent; GET /api/content?...&body=1 afterward still returns the full text, proving the stored record was copied rather than stripped.",
-                "got": "AssertionError: the whole body must not ride along in the event tail — expected true, actual false; /api/events currently returns attrs.body unchanged (the strip has not been implemented)."
-              },
-              {
-                "case": "E4. Asking without a session asks across all of them, and a bad at is ignored rather than fatal.",
-                "file": "/home/user/uroboros/tools/argus/test/server.test.mjs",
-                "testName": "asking without a session asks across all of them, and a bad at is ignored rather than fatal",
-                "expected": "GET /api/content (no session) and GET /api/content?session=s-content&at=nonsense both return 200 and list the session's content records; the bad 'at' is ignored, not fatal.",
-                "got": "AssertionError: Expected values to be strictly equal: 404 !== 200 — /api/content does not exist yet."
-              }
-            ],
-            "openQuestions": [
-              "The test plan does not name the field shape store.queryContent(...) returns, only that each result 'carries the log record and the classification'. I aligned it to the shape the content-pipeline research step's plan already documents for the implementer — Array<{ log, content }>, where content is contentOf's own {kind, text, length, truncated, ref} — so store.test.mjs asserts result.log.timeMs and result.content.kind rather than a flat shape. If the implementer departs from that plan, these five cases will need their field names revisited, not their behaviour.",
-              "The GET /api/content item shape (kind, length, truncated, querySource, attribution, text opt-in via body=1) is likewise not named field-by-field in the test plan I was given; I used the flat shape the same research plan documents for the route, which matches the plan's own worked example almost verbatim (seq, timeMs, sessionId, kind, length, truncated, model, querySource, attribution, text). If the implementer's response shape differs, only E1/E2/E4's field names need revisiting, not the intent."
-            ],
-            "questions": [],
-            "summary": "Wrote 20 planned test cases across four files (claude.test.mjs groups A and C, the new env.test.mjs for group B, store.test.mjs group D, server.test.mjs group E) exercising the content flags, contentOf classification, TelemetryStore.queryContent, and the new GET /api/content route; ran each file individually and confirmed every new/changed case fails for the missing-behaviour reason named in its 'got' field (a missing contentOf export, absent content flags in every argus env format, a missing queryContent method, or a missing/unstripped /api/content route), while all 129 previously-passing cases in the suite (npm --prefix tools/argus test, exit 1 for the expected 14 new-related failures) stayed green."
-          }
-        },
-        {
-          "label": "implement:content-pipeline.0",
-          "at": "2026-08-07T09:42:53.117Z",
-          "return": {
-            "deviations": [],
-            "commands": [
-              {
-                "command": "npm --prefix tools/argus test",
-                "exitCode": 0,
-                "note": "node --test over tools/argus/test/*.test.mjs, 156 cases including the new test/env.test.mjs, nothing skipped or excluded."
-              },
-              {
-                "command": "./test.sh",
-                "exitCode": 126,
-                "note": "Permission denied: test.sh is tracked as mode 100644 and carries no executable bit, which predates this change. Re-run as `bash ./test.sh`, exit 0, PASS: all 6 suites (test-repo.sh, test-worktree.sh, backlog recorder, tools/argus, tools/argus-ui, tools/log-parser)."
-              },
-              {
-                "command": "bash ./test.sh",
-                "exitCode": 0,
-                "note": "The whole repository: all 6 suites pass."
-              }
-            ],
-            "blockers": [],
-            "questions": [],
-            "summary": "argus now turns the four Claude Code content flags on by default, classifies content-bearing log records with a new claude.mjs contentOf(log), serves them over GET /api/content (text opt-in with body=1) backed by store.queryContent, and keeps whole API bodies out of the /api/events tail; README updated for all three."
-          }
-        },
-        {
-          "label": "review:content-pipeline.0",
-          "at": "2026-08-07T09:51:21.673Z",
-          "return": {
-            "findings": [],
-            "reason": "",
-            "questions": [],
-            "summary": "Reviewed the whole diff against main for increment 1: `npm --prefix tools/argus test` ran 156 cases, 0 fail, exit 0; `./test.sh` exits 126 (\"Permission denied\") because test.sh is committed mode 100644 on main and this diff does not touch it — run as `bash test.sh` it reports PASS: all 6 suites, exit 0, a pre-existing checkout fact, not a defect of this change. All four content flags (OTEL_LOG_USER_PROMPTS, OTEL_LOG_TOOL_DETAILS, OTEL_LOG_TOOL_CONTENT, OTEL_LOG_RAW_API_BODIES=1) are set unconditionally by otelEnvFor and covered by CLI-level tests across the shell, dotenv, json and settings formats; I independently confirmed every flag name, the inline-vs-file semantics of OTEL_LOG_RAW_API_BODIES, and the body/body_ref/body_length/body_truncated/query_source attributes against the official Claude Code monitoring reference (code.claude.com/docs/en/monitoring-usage), and the README's new table matches it. contentOf plus TelemetryStore.queryContent and GET /api/content store and serve the content-bearing records with an inclusive `at` bound, so \"nearest content at or before this moment\" is one request away, and the tests pin exactly that. No test pins behaviour for flagless recordings: the two null cases use claude_code.api_request, which carries no content under any flag setting. Blast radius: the only behaviour change outside the new endpoint is that /api/events now omits the `body` attribute of the two body events (copy only, the stored record keeps the text, and body_length/body_truncated survive), which no existing consumer reads — tools/argus-ui/public/app.js never had bodies to show since the flags were off before. Two facts I could not verify and did not file: the researcher's report of the subagent/request-body attribution gap lives in backlog.json, which I do not read (the docs do confirm api_request_body/api_response_body carry query_source and model but no agent.name, and /api/content surfaces both), and the collector's 50k-log cap now holds up to 60 KB per body, a memory ceiling nothing in the diff or the criteria addresses."
-          }
-        }
-      ]
+      "status": "done",
+      "note": "Review accepted with no findings: the four content flags (OTEL_LOG_USER_PROMPTS, OTEL_LOG_TOOL_DETAILS, OTEL_LOG_TOOL_CONTENT, OTEL_LOG_RAW_API_BODIES=1) are on by default in all four env formats, contentOf plus store.queryContent plus GET /api/content store and serve the content-bearing records with an inclusive 'at' bound, and the suite is green (156 argus cases exit 0; bash ./test.sh PASS all 6 suites). The attribution gap is established: body events carry query_source and span context but no agent.name or agent_id.",
+      "steps": []
     },
     {
       "id": "timeline-landing",
@@ -243,11 +27,12 @@
       "criteria": [
         "Opening a session in the argus UI lands on the timeline view.",
         "The previous technical views — event tail, traces, raw inspectors — remain reachable from the timeline view and are subordinate to it, not the other way round.",
-        "The timeline draws one lane for the main session and one lane per subagent the telemetry attributes.",
-        "Each agent lane spans that agent's lifetime, so any vertical slice answers which agents are running at that moment."
+        "The timeline draws one lane for the main session and one lane per subagent instance, so two concurrent subagents of the same type get two lanes; `query_source` names only the agent type, and per-instance identity has to come from the span attributes the previous increment reported (`agent_id`, `parent_agent_id`).",
+        "Each agent lane spans that agent's lifetime, so any vertical slice answers which agents are running at that moment.",
+        "Where the run places the record-to-agent join — collector side or UI side — that choice is stated, and activity that cannot be attributed to an agent instance is shown as unattributed rather than dropped or silently folded into the main session."
       ],
       "status": "todo",
-      "note": "",
+      "note": "Criteria sharpened by what content-pipeline established: bodies carry no agent.name or agent_id, so lanes per agent instance can only come from the span join, and query_source alone cannot separate two subagents of one type. The researcher of this increment settles first where that join lives and what session data with the content flags on it can be built and exercised against, since scripts/demo-emit.mjs emits no content-bearing events.",
       "steps": []
     },
     {
@@ -257,10 +42,11 @@
       "criteria": [
         "Each lane shows its activity over time — tool calls and API requests — placed at the times they occurred.",
         "Each lane carries, as a curve or area behind that activity, the context size over time for that agent.",
+        "The curve is drawn from a size the telemetry actually records — the reported untruncated request-body length survives even when the body itself was truncated — and the view names which measure it is showing.",
         "Growth in context size is readable from the timeline alone, without opening any detail."
       ],
       "status": "todo",
-      "note": "",
+      "note": "One criterion added: content-pipeline showed bodies are truncated at the CLI's 60 KB ceiling while the untruncated length is reported separately, so the curve must be built from a recorded size and say what it measures rather than from the text it happens to hold.",
       "steps": []
     },
     {
@@ -279,30 +65,28 @@
     },
     {
       "id": "context-at-time",
-      "title": "The selected agent's context as of the chosen time",
-      "goal": "Show, for the lane selected at the chosen time, that agent's or the main session's context at that moment as a structured, expandable message list.",
+      "title": "The selected agent's context and tool use as of the chosen time",
+      "goal": "Show, for the lane selected at the chosen time, that agent's or the main session's context at that moment as a structured, expandable message list, together with the tools that agent has used up to that moment.",
       "criteria": [
         "Selecting a lane at the chosen time shows that agent's — or the main session's — context as of that moment.",
         "The context shown is the body of the nearest API request at or before the chosen time.",
         "It is rendered as a structured message list distinguishing system prompt, user, assistant, tool call and tool result blocks.",
         "Each block is collapsed to one line carrying its size.",
-        "Each block expands to the exact full text."
+        "Each block expands to the exact full text the record carries, and a body the CLI truncated is marked as truncated instead of being presented as the whole context.",
+        "The same selection also shows the tools that agent has used up to that moment, each entry carrying the tool name and that call's parameters.",
+        "Both listings are per agent and per time, so \"which tools, and what for\" is answerable for any agent at any point of the session."
       ],
       "status": "todo",
-      "note": "",
+      "note": "Absorbed the former tools-at-time increment. content-pipeline showed the request body and the tool parameters are the same kind of record from the same endpoint, selected by the same session, agent and time bound, so the detail panel for a selected lane is one change, not two chains. Also added the truncation criterion, since recorded bodies stop at the CLI's content ceiling and carry a truncation marker.",
       "steps": []
     },
     {
       "id": "tools-at-time",
       "title": "The selected agent's tool use up to the chosen time",
       "goal": "Show, for the lane selected at the chosen time, the tools that agent has used up to that moment together with the parameters of each call.",
-      "criteria": [
-        "Selecting a lane at the chosen time also shows the tools that agent has used up to that moment.",
-        "Each entry carries the tool name and that call's parameters.",
-        "The listing is per agent and per time, so \"which tools, and what for\" is answerable for any agent at any point of the session."
-      ],
-      "status": "todo",
-      "note": "",
+      "criteria": [],
+      "status": "dropped",
+      "note": "Merged into context-at-time, which now carries all three of its criteria. content-pipeline showed tool parameters arrive as the same content records as request bodies, retrieved through the same query with the same time bound and the same per-agent join, so building them as a separate increment would repeat that increment's selection and attribution work for the sake of one extra list in the same panel.",
       "steps": []
     }
   ],
@@ -310,7 +94,11 @@
     "steps": [
       {
         "label": "decompose",
-        "at": "2026-08-07T09:12:30.164Z",
+        "at": "2026-08-07T09:12:30.164Z"
+      },
+      {
+        "label": "replan:content-pipeline",
+        "at": "2026-08-07T09:55:42.995Z",
         "return": {
           "increments": [
             {
@@ -326,8 +114,8 @@
                 "Recordings made without the content flags are out of contract: no fallback rendering, no compatibility notice, and no test pins behavior for them.",
                 "`./test.sh` is green."
               ],
-              "status": "todo",
-              "note": "Opening cut."
+              "status": "done",
+              "note": "Review accepted with no findings: the four content flags (OTEL_LOG_USER_PROMPTS, OTEL_LOG_TOOL_DETAILS, OTEL_LOG_TOOL_CONTENT, OTEL_LOG_RAW_API_BODIES=1) are on by default in all four env formats, contentOf plus store.queryContent plus GET /api/content store and serve the content-bearing records with an inclusive 'at' bound, and the suite is green (156 argus cases exit 0; bash ./test.sh PASS all 6 suites). The attribution gap is established: body events carry query_source and span context but no agent.name or agent_id."
             },
             {
               "id": "timeline-landing",
@@ -336,11 +124,12 @@
               "criteria": [
                 "Opening a session in the argus UI lands on the timeline view.",
                 "The previous technical views — event tail, traces, raw inspectors — remain reachable from the timeline view and are subordinate to it, not the other way round.",
-                "The timeline draws one lane for the main session and one lane per subagent the telemetry attributes.",
-                "Each agent lane spans that agent's lifetime, so any vertical slice answers which agents are running at that moment."
+                "The timeline draws one lane for the main session and one lane per subagent instance, so two concurrent subagents of the same type get two lanes; `query_source` names only the agent type, and per-instance identity has to come from the span attributes the previous increment reported (`agent_id`, `parent_agent_id`).",
+                "Each agent lane spans that agent's lifetime, so any vertical slice answers which agents are running at that moment.",
+                "Where the run places the record-to-agent join — collector side or UI side — that choice is stated, and activity that cannot be attributed to an agent instance is shown as unattributed rather than dropped or silently folded into the main session."
               ],
               "status": "todo",
-              "note": "Opening cut."
+              "note": "Criteria sharpened by what content-pipeline established: bodies carry no agent.name or agent_id, so lanes per agent instance can only come from the span join, and query_source alone cannot separate two subagents of one type. The researcher of this increment settles first where that join lives and what session data with the content flags on it can be built and exercised against, since scripts/demo-emit.mjs emits no content-bearing events."
             },
             {
               "id": "lane-activity",
@@ -349,10 +138,11 @@
               "criteria": [
                 "Each lane shows its activity over time — tool calls and API requests — placed at the times they occurred.",
                 "Each lane carries, as a curve or area behind that activity, the context size over time for that agent.",
+                "The curve is drawn from a size the telemetry actually records — the reported untruncated request-body length survives even when the body itself was truncated — and the view names which measure it is showing.",
                 "Growth in context size is readable from the timeline alone, without opening any detail."
               ],
               "status": "todo",
-              "note": "Opening cut."
+              "note": "One criterion added: content-pipeline showed bodies are truncated at the CLI's 60 KB ceiling while the untruncated length is reported separately, so the curve must be built from a recorded size and say what it measures rather than from the text it happens to hold."
             },
             {
               "id": "scrub-live",
@@ -365,37 +155,35 @@
                 "A control returns to live mode."
               ],
               "status": "todo",
-              "note": "Opening cut."
+              "note": ""
             },
             {
               "id": "context-at-time",
-              "title": "The selected agent's context as of the chosen time",
-              "goal": "Show, for the lane selected at the chosen time, that agent's or the main session's context at that moment as a structured, expandable message list.",
+              "title": "The selected agent's context and tool use as of the chosen time",
+              "goal": "Show, for the lane selected at the chosen time, that agent's or the main session's context at that moment as a structured, expandable message list, together with the tools that agent has used up to that moment.",
               "criteria": [
                 "Selecting a lane at the chosen time shows that agent's — or the main session's — context as of that moment.",
                 "The context shown is the body of the nearest API request at or before the chosen time.",
                 "It is rendered as a structured message list distinguishing system prompt, user, assistant, tool call and tool result blocks.",
                 "Each block is collapsed to one line carrying its size.",
-                "Each block expands to the exact full text."
+                "Each block expands to the exact full text the record carries, and a body the CLI truncated is marked as truncated instead of being presented as the whole context.",
+                "The same selection also shows the tools that agent has used up to that moment, each entry carrying the tool name and that call's parameters.",
+                "Both listings are per agent and per time, so \"which tools, and what for\" is answerable for any agent at any point of the session."
               ],
               "status": "todo",
-              "note": "Opening cut."
+              "note": "Absorbed the former tools-at-time increment. content-pipeline showed the request body and the tool parameters are the same kind of record from the same endpoint, selected by the same session, agent and time bound, so the detail panel for a selected lane is one change, not two chains. Also added the truncation criterion, since recorded bodies stop at the CLI's content ceiling and carry a truncation marker."
             },
             {
               "id": "tools-at-time",
               "title": "The selected agent's tool use up to the chosen time",
               "goal": "Show, for the lane selected at the chosen time, the tools that agent has used up to that moment together with the parameters of each call.",
-              "criteria": [
-                "Selecting a lane at the chosen time also shows the tools that agent has used up to that moment.",
-                "Each entry carries the tool name and that call's parameters.",
-                "The listing is per agent and per time, so \"which tools, and what for\" is answerable for any agent at any point of the session."
-              ],
-              "status": "todo",
-              "note": "Opening cut."
+              "criteria": [],
+              "status": "dropped",
+              "note": "Merged into context-at-time, which now carries all three of its criteria. content-pipeline showed tool parameters arrive as the same content records as request bodies, retrieved through the same query with the same time bound and the same per-agent join, so building them as a separate increment would repeat that increment's selection and attribution work for the sake of one extra list in the same panel."
             }
           ],
           "questions": [],
-          "summary": "Opening cut of the argus timeline issue into six increments, all todo, within the run's budget of eight.\n\nWhere each acceptance criterion landed. Criterion 1 (`argus env` carries the content flags, flag names verified) and criterion 2 (the collector stores and serves content-bearing records over the JSON API) both went to `content-pipeline`: turning the flags on delivers nothing until the collector keeps what arrives, and the collector cannot be shaped without knowing what the flags actually make the CLI emit, so they are one change. Criterion 9 (recordings without the content flags are out of contract, nothing tests them) is recorded there too, because the collector is the one place tempted to write a fallback; it is a standing prohibition that every later increment's review re-applies. Criterion 10 (`./test.sh` green) is likewise recorded on `content-pipeline` so the gate binds from the first increment onward, and every increment must leave it green as the price of standing on its own. Criterion 3 (the session opens on the timeline, technical views subordinate) and criterion 4 (a lane per agent, spanning its lifetime) went to `timeline-landing`. Criterion 5 (activity plus a context-size curve per lane) is `lane-activity`. Criterion 6 (scrub plus live mode) is `scrub-live`. Criterion 7 (context as a structured, expandable message list) is `context-at-time`. Criterion 8 (tools used up to that moment, with parameters) is `tools-at-time`.\n\nWhy this order. `content-pipeline` is first because it is both the load-bearing one and the one carrying the run's open questions: the exact flag names, whether the CLI emits request/response bodies at all, and how completely subagent traffic is attributed. Every UI increment depends on the answers, and if bodies turn out not to be emittable the later cut has to change — so the run has to learn that before it draws anything. I made those unknowns explicit criteria of that increment rather than questions for the human, because the issue already tells the researcher to verify them against the CLI's documentation and against the telemetry itself; nothing here needs a human decision, so `questions` is empty. Then the timeline is built outside in: the view and its lanes, the drawing inside the lanes, the time control, and finally the two detail panels that need a chosen time to mean anything.\n\nWhat I rejected. Splitting the `argus env` flags from the collector work — half of it is a config change nobody can judge. Merging `timeline-landing` with `lane-activity` — that one increment would carry the whole navigation restructure plus the lane rendering plus the context-size curve, too much for a single review, while \"the session opens on a timeline that shows which agents ran when\" is already judgeable on its own. Merging `context-at-time` with `tools-at-time` — they share the selection and the chosen time, but the message list with per-block sizes and expansion is substantial on its own, and the two answer different questions from the issue (\"what fills the context\" versus \"which tools, and what for\"); splitting them costs one extra chain and keeps both reviewable, with the tool list riding on selection plumbing the context increment will already have.\n\nOne fact the cut turns on that I do not have: how completely the telemetry attributes subagent activity. If attribution is thin, `timeline-landing` may deliver fewer lanes than hoped. Rather than guess, `content-pipeline` is cut to answer it first and report the gap, and I will re-cut the lane increments against that finding on the next call."
+          "summary": "Closed content-pipeline as done (review accepted, no findings) and re-cut the four open increments against what it showed. Three changes, each traceable to a finding of that increment. (1) tools-at-time is dropped and its three criteria moved into context-at-time: the increment established that tool parameters and request bodies are the same class of content record, served by the same endpoint under the same session/kind/time bound and needing the same per-agent join, so the selected-lane detail panel is one change rather than two full chains. (2) timeline-landing's lane criterion is sharpened: body events carry query_source and span context but no agent.name and no agent_id, and query_source names only the agent type, so two concurrent subagents of one type are indistinguishable without joining through the span attributes agent_id/parent_agent_id; the increment now also has to state where that join lives and to show unattributable activity as unattributed rather than folding it into the main session. (3) lane-activity gains one criterion: bodies are truncated at the CLI's content ceiling while the untruncated length is reported separately, so the context-size curve must come from a recorded size and the view must name which measure it draws. scrub-live is unchanged. Criterion coverage of the issue: env flags and collector storage/serving, the flag-name verification, the attribution finding, the out-of-contract rule for flagless recordings and ./test.sh green sit in content-pipeline (done); landing on the timeline with the technical views subordinate, and lanes per agent over their lifetime, in timeline-landing; activity plus the context-size curve in lane-activity; scrubbing and live mode in scrub-live; the structured context message list and the per-agent tool listing in context-at-time. Two facts the cut turns on that I could not settle and deliberately left to the next researcher rather than to a question: whether the record-to-agent join belongs in the collector or in the UI (the UI already proxies every /api/ path, so either is open), and what session data the UI increments can be built against, since scripts/demo-emit.mjs emits no content-bearing events and no recording with the flags on is known to exist. I rejected splitting an agent-resolution API off as its own increment: it would deliver nothing a reader can judge on its own and may be unnecessary if the join is done UI-side. One operational fact for later steps: test.sh is committed mode 100644, so `./test.sh` exits 126 on this checkout and the suite has to be run as `bash ./test.sh` (exit 0, PASS all 6 suites) — a pre-existing checkout fact, not a defect of the change. Backlog now holds 6 increments (1 done, 1 dropped, 4 todo), so at most 5 of the 8 chains are spent if every remaining one takes a single pass."
         }
       }
     ]
