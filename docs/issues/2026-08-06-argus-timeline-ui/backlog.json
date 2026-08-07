@@ -31,592 +31,25 @@
         "Each agent lane spans that agent's lifetime, so any vertical slice answers which agents are running at that moment.",
         "Where the run places the record-to-agent join — collector side or UI side — that choice is stated, and activity that cannot be attributed to an agent instance is shown as unattributed rather than dropped or silently folded into the main session."
       ],
-      "status": "todo",
-      "note": "Criteria sharpened by what content-pipeline established: bodies carry no agent.name or agent_id, so lanes per agent instance can only come from the span join, and query_source alone cannot separate two subagents of one type. The researcher of this increment settles first where that join lives and what session data with the content flags on it can be built and exercised against, since scripts/demo-emit.mjs emits no content-bearing events.",
-      "steps": [
-        {
-          "label": "research:timeline-landing.0",
-          "at": "2026-08-07T10:06:19.232Z",
-          "return": {
-            "needsTests": true,
-            "plan": "GOAL. Opening a session in argus-ui lands on a timeline that draws one lane for the main session and one lane per subagent *instance*, each lane spanning that agent's lifetime. The old technical views stay, below the timeline, closed by default.\n\nFACTS ESTABLISHED (verified against the installed Claude Code 2.1.224 binary at /opt/claude-code/bin/claude and against the code):\n1. Only two span names carry agent identity: `claude_code.llm_request` and `claude_code.tool` set `agent_id` and `parent_agent_id`, and only when the agent context is NOT the main agent (`B6(e){return e.agentType===\"main\"}` guards it). So a span without `agent_id` is either main-agent work or a span type that never carries it.\n2. `claude_code.interaction`, `claude_code.tool.execution`, `claude_code.tool.blocked_on_user` and `claude_code.hook` set NO agent attributes at all; they inherit the agent only through the span parent chain (they are started with the active span as parent).\n3. There IS a `claude_code.subagent.spawn` span in the binary carrying `agent_id`/`agent_type`/`parent_agent_id`, but it is dead code in this build: its emitter starts with `if(!Xwe())return` and `function Xwe(){return!1}`. Do not build lane lifetimes on it and do not reference it.\n4. `query_source` (e.g. `agent:builtin:researcher`) is set on `llm_request` spans and names only the agent type. `agent.name` is set by the attribution helper where the CLI knows the agent's name. Neither separates two concurrent instances of one type; `agent_id` does.\n5. `parent_agent_id` of a top-level subagent is the main agent's id, and the main agent's id never appears as an `agent_id` on any span. So a `parent_agent_id` that matches no lane means \"child of main\".\n6. The store already buffers every span (`store.spans`, bounded at 50 000, 24 h retention) with `sessionId`, `spanId`, `parentSpanId`, `traceId`, `name`, `startMs`, `endMs`, `durationMs`, `attrs`, `status`. There is no per-session span index; `queryEvents`/`queryContent` already do a full linear walk per request, so a walk is the house style.\n\nDECISION — WHERE THE JOIN LIVES: collector side. The store already holds every span of the session indexed by nothing but a linear array, so the join is one pass over a bounded buffer, whereas UI-side would mean one `/api/traces/:id` fetch per trace in the browser. The claude-specific knowledge \"which attribute names an agent\" belongs with the rest of it in `tools/argus/src/claude.mjs`, and `tools/argus-ui` is forbidden from importing anything of argus, so a UI-side join would duplicate that knowledge in the browser. The later increments (lane activity, context at a time) need one vocabulary of instance ids to filter by; serving it once fixes it. Rejected: a UI-side join (N fetches, duplicated domain knowledge); a new persisted index in the store (eviction would have to be kept in step for no gain over the scan).\n\nCOLLECTOR CHANGES\n\nA. `tools/argus/src/claude.mjs` — add one exported helper, next to `attributionOf`:\n```js\n/** The agent instance a record belongs to, or null when it carries no agent identity. */\nexport function agentRefOf(attrs = {}) {\n  const agentId = typeof attrs.agent_id === 'string' ? attrs.agent_id.trim() : '';\n  if (!agentId) return null;\n  const parentAgentId = typeof attrs.parent_agent_id === 'string' ? attrs.parent_agent_id.trim() : '';\n  const agentType = attrs['agent.name'] ?? attrs.query_source ?? null;\n  return { agentId, parentAgentId: parentAgentId || null, agentType: agentType || null };\n}\n```\nDocument in its comment that the main agent emits no `agent_id`, so `null` means \"not a subagent instance\", not \"unknown\".\n\nB. `tools/argus/src/store.mjs` — add `getAgents(sessionId)` in the queries section, after `getTrace`. Returns `null` for an unknown session (same contract as `getSession`), otherwise:\n```js\n{ sessionId, firstMs, lastMs, items: [lane, ...] }\n```\nwith `lane = { id, kind, agentId, parentAgentId, agentType, firstMs, lastMs, durationMs, spanCount }`.\n- `id` is `'main'`, `'unattributed'`, or `` `agent:${agentId}` `` — the prefix removes any collision between a real agent id and the two synthetic lanes.\n- `kind` is `'main' | 'subagent' | 'unattributed'`.\nAlgorithm: take `this.spans.filter(s => s.sessionId === sessionId)`, build `byId = Map(spanId -> span)` over ALL of them (across traces, since a subagent's spans may sit in another trace than its parent's), then resolve each span to a lane key with memoisation and a depth cap of 64:\n- `agentRefOf(span.attrs)` non-null -> `agent:<agentId>`;\n- else no `parentSpanId` -> `main`;\n- else parent present in `byId` -> the parent's lane key (recurse);\n- else (parent missing from the buffer, or the depth cap hit) -> `unattributed`.\nA missing parent is the one honest \"cannot be attributed\" case — the buffer evicts oldest first and `getTrace` already counts such orphans — and it must land on `unattributed`, never on `main`. Accumulate per lane: `firstMs = min(startMs)` over spans with `startMs > 0`, `lastMs = max(endMs || startMs)`, `durationMs = max(0, lastMs - firstMs)`, `spanCount`, and for subagent lanes fill `agentType`/`parentAgentId` from the first span that carries a non-null one. Order the items: the main lane first, then subagent lanes by `firstMs` and then `agentId`, then `unattributed` last. Top-level `firstMs`/`lastMs` are the min/max over the lanes, `0` when the session has no spans. A session with no spans yields `items: []` — lanes are built from spans and nothing is invented.\n\nC. `tools/argus/src/server.mjs` — add, in `handleApi` next to the existing `^\\/api\\/sessions\\/([^/]+)$` match, a route `^\\/api\\/sessions\\/([^/]+)\\/agents$`: `store.getAgents(id)`, `404 {error:'unknown session'}` when null, else `200` with the payload as-is. A path segment rather than `/api/agents?session=` so the unknown-session answer is the same 404 the sibling route already gives, with no new error shape to invent.\n\nD. `tools/argus/scripts/demo-emit.mjs` — emit subagent work, so the timeline can be seen without a live agent run. In `buildTurn`, after the first LLM call, add a `claude_code.tool` span with `tool_name: 'Task'` on the main lane and, overlapping in time under it, two subagent instances with the SAME `query_source: 'agent:builtin:researcher'` and DIFFERENT `agent_id` (`agt_<hex>`), each also carrying `parent_agent_id: 'agt_main'`, each with one `claude_code.llm_request` span and one `claude_code.tool` span, plus one `claude_code.tool.execution` child under a subagent tool span that carries no agent attributes (it exercises parent-chain inheritance in the demo the way the CLI produces it). Do not fake orphans; the unattributed lane is not demo material.\n\nE. `tools/argus/README.md` — one row in the HTTP API table: `GET /api/sessions/:id/agents` — \"Agent lanes of a session: main, one per subagent instance, unattributed\". Leave `skills/argus/SKILL.md` alone: its route table is a deliberate subset for reading numbers, not an API index.\n\nUI CHANGES (tools/argus-ui, no change to `src/server.mjs` — `/api/` is already proxied wholesale, and `.js` is already in its MIME map)\n\nF. New `public/format.js`: move `esc`, `fmtNum`, `fmtCost`, `fmtDur`, `fmtClock`, `fmtAgo`, `shortId` out of `public/app.js` verbatim and export them. A pure move, no behaviour change; it exists so the timeline module and `app.js` share one `esc` rather than two. Files in `public/` are `.js`, not `.mjs`, matching `app.js` and the server's MIME map.\n\nG. New `public/timeline.js`, the testable half of the view. Exports:\n- `SUBORDINATE_VIEWS` — the previous technical views, in order: `overview/Overview`, `todos/Tasks`, `traces/Traces`, `events/Events`, `metrics/Metrics`, `raw/Attributes` (the current `TABS` list, moved here).\n- `DEFAULT_VIEW = null` — no technical view open, so a freshly opened session is the timeline alone.\n- `agentLabel(lane)` — `'main session'` for main, `'unattributed'` for unattributed, otherwise the last `:`-separated segment of `agentType` (`agent:builtin:researcher` -> `researcher`), or `'subagent'` when `agentType` is null.\n- `laneRows(items, { startMs, endMs })` — pure geometry: returns each lane with `depth`, `leftPct`, `widthPct` as numbers. `total = Math.max(endMs - startMs, 1)` so a zero-width window cannot divide by zero; `leftPct`/`widthPct` are clamped into `0..100`; a zero-duration lane keeps a `0.4` minimum width, as the waterfall does. `depth`: main and unattributed `0`; a subagent whose `parentAgentId` matches another lane's `agentId` is `1 + depth(parent)`, otherwise `1` (its parent is the main agent, whose id is never emitted as an `agent_id`); cap the walk so a cycle cannot hang it.\n- `timelineHtml(items, window)` — the panel: an axis with 0/25/50/75/100 % ticks labelled `fmtClock`, one row per lane with an indented label (`agentLabel` plus, for subagents, the short `agentId`, so two instances of one type are told apart on screen), a bar positioned from the geometry, and the lane's duration. Bars carry `data-kind` = the lane kind. With no lanes it returns a placeholder in the wording of the existing traces placeholder: the timeline is drawn from spans, which need `CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1` and `OTEL_TRACES_EXPORTER=otlp`. Everything interpolated goes through `esc`.\n- `viewStripHtml(openId, counts)` — the subordinate strip, reusing the existing `.tabs`/`.tab` classes and `data-view` (not `data-tab`) buttons, `aria-selected` true only on the open one, count badges as today.\n\nH. `public/app.js`: import from the two new modules and delete what moved. `state.tab` becomes `state.view`, initialised to `DEFAULT_VIEW`; add `state.agents = []` and `state.agentWindow = { startMs: 0, endMs: 0 }`. `loadSession()` also fetches `/api/sessions/<id>/agents` and stores `items` plus a window of `{ startMs: min(session.firstSeenMs, payload.firstMs || Infinity), endMs: max(session.lastSeenMs, payload.lastMs) }`, falling back to empty on error. `renderDetail()` renders: head, then `timelineHtml(...)` ALWAYS, then `viewStripHtml(state.view, counts)`, then `<div id=\"view-body\">`; `renderViewBody()` (the renamed `renderTabBody`) renders nothing when `state.view` is null. Click wiring: `[data-view]` sets `state.view`, and clicking the open one closes it back to the timeline alone. `loadTabData` becomes `loadViewData` and returns early when no view is open. `selectSession()` resets `state.view = DEFAULT_VIEW`, which is what makes opening a session land on the timeline. The 15 s repaint's `state.tab === 'overview'` becomes `state.view === 'overview'`.\n\nI. `public/styles.css` — a `.timeline` block after the waterfall block, reusing the same `--label-w` grid, `.axis-ticks`/`.axis-tick`: `.lane-row`, `.lane-label`, `.lane-track`, `.lane-bar` with `data-kind=\"main\"` (`--violet`), `\"subagent\"` (`--accent`), `\"unattributed\"` (`--text-faint`), and an indent driven by an inline `padding-left` like `.span-label` uses. No new CSS variables.\n\nJ. `tools/argus-ui/README.md` — under \"What it shows\", a first bullet: **Timeline** — one lane for the main session and one per subagent instance over its lifetime; the other views listed after it as what opens below it. Do not extend the skeleton file list in `test/independence.test.mjs`: it names the project's structural minimum, not every file.\n\nOUT OF THIS INCREMENT, by the brief: activity marks and the context-size curve on a lane, scrubbing and live mode, and the per-lane context/tool detail. Do not add a chosen-time marker, a per-lane activity block or a selection handler now.",
-            "moduleMap": "tools/argus/src/claude.mjs — Claude domain knowledge (metric/span/event names, attributionOf, contentOf); add exported agentRefOf(attrs).\ntools/argus/src/store.mjs — TelemetryStore: ingest, aggregation, queries (getSession, getTrace, queryEvents, queryContent, queryMetrics); add getAgents(sessionId) in the queries section.\ntools/argus/src/server.mjs — HTTP surface; handleApi() holds the route table; add ^/api/sessions/:id/agents$ next to the existing session route.\ntools/argus/scripts/demo-emit.mjs — synthetic OTLP emitter; buildTurn() builds one turn's spans/logs/metrics; add the Task span and two same-type subagent instances.\ntools/argus/README.md — user page; the HTTP API table around line 556 gains one row.\ntools/argus/test/claude.test.mjs — unit cases for claude.mjs helpers.\ntools/argus/test/store.test.mjs — unit cases against a bare TelemetryStore, with local metric/log/span fixture builders at the top.\ntools/argus/test/server.test.mjs — HTTP cases against a real collector on port 0, with OTLP payload builders at the top.\ntools/argus-ui/public/format.js — NEW: esc, fmtNum, fmtCost, fmtDur, fmtClock, fmtAgo, shortId, moved verbatim out of app.js.\ntools/argus-ui/public/timeline.js — NEW: SUBORDINATE_VIEWS, DEFAULT_VIEW, agentLabel, laneRows, timelineHtml, viewStripHtml — the testable half of the timeline view.\ntools/argus-ui/public/app.js — the whole front end: state, api(), renderers, loaders, wiring, boot(); loses the formatters and TABS, gains the timeline as the session view and state.view.\ntools/argus-ui/public/styles.css — one stylesheet; add a .timeline block after the .waterfall block.\ntools/argus-ui/README.md — user page; \"What it shows\" list gains the timeline as its lead entry.\ntools/argus-ui/test/timeline.test.mjs — NEW: unit cases importing ../public/timeline.js directly, no DOM.",
-            "environment": "Node v22.22.2 is installed; both projects are zero-dependency, ESM, no build step, so nothing has to be installed and no `npm install` is needed before any command below. There is no linter, no formatter and no type checker in this repository — nothing to run for style.\n\nCommands the test plan uses, all from the repository root:\n- `npm --prefix tools/argus test` — the collector suite (`node --test \"test/*.test.mjs\"`).\n- `npm --prefix tools/argus-ui test` — the interface suite (`node --test \"test/*.test.mjs\"`).\n- `node --test tools/argus/test/store.test.mjs` — just the store cases.\n- `node --test tools/argus/test/claude.test.mjs` — just the claude.mjs cases.\n- `node --test tools/argus/test/server.test.mjs` — just the collector HTTP cases.\n- `node --test tools/argus-ui/test/timeline.test.mjs` — just the timeline cases.",
-            "testPlan": "WHETHER: tests are needed. Four of the five criteria have something a tool can check; the fifth (the join's placement) is a stated decision plus the unattributed rule, and the rule is testable.\n\nI ran nothing — not the suites, not a baseline. Both suites are green as of the last increment's review (156 argus cases, exit 0) and nothing is known red; the first run belongs to whoever runs it downstream. The only thing I executed was `grep` over the installed CLI binary to settle which spans carry `agent_id`, which is a reading, not a test run.\n\nWHAT AND HOW, per criterion.\n\n--- Criterion: the timeline draws one lane for the main session and one lane per subagent instance; two concurrent subagents of the same type get two lanes; identity comes from agent_id/parent_agent_id.\n\nLevel: unit, against the store. File: `tools/argus/test/store.test.mjs`. Framework: `node:test` + `node:assert/strict`. Conventions of that file: no server, a bare `new TelemetryStore()` per case, fixtures from the local `span(name, attributes, extra)` / `log(...)` / `metric(...)` builders at the top of the file — `span` already takes `{ spanId, parentSpanId, startMs, endMs }` as offsets from a module-level `NOW` (absolute past timestamps get evicted by retention, so keep using it), sets `traceId: 'trace-1'` and `attrs['session.id'] = SESSION`; records go in via `store.ingest('traces', [...])`; test names are lowercase sentences stating the fact. Add a small local helper for a subagent span (`agent_id`, `parent_agent_id`, `query_source`) rather than repeating the attribute literals. Command: `node --test tools/argus/test/store.test.mjs`.\n\n1. Main only. Ingest an interaction span (no parent, no agent_id) and an llm_request child of it, no agent attributes. `store.getAgents(SESSION)` returns exactly one item, `kind === 'main'`, `id === 'main'`, `spanCount === 2`.\n2. Two instances of one type — the headline case. Ingest a main interaction span plus, under it, two `claude_code.tool` spans with `agent_id: 'agt-a'` and `agent_id: 'agt-b'`, BOTH with `query_source: 'agent:builtin:researcher'` and `parent_agent_id: 'agt-main'`, with overlapping but different start/end offsets. Expect three items: one `main`, two `subagent` with ids `agent:agt-a` and `agent:agt-b`, each carrying `agentType === 'agent:builtin:researcher'` and `parentAgentId === 'agt-main'`. The two lanes must not be merged.\n3. Instance identity beats type. Same as case 2 but assert the item ids are distinct and `items.filter(i => i.kind === 'subagent').length === 2` — pins that `query_source` alone never collapses two instances.\n4. Ordering. In case 2's fixture, assert `items[0].kind === 'main'` and that the two subagent lanes come in ascending `firstMs`.\n5. Session isolation. Ingest a subagent span for a second session id and assert it does not appear in the first session's items.\n6. Unknown session. `store.getAgents('nope')` returns `null`.\n7. A session with records but no spans (ingest one log only) returns `{ items: [] }` with `firstMs === 0`.\n\n--- Criterion: each agent lane spans that agent's lifetime.\n\nLevel: unit, same file, same conventions, same command.\n\n8. Lifetime from the extremes. A subagent with three spans at offsets (start 100/end 400), (start 200/end 900), (start 300/end 500): the lane has `firstMs === NOW+100`, `lastMs === NOW+900`, `durationMs === 800`.\n9. Open span edge. A span with `endMs: 0` contributes its `startMs` to `lastMs` and does not push the lane to the epoch or to NaN.\n10. A span with `startMs: 0` (never started / not decoded) does not drag `firstMs` to 0.\n\n--- Criterion: activity that cannot be attributed to an agent instance is shown as unattributed, not dropped and not folded into the main session.\n\nLevel: unit, same file, same conventions, same command.\n\n11. Inheritance through the parent chain. A `claude_code.tool.execution` span with NO agent attributes whose `parentSpanId` is a subagent's tool span lands on that subagent's lane, not on main. (This is the real CLI shape: only llm_request and tool spans carry agent_id.)\n12. Broken chain. A span with no agent attributes whose `parentSpanId` names a span that is not in the buffer produces an `unattributed` lane holding it — assert the lane exists with `kind === 'unattributed'`, that its `spanCount` is 1, and that the main lane's `spanCount` did not absorb it.\n13. Unattributed is last. With main, one subagent and one orphan present, `items.at(-1).kind === 'unattributed'`.\n14. No orphans, no lane. With every parent resolvable, no item has `kind === 'unattributed'`.\n\n--- The agent-identity helper.\n\nLevel: unit. File: `tools/argus/test/claude.test.mjs`. Framework and conventions: `node:test` + `node:assert/strict`, plain calls with literal attribute objects, one `test('…')` per fact, names as lowercase sentences. Command: `node --test tools/argus/test/claude.test.mjs`.\n\n15. `agentRefOf({ agent_id: 'agt-a', parent_agent_id: 'agt-main', query_source: 'agent:builtin:researcher' })` returns `{ agentId: 'agt-a', parentAgentId: 'agt-main', agentType: 'agent:builtin:researcher' }`.\n16. `agentRefOf({ query_source: 'main' })` returns `null` — a main-agent span carries no agent_id and must not become an instance.\n17. `agentRefOf({ agent_id: '' })` and `agentRefOf({})` return `null`.\n18. `agent.name` wins over `query_source` as the type when both are present.\n\n--- The route that serves the lanes.\n\nLevel: integration over HTTP. File: `tools/argus/test/server.test.mjs`. Framework: `node:test` + `node:assert/strict` with the file's existing `withServer({}, async ({ base }) => …)` helper (real `TelemetryStore` + `createServer`, bound to port 0) and its OTLP payload builders — follow `tracePayload(sessionId)` for protobuf spans or the JSON logs builders for the JSON shape; build the span payload with the same `encodeMessage(..., EXPORT_TRACE_REQUEST)` route and `T0` nanosecond timestamps that `tracePayload` uses, and assert the ingest POST returned 200 before asserting on the query, as the content case does. Command: `node --test tools/argus/test/server.test.mjs`.\n\n19. POST a trace payload for one session holding an interaction span plus two subagent tool spans of one `query_source` with distinct `agent_id`; `GET /api/sessions/<id>/agents` answers 200 with `items.length === 3`, kinds `['main','subagent','subagent']`, and each item carrying numeric `firstMs`, `lastMs`, `durationMs` and `spanCount`.\n20. `GET /api/sessions/nope/agents` answers 404 with `{ error: 'unknown session' }`.\n\n--- Criterion: opening a session lands on the timeline, and the previous technical views stay reachable and subordinate.\n\nLevel: unit over the view module. File: `tools/argus-ui/test/timeline.test.mjs` — NEW. Framework: `node:test` + `node:assert/strict`, importing `../public/timeline.js` directly; the module must not touch `document`, `window` or `location` at import time, and none of these cases may use a DOM. Conventions to follow, taken from the two existing argus-ui test files: a top-of-file comment saying what the file pins, one `test('…')` per fact with a lowercase-sentence name, `assert.equal`/`assert.deepEqual`/`assert.match`, no shared mutable state between cases, and small local fixture builders instead of a framework. A lane fixture builder — `lane({ id, kind, agentId, parentAgentId, agentType, firstMs, lastMs })` — belongs at the top. Command: `node --test tools/argus-ui/test/timeline.test.mjs`.\n\n21. `DEFAULT_VIEW` is `null`, so nothing but the timeline is open when a session is opened.\n22. `SUBORDINATE_VIEWS` still offers every previous technical view: its ids are exactly `['overview','todos','traces','events','metrics','raw']`, in that order.\n23. `viewStripHtml(null, {})` marks no view as selected — no `aria-selected=\"true\"` in the markup — and still contains a button for each of the six ids.\n24. `viewStripHtml('events', {})` marks exactly one, and it is the events one.\n\n--- Criterion: the lanes are drawn, one per agent, over each lifetime (the view half).\n\nSame file, same conventions, same command.\n\n25. Geometry. A lane covering the middle half of the window gets `leftPct === 25` and `widthPct === 50`.\n26. Clamping. A lane starting before the window and ending after it gets `leftPct === 0` and `widthPct === 100`.\n27. Zero-width window (`startMs === endMs`) yields finite numbers for every lane — assert `Number.isFinite` on both, and no `NaN` in the rendered markup.\n28. A zero-duration lane keeps the `0.4` minimum width, so an instant agent is still visible.\n29. Depth. Main is depth 0; a subagent whose `parentAgentId` matches no lane is depth 1; a subagent whose `parentAgentId` matches another subagent lane's `agentId` is depth 2; the unattributed lane is depth 0.\n30. `agentLabel`: `agent:builtin:researcher` renders as `researcher`; a null `agentType` renders as `subagent`; the main lane as `main session`; the unattributed lane as `unattributed`.\n31. Two instances of one type are distinguishable on screen: `timelineHtml` for two lanes with the same `agentType` and different `agentId` contains both agent ids (assert each with `assert.match`) and produces two lane rows.\n32. Empty state: `timelineHtml([], window)` returns a placeholder whose text mentions spans (assert with a `/span/i` match), not an empty panel.\n33. Escaping: a lane whose `agentType` is `<script>x</script>` appears escaped — assert the markup contains no literal `<script`.\n\nDELIBERATELY UNTESTED, and why:\n- The browser rendering itself, and that a click on a subordinate view opens it below the timeline. There is no DOM harness in this project and adding one means a runtime dependency, which `tools/argus-ui/CLAUDE.md` forbids without asking the human. What is pinned instead is the view model — `DEFAULT_VIEW`, `SUBORDINATE_VIEWS`, the strip markup — plus the fact that `app.js` renders the timeline unconditionally, which a reader can check.\n- `public/styles.css`: no test asserts appearance.\n- `public/format.js`: a verbatim move of functions that were never directly tested; a test for them would pin behaviour this increment does not change.\n- `tools/argus/scripts/demo-emit.mjs`: the scripts directory has no test file by convention and the emitter is a convenience, not a contract.\n- The UI proxy forwarding `/api/sessions/:id/agents`: `tools/argus-ui/test/server.test.mjs` already pins that every `/api/` path is proxied; a per-route case would restate it.\n- Nothing pins the wording of any placeholder or label beyond the substring matches named above, per the house rule that a message is asserted as a fact, never as a phrasing.",
-            "checks": [
-              "npm --prefix tools/argus test",
-              "npm --prefix tools/argus-ui test"
-            ],
-            "questions": [],
-            "summary": "The record-to-agent join goes collector side as store.getAgents(sessionId) behind GET /api/sessions/:id/agents — resolving each span to a lane by agent_id, else by its parent chain, else to an explicit unattributed lane — and argus-ui renders those lanes as the session's landing view from a new public/timeline.js, with the six previous technical views moved into a subordinate strip below it that is closed by default."
-          }
-        },
-        {
-          "label": "tests:timeline-landing.0",
-          "at": "2026-08-07T10:16:12.030Z",
-          "return": {
-            "summary": "Added 20 failing unit/integration cases across tools/argus/test/store.test.mjs, tools/argus/test/claude.test.mjs and tools/argus/test/server.test.mjs for the collector-side agent-lane join (getAgents/agentRefOf/GET /api/sessions/:id/agents), plus a new tools/argus-ui/test/timeline.test.mjs (13 cases) pinning that opening a session lands on the timeline with the six technical views subordinate and closed, and that lanes are laid out one per agent instance over their lifetime, with unattributed activity kept visible rather than dropped or folded into main.",
-            "cases": [
-              {
-                "case": "1. Main only: an interaction span plus an llm_request child, no agent attributes -> getAgents returns exactly one item, kind 'main', id 'main', spanCount 2.",
-                "file": "tools/argus/test/store.test.mjs",
-                "testName": "a session with only a main interaction span reports one main lane",
-                "expected": "items.length===1, items[0].kind==='main', items[0].id==='main', items[0].spanCount===2",
-                "got": "TypeError: store.getAgents is not a function"
-              },
-              {
-                "case": "2. Two instances of one type: a main interaction span plus two claude_code.tool spans with distinct agent_id, same query_source and parent_agent_id -> three items, two subagent lanes not merged.",
-                "file": "tools/argus/test/store.test.mjs",
-                "testName": "two concurrent subagents of the same type get two separate lanes",
-                "expected": "items.length===3; two kind==='subagent' items with ids 'agent:agt-a'/'agent:agt-b', each agentType==='agent:builtin:researcher', parentAgentId==='agt-main'",
-                "got": "TypeError: store.getAgents is not a function"
-              },
-              {
-                "case": "3. Instance identity beats type: same fixture as case 2, assert distinct ids and exactly two subagent items — query_source alone never collapses two instances.",
-                "file": "tools/argus/test/store.test.mjs",
-                "testName": "query_source alone never collapses two agent instances into one lane",
-                "expected": "items.filter(i=>i.kind==='subagent').length===2 and the two ids differ",
-                "got": "TypeError: store.getAgents is not a function"
-              },
-              {
-                "case": "4. Ordering: in case 2's fixture, items[0].kind==='main' and the two subagent lanes come in ascending firstMs.",
-                "file": "tools/argus/test/store.test.mjs",
-                "testName": "lanes come back with main first and subagents ordered by when they started",
-                "expected": "items[0].kind==='main'; subagent items sorted agt-a before agt-b by firstMs",
-                "got": "TypeError: store.getAgents is not a function"
-              },
-              {
-                "case": "5. Session isolation: a subagent span for a second session id must not appear in the first session's items.",
-                "file": "tools/argus/test/store.test.mjs",
-                "testName": "a subagent span for a different session does not leak into this session's lanes",
-                "expected": "items has no entry with id 'agent:agt-other'",
-                "got": "TypeError: store.getAgents is not a function"
-              },
-              {
-                "case": "6. Unknown session: store.getAgents('nope') returns null.",
-                "file": "tools/argus/test/store.test.mjs",
-                "testName": "getAgents for an unknown session returns null",
-                "expected": "store.getAgents('nope') === null",
-                "got": "TypeError: store.getAgents is not a function"
-              },
-              {
-                "case": "7. A session with records but no spans (one log only) returns { items: [] } with firstMs === 0.",
-                "file": "tools/argus/test/store.test.mjs",
-                "testName": "a session with records but no spans reports no items and firstMs 0",
-                "expected": "result.items deepEqual []; result.firstMs === 0",
-                "got": "TypeError: store.getAgents is not a function"
-              },
-              {
-                "case": "8. Lifetime from the extremes: three spans at offsets (100/400),(200/900),(300/500) give firstMs===NOW+100, lastMs===NOW+900, durationMs===800.",
-                "file": "tools/argus/test/store.test.mjs",
-                "testName": "an agent lane spans from its earliest span start to its latest span end",
-                "expected": "lane.firstMs===NOW+100, lane.lastMs===NOW+900, lane.durationMs===800",
-                "got": "TypeError: store.getAgents is not a function"
-              },
-              {
-                "case": "9. Open span edge: a span with endMs: 0 contributes its startMs to lastMs and does not push the lane to the epoch or to NaN.",
-                "file": "tools/argus/test/store.test.mjs",
-                "testName": "an open span (endMs: 0) contributes only its start, never the epoch, to the lane",
-                "expected": "lane.lastMs===NOW+200 and Number.isFinite(lane.lastMs) && lane.lastMs>0",
-                "got": "TypeError: store.getAgents is not a function"
-              },
-              {
-                "case": "10. A span with startMs: 0 (never started / not decoded) does not drag firstMs to 0.",
-                "file": "tools/argus/test/store.test.mjs",
-                "testName": "a span with startMs: 0 does not drag the lane firstMs to the epoch",
-                "expected": "lane.firstMs===NOW+300 (the real span's start), unaffected by the startMs:0 span",
-                "got": "TypeError: store.getAgents is not a function"
-              },
-              {
-                "case": "11. Inheritance through the parent chain: a claude_code.tool.execution span with no agent attributes whose parentSpanId is a subagent's tool span lands on that subagent's lane, not on main.",
-                "file": "tools/argus/test/store.test.mjs",
-                "testName": "a span with no agent attributes inherits its lane from its subagent parent",
-                "expected": "the subagent lane's spanCount===2 (its own span + the inherited execution span); main's spanCount===1",
-                "got": "TypeError: store.getAgents is not a function"
-              },
-              {
-                "case": "12. Broken chain: a span with no agent attributes whose parentSpanId names a span not in the buffer produces an unattributed lane holding it; main does not absorb it.",
-                "file": "tools/argus/test/store.test.mjs",
-                "testName": "a span whose parent chain resolves to nothing lands on an unattributed lane",
-                "expected": "an item with kind==='unattributed' exists, its spanCount===1; main's spanCount===1 (unchanged)",
-                "got": "TypeError: store.getAgents is not a function"
-              },
-              {
-                "case": "13. Unattributed is last: with main, one subagent and one orphan present, items.at(-1).kind==='unattributed'.",
-                "file": "tools/argus/test/store.test.mjs",
-                "testName": "the unattributed lane, when present, sorts last",
-                "expected": "items.at(-1).kind === 'unattributed'",
-                "got": "TypeError: store.getAgents is not a function"
-              },
-              {
-                "case": "14. No orphans, no lane: with every parent resolvable, no item has kind==='unattributed'.",
-                "file": "tools/argus/test/store.test.mjs",
-                "testName": "with every parent resolvable, no unattributed lane appears",
-                "expected": "items.some(i=>i.kind==='unattributed') === false",
-                "got": "TypeError: store.getAgents is not a function"
-              },
-              {
-                "case": "15. agentRefOf({ agent_id, parent_agent_id, query_source }) returns { agentId, parentAgentId, agentType }.",
-                "file": "tools/argus/test/claude.test.mjs",
-                "testName": "agentRefOf reads instance identity, parent and type from span attributes",
-                "expected": "deepEqual to { agentId: 'agt-a', parentAgentId: 'agt-main', agentType: 'agent:builtin:researcher' }",
-                "got": "Whole-file failure at import time: SyntaxError: The requested module '../src/claude.mjs' does not provide an export named 'agentRefOf' (Node.js ERR_MODULE_NOT_FOUND-style ESM link error). No individual test in the file could run; this is the file-level proof that the export does not exist yet, not a per-case failure."
-              },
-              {
-                "case": "16. agentRefOf({ query_source: 'main' }) returns null — a main-agent span carries no agent_id and must not become an instance.",
-                "file": "tools/argus/test/claude.test.mjs",
-                "testName": "a main-agent span (query_source: \"main\") is not an agent instance",
-                "expected": "agentRefOf({ query_source: 'main' }) === null",
-                "got": "Whole-file failure at import time (same SyntaxError as case 15 — the module has no agentRefOf export)."
-              },
-              {
-                "case": "17. agentRefOf({ agent_id: '' }) and agentRefOf({}) return null.",
-                "file": "tools/argus/test/claude.test.mjs",
-                "testName": "an empty or missing agent_id is not an agent instance",
-                "expected": "both calls return null",
-                "got": "Whole-file failure at import time (same SyntaxError as case 15)."
-              },
-              {
-                "case": "18. agent.name wins over query_source as the type when both are present.",
-                "file": "tools/argus/test/claude.test.mjs",
-                "testName": "agent.name wins over query_source as the type when both are present",
-                "expected": "ref.agentType === 'named-type' (the agent.name value), not the query_source value",
-                "got": "Whole-file failure at import time (same SyntaxError as case 15)."
-              },
-              {
-                "case": "19. POST a trace payload (interaction + two subagent tool spans of one query_source, distinct agent_id); GET /api/sessions/<id>/agents answers 200 with items.length===3, kinds ['main','subagent','subagent'], each item carrying numeric firstMs/lastMs/durationMs/spanCount.",
-                "file": "tools/argus/test/server.test.mjs",
-                "testName": "GET /api/sessions/:id/agents answers with one lane per agent instance",
-                "expected": "response.status===200; items.length===3; kinds deepEqual ['main','subagent','subagent']; each item's firstMs/lastMs/durationMs/spanCount is typeof 'number'",
-                "got": "AssertionError [ERR_ASSERTION]: Expected values to be strictly equal: 404 !== 200 (the route does not exist yet, so the ingest-then-query flow 404s at the query step)"
-              },
-              {
-                "case": "20. GET /api/sessions/nope/agents answers 404 with { error: 'unknown session' }.",
-                "file": "tools/argus/test/server.test.mjs",
-                "testName": "GET /api/sessions/:id/agents for an unknown session is a 404",
-                "expected": "response.status===404; body deepEqual { error: 'unknown session' }",
-                "got": "AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal: + { error: 'unknown endpoint' } - { error: 'unknown session' } (status is 404 already, from the generic unknown-route handler, but the error text names the wrong reason since the route itself is unimplemented)"
-              },
-              {
-                "case": "21. DEFAULT_VIEW is null, so nothing but the timeline is open when a session is opened.",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "DEFAULT_VIEW is null, so opening a session opens nothing but the timeline",
-                "expected": "DEFAULT_VIEW === null",
-                "got": "Whole-file failure at import time: Error [ERR_MODULE_NOT_FOUND]: Cannot find module '.../tools/argus-ui/public/timeline.js' — the module does not exist yet, so no case in the file could run individually."
-              },
-              {
-                "case": "22. SUBORDINATE_VIEWS still offers every previous technical view: its ids are exactly ['overview','todos','traces','events','metrics','raw'], in that order.",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "SUBORDINATE_VIEWS still offers every previous technical view, in the old order",
-                "expected": "SUBORDINATE_VIEWS.map(v=>v.id) deepEqual ['overview','todos','traces','events','metrics','raw']",
-                "got": "Whole-file failure at import time (same ERR_MODULE_NOT_FOUND as case 21)."
-              },
-              {
-                "case": "23. viewStripHtml(null, {}) marks no view as selected — no aria-selected=\"true\" in the markup — and still contains a button for each of the six ids.",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "viewStripHtml(null, {}) selects nothing but still offers every view as a button",
-                "expected": "html excludes 'aria-selected=\"true\"'; html matches data-view=\"<id>\" for all six ids",
-                "got": "Whole-file failure at import time (same ERR_MODULE_NOT_FOUND as case 21)."
-              },
-              {
-                "case": "24. viewStripHtml('events', {}) marks exactly one, and it is the events one.",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "viewStripHtml marks exactly the requested view as selected",
-                "expected": "exactly one 'aria-selected=\"true\"' in the markup, on the button carrying data-view=\"events\"",
-                "got": "Whole-file failure at import time (same ERR_MODULE_NOT_FOUND as case 21)."
-              },
-              {
-                "case": "25. Geometry: a lane covering the middle half of the window gets leftPct===25 and widthPct===50.",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "a lane covering the middle half of the window gets left 25 and width 50",
-                "expected": "leftPct===25, widthPct===50",
-                "got": "Whole-file failure at import time (same ERR_MODULE_NOT_FOUND as case 21)."
-              },
-              {
-                "case": "26. Clamping: a lane starting before the window and ending after it gets leftPct===0 and widthPct===100.",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "a lane spanning past both edges of the window is clamped to the full width",
-                "expected": "leftPct===0, widthPct===100",
-                "got": "Whole-file failure at import time (same ERR_MODULE_NOT_FOUND as case 21)."
-              },
-              {
-                "case": "27. Zero-width window (startMs===endMs) yields finite numbers for every lane, and no NaN in the rendered markup.",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "a zero-width window still yields finite geometry, never NaN",
-                "expected": "Number.isFinite(leftPct) and Number.isFinite(widthPct); timelineHtml(...) contains no 'NaN'",
-                "got": "Whole-file failure at import time (same ERR_MODULE_NOT_FOUND as case 21)."
-              },
-              {
-                "case": "28. A zero-duration lane keeps the 0.4 minimum width, so an instant agent is still visible.",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "a zero-duration lane keeps the 0.4 minimum width so an instant agent stays visible",
-                "expected": "widthPct === 0.4",
-                "got": "Whole-file failure at import time (same ERR_MODULE_NOT_FOUND as case 21)."
-              },
-              {
-                "case": "29. Depth: main is depth 0; a subagent whose parentAgentId matches no lane is depth 1; a subagent whose parentAgentId matches another subagent lane's agentId is depth 2; the unattributed lane is depth 0.",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "lane depth follows the parent chain: main and unattributed at 0, direct subagents at 1, nested ones at 2",
-                "expected": "depth of main===0, direct subagent===1, nested subagent===2, unattributed===0",
-                "got": "Whole-file failure at import time (same ERR_MODULE_NOT_FOUND as case 21)."
-              },
-              {
-                "case": "30a. agentLabel: agent:builtin:researcher renders as researcher.",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "agentLabel renders the agent type without its namespace prefix",
-                "expected": "agentLabel(lane) === 'researcher'",
-                "got": "Whole-file failure at import time (same ERR_MODULE_NOT_FOUND as case 21)."
-              },
-              {
-                "case": "30b. agentLabel: a null agentType renders as subagent.",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "agentLabel falls back to \"subagent\" when the type is unknown",
-                "expected": "agentLabel(lane) === 'subagent'",
-                "got": "Whole-file failure at import time (same ERR_MODULE_NOT_FOUND as case 21)."
-              },
-              {
-                "case": "30c. agentLabel: the main lane renders as main session.",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "agentLabel names the main lane \"main session\"",
-                "expected": "agentLabel(lane) === 'main session'",
-                "got": "Whole-file failure at import time (same ERR_MODULE_NOT_FOUND as case 21)."
-              },
-              {
-                "case": "30d. agentLabel: the unattributed lane renders as unattributed.",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "agentLabel names the unattributed lane \"unattributed\"",
-                "expected": "agentLabel(lane) === 'unattributed'",
-                "got": "Whole-file failure at import time (same ERR_MODULE_NOT_FOUND as case 21)."
-              },
-              {
-                "case": "31. Two instances of one type are distinguishable on screen: timelineHtml for two lanes with the same agentType and different agentId contains both agent ids and produces two lane rows.",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "two lanes of the same agent type stay visually distinct by agent id",
-                "expected": "html matches /agt-a/ and /agt-b/; exactly two data-lane-id=\" occurrences",
-                "got": "Whole-file failure at import time (same ERR_MODULE_NOT_FOUND as case 21)."
-              },
-              {
-                "case": "32. Empty state: timelineHtml([], window) returns a placeholder whose text mentions spans, not an empty panel.",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "an empty lane list renders a placeholder mentioning spans instead of a bare panel",
-                "expected": "html matches /span/i",
-                "got": "Whole-file failure at import time (same ERR_MODULE_NOT_FOUND as case 21)."
-              },
-              {
-                "case": "33. Escaping: a lane whose agentType is <script>x</script> appears escaped — the markup contains no literal <script.",
-                "file": "tools/argus-ui/test/timeline.test.mjs",
-                "testName": "a lane whose agent type contains markup is escaped in the rendered output",
-                "expected": "html does not include '<script'",
-                "got": "Whole-file failure at import time (same ERR_MODULE_NOT_FOUND as case 21)."
-              },
-              {
-                "case": "DELIBERATELY UNTESTED — browser rendering / click-opens-view-below-timeline: no DOM harness in this project, forbidden without asking the human; only the view model is pinned.",
-                "file": "",
-                "testName": "",
-                "expected": "",
-                "got": "Not written, per the plan's own instruction — the plan names this as deliberately untested and gives the reason."
-              },
-              {
-                "case": "DELIBERATELY UNTESTED — public/styles.css: no test asserts appearance.",
-                "file": "",
-                "testName": "",
-                "expected": "",
-                "got": "Not written, per the plan's own instruction."
-              },
-              {
-                "case": "DELIBERATELY UNTESTED — public/format.js: a verbatim move of never-directly-tested functions; a test would pin behaviour this increment does not change.",
-                "file": "",
-                "testName": "",
-                "expected": "",
-                "got": "Not written, per the plan's own instruction."
-              },
-              {
-                "case": "DELIBERATELY UNTESTED — tools/argus/scripts/demo-emit.mjs: the scripts directory has no test file by convention; the emitter is a convenience, not a contract.",
-                "file": "",
-                "testName": "",
-                "expected": "",
-                "got": "Not written, per the plan's own instruction."
-              },
-              {
-                "case": "DELIBERATELY UNTESTED — the UI proxy forwarding /api/sessions/:id/agents: server.test.mjs already pins that every /api/ path is proxied; a per-route case would restate it.",
-                "file": "",
-                "testName": "",
-                "expected": "",
-                "got": "Not written, per the plan's own instruction."
-              },
-              {
-                "case": "DELIBERATELY UNTESTED — the wording of any placeholder or label beyond the named substring matches, per the house rule that a message is asserted as a fact, never as a phrasing.",
-                "file": "",
-                "testName": "",
-                "expected": "",
-                "got": "Not written, per the plan's own instruction."
-              }
-            ],
-            "openQuestions": [
-              "The test plan gives concrete numbers for lane geometry and depth (leftPct, widthPct, depth) but names no function to call for them, unlike agentLabel and timelineHtml which it names explicitly; I introduced `laneGeometry(lane, lanesInScope, window) -> { leftPct, widthPct, depth }` as a pure function separate from timelineHtml so cases 25-29 can assert Number.isFinite and exact numbers directly, matching the plan's own phrasing for case 27. This name and signature is my own decision, not stated by the plan, and the implementer must match it exactly for tools/argus-ui/test/timeline.test.mjs to compile.",
-              "viewStripHtml's second parameter is only ever exercised as `{}` in the plan's two named cases (23, 24); its real shape (e.g. per-view counts) is left open by the plan and untested here — the implementer's docstring/shape choice for that parameter has no test pinning it, and I introduced no case beyond what was planned.",
-              "SUBORDINATE_VIEWS' item shape is not specified beyond 'its ids are exactly [...]'; I modeled it as an array of `{ id, label }` objects (SUBORDINATE_VIEWS.map(v => v.id)) since the plan's own wording ('its ids are') reads as items richer than bare id strings — but a bare-string-array implementation would fail this test as written, and the plan does not settle which is intended.",
-              "tools/argus/test/claude.test.mjs and tools/argus-ui/test/timeline.test.mjs fail as one whole-file error (a missing named export from claude.mjs; a missing public/timeline.js module) rather than as per-case failures, since the tested surface does not exist at all yet. Every case in those two files currently reports the same file-level error string rather than its own — this is the expected shape for a wholly new export/module and not a defect in the tests, but it means the individual 'got' values recorded for cases 15-18 and 21-33 are identical rather than each pinpointing its own assertion."
-            ],
-            "questions": []
-          }
-        },
-        {
-          "label": "implement:timeline-landing.0",
-          "at": "2026-08-07T10:26:02.759Z",
-          "return": {
-            "summary": "Added the agent-lane join to the collector (agentRefOf, store.getAgents, GET /api/sessions/:id/agents, subagent spans in the demo emitter) and made the timeline the session's landing view in argus-ui, with the six technical views moved into a subordinate strip below it, closed by default.",
-            "deviations": [
-              "The plan named only laneRows(items, window) for geometry; the test-author's cases call laneGeometry(lane, lanesInScope, window) -> { leftPct, widthPct, depth }. I implemented laneGeometry as the pure per-lane function the tests require and kept laneRows as the plan named it, built on top of it — both are exported from tools/argus-ui/public/timeline.js.",
-              "The plan said loadSession() also fetches the agents payload; I put that fetch in a small loadAgents() helper that loadSession() awaits, so the failure path (empty lanes, window falling back to the session's own first/last sighting) is expressed once rather than inline.",
-              "Each timeline lane row also shows its span count next to the label. The plan named the label, the short agent id, the bar and the duration; the span count is one extra field I added because a lane with no visible width is otherwise indistinguishable from an empty one. No test pins it."
-            ],
-            "commands": [
-              {
-                "command": "npm --prefix tools/argus test",
-                "exitCode": 0,
-                "note": "176 cases, all pass. Before the change the same command was exit 1 with 17 failures: the 14 getAgents cases in store.test.mjs, the whole-file import failure of claude.test.mjs, and the two /api/sessions/:id/agents cases in server.test.mjs."
-              },
-              {
-                "command": "npm --prefix tools/argus-ui test",
-                "exitCode": 0,
-                "note": "30 cases, all pass, including the 16 in timeline.test.mjs. Before the change that file failed at import with ERR_MODULE_NOT_FOUND for public/timeline.js."
-              }
-            ],
-            "blockers": [],
-            "questions": [],
-            "notes": [
-              "Verified the demo emitter end-to-end outside the counted suites: a collector on port 4399 fed by scripts/demo-emit.mjs --sessions 1 answered GET /api/sessions/<id>/agents with 5 lanes — main (17 spans) and four subagent instances of the one type agent:builtin:researcher (two per turn, 3 spans each, the tool.execution child inherited through the parent chain).",
-              "Not touched, per the plan: skills/argus/SKILL.md's route table, the skeleton file list in tools/argus-ui/test/independence.test.mjs, and the out-of-increment features (activity marks, context curve, scrubbing, per-lane detail, chosen-time marker)."
-            ]
-          }
-        },
-        {
-          "label": "review:timeline-landing.0",
-          "at": "2026-08-07T10:32:43.297Z",
-          "return": {
-            "summary": "Ran the two listed suites — `npm --prefix tools/argus test` (176 cases, exit 0) and `npm --prefix tools/argus-ui test` (30 cases, exit 0), nothing skipped — and reviewed the whole diff against main: the collector-side lane join, the /api/sessions/:id/agents route, the new timeline module and the app.js rewiring meet all five criteria, with one test gap on the drawn lane lifetime.",
-            "reason": "Nothing pins that the rendered timeline actually positions each lane bar by its computed lifetime: every lane bar could be emitted at a fixed left/width and both suites stay green, so the criterion that a vertical slice answers which agents are running is unverified at the only place the human sees it.",
-            "findings": [
-              {
-                "claim": "No test fails if timelineHtml stops applying each lane's computed geometry, so the drawn lane lifetime — the visible half of the lane-spans-its-lifetime criterion — is unverified.",
-                "reproduction": "In tools/argus-ui/public/timeline.js line 125-126, replace the lane bar's style expression with the constant `style=\"left:0%;width:100%\"`. Two lanes with different firstMs/lastMs (e.g. agt-a 100..400 and agt-b 200..500 in a 0..1000 window) then both draw across the whole window, so a vertical slice no longer says which agents run — yet `npm --prefix tools/argus-ui test` still passes 30/30: laneGeometry is asserted directly (25/50, clamping, 0.4 minimum), while every timelineHtml case only checks lane-id count, agent ids, escaping, the placeholder and the absence of NaN, and none reads the left/width the markup carries.",
-                "criterion": "Each agent lane spans that agent's lifetime, so any vertical slice answers which agents are running at that moment."
-              }
-            ],
-            "questions": []
-          }
-        },
-        {
-          "label": "research:timeline-landing.1",
-          "at": "2026-08-07T10:36:08.633Z",
-          "return": {
-            "needsTests": true,
-            "summary": "Close the review's one gap by pinning the geometry timelineHtml writes into the lane markup, and settle the test-author's open questions in favour of the shipped signatures; no production change is expected.",
-            "plan": "Correction round 1 has exactly one finding, and it is a missing assertion, not a broken behaviour: `timelineHtml` in tools/argus-ui/public/timeline.js does apply each lane's computed geometry (line 125-126 writes `style=\"left:<leftPct>%;width:<widthPct>%\"` on the `.lane-bar`), but no test reads that markup, so replacing the expression with a constant leaves the suite green while every lane draws across the whole window. The fix is three new cases in the existing test file that read the left/width the markup actually carries, plus the label indentation the same geometry produces. Nothing in public/timeline.js, public/app.js, public/styles.css or tools/argus changes.\n\nWhat the implementer does: nothing to the production code. Run the check below; the three new cases are written against the markup the current implementation already emits, so they are expected to pass on first run. If one fails, the defect is in the row markup of `timelineHtml` (the `style` attributes on `.lane-bar` and `.lane-label`) and the fix goes there — never in the test, and never by loosening an assertion.\n\nDecisions settling the four questions the test-author left open, all of them in favour of what already ships, so no rename and no reshape follows:\n1. `laneGeometry(lane, lanes, window) -> { leftPct, widthPct, depth }` is the contract. It is exported from public/timeline.js, takes the lane, the full lane array of the same panel (for the parent lookup that yields depth) and `{ startMs, endMs }`, and is pure. Keep the name and the signature exactly; the test file already imports it under that name.\n2. `SUBORDINATE_VIEWS` is an array of `{ id, label }` objects, in the order `overview, todos, traces, events, metrics, raw`. Keep the object shape; a bare string array is rejected because the strip needs a human label per view and the label belongs next to the id it belongs to.\n3. `viewStripHtml(openId, counts)`: `counts` is a plain object keyed by view id whose values are numbers; a key present renders a `<span class=\"count\">` badge with `fmtNum` of the value (including `0`), a key absent renders no badge. This shape is settled and stays as implemented; it is deliberately left untested, see the test plan.\n4. The round-0 note that the two new test files failed as one file-level error each is correct and expected for a module that did not exist yet; both modules exist now, so nothing follows from it.\n\nRejected: adding `data-left`/`data-width` attributes to the bar purely to make it easier to assert — the `style` attribute is what the browser lays the lane out from, so asserting anything else would pin a shadow of the real output. Rejected: asserting only that two lanes have different styles — the reviewer's mutation is a constant style, which differing-only assertions could still let through in a one-lane render, so the cases pin exact numbers. Rejected: broadening the round to `state.agentWindow` in app.js, which no finding names.",
-            "moduleMap": "tools/argus-ui/test/timeline.test.mjs — the only file this round changes: adds three cases at the end, under the existing `timelineHtml` banner, and one local markup-parsing helper next to the existing `lane()` fixture factory.\ntools/argus-ui/public/timeline.js — unchanged reference. Exports `SUBORDINATE_VIEWS`, `DEFAULT_VIEW`, `agentLabel(lane)`, `laneGeometry(lane, lanes, window)`, `laneRows(items, window)`, `timelineHtml(items, window)`, `viewStripHtml(openId, counts)`. The markup under test: each row is `<div class=\"lane-row\" data-lane-id=\"…\">` containing `<span class=\"lane-label\" style=\"padding-left:<depth*14>px\">` and `<span class=\"lane-bar\" data-kind=\"…\" style=\"left:<leftPct.toFixed(3)>%;width:<widthPct.toFixed(3)>%\">`.\ntools/argus-ui/public/format.js — unchanged reference. `esc`, `fmtNum`, `fmtDur`, `fmtClock`, `shortId` used by the markup.\ntools/argus-ui/public/app.js — unchanged. Imports `DEFAULT_VIEW`, `timelineHtml`, `viewStripHtml`; holds the DOM glue and `state.agentWindow`. Out of this round.",
-            "environment": "Node >= 20.11, already installed. tools/argus-ui has zero runtime and zero dev dependencies, so no `npm install` is needed before anything below. Tests are `node:test` with `node:assert/strict`, ESM `.mjs`.\nThe whole check for this round, from the repository root: `npm --prefix tools/argus-ui test` (its package script is `node --test \"test/*.test.mjs\"`).\nTo run just the changed file while writing it, from the repository root: `node --test tools/argus-ui/test/timeline.test.mjs`.\nThere is no linter and no formatter in this repository.",
-            "testPlan": "Tests are needed: the finding is a missing assertion, and closing it is a test-only change.\n\nWhole work order — three new cases in the one existing file, no new file.\n\nFile: /home/user/uroboros/tools/argus-ui/test/timeline.test.mjs\nFramework: `node:test` + `node:assert/strict`, ESM. Level: unit, pure functions, no DOM and no fake — the module under test must not touch `document`, `window` or `location`, and no case here may introduce one.\nConventions of that file, follow them exactly: imports come from `'../public/timeline.js'` in one named-import block at the top (add nothing to it; `timelineHtml` and `laneGeometry` are already imported). Cases are top-level `test('<lowercase sentence stating the fact>', () => { … })`, synchronous arrows, no `describe`, no setup or teardown, no shared mutable state. Sections are separated by banner comments of the form `/* ----- name ----- */`. Lane fixtures come from the existing local `lane({ id, kind, agentId, parentAgentId, agentType, firstMs, lastMs })` factory near the top, which fills `durationMs = lastMs - firstMs` and `spanCount = 1`; reuse it and do not add a second factory. The window is always an inline `{ startMs, endMs }` object. Put all three new cases at the end of the file, under the existing `/* --- timelineHtml --- */` banner.\n\nAdd one local helper beside the `lane()` factory, exactly one, with a one-line doc comment in the file's style:\n\n```js\n/** Every lane row's id and the geometry its bar carries, in markup order. */\nfunction laneBars(html) {\n  return [...html.matchAll(/data-lane-id=\"([^\"]+)\"[\\s\\S]*?class=\"lane-bar\"[^>]*style=\"left:([\\d.]+)%;width:([\\d.]+)%\"/g)]\n    .map(([, id, left, width]) => ({ id, left: Number(left), width: Number(width) }));\n}\n```\n\nCase 1 — the criterion it proves: each agent lane spans that agent's lifetime, and the markup is what carries it. This is the reviewer's reproduction, so it must fail against a constant `style=\"left:0%;width:100%\"`.\nInput/state: window `{ startMs: 0, endMs: 1000 }`; two subagent lanes of the same `agentType` `'agent:builtin:researcher'` — `a` = id `'agent:agt-a'`, agentId `'agt-a'`, 100..400; `b` = id `'agent:agt-b'`, agentId `'agt-b'`, 200..500. Render `timelineHtml([a, b], window)`.\nExpected: `assert.deepEqual(laneBars(html), [{ id: 'agent:agt-a', left: 10, width: 30 }, { id: 'agent:agt-b', left: 20, width: 30 }])`. Then tie the markup to the function in the same case: for each of `[a, b]`, the parsed `left`/`width` equal `laneGeometry(l, [a, b], window).leftPct` / `.widthPct`.\nName it something like `'timelineHtml draws each lane at its own left and width, so a vertical slice tells the lanes apart'`.\n\nCase 2 — the criterion it proves: the same, at the edges; the clamping and the minimum width reach the markup rather than staying inside `laneGeometry`.\nInput/state: window `{ startMs: 0, endMs: 1000 }`; `overflow` = id `'main'`, kind `'main'`, firstMs `-500`, lastMs `5000`; `instant` = id `'agent:agt-i'`, kind `'subagent'`, agentId `'agt-i'`, firstMs `500`, lastMs `500`. Render `timelineHtml([overflow, instant], window)`.\nExpected: `assert.deepEqual(laneBars(html), [{ id: 'main', left: 0, width: 100 }, { id: 'agent:agt-i', left: 50, width: 0.4 }])`.\nName it something like `'timelineHtml clamps a lane overflowing the window to the full width and keeps an instant lane visible'`.\n\nCase 3 — the criterion it proves: the depth half of the computed geometry reaches the markup, so nesting is readable on screen.\nInput/state: window `{ startMs: 0, endMs: 1000 }`; `main` = id `'main'`, kind `'main'`, 0..1000; `subA` = id `'agent:agt-a'`, kind `'subagent'`, agentId `'agt-a'`, parentAgentId `'agt-main'`, agentType `'agent:builtin:researcher'`, 100..900; `subB` = id `'agent:agt-b'`, kind `'subagent'`, agentId `'agt-b'`, parentAgentId `'agt-a'`, agentType `'agent:builtin:helper'`, 200..800. Render `timelineHtml([main, subA, subB], window)`.\nExpected: parse with `/data-lane-id=\"([^\"]+)\"[\\s\\S]*?class=\"lane-label\" style=\"padding-left:(\\d+)px\"/g` inline in the case (do not generalise the helper) and assert the pairs are `[['main', 0], ['agent:agt-a', 14], ['agent:agt-b', 28]]` — depth 0, 1, 2 at 14px of indent per level.\nName it something like `'timelineHtml indents each lane label by its depth, so a nested subagent reads as nested'`.\n\nExpected result of the run: all three pass against tools/argus-ui/public/timeline.js as it stands today — they are regression guards for a behaviour that is already correct but unpinned, not red-first cases. Do not weaken an assertion to make one red, and do not change production code to make one pass; a failure here means the markup drifted and belongs to the implementer.\n\nLeft untested, deliberately: `viewStripHtml`'s `counts` badge rendering — the shape is settled in the plan (object keyed by view id, numeric values, absent key means no badge) but the badge is cosmetic and no criterion of this increment turns on it. Also untested: `state.agentWindow`'s derivation in public/app.js, which is DOM glue outside the pure module and outside every finding of this round; `laneRows`, which is `laneGeometry` mapped over the array and is covered through `timelineHtml`; the CSS in public/styles.css. The nine cases of round 0 in this file stay as they are, unedited.\n\nI ran nothing — not the suite, not a single file. Nothing in this file's list is known red; every case in tools/argus-ui/test/timeline.test.mjs passed at the end of round 0 (reported 30/30 by the reviewer), and the three cases above are expected to join them green. The first run belongs downstream.",
-            "checks": [
-              "npm --prefix tools/argus-ui test"
-            ],
-            "questions": []
-          }
-        },
-        {
-          "label": "tests:timeline-landing.1",
-          "at": "2026-08-07T10:38:06.805Z",
-          "return": {
-            "summary": "Added three new-test cases to tools/argus-ui/test/timeline.test.mjs pinning the reviewer's reproduction — that timelineHtml's drawn geometry (left/width) and lane-label indent reach the markup rather than staying inside laneGeometry — plus the laneBars() helper the plan named; all 19 cases in the file, including the three new ones, pass (0 fail).",
-            "cases": [
-              {
-                "case": "each agent lane spans that agent's lifetime, and the markup is what carries it (must fail against a constant style=\"left:0%;width:100%\")",
-                "file": "/home/user/uroboros/tools/argus-ui/test/timeline.test.mjs",
-                "testName": "timelineHtml draws each lane at its own left and width, so a vertical slice tells the lanes apart",
-                "expected": "laneBars(html) for two same-type subagent lanes a (100..400) and b (200..500) in window 0..1000 equals [{id:'agent:agt-a',left:10,width:30},{id:'agent:agt-b',left:20,width:30}], and each lane's parsed left/width equal laneGeometry(l, [a,b], window).leftPct/.widthPct",
-                "got": "Passes against the current tools/argus-ui/public/timeline.js: laneBars(html) deep-equals the expected array and both parsed bars match laneGeometry's leftPct/widthPct exactly. This is a regression guard, not a red-first case — it would fail against any implementation that renders a constant style=\"left:0%;width:100%\" for every lane."
-              },
-              {
-                "case": "the same, at the edges: the clamping and the minimum width reach the markup rather than staying inside laneGeometry",
-                "file": "/home/user/uroboros/tools/argus-ui/test/timeline.test.mjs",
-                "testName": "timelineHtml clamps a lane overflowing the window to the full width and keeps an instant lane visible",
-                "expected": "For window 0..1000, an overflow main lane (-500..5000) and an instant subagent lane agt-i (500..500), laneBars(html) equals [{id:'main',left:0,width:100},{id:'agent:agt-i',left:50,width:0.4}]",
-                "got": "Passes against the current implementation: the overflowing lane clamps to left 0 / width 100 and the zero-duration lane keeps the 0.4 minimum width, both in the rendered markup."
-              },
-              {
-                "case": "the depth half of the computed geometry reaches the markup, so nesting is readable on screen",
-                "file": "/home/user/uroboros/tools/argus-ui/test/timeline.test.mjs",
-                "testName": "timelineHtml indents each lane label by its depth, so a nested subagent reads as nested",
-                "expected": "For main (depth 0), subA parented to 'agt-main' (depth 1), subB parented to subA's agentId 'agt-a' (depth 2), the pairs parsed from data-lane-id + class=\"lane-label\" style=\"padding-left:Npx\" equal [['main',0],['agent:agt-a',14],['agent:agt-b',28]]",
-                "got": "Passes against the current implementation: labels are indented 14px per depth level, matching the depth laneGeometry already computes."
-              }
-            ],
-            "openQuestions": [],
-            "questions": []
-          }
-        },
-        {
-          "label": "implement:timeline-landing.1",
-          "at": "2026-08-07T10:39:15.007Z",
-          "return": {
-            "deviations": [
-              "The plan says the implementer adds nothing and changes no production code; the three new cases it names were already present in tools/argus-ui/test/timeline.test.mjs, landed by the test-author in commit 522e68b, so this step wrote no code at all and only ran the check. Writing them a second time would have duplicated a test, which is forbidden to me anyway."
-            ],
-            "commands": [
-              {
-                "command": "npm --prefix tools/argus-ui test",
-                "exitCode": 0,
-                "note": "33 cases across test/*.test.mjs, 33 pass, 0 fail, 0 skipped, 0 todo. Includes the three new geometry cases: 'timelineHtml draws each lane at its own left and width...', 'timelineHtml clamps a lane overflowing the window...', 'timelineHtml indents each lane label by its depth...'."
-              },
-              {
-                "command": "node --test tools/argus-ui/test/timeline.test.mjs (against a temporary mutation of public/timeline.js)",
-                "exitCode": 1,
-                "note": "Not one of the commands that count; a throwaway mutation check, reverted immediately with git checkout. Replacing the .lane-bar style with the constant style=\"left:0.000%;width:100.000%\" turns the first two new cases red (17 pass, 2 fail), which confirms the round-1 finding is closed: the drawn geometry is now pinned. The third new case stays green under that mutation because it pins the label's padding-left, which the mutation does not touch."
-              }
-            ],
-            "blockers": [],
-            "questions": [],
-            "summary": "No production code changed: the three geometry cases the plan names were already in tools/argus-ui/test/timeline.test.mjs, and `npm --prefix tools/argus-ui test` is green at 33/33 while a constant .lane-bar style now makes two of them fail."
-          }
-        },
-        {
-          "label": "review:timeline-landing.1",
-          "at": "2026-08-07T10:44:26.488Z",
-          "return": {
-            "findings": [
-              {
-                "claim": "Nothing in the suite fails if the UI stops opening a session on the timeline: only the constant DEFAULT_VIEW and the extracted pure renderers are pinned, while the wiring in public/app.js that actually makes a session land on the timeline is unverified.",
-                "reproduction": "Change tools/argus-ui/public/app.js:932 from `state.view = DEFAULT_VIEW;` to `state.view = 'overview';`, or delete the `${timelineHtml(state.agents, state.agentWindow)}` line at tools/argus-ui/public/app.js:168, or drop the `await loadAgents();` call at tools/argus-ui/public/app.js:833. Each of these makes a session open on a technical tab or on an always-empty timeline, and `npm --prefix tools/argus-ui test` still reports 33 passing cases, exit 0. The only assertion about landing is `assert.equal(DEFAULT_VIEW, null)` at tools/argus-ui/test/timeline.test.mjs:45, which pins a constant no test ties to the session view; tools/argus-ui/public/app.js has no test file at all. The same gap covers the subordination of the technical views: the strip's content and selection are pinned in timeline.test.mjs, but nothing pins that the strip is rendered below the timeline inside the session detail rather than in place of it.",
-                "criterion": "Opening a session in the argus UI lands on the timeline view; the previous technical views remain reachable from it and subordinate to it, not the other way round."
-              }
-            ],
-            "reason": "Opening a session on the timeline is the increment's headline behaviour and no test would catch its loss: the suite pins the extracted timeline module and a null default constant, but the code in the page that renders the timeline, resets the open technical view and fetches the agent lanes is untested, so a regression there stays green.",
-            "questions": [],
-            "summary": "Ran the one listed command, `npm --prefix tools/argus-ui test` (33 cases, exit 0, nothing skipped); the collector-side lane join in store.getAgents/agentRefOf and the UI lane geometry, labels, depth and unattributed lane match criteria 3 to 5 and are well covered by the tests that exist, but the landing behaviour itself (criteria 1 and 2) lives only in the untested public/app.js, which is the one finding."
-          }
-        },
-        {
-          "label": "research:timeline-landing.2",
-          "at": "2026-08-07T10:50:59.092Z",
-          "return": {
-            "needsTests": true,
-            "summary": "Pin the session-landing wiring itself by booting public/app.js in the test process against a hand-rolled fake DOM and a stubbed fetch, so each of the reviewer's three reproduction edits turns a named case red.",
-            "plan": "The finding is a test gap, not a defect: the wiring in `tools/argus-ui/public/app.js` is already correct (line 168 renders `timelineHtml(state.agents, state.agentWindow)` above `viewStripHtml(...)`, line 833 awaits `loadAgents()`, line 932 resets `state.view = DEFAULT_VIEW` when a session is opened). What is missing is a test that executes that wiring. Expect the production tree to stay unchanged by this correction: the whole increment is one new test file, `tools/argus-ui/test/app.test.mjs`.\n\nImplementer instructions. Run the check command. If every case is green, change nothing in `public/` — do not invent a production edit to justify the step, and do not touch `public/timeline.js` or `test/timeline.test.mjs`. If a case is red, the fix goes into `tools/argus-ui/public/app.js` so that opening a session lands on the timeline with the technical views below it; never weaken or delete a case to reach green.\n\nHow the gap gets closed, and what was rejected.\n\nChosen: boot `public/app.js` for real inside the Node test process, against a hand-rolled fake `document`/`window`/`location`, a stubbed `fetch` serving fixture JSON, and a stubbed `EventSource`. `app.js` calls `boot()` at module scope, so importing it *is* the exercise: it wires the listeners, fetches config/stats/sessions/session/agents, and writes the session detail markup into the fake `#detail` element. Assertions then read that markup and the recorded request paths. This is the only approach under which the reviewer's three edits — flipping `DEFAULT_VIEW` to `'overview'`, deleting the `timelineHtml(...)` line, dropping `await loadAgents()` — each turn a case red, because each of them lives in `app.js` and nowhere else.\n\nRejected: extracting a further pure `sessionDetailHtml()` / `openSessionState()` out of `app.js` and pinning those. It moves the untested boundary rather than removing it — the call site that drops `loadAgents()` would still be unpinned, which is exactly the shape of code the review already refused.\n\nRejected: asserting on the source text of `app.js` (for example that it contains `timelineHtml(state.agents`). That pins characters, not behaviour, and would survive a wiring that never runs.\n\nRejected: jsdom or any other DOM library. `tools/argus-ui/CLAUDE.md` forbids dependencies outright; the fake collector in `test/server.test.mjs` is already hand-rolled from `node:http`, and a hand-rolled fake DOM is the same move.\n\nThree facts about `app.js` that make the harness work, and that the harness must respect. First, `const TOKEN = new URLSearchParams(location.search).get('token')` runs at module top level, so `globalThis.location` must exist before the import. Second, `boot()` is called but never awaited and never exported, so the test has to poll the fake DOM until the first render lands rather than awaiting the import. Third, `boot()` ends with `setInterval(..., 15_000)`, which would hold the test process open; the harness replaces `globalThis.setInterval` with a no-op before importing and restores the real one afterwards. `public/format.js` and `public/timeline.js` are pure and touch no global, so nothing else has to be faked.\n\nWhere the record-to-agent join sits, restated for the record and unchanged by this correction: collector side, in `Store#getAgents` at `tools/argus/src/store.mjs:846`, served by `GET /api/sessions/:id/agents` (`tools/argus/src/server.mjs:230`). Spans carrying `agent_id` get a lane per instance; spans with no agent attributes inherit their lane from the parent span chain; a span whose parent is not in the buffer lands on the synthetic `unattributed` lane rather than being folded into `main`. The UI joins nothing — it renders the payload — and the new case D pins that by asserting the UI asks that endpoint for the opened session.",
-            "moduleMap": "/home/user/uroboros/tools/argus-ui/test/app.test.mjs — NEW, and the only file this correction adds: the fake-DOM harness and the six cases that pin the landing wiring.\n/home/user/uroboros/tools/argus-ui/public/app.js — the module under test, expected to stay unchanged; module-scope `boot()` at line 1092, `renderDetail()` composing timeline then view strip then `#view-body` at line 150, `loadAgents()` at line 841, `selectSession()` resetting `state.view` at line 932, listeners registered in `wireEvents()` at line 976.\n/home/user/uroboros/tools/argus-ui/public/timeline.js — imported by app.js; exports `DEFAULT_VIEW` (null), `SUBORDINATE_VIEWS`, `timelineHtml`, `viewStripHtml`, `laneGeometry`, `agentLabel`; unchanged.\n/home/user/uroboros/tools/argus-ui/public/format.js — pure formatters (`esc`, `fmtNum`, `fmtDur`, `fmtClock`, `fmtAgo`, `fmtCost`, `shortId`); no DOM access; unchanged.\n/home/user/uroboros/tools/argus-ui/test/timeline.test.mjs — the existing pure view-model cases; unchanged, and the new file must not repeat them.\n/home/user/uroboros/tools/argus-ui/test/independence.test.mjs — scans every .js/.mjs in the project for relative imports leaving it; a new test file needs no entry there and the harness's template-literal dynamic import is not matched by its quoted-string regex.\n/home/user/uroboros/tools/argus/src/store.mjs — collector side, `getAgents` at line 846 builds the lane payload the fixtures imitate; not touched.\n/home/user/uroboros/tools/argus/src/server.mjs — collector route `GET /api/sessions/:id/agents` at line 230; not touched.",
-            "environment": "Node v22.22.2 is installed; the project declares `node >= 20.11`. `tools/argus-ui` has zero dependencies, so no `npm install` is needed and none should be run. The suite is `node --test \"test/*.test.mjs\"` behind the package's `test` script, and `node --test` gives each test file its own process, so globals faked in `test/app.test.mjs` cannot leak into the other test files. There is no linter and no formatter in this repository — no eslint, no prettier config at any level. The one command this plan asks anyone to run: `npm --prefix tools/argus-ui test`.",
-            "testPlan": "Tests are needed. One new file, `tools/argus-ui/test/app.test.mjs`, with the harness described below and the six cases A–F. Nothing in `test/timeline.test.mjs` changes and no case here repeats one from it.\n\nFRAMEWORK AND CONVENTIONS OF THIS PROJECT'S TESTS\n`node:test` with `node:assert/strict`, ESM, no dependencies. Test names are lowercase sentences describing the guarantee, not the function — `test('the interface serves the page on its own port', ...)` in server.test.mjs, `test('two lanes of the same agent type stay visually distinct by agent id', ...)` in timeline.test.mjs. Fakes are hand-rolled in the test file (server.test.mjs builds its collector from `node:http`); nothing is imported from `tools/argus`. Helper functions sit at the top of the file with a one-line JSDoc, and section banners of the form `/* ------ name ------ */` separate groups of cases. Put a file-header comment on app.test.mjs saying what it pins: that opening a session lands on the timeline and that the technical views open below it, exercised by booting the real `public/app.js` against a fake DOM.\n\nTHE HARNESS (top of app.test.mjs)\nCapture `const realSetInterval = globalThis.setInterval;` at file scope and restore it in `test.after(() => { globalThis.setInterval = realSetInterval; });`.\n\n`fakeElement(id)` returns `{ id, innerHTML: '', textContent: '', scrollTop: 0, hidden: false, dataset: {}, listeners: {}, addEventListener(type, fn) { (this.listeners[type] ||= []).push(fn); }, querySelector: () => ({ textContent: '' }), showModal() {} }`.\n\n`installFakes(routes)` sets, on `globalThis`: `document` = `{ getElementById(id) { … }, addEventListener() {}, querySelector: () => null, activeElement: null }` where `getElementById` memoises one `fakeElement` per id in a `Map` and vivifies any id on demand (app.js asks for `stat-strip`, `session-list`, `session-count`, `session-search`, `detail`, `view-body`, `live-indicator`, `setup-button`, `setup-modal`, `setup-modal-body`); `window` = `{ addEventListener() {} }`; `location` = `{ origin: 'http://127.0.0.1:4319', search: '', hash: '' }` (a plain writable object — app.js assigns `location.hash`); `EventSource` = a class whose constructor stores the url and whose `addEventListener` does nothing; `setInterval` = `() => 0`; and `fetch` = the stub below. It returns a handle `{ el(id), fire(id, type, event), paths, settle(predicate) }`.\n\nThe fetch stub takes `(url, init)`, pushes `url.pathname` onto `paths`, looks the pathname up in `routes`, and resolves `{ ok: true, status: 200, statusText: 'OK', json: async () => body }` for a hit or `{ ok: false, status: 404, statusText: 'Not Found', json: async () => ({}) }` for a miss. A route value may be a function `(url) => body` so a case can make one endpoint fail by returning `{ status: 500 }` — simplest is to let a route be either a body or the literal string `'fail'`, and answer `'fail'` with `{ ok: false, status: 500, statusText: 'Server Error' }`. `url` arrives as a `URL` object (`app.js` builds `new URL(path, location.origin)`), so `url.pathname` is available directly. `/api/stream` is never fetched — it goes through the `EventSource` stub.\n\n`fire(id, type, event)` invokes every listener registered on that fake element for that type. Build the event as `{ target: { closest: (sel) => matches[sel] ?? null } }`; returning `null` for every selector the case does not name matters, because the detail click handler tests `[data-copy]` before `[data-view]`.\n\n`settle(predicate)` polls: up to 200 iterations of `if (predicate()) return; await new Promise((r) => setTimeout(r, 5));` then throws an error quoting `el('detail').innerHTML.slice(0, 400)` so a timeout reads as a diagnosis. `setTimeout` is the real one — only `setInterval` is stubbed.\n\n`bootApp(routes, predicate)` calls `installFakes(routes)`, then `await import(\\`../public/app.js?case=${n++}\\`)` with a module-scope counter so every case gets a fresh module instance (the query string makes a distinct specifier; `./timeline.js` and `./format.js` stay shared and are pure). Then `await handle.settle(predicate ?? (() => handle.el('detail').innerHTML.includes('data-lane-id=')))` and return the handle. Write the dynamic import as a template literal, not a quoted string.\n\nFIXTURES (module scope, above the cases)\n`const T0 = Date.now() - 10_000;`\n`config` → `{ env: { OTEL_EXPORTER_OTLP_ENDPOINT: 'http://127.0.0.1:4318' } }`.\n`stats` → `{ totals: { sessions: 2, activeSessions: 1, costUsd: 0.12, tokens: { input: 100, output: 20 }, llmRequests: 2, toolCalls: 3, apiErrors: 0, toolFailures: 0 }, buffered: { spans: 6 } }`.\n`sessionsList` → `{ items: [ { id: 'sess-1', name: 'first session', lastSeenMs: T0 + 10_000, costUsd: 0.12, tokensTotal: 180, counts: { apiErrors: 0, toolFailures: 0 } }, { id: 'sess-2', name: null, lastSeenMs: T0 + 9_000, costUsd: 0.01, tokensTotal: 20, counts: { apiErrors: 0, toolFailures: 0 } } ] }`.\n`sessionDetail(id, name)` → the full shape `/api/sessions/:id` returns, because a broken-landing reproduction renders the overview tab and a thin fixture would crash instead of failing an assertion: `{ id, name, serviceName: 'claude-code', resource: { 'service.name': 'claude-code' }, attrs: { 'app.version': '2.1.220', 'app.entrypoint': 'cli' }, firstSeenMs: T0, lastSeenMs: T0 + 10_000, durationMs: 10_000, counts: { spans: 6, logs: 4, metricPoints: 2, interactions: 1, llmRequests: 2, toolCalls: 3, toolFailures: 0, hooks: 0, userPrompts: 1, apiRequests: 2, apiErrors: 0 }, tokens: { input: 100, output: 20, cacheRead: 50, cacheCreation: 10 }, tokensTotal: 180, tokenSource: 'metrics', costUsd: 0.12, costSource: 'metrics', linesAdded: 3, linesRemoved: 1, commits: 0, pullRequests: 0, editDecisions: { accept: 1, reject: 0 }, activeTimeSec: { user: 2, cli: 3 }, startTypes: ['startup'], models: [], tools: [], todos: { callsSeen: 0, legacy: null, legacyAtMs: null, tasks: [], unlinkedCreates: [] }, toolFailuresFromEvents: 0, traceCount: 1, lastError: null, traces: [] }`.\n`agentsOne` (for sess-1) → `{ sessionId: 'sess-1', firstMs: T0, lastMs: T0 + 10_000, items: [ { id: 'main', kind: 'main', agentId: null, parentAgentId: null, agentType: null, firstMs: T0, lastMs: T0 + 10_000, durationMs: 10_000, spanCount: 4 }, { id: 'agent:agt-a', kind: 'subagent', agentId: 'agt-a', parentAgentId: null, agentType: 'agent:builtin:researcher', firstMs: T0 + 1_000, lastMs: T0 + 4_000, durationMs: 3_000, spanCount: 3 }, { id: 'agent:agt-b', kind: 'subagent', agentId: 'agt-b', parentAgentId: null, agentType: 'agent:builtin:researcher', firstMs: T0 + 2_000, lastMs: T0 + 5_000, durationMs: 3_000, spanCount: 2 }, { id: 'unattributed', kind: 'unattributed', agentId: null, parentAgentId: null, agentType: null, firstMs: T0 + 6_000, lastMs: T0 + 7_000, durationMs: 1_000, spanCount: 1 } ] }` — two concurrent instances of one agent type plus an unattributed lane, so four lanes reach the screen.\n`agentsTwo` (for sess-2) → same envelope with `sessionId: 'sess-2'` and items `main` plus `agent:agt-c` (`kind: 'subagent'`, `agentId: 'agt-c'`, `agentType: 'agent:builtin:helper'`).\n`baseRoutes` → `{ '/api/config': config, '/api/stats': stats, '/api/sessions': sessionsList, '/api/sessions/sess-1': sessionDetail('sess-1', 'first session'), '/api/sessions/sess-1/agents': agentsOne, '/api/sessions/sess-2': sessionDetail('sess-2', null), '/api/sessions/sess-2/agents': agentsTwo }`. Each case starts from a shallow copy so it can override one route.\n\nONE THING TO KNOW ABOUT THE FAKE DOM'S LIMITS\nIt does not parse `innerHTML`, so `#view-body` is not a child of `#detail`: assertions about the timeline and the view strip read `el('detail').innerHTML`, and assertions about the opened technical view read `el('view-body').innerHTML`. That is faithful enough, because `renderViewBody()` always writes that element — with `''` when no view is open.\n\nTHE CASES\n\nCase A — criterion: opening a session lands on the timeline view.\nName: 'opening a session draws a lane per agent and opens no technical view'.\nLevel: integration (the real app module over fake browser globals). File: `tools/argus-ui/test/app.test.mjs`.\nInput/state: `bootApp(baseRoutes)` with `location.hash` empty, so app.js auto-selects the first session from the list.\nExpected: `el('detail').innerHTML` contains exactly four occurrences of `data-lane-id=\"` (`(html.match(/data-lane-id=\"/g) || []).length === 4`) and contains each of `data-lane-id=\"main\"`, `data-lane-id=\"agent:agt-a\"`, `data-lane-id=\"agent:agt-b\"`, `data-lane-id=\"unattributed\"`; it contains no `aria-selected=\"true\"`; and `el('view-body').innerHTML === ''`. This is the case that goes red for all three reproduction edits.\n\nCase B — criterion: the technical views are subordinate to the timeline, not the other way round.\nName: 'the strip of technical views is rendered below the timeline, not in place of it'.\nInput/state: same boot as case A.\nExpected: in `el('detail').innerHTML`, `indexOf('data-lane-id=')` is greater than -1 and less than `indexOf('role=\"tablist\"')`, which in turn is less than `indexOf('id=\"view-body\"')`; and all six buttons are present — assert a match for `data-view=\"${id}\"` for each of `overview`, `todos`, `traces`, `events`, `metrics`, `raw`.\n\nCase C — criterion: the technical views stay reachable from the timeline.\nName: 'clicking a technical view opens it under the timeline and leaves the lanes drawn'.\nInput/state: boot as in case A, then `fire('detail', 'click', { target: { closest: (sel) => (sel === '[data-view]' ? { dataset: { view: 'raw' } } : null) } })`, then `settle(() => el('view-body').innerHTML.includes('Resource attributes'))`. `raw` is chosen because it needs no further endpoint.\nExpected: `el('view-body').innerHTML` contains `Resource attributes`; `el('detail').innerHTML` still has four `data-lane-id=\"` occurrences; it contains exactly one `aria-selected=\"true\"`, and the button carrying it is the one matched by `/<button[^>]*data-view=\"raw\"[^>]*>/`; and the timeline still precedes `role=\"tablist\"` in that markup.\n\nCase D — criterion: lanes come from the collector's per-instance join, not from the UI.\nName: 'opening a session asks the collector for that session\\'s agent lanes'.\nInput/state: boot as in case A.\nExpected: `paths` includes `/api/sessions/sess-1/agents`. This is the case that names the dropped `await loadAgents()` directly.\n\nCase E — criterion: opening a session lands on the timeline, whatever was open under the previous one.\nName: 'switching sessions returns to the timeline alone, with the new session\\'s lanes'.\nInput/state: boot as in case A; open `raw` exactly as in case C; then `fire('session-list', 'click', { target: { closest: (sel) => (sel === '[data-session]' ? { dataset: { session: 'sess-2' } } : null) } })`; then `settle(() => paths.includes('/api/sessions/sess-2/agents') && el('detail').innerHTML.includes('agent:agt-c'))`.\nExpected: `el('detail').innerHTML` contains `data-lane-id=\"agent:agt-c\"` and no `aria-selected=\"true\"`; `el('view-body').innerHTML === ''`. This is the case that goes red when `state.view = DEFAULT_VIEW` in `selectSession` is changed.\n\nCase F — the empty edge: no lanes to draw.\nName: 'a session whose agent lanes cannot be fetched still lands on the timeline, not on a technical tab'.\nInput/state: boot with `{ ...baseRoutes, '/api/sessions/sess-1/agents': 'fail' }` and `settle(() => el('detail').innerHTML.includes('role=\"tablist\"'))`.\nExpected: `el('detail').innerHTML` contains no `data-lane-id=\"`, matches `/no agent lanes/i` (the placeholder `timelineHtml([])` renders), contains no `aria-selected=\"true\"`, and the placeholder precedes `role=\"tablist\"`; `el('view-body').innerHTML === ''`.\n\nPROVING THE CASES BITE\nAfter the six pass on the unmodified tree, apply each of the reviewer's three edits to `tools/argus-ui/public/app.js` one at a time, run the check command, confirm the named case fails, and revert the edit before the next one: (1) line 932 `state.view = DEFAULT_VIEW;` → `state.view = 'overview';` must fail cases A and E; (2) delete the `${timelineHtml(state.agents, state.agentWindow)}` line at line 168 must fail cases A, B and C; (3) delete `await loadAgents();` at line 833 must fail cases A and D. Leave the tree reverted and unmodified when done; report any edit that did not turn a case red rather than adjusting the case to suit it.\n\nWHAT IS ALREADY RED\nNothing was run for this plan — no test command, no suite, not as a baseline. The review reports the argus-ui suite at 33 passing cases, exit 0, and this correction changes no production code, so the six new cases are expected to pass on first run; their value is what they do under the three edits above, not a red-to-green transition.\n\nLEFT UNTESTED, ON PURPOSE\nLane geometry, depth, labels, escaping and the empty-lane placeholder markup: already pinned as pure functions in `test/timeline.test.mjs`, and repeating them through the fake DOM would buy nothing. The collector-side record-to-agent join (`Store#getAgents`): pinned in the `tools/argus` suite; this file only imitates its payload. CSS, layout and real browser rendering: no DOM engine is available under the zero-dependency rule, so the tests pin composition and ordering of markup, not pixels. The live SSE stream, token/cookie flows, copy buttons, and the internals of the events, metrics, traces and tasks tabs: outside this increment's criteria. Activity blocks, context curves, scrubbing and live mode: later increments.",
-            "checks": [
-              "npm --prefix tools/argus-ui test"
-            ],
-            "questions": []
-          }
-        },
-        {
-          "label": "tests:timeline-landing.2",
-          "at": "2026-08-07T10:56:23.772Z",
-          "return": {
-            "summary": "Wrote tools/argus-ui/test/app.test.mjs with the six planned cases (A-F) booting the real public/app.js against a hand-rolled fake DOM; all six pass on the unmodified tree (node --test test/app.test.mjs, 6 pass, exit 0), and each of the reviewer's three reproduction edits turns exactly the named cases red, confirmed and reverted one at a time.",
-            "cases": [
-              {
-                "case": "Case A - opening a session lands on the timeline view: opening a session draws a lane per agent and opens no technical view.",
-                "file": "tools/argus-ui/test/app.test.mjs",
-                "testName": "opening a session draws a lane per agent and opens no technical view",
-                "expected": "el('detail').innerHTML has exactly four `data-lane-id=\"` occurrences, one each for main, agent:agt-a, agent:agt-b, unattributed; no `aria-selected=\"true\"`; el('view-body').innerHTML === ''.",
-                "got": "Passes on the unmodified tree. Under reviewer edit 1 (`state.view = DEFAULT_VIEW;` -> `state.view = 'overview';` at app.js line 932) it fails: `assert.ok(!html.includes('aria-selected=\"true\"'))` evaluates false, actual false vs expected true - the overview tab opens selected instead of no view. Under edit 2 (deleting the `${timelineHtml(state.agents, state.agentWindow)}` line at app.js line 168) it fails with `settle() timed out` because no `data-lane-id=` ever appears (the default settle predicate never resolves). Under edit 3 (deleting `await loadAgents();` at app.js line 833) it fails the same way: `settle() timed out`, because state.agents never populates so no lane markup appears."
-              },
-              {
-                "case": "Case B - the technical views are subordinate to the timeline, not the other way round.",
-                "file": "tools/argus-ui/test/app.test.mjs",
-                "testName": "the strip of technical views is rendered below the timeline, not in place of it",
-                "expected": "in el('detail').innerHTML, indexOf('data-lane-id=') < indexOf('role=\"tablist\"') < indexOf('id=\"view-body\"'); and all six data-view buttons (overview, todos, traces, events, metrics, raw) are present.",
-                "got": "Passes on the unmodified tree. Under reviewer edit 2 (deleting the timelineHtml line at app.js line 168) it fails: `settle() timed out; detail.innerHTML so far: ...` - the boot never reaches a state with `data-lane-id=` in the markup, since the line composing the timeline was removed."
-              },
-              {
-                "case": "Case C - the technical views stay reachable from the timeline.",
-                "file": "tools/argus-ui/test/app.test.mjs",
-                "testName": "clicking a technical view opens it under the timeline and leaves the lanes drawn",
-                "expected": "after clicking data-view=\"raw\", el('view-body').innerHTML contains 'Resource attributes'; el('detail').innerHTML still has four data-lane-id occurrences and exactly one aria-selected=\"true\" on the raw button; the timeline still precedes role=\"tablist\".",
-                "got": "Passes on the unmodified tree. Under reviewer edit 2 (deleting the timelineHtml line at app.js line 168) it fails: `settle() timed out; detail.innerHTML so far: ...` before the click can even be fired, because the initial boot (case A's bootApp) never settles without any data-lane-id= markup to find."
-              },
-              {
-                "case": "Case D - lanes come from the collector's per-instance join, not from the UI.",
-                "file": "tools/argus-ui/test/app.test.mjs",
-                "testName": "opening a session asks the collector for that session's agent lanes",
-                "expected": "handle.paths includes '/api/sessions/sess-1/agents'.",
-                "got": "Passes on the unmodified tree. Under reviewer edit 3 (deleting `await loadAgents();` at app.js line 833) it fails: `settle() timed out; detail.innerHTML so far: ...` - loadAgents is never invoked, /api/sessions/sess-1/agents is never fetched, so no data-lane-id= markup appears and the default settle predicate in bootApp never resolves (the boot itself times out before the assertion on `paths` is reached)."
-              },
-              {
-                "case": "Case E - opening a session lands on the timeline, whatever was open under the previous one.",
-                "file": "tools/argus-ui/test/app.test.mjs",
-                "testName": "switching sessions returns to the timeline alone, with the new session's lanes",
-                "expected": "after opening raw on sess-1 then switching to sess-2, el('detail').innerHTML contains data-lane-id=\"agent:agt-c\" and no aria-selected=\"true\"; el('view-body').innerHTML === ''.",
-                "got": "Passes on the unmodified tree. Under reviewer edit 1 (`state.view = DEFAULT_VIEW;` -> `state.view = 'overview';` at app.js line 932) it fails: `assert.ok(!html.includes('aria-selected=\"true\"'))` evaluates false - selecting sess-2 lands on the overview tab (selected) instead of on the timeline alone, because selectSession no longer resets state.view to null."
-              },
-              {
-                "case": "Case F - the empty edge: no lanes to draw.",
-                "file": "tools/argus-ui/test/app.test.mjs",
-                "testName": "a session whose agent lanes cannot be fetched still lands on the timeline, not on a technical tab",
-                "expected": "with /api/sessions/sess-1/agents failing, el('detail').innerHTML has no data-lane-id=, matches /no agent lanes/i, has no aria-selected=\"true\", and the placeholder precedes role=\"tablist\"; el('view-body').innerHTML === ''.",
-                "got": "Passes on the unmodified tree. Not named as a required target of any of the reviewer's three edits, so no failure was required or sought for it; noted only that it also failed as a knock-on effect under edit 1 (`aria-selected=\"true\"` appears because the overview tab opens selected), which is consistent with the same root cause edit 1 breaks in cases A and E."
-              }
-            ],
-            "openQuestions": [],
-            "questions": []
-          }
-        },
-        {
-          "label": "implement:timeline-landing.2",
-          "at": "2026-08-07T10:58:13.329Z",
-          "return": {
-            "deviations": [
-              "The plan named tools/argus-ui/test/app.test.mjs as NEW and the only file the increment adds; it was already present and committed by the preceding test-author step (commit 8bb0f3d, \"Pin opening a session on the timeline against a fake DOM (round 2)\"), so this step wrote no file at all. I ran the check command instead of re-creating it, per the instruction never to edit or rewrite a test."
-            ],
-            "commands": [
-              {
-                "command": "npm --prefix tools/argus-ui test",
-                "exitCode": 0,
-                "note": "39 cases across test/app.test.mjs, test/timeline.test.mjs, test/config.test.mjs, test/independence.test.mjs and test/server.test.mjs; 39 pass, 0 fail, 0 skipped, nothing excluded. The six planned cases A-F all pass on the unmodified tree."
-              },
-              {
-                "command": "node --test \"test/app.test.mjs\" (run from tools/argus-ui, to isolate the six planned cases)",
-                "exitCode": 0,
-                "note": "Not on the list that counts; run only to read the six planned cases separately. 6 pass, 0 fail."
-              },
-              {
-                "command": "node --test \"test/app.test.mjs\" against three mutated copies of public/app.js, in a scratchpad copy of tools/argus-ui outside the repository",
-                "exitCode": 1,
-                "note": "Not on the list that counts, and the repository tree was never modified (git status stayed empty). Run to prove the six cases are not vacuous, since the plan predicted them all green and a green test that pins nothing would pass the same way. Reviewer edit 1 (state.view = DEFAULT_VIEW -> 'overview' at app.js line 932): 3 pass, 3 fail. Edit 2 (deleting the timelineHtml line at app.js line 168): 0 pass, 6 fail. Edit 3 (deleting await loadAgents(); at app.js line 833): 1 pass, 5 fail. Each reviewer edit therefore turns cases red, as the test plan recorded."
-              }
-            ],
-            "blockers": [],
-            "questions": [],
-            "summary": "No production change was needed: the check command is green on the unmodified tree, and a mutation check on a scratch copy confirms the six new cases genuinely pin the landing wiring in public/app.js rather than passing vacuously."
-          }
-        },
-        {
-          "label": "review:timeline-landing.2",
-          "at": "2026-08-07T11:03:18.383Z",
-          "return": {
-            "findings": [],
-            "reason": "",
-            "questions": [],
-            "summary": "Ran the one listed command, `npm --prefix tools/argus-ui test` (39 cases over app/timeline/config/server/independence test files), exit 0; the diff meets all five increment criteria and I found no finding. Opening a session lands on the timeline (`state.view = DEFAULT_VIEW = null`, reset again in `selectSession`), the six previous technical views survive unchanged in `SUBORDINATE_VIEWS` and render below the timeline into `#view-body`, lanes are keyed per instance by `agent_id` (`store.getAgents`, `AGENT_LANE_PREFIX`) so two concurrent researchers get two lanes distinguished on screen by a short agent id, each lane spans first-span-start to last-span-end inside one shared window so a vertical slice is readable, the join is placed collector-side behind `GET /api/sessions/:id/agents` and documented in tools/argus/README.md, and spans whose parent chain resolves to nothing land on an explicit `unattributed` lane instead of being dropped or folded into main. Blast radius: nothing found — index.html already loads app.js with `type=\"module\"` so the new `format.js`/`timeline.js` imports resolve, the UI's static server has a `.js` MIME entry, no `state.tab`/`data-tab`/`renderTabBody` references survive anywhere, and both READMEs were updated. One fact, not a finding: increment 2 also added collector-side tests for `getAgents` and the new endpoint in tools/argus/test/{store,server}.test.mjs, and the listed command does not run them; I read them and they pin the per-instance, lifetime and unattributed behaviour, but no run of them happened in this review."
-          }
-        }
-      ]
+      "status": "done",
+      "note": "Review accepted with no findings after two correction rounds, both of them test gaps rather than defects. What shipped: a collector-side lane join in store.getAgents behind GET /api/sessions/:id/agents, giving every span of a session a lane key of 'main', 'agent:<agent_id>' or 'unattributed' by resolving agent_id first and the parent-span chain second; a timeline module in argus-ui drawing one bar per lane over one shared window; and the six technical views (overview, todos, traces, events, metrics, raw) moved into a strip below the timeline, closed by default. npm --prefix tools/argus test 176 cases exit 0, npm --prefix tools/argus-ui test 39 cases exit 0. Both correction rounds were spent because the visible behaviour was computed by a tested pure helper but never pinned in the rendered markup or the booted page; the round-2 fake-DOM harness in tools/argus-ui/test/app.test.mjs now boots public/app.js in-process, so later UI increments have a way to pin what the human sees.",
+      "steps": []
     },
     {
       "id": "lane-activity",
       "title": "Activity and context growth drawn on each lane",
       "goal": "Draw each lane's activity over time and, behind it, that agent's context size over time, so where token consumption grows is visible on the timeline itself.",
       "criteria": [
-        "Each lane shows its activity over time — tool calls and API requests — placed at the times they occurred.",
+        "Each lane shows its activity over time - tool calls and API requests - placed at the times they occurred, on the lane of the agent instance the activity belongs to.",
+        "Activity is assigned to lanes with the lane vocabulary the session's agents endpoint already serves ('main', 'agent:<agent_id>', 'unattributed'), not a second attribution scheme; the records drawn here carry no agent_id of their own, so where their lane comes from is stated.",
+        "Activity that resolves to no agent instance stays visible on the unattributed lane rather than being dropped or folded into the main lane.",
         "Each lane carries, as a curve or area behind that activity, the context size over time for that agent.",
-        "The curve is drawn from a size the telemetry actually records — the reported untruncated request-body length survives even when the body itself was truncated — and the view names which measure it is showing.",
-        "Growth in context size is readable from the timeline alone, without opening any detail."
+        "The curve is drawn from a size the telemetry actually records - the reported untruncated request-body length survives even when the body itself was truncated - and the view names which measure it is showing.",
+        "Growth in context size is readable from the timeline alone, without opening any detail.",
+        "What proves this increment is the drawn result in the page: a change that stops the activity marks or the curve reaching the rendered timeline is caught, not only a computation checked in isolation."
       ],
       "status": "todo",
-      "note": "One criterion added: content-pipeline showed bodies are truncated at the CLI's 60 KB ceiling while the untruncated length is reported separately, so the curve must be built from a recorded size and say what it measures rather than from the text it happens to hold.",
+      "note": "Re-cut after timeline-landing. Two criteria added and one sharpened. Timeline-landing established a lane vocabulary collector-side - every span of a session resolves to 'main', 'agent:<agent_id>' or 'unattributed', by agent_id first and the parent-span chain second, served by GET /api/sessions/:id/agents - so this increment inherits it instead of inventing per-lane attribution again, and the unattributed lane it already draws must keep receiving what cannot be attributed. Content-pipeline showed the body events carry no agent_id, so the same span-chain resolution is the only route from a record to a lane, and that route is the one open question its researcher settles first. The provability criterion is there because both correction rounds of timeline-landing were spent on exactly this: the geometry and the landing were computed correctly by tested pure helpers while nothing pinned that they reached the page.",
       "steps": []
     },
     {
@@ -624,13 +57,15 @@
       "title": "Scrubbing the timeline, and a live mode that follows the head",
       "goal": "Give the timeline a chosen time that can be moved to any point of the recorded session, plus a live mode that follows the newest data as it arrives.",
       "criteria": [
-        "The timeline can be scrubbed backward and forward to any point of the recorded session.",
+        "The timeline can be scrubbed backward and forward to any point of the recorded session, and the chosen time is visible on the timeline.",
         "A live mode follows the newest data as it arrives.",
         "Scrubbing away from the head leaves live mode.",
-        "A control returns to live mode."
+        "A control returns to live mode.",
+        "The chosen time is one shared value the session view works from, so a later per-lane detail can be answered for exactly that moment.",
+        "What proves this increment is the behaviour of the page: a change that stops scrubbing moving the chosen time, or stops the live control returning to the head, is caught, not only a helper that maps a position to a time."
       ],
       "status": "todo",
-      "note": "",
+      "note": "Re-cut after timeline-landing. Two criteria added, none removed. The chosen time is named as one shared value because context-at-time, which follows, has to answer for exactly that moment, and timeline-landing showed the session view already keeps its timeline window in one place. The provability criterion carries forward the lesson that cost timeline-landing both correction rounds: a pinned pure helper is not a pinned behaviour.",
       "steps": []
     },
     {
@@ -638,16 +73,18 @@
       "title": "The selected agent's context and tool use as of the chosen time",
       "goal": "Show, for the lane selected at the chosen time, that agent's or the main session's context at that moment as a structured, expandable message list, together with the tools that agent has used up to that moment.",
       "criteria": [
-        "Selecting a lane at the chosen time shows that agent's — or the main session's — context as of that moment.",
+        "Selecting a lane at the chosen time shows that agent's - or the main session's - context as of that moment.",
+        "The lane selected is one of the lanes the timeline already draws, and the records shown are chosen by that lane and the chosen time using the lane vocabulary already in place, not a second attribution scheme.",
         "The context shown is the body of the nearest API request at or before the chosen time.",
         "It is rendered as a structured message list distinguishing system prompt, user, assistant, tool call and tool result blocks.",
         "Each block is collapsed to one line carrying its size.",
         "Each block expands to the exact full text the record carries, and a body the CLI truncated is marked as truncated instead of being presented as the whole context.",
         "The same selection also shows the tools that agent has used up to that moment, each entry carrying the tool name and that call's parameters.",
-        "Both listings are per agent and per time, so \"which tools, and what for\" is answerable for any agent at any point of the session."
+        "Both listings are per agent and per time, so 'which tools, and what for' is answerable for any agent at any point of the session.",
+        "What proves this increment is the rendered panel: a change that stops a selection reaching the panel, or stops an expanded block showing the full text, is caught, not only a builder function checked in isolation."
       ],
       "status": "todo",
-      "note": "Absorbed the former tools-at-time increment. content-pipeline showed the request body and the tool parameters are the same kind of record from the same endpoint, selected by the same session, agent and time bound, so the detail panel for a selected lane is one change, not two chains. Also added the truncation criterion, since recorded bodies stop at the CLI's content ceiling and carry a truncation marker.",
+      "note": "Re-cut after timeline-landing. Kept whole - it still absorbs the dropped tools-at-time - with two criteria added: the selection reuses the lane vocabulary the collector serves ('main', 'agent:<agent_id>', 'unattributed') rather than a second join, and the panel is proved where it is seen. Both come from timeline-landing: it placed the join collector-side and it lost two correction rounds to behaviour that lived only in untested page wiring.",
       "steps": []
     },
     {
@@ -668,92 +105,40 @@
       },
       {
         "label": "replan:content-pipeline",
-        "at": "2026-08-07T09:55:42.995Z",
+        "at": "2026-08-07T09:55:42.995Z"
+      },
+      {
+        "label": "replan:timeline-landing",
+        "at": "2026-08-07T11:06:23.979Z",
         "return": {
+          "summary": "Closed timeline-landing as done (review accepted, no findings, after two correction rounds that were both test gaps rather than defects) and re-cut the three open increments against what it showed. Nothing was split, merged, dropped or reordered: the run confirmed the cut rather than contradicting it. Two facts changed the criteria. First, timeline-landing placed the record-to-agent join collector-side and fixed a lane vocabulary - every span of a session resolves to 'main', 'agent:<agent_id>' or 'unattributed', by agent_id first and the parent-span chain second, served by GET /api/sessions/:id/agents - so lane-activity and context-at-time now carry a criterion each that they select records by that same vocabulary instead of building a second attribution scheme, and lane-activity carries the unattributed-stays-visible criterion explicitly. Content-pipeline had already shown that body events carry no agent_id, which makes the span chain the only route from a content record to a lane; lane-activity's researcher settles that route first, since it is the last load-bearing unknown of the issue. Second, both of timeline-landing's correction rounds went on behaviour that was computed by a well-tested pure helper and never pinned in the rendered page - first the lane geometry, then the landing wiring itself - so each of the three open increments now carries one criterion demanding that what the human sees is what proves it done. The fake-DOM harness that round 2 built (tools/argus-ui/test/app.test.mjs boots public/app.js in-process) makes that cheap now, which is why the criterion is affordable. Order unchanged and deliberate: lane-activity first because per-lane attribution of activity and size records is the riskiest remaining piece, scrub-live second because it establishes the one chosen time, context-at-time last because it answers for exactly that time on exactly those lanes.",
           "increments": [
             {
               "id": "content-pipeline",
-              "title": "Content-bearing telemetry is captured by default and served over the API",
-              "goal": "Turn the content flags on by default in `argus env` and make the collector store and serve what the resulting events carry, so a caller can ask for the conversation content belonging to a point in time.",
-              "criteria": [
-                "`argus env` includes the content flags by default in both output formats: user prompts, tool details, tool content, and the flag or flags the CLI requires to emit `api_request_body`/`api_response_body` events.",
-                "The exact flag names are verified against the CLI's monitoring documentation rather than assumed.",
-                "If the current CLI turns out not to emit request/response body events at all, that is reported as an explicit finding, naming the best content the available flags do provide.",
-                "What attribution actually arrives for subagent activity and for request bodies is established and reported, including any gap, so later increments know which records can be assigned to which agent.",
-                "The collector stores the content those events carry and exposes those content-bearing records over the JSON API like the existing signals, such that the content belonging to a point in time can be asked for.",
-                "Recordings made without the content flags are out of contract: no fallback rendering, no compatibility notice, and no test pins behavior for them.",
-                "`./test.sh` is green."
-              ],
-              "status": "done",
-              "note": "Review accepted with no findings: the four content flags (OTEL_LOG_USER_PROMPTS, OTEL_LOG_TOOL_DETAILS, OTEL_LOG_TOOL_CONTENT, OTEL_LOG_RAW_API_BODIES=1) are on by default in all four env formats, contentOf plus store.queryContent plus GET /api/content store and serve the content-bearing records with an inclusive 'at' bound, and the suite is green (156 argus cases exit 0; bash ./test.sh PASS all 6 suites). The attribution gap is established: body events carry query_source and span context but no agent.name or agent_id."
+              "status": "done"
             },
             {
               "id": "timeline-landing",
-              "title": "A session opens on the timeline, with a lane per agent",
-              "goal": "Make opening a session in the argus UI land on a timeline view that draws one lane for the main session and one per subagent across each agent's lifetime, with the existing technical views reachable from it but subordinate.",
-              "criteria": [
-                "Opening a session in the argus UI lands on the timeline view.",
-                "The previous technical views — event tail, traces, raw inspectors — remain reachable from the timeline view and are subordinate to it, not the other way round.",
-                "The timeline draws one lane for the main session and one lane per subagent instance, so two concurrent subagents of the same type get two lanes; `query_source` names only the agent type, and per-instance identity has to come from the span attributes the previous increment reported (`agent_id`, `parent_agent_id`).",
-                "Each agent lane spans that agent's lifetime, so any vertical slice answers which agents are running at that moment.",
-                "Where the run places the record-to-agent join — collector side or UI side — that choice is stated, and activity that cannot be attributed to an agent instance is shown as unattributed rather than dropped or silently folded into the main session."
-              ],
-              "status": "todo",
-              "note": "Criteria sharpened by what content-pipeline established: bodies carry no agent.name or agent_id, so lanes per agent instance can only come from the span join, and query_source alone cannot separate two subagents of one type. The researcher of this increment settles first where that join lives and what session data with the content flags on it can be built and exercised against, since scripts/demo-emit.mjs emits no content-bearing events."
+              "status": "done"
             },
             {
               "id": "lane-activity",
-              "title": "Activity and context growth drawn on each lane",
-              "goal": "Draw each lane's activity over time and, behind it, that agent's context size over time, so where token consumption grows is visible on the timeline itself.",
-              "criteria": [
-                "Each lane shows its activity over time — tool calls and API requests — placed at the times they occurred.",
-                "Each lane carries, as a curve or area behind that activity, the context size over time for that agent.",
-                "The curve is drawn from a size the telemetry actually records — the reported untruncated request-body length survives even when the body itself was truncated — and the view names which measure it is showing.",
-                "Growth in context size is readable from the timeline alone, without opening any detail."
-              ],
-              "status": "todo",
-              "note": "One criterion added: content-pipeline showed bodies are truncated at the CLI's 60 KB ceiling while the untruncated length is reported separately, so the curve must be built from a recorded size and say what it measures rather than from the text it happens to hold."
+              "status": "todo"
             },
             {
               "id": "scrub-live",
-              "title": "Scrubbing the timeline, and a live mode that follows the head",
-              "goal": "Give the timeline a chosen time that can be moved to any point of the recorded session, plus a live mode that follows the newest data as it arrives.",
-              "criteria": [
-                "The timeline can be scrubbed backward and forward to any point of the recorded session.",
-                "A live mode follows the newest data as it arrives.",
-                "Scrubbing away from the head leaves live mode.",
-                "A control returns to live mode."
-              ],
-              "status": "todo",
-              "note": ""
+              "status": "todo"
             },
             {
               "id": "context-at-time",
-              "title": "The selected agent's context and tool use as of the chosen time",
-              "goal": "Show, for the lane selected at the chosen time, that agent's or the main session's context at that moment as a structured, expandable message list, together with the tools that agent has used up to that moment.",
-              "criteria": [
-                "Selecting a lane at the chosen time shows that agent's — or the main session's — context as of that moment.",
-                "The context shown is the body of the nearest API request at or before the chosen time.",
-                "It is rendered as a structured message list distinguishing system prompt, user, assistant, tool call and tool result blocks.",
-                "Each block is collapsed to one line carrying its size.",
-                "Each block expands to the exact full text the record carries, and a body the CLI truncated is marked as truncated instead of being presented as the whole context.",
-                "The same selection also shows the tools that agent has used up to that moment, each entry carrying the tool name and that call's parameters.",
-                "Both listings are per agent and per time, so \"which tools, and what for\" is answerable for any agent at any point of the session."
-              ],
-              "status": "todo",
-              "note": "Absorbed the former tools-at-time increment. content-pipeline showed the request body and the tool parameters are the same kind of record from the same endpoint, selected by the same session, agent and time bound, so the detail panel for a selected lane is one change, not two chains. Also added the truncation criterion, since recorded bodies stop at the CLI's content ceiling and carry a truncation marker."
+              "status": "todo"
             },
             {
               "id": "tools-at-time",
-              "title": "The selected agent's tool use up to the chosen time",
-              "goal": "Show, for the lane selected at the chosen time, the tools that agent has used up to that moment together with the parameters of each call.",
-              "criteria": [],
-              "status": "dropped",
-              "note": "Merged into context-at-time, which now carries all three of its criteria. content-pipeline showed tool parameters arrive as the same content records as request bodies, retrieved through the same query with the same time bound and the same per-agent join, so building them as a separate increment would repeat that increment's selection and attribution work for the sake of one extra list in the same panel."
+              "status": "dropped"
             }
           ],
-          "questions": [],
-          "summary": "Closed content-pipeline as done (review accepted, no findings) and re-cut the four open increments against what it showed. Three changes, each traceable to a finding of that increment. (1) tools-at-time is dropped and its three criteria moved into context-at-time: the increment established that tool parameters and request bodies are the same class of content record, served by the same endpoint under the same session/kind/time bound and needing the same per-agent join, so the selected-lane detail panel is one change rather than two full chains. (2) timeline-landing's lane criterion is sharpened: body events carry query_source and span context but no agent.name and no agent_id, and query_source names only the agent type, so two concurrent subagents of one type are indistinguishable without joining through the span attributes agent_id/parent_agent_id; the increment now also has to state where that join lives and to show unattributable activity as unattributed rather than folding it into the main session. (3) lane-activity gains one criterion: bodies are truncated at the CLI's content ceiling while the untruncated length is reported separately, so the context-size curve must come from a recorded size and the view must name which measure it draws. scrub-live is unchanged. Criterion coverage of the issue: env flags and collector storage/serving, the flag-name verification, the attribution finding, the out-of-contract rule for flagless recordings and ./test.sh green sit in content-pipeline (done); landing on the timeline with the technical views subordinate, and lanes per agent over their lifetime, in timeline-landing; activity plus the context-size curve in lane-activity; scrubbing and live mode in scrub-live; the structured context message list and the per-agent tool listing in context-at-time. Two facts the cut turns on that I could not settle and deliberately left to the next researcher rather than to a question: whether the record-to-agent join belongs in the collector or in the UI (the UI already proxies every /api/ path, so either is open), and what session data the UI increments can be built against, since scripts/demo-emit.mjs emits no content-bearing events and no recording with the flags on is known to exist. I rejected splitting an agent-resolution API off as its own increment: it would deliver nothing a reader can judge on its own and may be unnecessary if the join is done UI-side. One operational fact for later steps: test.sh is committed mode 100644, so `./test.sh` exits 126 on this checkout and the suite has to be run as `bash ./test.sh` (exit 0, PASS all 6 suites) — a pre-existing checkout fact, not a defect of the change. Backlog now holds 6 increments (1 done, 1 dropped, 4 todo), so at most 5 of the 8 chains are spent if every remaining one takes a single pass."
+          "questions": []
         }
       }
     ]
