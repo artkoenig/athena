@@ -575,3 +575,130 @@ Two facts, neither a finding:
 - `test.sh` and `test-repo.sh` are still not executable in this checkout
   (`-rw-r--r--`), so `./test.sh` exits 126 while `bash test.sh` exits 0. That
   predates the change and is unchanged by it.
+
+## Round 4
+
+**Status: 1 finding, correction needed.**
+
+### The commands that count
+
+- `bash test-repo.sh` — **exit 0**. 54 cases, seven sections (`the licence`, `no
+  repository-local rule reaches an agent`, `the run state is the channel, and no
+  prose handoff is left`, `a run resumes from the state it recorded`, `the two
+  workflows coexist`, `every agent page is declared`, `remote operation deploys
+  the collector alone`). Nothing skipped or excluded.
+- `bash test.sh` — **exit 0**. `PASS: all 6 suites`: `the repository itself`
+  (test-repo.sh, 54 cases), `parallel runs: worktrees` (4 cases),
+  `skills/agent-brief/assets: the backlog recorder` (15 tests, 0 fail),
+  `tools/argus` (135 tests, 0 fail), `tools/argus-ui` (14 tests, 0 fail),
+  `tools/log-parser` (23 tests, 0 fail). Nothing skipped or excluded.
+
+Both are green, so no red run is this change's to answer for. Both exit codes
+were taken from the scripts themselves, not from the tail of a pipe.
+
+Round 3's finding is repaired: `cutWasReplayed` (`workflows/loop.js` line 524,
+`workflows/agile-loop.js` line 569) is read before the Decompose step
+dispatches, so a cut the planner returns in this session wins over the startup
+snapshot and only a replayed cut loses to it. Driver modes `w13` and `w14` pin
+both halves on both scripts.
+
+The review was again taken against `origin/main` (eb13462), the default branch
+tip; the local `main` ref is stale at 57e5fd4, and diffing against it
+additionally shows six issue directories that are already on `origin/main`. The
+real diff is 20 files, four of which are this run's own handoff files and out of
+my judgment.
+
+### Finding 1 — a resumed incremental run reviews its next increment as if it were the first, so the accepted code already in the diff is handed to the reviewer unannounced
+
+**Claim.** `workflows/agile-loop.js` rebuilds the increment list from
+`backlog.json` on resume but rebuilds nothing else from it. The iteration counter
+`n` and the `worked` list are session-local and both restart empty, so the first
+increment a resumed session works is treated as increment 1 of the run whatever
+the file says came before it. The reviewer's prompt therefore loses the baseline
+block that tells it which code in its diff an earlier iteration already accepted
+— the exact block the function's own comment says exists "to keep it from
+re-litigating a settled increment every round".
+
+**Reproduction.** State: a first `uroboros:agile-loop` session cut the issue into
+`i1` and `i2`, worked `i1` to acceptance and recorded `replan:i1`. That leaves
+`<issueDir>/backlog.json` as `increments: [i1 {status "done", steps: []}, i2
+{status "todo", steps: []}]` and `run: { steps: [{label: "decompose", at},
+{label: "replan:i1", at, return: …}] }` — `decompose`'s return was shed by the
+`close` the replan ran (`skills/agent-brief/assets/backlog.mjs` lines 179-181).
+The session dies during `i2`'s research. The human starts `uroboros:agile-loop`
+on the same directory.
+
+What happens: lines 510-521 put `decompose` and `replan:i1` into `recorded` (no
+`questions` in either, `decompose`'s return absent), so `cutWasReplayed` at line
+569 is true and `increments` at lines 595-602 is the file's `[i1 done, i2 todo]`
+— all correct. Line 640 then opens the iteration at `n = 1` and line 641 picks
+`i2`, because a `done` increment is skipped without advancing `n`. `worked` (line
+610) is empty. So at line 730 the reviewer's prompt for `review:i2.0` gets
+`baseline(1)`, which returns `''` at line 622 before it ever looks at a status,
+and `scope(task, increments, 1)` (lines 457-474) announces "increment 1 is
+yours" for the run's second increment.
+
+The wrong result is that prompt: the `review:i2.0` prompt of the resumed run
+carries no baseline sentence at all, while the same step in an uninterrupted run
+carries "Increment 1 was reviewed and accepted in an earlier iteration. That code
+is in your diff: treat it as the baseline increment 2 builds on, and raise it
+again only where increment 2 broke it." The reviewer of the resumed run is told
+its diff is against `main` and that `i2`'s criteria are the whole of what was
+asked for, and `i1`'s accepted work sits in that diff with nothing naming it —
+so check 2 of its page ("Is there anything in the diff no criterion asked for?")
+points it straight at settled code, and the two correction rounds are spendable
+on it. The same session-local gap costs the human the per-increment lines the
+rulebook's step 5 asks for: `result.increments` is `worked`, so a resumed run
+reports no line for `i1` even though the file records how it ended.
+
+Everything the block needs is in the state file the run just read: `status`
+`done` is the accepted case and `blocked` the not-accepted one, and the count of
+non-`todo` increments is the ordinal. Nothing in the run state is missing; the
+script does not use it.
+
+No test covers it. `contextFor` (`test-repo.sh` lines 479-524) has no fixture in
+which `backlog.json` holds a closed increment beside an open one: `resumeBacklog`
+and `questionBacklog` hold one `todo` increment, `recutBacklog` two `todo` ones,
+and `doneBacklog` is fully closed and dispatches nothing but `load-state` and
+`publish`. So the whole resume section proves resume into the first increment of
+a run and never resume into a later one.
+
+**Criterion.** "A fresh session can rebuild the next prompt from `backlog.json`
+alone" — the next prompt here is rebuilt short of what `backlog.json` holds.
+
+### Beyond the criteria
+
+Traced, and nothing further found:
+
+- **Callers of what was touched.** `rulebook.md` steps 4-5, `README.md` (both
+  diagrams and the prose), `skills/retro/SKILL.md` and `.claude/rules/agents.md`
+  all move to the structured return and `backlog.json`; the two greps in
+  `test-repo.sh` lines 136-159 hold the file names and the word "handoff" out of
+  every prompt-bearing file, and a repository-wide grep for `hand-?off` and
+  `backlog.md` finds hits only in old issue directories (out of scope), in the
+  guard itself, and in an unrelated `tools/argus-ui` fixture.
+- **Round 4's own change.** `cutWasReplayed` is read before `step('decompose')`
+  writes the label into `recorded`, so it cannot answer itself; a replayed cut
+  still loses to the file, which is what `w2` and `w3` keep pinned, and a shed
+  `decompose` stub replays as `undefined` without either script dividing by it
+  (`asksTheHuman` and the `Array.isArray` guards absorb it).
+- **The planner handing an increment back across a session boundary.** A
+  `replan:<id>` recorded with its return, followed by a session death, replays
+  once and then `forgetSteps` deletes that label too, so the second attempt
+  dispatches a real planner and the increment still closes. Wasteful, not wrong;
+  no finding.
+- **The reviewer's independence.** Its page still forbids reading
+  `backlog.json`, excludes it from the diff it judges, and the recorder prints
+  one confirmation line and nothing of the file — pinned by the recorder suite's
+  `MARKER-IN-FILE-NOT-PAYLOAD` case. Unchanged this round.
+- **Old issue directories.** Nothing reads or migrates them, which is what the
+  out-of-scope section asks.
+
+Two facts, neither a finding:
+
+- `MAX_ATTEMPTS` and the `maxIncrements` cap are counted in session-local maps
+  too, so both budgets restart on resume. Same root as finding 1, and unlike the
+  baseline block neither loses information a prompt carries.
+- `test.sh` and `test-repo.sh` are still not executable in this checkout
+  (`-rw-r--r--`), so `./test.sh` exits 126 while `bash test.sh` exits 0. That
+  predates the change and is unchanged by it.
