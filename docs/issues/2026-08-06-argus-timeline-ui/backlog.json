@@ -83,6 +83,132 @@
             ],
             "questions": []
           }
+        },
+        {
+          "label": "tests:scrub-live.0",
+          "at": "2026-08-07T12:00:15.804Z",
+          "return": {
+            "summary": "Wrote the ten geometry/markup cases (A1-A10) for the chosen time, scrubbing and live mode into tools/argus-ui/test/timeline.test.mjs and the six page-behaviour cases (B1-B6) into tools/argus-ui/test/app.test.mjs, extending installFakes with EventSource listener recording/emit and a 400-iteration settle ceiling as required; ran both files and confirmed every new case fails for a genuine missing-behaviour reason (a missing export in timeline.js, or an absent scrub/live control in the rendered page) while all eight pre-existing app.test.mjs cases still pass.",
+            "cases": [
+              {
+                "case": "A1 — chosenTimePct(500, {0,1000}) is 50; at startMs 0; at endMs 100.",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "chosenTimePct places the chosen time against the shared window",
+                "expected": "chosenTimePct(500, window) === 50, chosenTimePct(0, window) === 0, chosenTimePct(1000, window) === 100",
+                "got": "Whole file fails to load: SyntaxError: The requested module '../public/timeline.js' does not provide an export named 'chosenTimePct' — the export does not exist yet, so this case (and every other case in the file) cannot run."
+              },
+              {
+                "case": "A2 — chosenTimePct clamps at the edges and stays finite for a zero-width window.",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "chosenTimePct clamps to the window edges and stays finite for a zero-width window",
+                "expected": "chosenTimePct(-50, window) === 0, chosenTimePct(5000, window) === 100, Number.isFinite(chosenTimePct(1000, {startMs:1000,endMs:1000}))",
+                "got": "Same file-level SyntaxError as A1 (missing 'chosenTimePct' export); the case cannot run until the module provides it."
+              },
+              {
+                "case": "A3 — clampChosenTime reaches any point of the session and no other; a broken input parks at the head.",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "clampChosenTime reaches any point of the recorded session and no other, parking a broken input at the head",
+                "expected": "clampChosenTime(400,w)=400; clampChosenTime(-5,w)=0; clampChosenTime(9999,w)=1000; clampChosenTime('abc',w)=1000",
+                "got": "Same file-level SyntaxError (missing 'clampChosenTime' export)."
+              },
+              {
+                "case": "A4 — timelineHtml draws exactly three lane-playhead elements at the same left percentage.",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "the chosen time is one shared value: every lane draws its playhead at the same left percentage",
+                "expected": "3 lane-playhead elements, all left === chosenTimePct(250, window).toFixed(3)",
+                "got": "Same file-level SyntaxError (missing exports)."
+              },
+              {
+                "case": "A5 — the playhead lines up with the activity mark and the context curve at the chosen instant.",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "the playhead lines up with the activity mark and the context curve at the chosen instant",
+                "expected": "playhead left === activityMarkTags entry leftPct (25) === x of the polygon's first point (25)",
+                "got": "Same file-level SyntaxError (missing exports); verified the regex/parsing logic itself against synthetic markup outside the module under test, so this case is not a self-inflicted typo."
+              },
+              {
+                "case": "A6 — nothing is drawn before a chosen time exists (the two-argument call).",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "nothing scrub-related is drawn before a chosen time exists",
+                "expected": "timelineHtml([main], window) contains no lane-playhead, no id=\"timeline-scrub\", no data-timeline-live",
+                "got": "Same file-level SyntaxError (missing exports)."
+              },
+              {
+                "case": "A7 — the scrub control spans the window and its value is the chosen time.",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "the scrub control spans the window and its value is the chosen time, with a readable readout",
+                "expected": "id=\"timeline-scrub\" with min=\"1000\" max=\"5000\" value=\"2000\" step=\"1\"; the rendered html includes fmtClock(2000)",
+                "got": "Same file-level SyntaxError (missing exports)."
+              },
+              {
+                "case": "A8 — scrubStateHtml is readable: data-timeline-live plus aria-pressed reflecting following.",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "scrubStateHtml renders a live control whose pressed state reflects following",
+                "expected": "scrubStateHtml(2000,true) has data-timeline-live and aria-pressed=\"true\"; scrubStateHtml(2000,false) has aria-pressed=\"false\"",
+                "got": "Same file-level SyntaxError (missing 'scrubStateHtml' export)."
+              },
+              {
+                "case": "A9 — an empty lane list still shows today's placeholder, with no scrub control and no playhead.",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "an empty lane list draws no scrub control and no playhead even with a chosen time",
+                "expected": "timelineHtml([], window, {atMs:500}) matches /span/i, has no id=\"timeline-scrub\", no lane-playhead",
+                "got": "Same file-level SyntaxError (missing exports)."
+              },
+              {
+                "case": "A10 — the in-place repaint cannot drift from the full render.",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "the in-place repaint cannot drift from the full render",
+                "expected": "timelineHtml(items, window, {atMs}) includes the string laneRowsHtml(items, window, atMs)",
+                "got": "Same file-level SyntaxError (missing 'laneRowsHtml' export)."
+              },
+              {
+                "case": "B1 — a live mode follows the newest data; opening a session starts there.",
+                "file": "tools/argus-ui/test/app.test.mjs",
+                "testName": "opening a session starts in live mode, with the scrub control at the head",
+                "expected": "detail.innerHTML carries id=\"timeline-scrub\" value/max at T0+10000, aria-pressed=\"true\" on data-timeline-live, and each of 4 lane rows has one playhead at 100.000%",
+                "got": "AssertionError: 'expected a timeline-scrub control' — the fake DOM's detail.innerHTML has no timeline-scrub element yet, so the feature is absent, not a harness bug."
+              },
+              {
+                "case": "B2 — scrubbing backward and forward to any point, chosen time visible.",
+                "file": "tools/argus-ui/test/app.test.mjs",
+                "testName": "the timeline can be scrubbed backward and forward to any point, and the chosen time is visible",
+                "expected": "after firing input on timeline-scrub, timeline-lanes shows 4 playheads at 25.000% then 10.000%, and timeline-scrub-state shows fmtClock of the chosen time",
+                "got": "AssertionError: 'Expected values to be strictly equal: 0 !== 4' — no playhead is drawn at all yet, confirming scrubbing is unimplemented rather than a typo in the test."
+              },
+              {
+                "case": "B3 — scrubbing away from the head leaves live mode.",
+                "file": "tools/argus-ui/test/app.test.mjs",
+                "testName": "scrubbing away from the head leaves live mode",
+                "expected": "timeline-scrub-state.innerHTML contains aria-pressed=\"false\" after scrubbing away from the head",
+                "got": "AssertionError: input did not match /aria-pressed=\"false\"/, actual '' — el('timeline-scrub-state') is still the blank fake element app.js never populates."
+              },
+              {
+                "case": "B4 — live mode keeps following as later data extends the session's window.",
+                "file": "tools/argus-ui/test/app.test.mjs",
+                "testName": "live mode keeps following as later data extends the session window",
+                "expected": "after emit('ingest') with a widened headMs, detail.innerHTML reaches max=\"T0+20000\", scrub value is T0+20000, playheads at 100.000%, aria-pressed=\"true\" still present",
+                "got": "settle() timed out (2s ceiling, 400 iterations) — detail.innerHTML never reaches max=\"T0+20000\" because there is no ingest listener/refresh wiring yet, confirmed by the timeout rather than an immediate assertion mismatch."
+              },
+              {
+                "case": "B5 — a chosen time scrubbed away from the head is not dragged along by new data.",
+                "file": "tools/argus-ui/test/app.test.mjs",
+                "testName": "a chosen time scrubbed away from the head is not dragged along by new data",
+                "expected": "after scrubbing to T0+2500 then widening the window via ingest, scrub value stays T0+2500, playheads move to 12.500%, aria-pressed=\"false\"",
+                "got": "settle() timed out (2s ceiling) for the same reason as B4 — no ingest-driven refresh exists yet to reach max=\"T0+20000\"."
+              },
+              {
+                "case": "B6 — a control returns to live mode, and following actually resumes.",
+                "file": "tools/argus-ui/test/app.test.mjs",
+                "testName": "the live control returns to live mode, and following actually resumes",
+                "expected": "clicking [data-timeline-live] after scrubbing away restores value=T0+10000, aria-pressed=\"true\", playheads at 100.000%; a later ingest keeps following to T0+20000",
+                "got": "AssertionError: 'The \"string\" argument must be of type string. Received type undefined' — the scrub-tag regex match is undefined because no id=\"timeline-scrub\" element is rendered, confirming the live-return control does not exist yet."
+              }
+            ],
+            "openQuestions": [
+              "A7 names 'the state row' as carrying fmtClock(2000) but gives no helper to isolate that row from the rest of timelineHtml's output (unlike A8's dedicated scrubStateHtml); I checked containment against the whole rendered html string as the safe reading, but a reviewer may want the implementer's state-row markup to be more precisely scoped by a later test.",
+              "Because file A's test module does one static `import { ... } from '../public/timeline.js'` for both existing and new exports, the whole file (all pre-existing cases too) fails to load until timeline.js exports chosenTimePct/clampChosenTime/scrubStateHtml/laneRowsHtml — this is what the plan's own 'expected state before the implementation' note anticipates, but it means the implementer will see the entire timeline.test.mjs suite red, not just the ten new cases, until all four exports land together."
+            ],
+            "questions": []
+          }
         }
       ]
     },

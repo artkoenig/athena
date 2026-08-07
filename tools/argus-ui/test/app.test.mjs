@@ -6,6 +6,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { fmtClock } from '../public/format.js';
 
 const realSetInterval = globalThis.setInterval;
 test.after(() => {
@@ -40,6 +41,7 @@ function fakeElement(id) {
 function installFakes(routes) {
   const elements = new Map();
   const paths = [];
+  const streamListeners = {};
 
   function el(id) {
     if (!elements.has(id)) elements.set(id, fakeElement(id));
@@ -69,7 +71,9 @@ function installFakes(routes) {
     constructor(url) {
       this.url = url;
     }
-    addEventListener() {}
+    addEventListener(type, fn) {
+      (streamListeners[type] ||= []).push(fn);
+    }
   };
 
   globalThis.setInterval = () => 0;
@@ -91,8 +95,13 @@ function installFakes(routes) {
     for (const fn of el(id).listeners[type] || []) fn(event);
   }
 
+  /** Fires an event on the fake EventSource stream, the way the collector's SSE would. */
+  function emit(type, event) {
+    for (const fn of streamListeners[type] || []) fn(event);
+  }
+
   async function settle(predicate) {
-    for (let i = 0; i < 200; i++) {
+    for (let i = 0; i < 400; i++) {
       if (predicate()) return;
       await new Promise((r) => setTimeout(r, 5));
     }
@@ -101,7 +110,7 @@ function installFakes(routes) {
     );
   }
 
-  return { el, fire, paths, settle };
+  return { el, fire, emit, paths, settle };
 }
 
 let n = 0;
@@ -401,4 +410,133 @@ test('unattributed activity reaches the page, and the page names the measure', a
   assert.match(unattributedRow, /data-activity-kind="tool"/);
 
   assert.match(html, /request body length/i);
+});
+
+/* ------- scrubbing and live mode ------- */
+
+/** Every `class="lane-playhead"` element's left percentage, as a Number. */
+function playheads(html) {
+  return [...html.matchAll(/<[^>]*class="lane-playhead"[^>]*>/g)].map((match) => {
+    return Number((match[0].match(/left:([\d.]+)%/) || [])[1]);
+  });
+}
+
+test('opening a session starts in live mode, with the scrub control at the head', async () => {
+  const handle = await bootApp({ ...baseRoutes });
+  const html = handle.el('detail').innerHTML;
+
+  const scrubTag = (html.match(/<[^>]*id="timeline-scrub"[^>]*>/) || [])[0];
+  assert.ok(scrubTag, 'expected a timeline-scrub control');
+  assert.match(scrubTag, new RegExp(`value="${T0 + 10_000}"`));
+  assert.match(scrubTag, new RegExp(`max="${T0 + 10_000}"`));
+
+  const liveTag = (html.match(/<[^>]*data-timeline-live[^>]*>/) || [])[0];
+  assert.ok(liveTag, 'expected a data-timeline-live control');
+  assert.match(liveTag, /aria-pressed="true"/);
+
+  for (const id of ['main', 'agent:agt-a', 'agent:agt-b', 'unattributed']) {
+    const marks = playheads(laneRow(html, id));
+    assert.equal(marks.length, 1);
+    assert.equal(marks[0].toFixed(3), '100.000');
+  }
+});
+
+test('the timeline can be scrubbed backward and forward to any point, and the chosen time is visible', async () => {
+  const handle = await bootApp({ ...baseRoutes });
+
+  handle.fire('detail', 'input', { target: { id: 'timeline-scrub', value: String(T0 + 2_500) } });
+  let marks = playheads(handle.el('timeline-lanes').innerHTML);
+  assert.equal(marks.length, 4);
+  for (const m of marks) assert.equal(m.toFixed(3), '25.000');
+  assert.ok(handle.el('timeline-scrub-state').innerHTML.includes(fmtClock(T0 + 2_500)));
+
+  handle.fire('detail', 'input', { target: { id: 'timeline-scrub', value: String(T0 + 1_000) } });
+  marks = playheads(handle.el('timeline-lanes').innerHTML);
+  assert.equal(marks.length, 4);
+  for (const m of marks) assert.equal(m.toFixed(3), '10.000');
+});
+
+test('scrubbing away from the head leaves live mode', async () => {
+  const handle = await bootApp({ ...baseRoutes });
+  handle.fire('detail', 'input', { target: { id: 'timeline-scrub', value: String(T0 + 2_500) } });
+  assert.match(handle.el('timeline-scrub-state').innerHTML, /aria-pressed="false"/);
+});
+
+test('live mode keeps following as later data extends the session window', async () => {
+  let headMs = T0 + 10_000;
+  const routes = {
+    ...baseRoutes,
+    '/api/sessions/sess-1/agents': () => ({ ...agentsOne, lastMs: headMs }),
+  };
+  const handle = await bootApp(routes);
+
+  headMs = T0 + 20_000;
+  handle.emit('ingest');
+  await handle.settle(() => handle.el('detail').innerHTML.includes(`max="${T0 + 20_000}"`));
+
+  const html = handle.el('detail').innerHTML;
+  const scrubTag = (html.match(/<[^>]*id="timeline-scrub"[^>]*>/) || [])[0];
+  assert.match(scrubTag, new RegExp(`value="${T0 + 20_000}"`));
+
+  const marks = playheads(html);
+  assert.equal(marks.length, 4);
+  for (const m of marks) assert.equal(m.toFixed(3), '100.000');
+
+  assert.match(html, /aria-pressed="true"/);
+});
+
+test('a chosen time scrubbed away from the head is not dragged along by new data', async () => {
+  let headMs = T0 + 10_000;
+  const routes = {
+    ...baseRoutes,
+    '/api/sessions/sess-1/agents': () => ({ ...agentsOne, lastMs: headMs }),
+  };
+  const handle = await bootApp(routes);
+
+  handle.fire('detail', 'input', { target: { id: 'timeline-scrub', value: String(T0 + 2_500) } });
+
+  headMs = T0 + 20_000;
+  handle.emit('ingest');
+  await handle.settle(() => handle.el('detail').innerHTML.includes(`max="${T0 + 20_000}"`));
+
+  const html = handle.el('detail').innerHTML;
+  const scrubTag = (html.match(/<[^>]*id="timeline-scrub"[^>]*>/) || [])[0];
+  assert.match(scrubTag, new RegExp(`value="${T0 + 2_500}"`));
+
+  const marks = playheads(html);
+  assert.equal(marks.length, 4);
+  for (const m of marks) assert.equal(m.toFixed(3), '12.500');
+
+  assert.match(html, /aria-pressed="false"/);
+});
+
+test('the live control returns to live mode, and following actually resumes', async () => {
+  let headMs = T0 + 10_000;
+  const routes = {
+    ...baseRoutes,
+    '/api/sessions/sess-1/agents': () => ({ ...agentsOne, lastMs: headMs }),
+  };
+  const handle = await bootApp(routes);
+
+  handle.fire('detail', 'input', { target: { id: 'timeline-scrub', value: String(T0 + 2_500) } });
+  handle.fire('detail', 'click', clickOn('[data-timeline-live]', { dataset: {} }));
+
+  let html = handle.el('detail').innerHTML;
+  let scrubTag = (html.match(/<[^>]*id="timeline-scrub"[^>]*>/) || [])[0];
+  assert.match(scrubTag, new RegExp(`value="${T0 + 10_000}"`));
+  assert.match(html, /aria-pressed="true"/);
+  let marks = playheads(html);
+  assert.equal(marks.length, 4);
+  for (const m of marks) assert.equal(m.toFixed(3), '100.000');
+
+  headMs = T0 + 20_000;
+  handle.emit('ingest');
+  await handle.settle(() => handle.el('detail').innerHTML.includes(`max="${T0 + 20_000}"`));
+
+  html = handle.el('detail').innerHTML;
+  scrubTag = (html.match(/<[^>]*id="timeline-scrub"[^>]*>/) || [])[0];
+  assert.match(scrubTag, new RegExp(`value="${T0 + 20_000}"`));
+  marks = playheads(html);
+  assert.equal(marks.length, 4);
+  for (const m of marks) assert.equal(m.toFixed(3), '100.000');
 });

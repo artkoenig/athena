@@ -18,7 +18,12 @@ import {
   activityMarks,
   contextAreaPoints,
   contextPeakOf,
+  chosenTimePct,
+  clampChosenTime,
+  scrubStateHtml,
+  laneRowsHtml,
 } from '../public/timeline.js';
+import { fmtClock } from '../public/format.js';
 
 const VIEW_IDS = ['overview', 'todos', 'traces', 'events', 'metrics', 'raw'];
 
@@ -77,6 +82,13 @@ function activityMarkTags(html) {
       kind: (tag.match(/data-activity-kind="([^"]+)"/) || [])[1],
       leftPct: Number((tag.match(/left:([\d.]+)%/) || [])[1]),
     };
+  });
+}
+
+/** Every `class="lane-playhead"` element's left percentage, as a Number. */
+function playheads(html) {
+  return [...html.matchAll(/<[^>]*class="lane-playhead"[^>]*>/g)].map((match) => {
+    return Number((match[0].match(/left:([\d.]+)%/) || [])[1]);
   });
 }
 
@@ -600,4 +612,129 @@ test('a hostile activity name is escaped in the rendered output', () => {
   });
   const html = timelineHtml([hostile], window);
   assert.ok(!html.includes('<script'));
+});
+
+/* ------- the chosen time, scrubbing and live mode ------- */
+
+test('chosenTimePct places the chosen time against the shared window', () => {
+  const window = { startMs: 0, endMs: 1000 };
+  assert.equal(chosenTimePct(500, window), 50);
+  assert.equal(chosenTimePct(0, window), 0);
+  assert.equal(chosenTimePct(1000, window), 100);
+});
+
+test('chosenTimePct clamps to the window edges and stays finite for a zero-width window', () => {
+  const window = { startMs: 0, endMs: 1000 };
+  assert.equal(chosenTimePct(-50, window), 0);
+  assert.equal(chosenTimePct(5000, window), 100);
+  assert.ok(Number.isFinite(chosenTimePct(1000, { startMs: 1000, endMs: 1000 })));
+});
+
+test('clampChosenTime reaches any point of the recorded session and no other, parking a broken input at the head', () => {
+  const window = { startMs: 0, endMs: 1000 };
+  assert.equal(clampChosenTime(400, window), 400);
+  assert.equal(clampChosenTime(-5, window), 0);
+  assert.equal(clampChosenTime(9999, window), 1000);
+  assert.equal(clampChosenTime('abc', window), 1000);
+});
+
+test('the chosen time is one shared value: every lane draws its playhead at the same left percentage', () => {
+  const window = { startMs: 0, endMs: 1000 };
+  const main = lane({ id: 'main', kind: 'main', firstMs: 0, lastMs: 1000 });
+  const subA = lane({
+    id: 'agent:agt-a',
+    kind: 'subagent',
+    agentId: 'agt-a',
+    firstMs: 100,
+    lastMs: 900,
+  });
+  const subB = lane({
+    id: 'agent:agt-b',
+    kind: 'subagent',
+    agentId: 'agt-b',
+    firstMs: 200,
+    lastMs: 800,
+  });
+  const html = timelineHtml([main, subA, subB], window, { atMs: 250 });
+  const marks = playheads(html);
+  assert.equal(marks.length, 3);
+  const expected = Number(chosenTimePct(250, window).toFixed(3));
+  assert.deepEqual(marks, [expected, expected, expected]);
+});
+
+test('the playhead lines up with the activity mark and the context curve at the chosen instant', () => {
+  const window = { startMs: 0, endMs: 1000 };
+  const l = lane({
+    id: 'main',
+    kind: 'main',
+    firstMs: 0,
+    lastMs: 1000,
+    activity: [{ atMs: 250, kind: 'tool', name: 'Read' }],
+    context: [{ atMs: 250, length: 100 }],
+  });
+  const html = timelineHtml([l], window, { atMs: 250 });
+  const row = laneRow(html, 'main');
+
+  const marks = activityMarkTags(row);
+  assert.equal(marks.length, 1);
+  assert.equal(marks[0].leftPct, 25);
+
+  const [playheadLeft] = playheads(row);
+  assert.equal(playheadLeft, 25);
+
+  const polygon = (row.match(/<polygon points="([^"]*)"/) || [])[1];
+  assert.ok(polygon, 'expected a polygon in the row');
+  const firstPointX = Number(polygon.trim().split(' ')[0].split(',')[0]);
+  assert.equal(firstPointX, 25);
+});
+
+test('nothing scrub-related is drawn before a chosen time exists', () => {
+  const window = { startMs: 0, endMs: 1000 };
+  const main = lane({ id: 'main', kind: 'main', firstMs: 0, lastMs: 1000 });
+  const html = timelineHtml([main], window);
+  assert.ok(!html.includes('lane-playhead'));
+  assert.ok(!html.includes('id="timeline-scrub"'));
+  assert.ok(!html.includes('data-timeline-live'));
+});
+
+test('the scrub control spans the window and its value is the chosen time, with a readable readout', () => {
+  const window = { startMs: 1000, endMs: 5000 };
+  const main = lane({ id: 'main', kind: 'main', firstMs: 1000, lastMs: 5000 });
+  const html = timelineHtml([main], window, { atMs: 2000 });
+
+  const scrubTag = (html.match(/<[^>]*id="timeline-scrub"[^>]*>/) || [])[0];
+  assert.ok(scrubTag, 'expected a timeline-scrub control');
+  assert.match(scrubTag, /min="1000"/);
+  assert.match(scrubTag, /max="5000"/);
+  assert.match(scrubTag, /value="2000"/);
+  assert.match(scrubTag, /step="1"/);
+
+  assert.ok(html.includes(fmtClock(2000)), 'expected the state row to show the chosen time');
+});
+
+test('scrubStateHtml renders a live control whose pressed state reflects following', () => {
+  const following = scrubStateHtml(2000, true);
+  assert.match(following, /data-timeline-live/);
+  assert.match(following, /aria-pressed="true"/);
+
+  const paused = scrubStateHtml(2000, false);
+  assert.match(paused, /data-timeline-live/);
+  assert.match(paused, /aria-pressed="false"/);
+});
+
+test('an empty lane list draws no scrub control and no playhead even with a chosen time', () => {
+  const html = timelineHtml([], { startMs: 0, endMs: 1000 }, { atMs: 500 });
+  assert.match(html, /span/i);
+  assert.ok(!html.includes('id="timeline-scrub"'));
+  assert.ok(!html.includes('lane-playhead'));
+});
+
+test('the in-place repaint cannot drift from the full render', () => {
+  const window = { startMs: 0, endMs: 1000 };
+  const main = lane({ id: 'main', kind: 'main', firstMs: 0, lastMs: 1000 });
+  const subA = lane({ id: 'agent:agt-a', kind: 'subagent', agentId: 'agt-a', firstMs: 100, lastMs: 900 });
+  const items = [main, subA];
+  const atMs = 250;
+  const html = timelineHtml(items, window, { atMs });
+  assert.ok(html.includes(laneRowsHtml(items, window, atMs)));
 });
