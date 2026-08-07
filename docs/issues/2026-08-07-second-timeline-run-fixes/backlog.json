@@ -132,6 +132,29 @@
             "questions": [],
             "summary": "Both workflow scripts gained the finding's `kind` classification and the coverage-only correction round it routes, and the reviewer's page and the README document the new field."
           }
+        },
+        {
+          "label": "review:coverage-only-round.0",
+          "at": "2026-08-07T20:14:04.631Z",
+          "return": {
+            "findings": [
+              {
+                "claim": "The shortened round dispatches the test-author against orders its own page forbids: its brief has no coverage-only mode, so the agent is told both that every case must fail and that every case must pass.",
+                "reproduction": "State: a round whose findings are all kind 'coverage-gap' dispatches uroboros:test-author with coverageBlock (workflows/loop.js:512-533, the same function in workflows/agile-loop.js), which says 'each case passes against the code as it stands and would fail if that behaviour were removed: confirm both'. The same agent holds agents/test-author.md, which at line 26 says 'you do not open production code at all', at lines 38-42 says 'confirm each fails because the behaviour is missing ... Quote the failure in your return', and at line 52 says 'You never make a test pass'. Wrong result: the test-author has two contradicting instructions on whether its new cases may be green and on whether it may read the behaviour it must guard, and the prompt itself states the consequence — 'a red test reaching the reviewer ends the increment blocked'. Criterion 6 applied exactly this remedy to the reviewer's page; the test-author's page is the only other brief the shortened round runs on and was left unchanged.",
+                "criterion": "none",
+                "fix": "needs-plan"
+              },
+              {
+                "claim": "agents/reviewer.md still enumerates only two ways a correction round is worked, which this change made stale.",
+                "reproduction": "agents/reviewer.md:140 reads 'whoever works that round — a researcher, or the builder alone — has these fields and nothing else', while line 124 of the same page, added by this diff, says a round whose findings are all coverage-gap is worked by the test-author alone. Reading the page top to bottom, the reviewer meets a list of round-working paths that omits the third path this change introduced. Right result: extend that enumeration to name the test-author-alone path.",
+                "criterion": "The reviewer's own brief states what makes a finding a coverage gap rather than a defect, so the classification is decided the same way twice.",
+                "fix": "direct"
+              }
+            ],
+            "reason": "The coverage-only round works in the workflow, but the test-author it now runs alone still carries a brief that forbids opening production code and demands every case fail, so the shortened round hands that agent contradictory orders; the reviewer's page also still lists only a researcher or the builder as the ones who work a correction round.",
+            "questions": [],
+            "summary": "bash test-repo.sh: 67 cases, exit 0; ./test.sh: exit 0 (repo 67 cases, backlog recorder 16, tools/argus 159, tools/argus-ui 234, tools/log-parser 23, 0 failures). The routing criteria are met and pinned: 'kind' is a required enum ('coverage-gap'/'defect') per finding in both workflows' VERDICT schema; w17 pins that an all-coverage-gap round runs exactly load-state, decompose, research.0, tests.0, implement.0, review.0, tests.1, review.1, close, publish and logs 'correcting coverage only'; w18 pins the full four-agent chain when one finding is a defect and pins that the log line is absent; w19 pins that a coverage gap marked fix 'direct' still goes to the test-author; the new backlog.test.mjs case pins that both kinds survive into the step recorded under 'review:i1.1'; test-repo.sh pins the reviewer page's coverage-gap rule and the literal enum values. Both findings are defects rather than coverage gaps. Two observations that need no round: the README paragraph at lines 79-81 was left unwrapped by the insertion above it, and the TESTS schema's 'got' description ('The failure it produced') still assumes a failing case, which the coverage prompt overrides in prose only."
+          }
         }
       ]
     },
