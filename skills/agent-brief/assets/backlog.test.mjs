@@ -192,6 +192,30 @@ test('record against a path with no file exits 1 and creates nothing', () => {
   assert.equal(fs.existsSync(backlogPath), false);
 });
 
+test("record keeps each finding's classification in the verdict it stores under the round's label", () => {
+  const dir = tmpDir();
+  const backlogPath = path.join(dir, 'backlog.json');
+  run(['init', backlogPath, writeJson(dir, 'init.json', backlogTemplate([incrementPayload('i1', 'First')]))]);
+
+  const payload = {
+    findings: [
+      { claim: 'no guard', reproduction: 'delete the container, nothing goes red', criterion: 'c1', kind: 'coverage-gap', fix: 'needs-plan' },
+      { claim: 'wrong number', reproduction: 'x at line 3', criterion: 'c2', kind: 'defect', fix: 'direct' },
+    ],
+    reason: 'another round',
+    questions: [],
+    summary: 'verdict summary',
+  };
+  run(['record', backlogPath, 'i1', 'review:i1.1', writeJson(dir, 'payload.json', payload)]);
+
+  const backlog = JSON.parse(fs.readFileSync(backlogPath, 'utf8'));
+  const i1 = backlog.increments.find((i) => i.id === 'i1');
+  assert.equal(i1.steps.length, 1, 'the round is recorded as exactly one step');
+  assert.equal(i1.steps[0].label, 'review:i1.1', "the round is in the step's label");
+  assert.deepEqual(i1.steps[0].return.findings.map((f) => f.kind), ['coverage-gap', 'defect'],
+    "the verdict's own findings keep the classification the reviewer set for each one");
+});
+
 test("close sets status and note and empties only the closed increment's steps", () => {
   const dir = tmpDir();
   const backlogPath = path.join(dir, 'backlog.json');

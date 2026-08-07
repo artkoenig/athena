@@ -35,6 +35,76 @@
             ],
             "questions": []
           }
+        },
+        {
+          "label": "tests:coverage-only-round.0",
+          "at": "2026-08-07T20:03:27.857Z",
+          "return": {
+            "cases": [
+              {
+                "case": "A — a round whose every finding is a coverage gap runs the test-author and the reviewer only, and says so.",
+                "file": "test-repo.sh",
+                "testName": "run_driver w17 (both loop.js and agile-loop.js): \"a correction round whose findings are all coverage gaps runs the test-author and the reviewer alone, and logs that it is correcting coverage only\"",
+                "expected": "labels are ['load-state','decompose','research:i1.0','tests:i1.0','implement:i1.0','review:i1.0','tests:i1.1','review:i1.1',closeLabel,'publish'] — no research:i1.1, no implement:i1.1; tests:i1.1 carries MARKER-COVERAGE-CLAIM, MARKER-COVERAGE-REPRODUCTION and CHECK-MARKER but not TESTPLAN_MARKER; review:i1.1 carries CHECK-MARKER but not MARKER-COVERAGE-CLAIM; some log line includes 'correcting coverage only'; result.blockedOnHuman is empty.",
+                "got": "FAIL for both workflows. loop.js: \"a correction round whose findings are all coverage gaps did not skip exactly the researcher and the implementer — expected [\\\"load-state\\\",\\\"decompose\\\",\\\"research:i1.0\\\",\\\"tests:i1.0\\\",\\\"implement:i1.0\\\",\\\"review:i1.0\\\",\\\"tests:i1.1\\\",\\\"review:i1.1\\\",\\\"close:i1\\\",\\\"publish\\\"] got [\\\"load-state\\\",\\\"decompose\\\",\\\"research:i1.0\\\",\\\"tests:i1.0\\\",\\\"implement:i1.0\\\",\\\"review:i1.0\\\",\\\"research:i1.1\\\",\\\"tests:i1.1\\\",\\\"implement:i1.1\\\",\\\"review:i1.1\\\",\\\"close:i1\\\",\\\"publish\\\"]\" plus \"the coverage-only round's test-author prompt does not carry MARKER-COVERAGE-CLAIM\", \"...MARKER-COVERAGE-REPRODUCTION\", \"...does not carry the checks the round before closed\", \"...carries a stale test plan no researcher wrote this round\", and \"the workflow never logged that it is correcting coverage only\". agile-loop.js failed the same five assertions with replan:i1 as the close label. The failures are the missing coverage-only routing itself, not an import error or typo."
+              },
+              {
+                "case": "B — a round with one coverage gap and one defect runs the full four-agent chain.",
+                "file": "test-repo.sh",
+                "testName": "run_driver w18 (both loop.js and agile-loop.js): \"a correction round with one defect among its coverage gaps runs the full chain\"",
+                "expected": "labels are the full chain ['load-state','decompose','research:i1.0','tests:i1.0','implement:i1.0','review:i1.0','research:i1.1','tests:i1.1','implement:i1.1','review:i1.1',closeLabel,'publish']; no log line contains 'correcting coverage only'; research:i1.1 carries both MARKER-FINDING-CLAIM and MARKER-COVERAGE-CLAIM.",
+                "got": "PASS on both workflows already, before any implementation change: `ok — loop.js: a correction round with one defect among its coverage gaps runs the full chain` and the same for agile-loop.js. This is not a mistake in the case — today's code has no coverage-only shortcut at all, so every correction round already runs the unabridged chain and the researcher already receives every finding's claim regardless of a 'kind' field nobody reads yet. Criterion 3 only asks that this stay true once the shortcut exists, so the case is a real regression guard, not a false pass; but it contradicts the plan's opening claim that every case below (bar D) is red until the implementation lands. Recorded verbatim in openQuestions."
+              },
+              {
+                "case": "C — a coverage gap the reviewer also marked a direct fix is not handed to the implementer alone.",
+                "file": "test-repo.sh",
+                "testName": "run_driver w19 (both loop.js and agile-loop.js): \"a coverage gap marked a direct fix still goes to the test-author, not to the implementer alone\"",
+                "expected": "same label array as case A (tests:i1.1 and review:i1.1, no implement:i1.1), and some log line includes 'correcting coverage only'.",
+                "got": "FAIL for both workflows. loop.js: \"a coverage gap marked a direct fix was routed to the implementer alone instead of the test-author — expected [...,\\\"tests:i1.1\\\",\\\"review:i1.1\\\",\\\"close:i1\\\",\\\"publish\\\"] got [...,\\\"implement:i1.1\\\",\\\"review:i1.1\\\",\\\"close:i1\\\",\\\"publish\\\"]\" plus \"the workflow never logged that it is correcting coverage only\". agile-loop.js failed the same two assertions with replan:i1. This confirms today's existing direct-fix fast path (built for w16) still swallows a coverage-gap finding that happens to carry fix:'direct', exactly the conflict the case is written to catch."
+              },
+              {
+                "case": "D — a recorded verdict keeps each finding's classification, under the label that carries the round.",
+                "file": "skills/agent-brief/assets/backlog.test.mjs",
+                "testName": "record keeps each finding's classification in the verdict it stores under the round's label",
+                "expected": "reading backlog.json back after `record ... i1 review:i1.1 <payload>`, increment i1 has exactly one step, its label is 'review:i1.1', and step.return.findings.map(f => f.kind) deep-equals ['coverage-gap', 'defect'].",
+                "got": "PASS from the first run, as the plan says it must be: `ok 8 - record keeps each finding's classification in the verdict it stores under the round's label`. `record` already stores the step return object verbatim with no field-level filtering, so a 'kind' key on each finding survives into the file untouched — this case pins that fact rather than hunting a failure that does not exist."
+              },
+              {
+                "case": "Fixture maintenance — verdictReturnWithDirectFinding gains kind: 'defect' (w16 keeps proving the direct-fix path under the new field).",
+                "file": "test-repo.sh",
+                "testName": "run_driver w16 (both loop.js and agile-loop.js): \"a correction round whose findings are all direct fixes skips the researcher and the test-author, and is still reviewed\"",
+                "expected": "w16 still passes with the fixture carrying kind: 'defect' alongside fix: 'direct'.",
+                "got": "PASS on both workflows, unchanged: `ok — loop.js: a correction round whose findings are all direct fixes skips the researcher and the test-author, and is still reviewed` and the same for agile-loop.js. No regression from adding the field."
+              },
+              {
+                "case": "Fixture maintenance — add to w10 an assertion that no line of logs contains 'correcting coverage only' (verdictReturnWithFinding deliberately carries no kind key at all, the missing-field guard).",
+                "file": "test-repo.sh",
+                "testName": "run_driver w10 (both loop.js and agile-loop.js): \"a correction round carries the reviewer's findings to the researcher and the reason to the human\"",
+                "expected": "the added assertion holds: a finding with no 'kind' key does not trigger the coverage-only log line.",
+                "got": "PASS on both workflows: `ok — loop.js: a correction round carries the reviewer's findings to the researcher and the reason to the human` and the same for agile-loop.js, with the new assertion included and passing — nothing today produces that log line for any fixture, so the missing-field guard holds trivially and will keep holding once the feature exists, since this fixture's finding carries no kind at all."
+              },
+              {
+                "case": "E — the reviewer's page states what makes a finding a coverage gap.",
+                "file": "test-repo.sh",
+                "testName": "grep case added directly after the existing reviewer_page block: \"the reviewer's page states what makes a finding a coverage gap rather than a defect\"",
+                "expected": "agents/reviewer.md contains all three literals 'coverage-gap', 'defect' and 'goes red'; the no branch names which of the three is missing.",
+                "got": "FAIL — `the reviewer's page is missing: 'coverage-gap' 'goes red'`. 'defect' already appears in the page in an unrelated sense; the classification rule itself (with the 'coverage-gap' term and the 'goes red' phrasing this plan's own findings use to describe a coverage gap) is not there yet."
+              },
+              {
+                "case": "F — each workflow's verdict schema offers the classification its routing reads.",
+                "file": "test-repo.sh",
+                "testName": "grep case added after the existing backlog.json/load-state loop, once per workflow: \"$name's verdict schema offers 'coverage-gap' and 'defect' as literal values\"",
+                "expected": "each of workflows/loop.js and workflows/agile-loop.js contains both 'coverage-gap' and 'defect' as quoted literals; failing names the file.",
+                "got": "FAIL for both files: `loop.js's verdict schema is missing 'coverage-gap' or 'defect' as a quoted literal` and the same for agile-loop.js — neither literal exists in either workflow script yet."
+              }
+            ],
+            "openQuestions": [
+              "The plan's preamble says every new case below is expected red except case D, which it calls out as green from the start — but case B (w18, both workflows) is already green on the current checkout, before any implementation change: today's chain has no coverage-only shortcut at all, so a round with a mixed coverage-gap/defect finding already runs the unabridged four-agent chain and the researcher already receives every finding's claim. The case is written correctly against criterion 3 and stays a real regression guard once the shortcut ships, but the plan's blanket 'red until implemented' claim does not hold for it the way it does for A, C, E and F. Left as written since the case still proves what criterion 3 asks; flagging the mismatch rather than guessing whether the plan meant B to be a second green-from-the-start case it forgot to name.",
+              "Case E asks for the literal 'goes red' inside agents/reviewer.md without saying in what sentence or context it belongs — the plan supplies the three literals to grep for but not the rule's wording itself (deliberately, per 'Left untested' notes elsewhere in the plan about not pinning prose). The grep is written exactly as specified; whether an implementer's eventual sentence satisfies it in spirit as well as in the three literals is not something this case can settle beyond the literals themselves."
+            ],
+            "questions": [],
+            "summary": "Wrote driver modes w17 (case A), w18 (case B), w19 (case C) in test-repo.sh with three new verdict fixtures and DISJOINT_MARKERS entries, added a case D test to backlog.test.mjs, applied the two named fixture-maintenance edits to w16 and w10, and added the two grep cases E and F; ran both suites and confirmed every case is red except B and D, which are green for reasons recorded in openQuestions and in case D's own field."
+          }
         }
       ]
     },

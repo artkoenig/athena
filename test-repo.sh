@@ -169,6 +169,22 @@ for f in "$root/workflows/loop.js" "$root/workflows/agile-loop.js"; do
   fi
 done
 
+# Criterion 1: the coverage-gap/defect classification is a value the
+# reviewer's structured return sets, not a phrase the workflow greps out of
+# prose, so each workflow's verdict schema has to offer 'coverage-gap' and
+# 'defect' as literal values a reviewer can choose. Without this a script
+# could route on f.kind while no schema ever let a reviewer set it, and every
+# driver mode above would still pass, because the driver stubs a fixture
+# straight past whatever schema the workflow declares and never validate it.
+for f in "$root/workflows/loop.js" "$root/workflows/agile-loop.js"; do
+  name="$(basename "$f")"
+  if grep -qF "'coverage-gap'" "$f" && grep -qF "'defect'" "$f"; then
+    ok "$name's verdict schema offers 'coverage-gap' and 'defect' as literal values"
+  else
+    no "$name's verdict schema is missing 'coverage-gap' or 'defect' as a quoted literal"
+  fi
+done
+
 # The reviewer's independence is the one boundary a channel change could
 # quietly erase: recording through the same file it must not read is only
 # safe if its own page says so twice — once as a rule, once as a diff
@@ -183,6 +199,19 @@ if grep -i 'backlog.json' "$reviewer_page" | grep -qi 'diff'; then
   ok "the reviewer's page excludes backlog.json from the diff it judges"
 else
   no "the reviewer's page does not exclude backlog.json from its diff judgment"
+fi
+
+# Criterion 6: what makes a finding a coverage gap rather than a defect has
+# to be decided the same way twice, so the reviewer's own page states the
+# rule instead of leaving it to be inferred from the field's name alone.
+missing_classification_terms=""
+for term in 'coverage-gap' 'defect' 'goes red'; do
+  grep -qF -- "$term" "$reviewer_page" || missing_classification_terms="${missing_classification_terms} '$term'"
+done
+if [ -z "$missing_classification_terms" ]; then
+  ok "the reviewer's page states what makes a finding a coverage gap rather than a defect"
+else
+  no "the reviewer's page is missing:$missing_classification_terms"
 fi
 
 # Decision 5: the planner now opens and closes the plain loop too, not only
@@ -320,6 +349,8 @@ const DISJOINT_MARKERS = [
   'MARKER-CUT-QUESTION',
   'MARKER-DIRECT-CLAIM',
   'MARKER-DIRECT-REPRODUCTION',
+  'MARKER-COVERAGE-CLAIM',
+  'MARKER-COVERAGE-REPRODUCTION',
 ];
 
 const planReturn = {
@@ -383,6 +414,67 @@ const verdictReturnWithDirectFinding = {
     claim: 'MARKER-DIRECT-CLAIM',
     reproduction: 'MARKER-DIRECT-REPRODUCTION',
     criterion: 'none',
+    kind: 'defect',
+    fix: 'direct',
+  }],
+  reason: 'MARKER-VERDICT-REASON',
+  questions: [],
+  summary: 'verdict summary',
+};
+
+// w17's fixture: a review whose every finding is a coverage gap — the
+// behaviour is right, but nothing goes red when it breaks. Such a round is
+// worked by the test-author and the reviewer alone, off the finding itself,
+// with no researcher and no implementer paid to conclude the code already
+// works.
+const verdictReturnWithCoverageFinding = {
+  findings: [{
+    claim: 'MARKER-COVERAGE-CLAIM',
+    reproduction: 'MARKER-COVERAGE-REPRODUCTION',
+    criterion: 'none',
+    kind: 'coverage-gap',
+    fix: 'needs-plan',
+  }],
+  reason: 'MARKER-VERDICT-REASON',
+  questions: [],
+  summary: 'verdict summary',
+};
+
+// w18's fixture: a review whose findings mix a coverage gap with a defect —
+// at least one defect among them runs the full four-agent chain, and the
+// mixed round must drop neither finding from the researcher's prompt.
+const verdictReturnWithMixedFindings = {
+  findings: [
+    {
+      claim: 'MARKER-COVERAGE-CLAIM',
+      reproduction: 'MARKER-COVERAGE-REPRODUCTION',
+      criterion: 'none',
+      kind: 'coverage-gap',
+      fix: 'needs-plan',
+    },
+    {
+      claim: 'MARKER-FINDING-CLAIM',
+      reproduction: 'MARKER-FINDING-REPRODUCTION',
+      criterion: 'MARKER-FINDING-CRITERION',
+      kind: 'defect',
+      fix: 'needs-plan',
+    },
+  ],
+  reason: 'MARKER-VERDICT-REASON',
+  questions: [],
+  summary: 'verdict summary',
+};
+
+// w19's fixture: a coverage gap the reviewer also marked a direct fix — the
+// coverage-only shortcut still has to apply; the guard that sends a
+// direct-fix finding straight to the implementer alone must not swallow a
+// coverage gap that happens to carry fix: 'direct' too.
+const verdictReturnWithDirectCoverageFinding = {
+  findings: [{
+    claim: 'MARKER-COVERAGE-CLAIM',
+    reproduction: 'MARKER-COVERAGE-REPRODUCTION',
+    criterion: 'none',
+    kind: 'coverage-gap',
     fix: 'direct',
   }],
   reason: 'MARKER-VERDICT-REASON',
@@ -564,6 +656,12 @@ function contextFor(m) {
       return { stateReturn: { exists: true, backlogJson: JSON.stringify(laterIncrementBacklog(), null, 2) + '\n', summary: '' }, decomposeReturn: decomposeReturnTwo, researchReturn: planReturn };
     case 'w16':
       return { stateReturn: { exists: false, backlogJson: '', summary: '' }, decomposeReturn: decomposeReturnOne, researchReturn: planReturn, verdictFor: (label) => (label === 'review:i1.0' ? verdictReturnWithDirectFinding : verdictReturnClean) };
+    case 'w17':
+      return { stateReturn: { exists: false, backlogJson: '', summary: '' }, decomposeReturn: decomposeReturnOne, researchReturn: planReturn, verdictFor: (label) => (label === 'review:i1.0' ? verdictReturnWithCoverageFinding : verdictReturnClean) };
+    case 'w18':
+      return { stateReturn: { exists: false, backlogJson: '', summary: '' }, decomposeReturn: decomposeReturnOne, researchReturn: planReturn, verdictFor: (label) => (label === 'review:i1.0' ? verdictReturnWithMixedFindings : verdictReturnClean) };
+    case 'w19':
+      return { stateReturn: { exists: false, backlogJson: '', summary: '' }, decomposeReturn: decomposeReturnOne, researchReturn: planReturn, verdictFor: (label) => (label === 'review:i1.0' ? verdictReturnWithDirectCoverageFinding : verdictReturnClean) };
     default:
       throw new Error('unknown mode ' + m);
   }
@@ -714,6 +812,11 @@ async function main() {
       "the first round's researcher prompt carries findings that do not exist yet");
     assertTrue(logs.some((l) => l.includes('MARKER-VERDICT-REASON')),
       "the reviewer's reason sentence never reached the human in the chat");
+    // Fixture maintenance for this increment: verdictReturnWithFinding
+    // carries no kind key at all — the missing-field guard — so a round
+    // built on it is not coverage-only and must not claim to be.
+    assertTrue(!logs.some((l) => l.includes('correcting coverage only')),
+      'a review whose finding carries no kind at all logged that it is correcting coverage only');
   } else if (mode === 'w11') {
     // Round 3, finding 1: loop.js dispatched the Close step and dropped its
     // return, so a question the closing planner asked reached nobody — no
@@ -820,6 +923,61 @@ async function main() {
       'the review after a direct-fix round was handed no checks');
     assertTrue(!!reviewCall && !reviewCall.prompt.includes('MARKER-DIRECT-CLAIM'),
       "the review after a direct-fix round was handed the finding it wrote, and is no longer independent");
+  } else if (mode === 'w17') {
+    // Criteria 2 and 4: a correction round whose every finding is a coverage
+    // gap runs the test-author and the reviewer alone — no researcher, no
+    // implementer — and the workflow logs that it took the shortened path.
+    const closeLabel = isAgile ? 'replan:i1' : 'close:i1';
+    assertEqualArrays(labels,
+      ['load-state', 'decompose', 'research:i1.0', 'tests:i1.0', 'implement:i1.0', 'review:i1.0',
+       'tests:i1.1', 'review:i1.1', closeLabel, 'publish'],
+      'a correction round whose findings are all coverage gaps did not skip exactly the researcher and the implementer');
+    const testsCall = calls.find((c) => c.label === 'tests:i1.1');
+    for (const marker of ['MARKER-COVERAGE-CLAIM', 'MARKER-COVERAGE-REPRODUCTION']) {
+      assertTrue(!!testsCall && testsCall.prompt.includes(marker),
+        "the coverage-only round's test-author prompt does not carry " + marker);
+    }
+    assertTrue(!!testsCall && testsCall.prompt.includes('CHECK-MARKER'),
+      "the coverage-only round's test-author prompt does not carry the checks the round before closed");
+    assertTrue(!!testsCall && !testsCall.prompt.includes(TESTPLAN_MARKER),
+      "the coverage-only round's test-author prompt carries a stale test plan no researcher wrote this round");
+    const reviewCall = calls.find((c) => c.label === 'review:i1.1');
+    assertTrue(!!reviewCall && reviewCall.prompt.includes('CHECK-MARKER'),
+      'the review after a coverage-only round was handed no checks');
+    assertTrue(!!reviewCall && !reviewCall.prompt.includes('MARKER-COVERAGE-CLAIM'),
+      "the review after a coverage-only round was handed the finding it wrote, and is no longer independent");
+    assertTrue(logs.some((l) => l.includes('correcting coverage only')),
+      'the workflow never logged that it is correcting coverage only');
+    assertTrue(!!result && Array.isArray(result.blockedOnHuman) && result.blockedOnHuman.length === 0,
+      'a coverage-only round did not run to a clean close');
+  } else if (mode === 'w18') {
+    // Criterion 3: at least one defect among a round's findings runs the
+    // full four-agent chain unchanged, dropping neither finding from the
+    // researcher's prompt.
+    const closeLabel = isAgile ? 'replan:i1' : 'close:i1';
+    assertEqualArrays(labels,
+      ['load-state', 'decompose', 'research:i1.0', 'tests:i1.0', 'implement:i1.0', 'review:i1.0',
+       'research:i1.1', 'tests:i1.1', 'implement:i1.1', 'review:i1.1', closeLabel, 'publish'],
+      'a correction round with one defect among its coverage gaps did not run the full chain');
+    assertTrue(!logs.some((l) => l.includes('correcting coverage only')),
+      'a round with a defect among its findings logged that it is correcting coverage only');
+    const researchCall = calls.find((c) => c.label === 'research:i1.1');
+    for (const marker of ['MARKER-FINDING-CLAIM', 'MARKER-COVERAGE-CLAIM']) {
+      assertTrue(!!researchCall && researchCall.prompt.includes(marker),
+        "the mixed round's researcher prompt does not carry " + marker);
+    }
+  } else if (mode === 'w19') {
+    // The repeat/conflict edge of criterion 2 against the existing
+    // direct-fix fast path: a coverage gap the reviewer also marked a
+    // direct fix still goes to the test-author, not to the implementer
+    // alone — the coverage-gap classification wins the routing over fix.
+    const closeLabel = isAgile ? 'replan:i1' : 'close:i1';
+    assertEqualArrays(labels,
+      ['load-state', 'decompose', 'research:i1.0', 'tests:i1.0', 'implement:i1.0', 'review:i1.0',
+       'tests:i1.1', 'review:i1.1', closeLabel, 'publish'],
+      'a coverage gap marked a direct fix was routed to the implementer alone instead of the test-author');
+    assertTrue(logs.some((l) => l.includes('correcting coverage only')),
+      'the workflow never logged that it is correcting coverage only');
   } else {
     throw new Error('unknown mode ' + mode);
   }
@@ -866,6 +1024,9 @@ for wf in "$root/workflows/loop.js" "$root/workflows/agile-loop.js"; do
   run_driver "$wf" w13 "$wf_name: a Decompose worked again after the human's answer has its new cut worked, not the one the state file still held"
   run_driver "$wf" w14 "$wf_name: a Decompose worked again after a session died before recording it has its new cut worked"
   run_driver "$wf" w16 "$wf_name: a correction round whose findings are all direct fixes skips the researcher and the test-author, and is still reviewed"
+  run_driver "$wf" w17 "$wf_name: a correction round whose findings are all coverage gaps runs the test-author and the reviewer alone, and logs that it is correcting coverage only"
+  run_driver "$wf" w18 "$wf_name: a correction round with one defect among its coverage gaps runs the full chain"
+  run_driver "$wf" w19 "$wf_name: a coverage gap marked a direct fix still goes to the test-author, not to the implementer alone"
 done
 
 # Round 3, finding 2: only the incremental loop re-cuts, so an increment
