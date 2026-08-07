@@ -62,158 +62,9 @@
         "Every other page that tells an agent how to record a step return says the same thing as the brief; the report names each page checked and each corrected.",
         "The change has test coverage that goes red when the stdin form breaks, when the file-path form regresses, or when a page stops carrying the stdin instruction - a guard that asserts what the pages now say rather than only that they no longer say the old thing; the test run is reported with its case count."
       ],
-      "status": "todo",
-      "note": "Sharpened the coverage criterion: run-report's reviewer observed that its own corrected README line was guarded only by a banned-phrase grep, which would stay green if the line regressed to the old description, so this increment's doc guard must assert the new instruction is present, not merely that the old one is gone.",
-      "steps": [
-        {
-          "label": "research:agent-affordances.0",
-          "at": "2026-08-07T21:55:50.794Z",
-          "return": {
-            "needsTests": true,
-            "plan": "GOAL: `record` in the backlog recorder takes the step return on stdin, the file-path form survives untouched, and every page that tells an agent how to record says the stdin form.\n\n=== 1. skills/agent-brief/assets/backlog.mjs — the stdin payload ===\n\nAdd one helper and call it from `record` only:\n\n```js\n// The step return arrives either as a path to a JSON file or, with a payload\n// argument of `-`, on stdin. Stdin is the form the agents are told to use:\n// building the file first put a heredoc between an agent and its own return,\n// and a summary carrying quotes or HTML attributes did not survive it.\nfunction readPayload(source, what) {\n  if (source !== '-') return readJson(source, what)\n  if (process.stdin.isTTY) fail(`${what} was asked for on stdin, but stdin is a terminal`, 2)\n  let text\n  try {\n    text = fs.readFileSync(0, 'utf8')\n  } catch {\n    fail(`cannot read ${what} from stdin`, 2)\n  }\n  if (!text.trim()) fail(`${what} on stdin is empty`, 2)\n  try {\n    return JSON.parse(text)\n  } catch (err) {\n    fail(`${what} on stdin is not valid JSON: ${err.message}`, 2)\n  }\n}\n```\n\nIn `record` (line 133), replace `readJson(payloadFile, 'the step return')` with `readPayload(payloadFile, 'the step return')`. Nothing else in `record` changes: the payload is still read before the backlog is loaded, the entry shape stays `{ label, at, return }`, the same-label replace stays, the atomic tmp+rename write stays, the single confirmation line stays.\n\nUpdate `USAGE` (lines 23-29): the record line becomes\n`'  backlog.mjs record <backlogPath> <incrementId|-> <label> <payloadFile|->',`\nand one line is appended after the four command lines:\n`''` then `'record reads the step return from stdin when its payload argument is `-`.'`\n\nDECISIONS, and what was rejected:\n- The stdin form is an explicit `-` in the payload position, not an omitted fourth argument. `need(4)` then still catches an agent that forgets the payload, where a 3-argument form would silently block on `fs.readFileSync(0)` against a terminal — a hung agent is worse than an exit 2. The `process.stdin.isTTY` guard closes the same hole for an explicit `-` typed at a prompt.\n- `-` in the payload position does not collide with `-` in the increment position: they are different positional arguments, and both dashes together (`record <path> - <label> -`, a run-level step piped in) is a case the tests pin.\n- `init` keeps the file-path form and is not touched. The criteria name `record`; the planner's cut is not a step return, and giving `init` a second input form is scope this increment was not given. That is why `readPayload` wraps `readJson` instead of `readJson` growing the dash branch: the file-path behaviour of `init` cannot change by accident.\n- Exit code for an unusable stdin payload is 2, matching the existing rule that a payload that is not JSON is \"you called it wrong\". Empty stdin gets its own message rather than a JSON parse error, because \"is not valid JSON: Unexpected end of JSON input\" reads as a broken return rather than as an empty pipe.\n- `fs.readFileSync(0, 'utf8')` reads fd 0 to EOF and is zero-dependency and synchronous, matching the rest of the file; an async stdin read would force `record` to become async for nothing.\n\n=== 2. skills/agent-brief/SKILL.md — the brief instructs the stdin form ===\n\nIn `## Your step return`, replace the paragraph and fenced block at lines 87-99 (from `**Record it before you finish.**` through `so you never edit that file by hand.`) with exactly this, keeping every other paragraph of the section as it stands:\n\n```\n**Record it before you finish.** Pipe your return into the recorder on stdin,\nwith a trailing `-` in place of a file:\n\n```\nnode \"<base>/assets/backlog.mjs\" record <issueDir>/backlog.json <incrementId> <label> - <<'RETURN'\n{\"summary\": \"your return, as JSON\"}\nRETURN\n```\n\nQuote the heredoc delimiter as `<<'RETURN'` so the shell passes your JSON\nthrough untouched, quotes and markup and all. Use the increment id and the\nlabel your prompt gives you. A path to a JSON file still works in place of the\n`-`. `<base>` is the base directory of the `agent-brief` skill, which your\ncontext names on its `Base directory for this skill:` line; where no such line\nis there, find the helper with `find \"$HOME/.claude/plugins\" -path\n'*agent-brief/assets/backlog.mjs' | head -1`. That helper is the only writer of\n`backlog.json`, so you never edit that file by hand.\n```\n\nThe literal `record <issueDir>/backlog.json <incrementId> <label> -` and the word `stdin` are both load-bearing: test-repo.sh greps for them.\n\n=== 3. workflows/loop.js and workflows/agile-loop.js — the per-dispatch line ===\n\nBoth files carry an identical `recordStep()` (loop.js lines 392-398, agile-loop.js lines 399-405). Replace the body in both with:\n\n```js\nfunction recordStep(incrementId, label) {\n  return (\n    `Record this step: pipe your whole return as JSON into the \\`record\\` subcommand of the ` +\n    `backlog helper your shared brief names, on stdin, as ` +\n    `\\`record ${dir}/backlog.json ${incrementId} ${label} -\\`, with no file in between.\\n`\n  )\n}\n```\n\nAnd correct the comment above it, which still says the agent writes a file: keep the first sentence, and replace the second with `The agent pipes its return to the recorder; this script never touches the state file, because the workflow runtime gives a script \\`args\\`, \\`agent\\`, \\`log\\` and \\`phase\\` and no file access at all.`\n\nThe existing driver mode w8 asserts every step's prompt matches `/backlog\\.json/` and `/\\brecord\\b/i` and `/\\bpush\\b/i`; the new wording keeps all three. `noDispatch` (\"Record your step return, commit it with your work, then push the commit\") names no form and is not touched.\n\n=== Pages checked, and the verdict on each ===\n\nCorrected (the three above), because each tells an agent how to record a step return:\n- skills/agent-brief/SKILL.md\n- workflows/loop.js `recordStep()`\n- workflows/agile-loop.js `recordStep()`\n\nChecked and deliberately left alone, with the reason:\n- agents/researcher.md (l. 53), agents/test-author.md (l. 97), agents/reviewer.md (l. 152), agents/implementer.md (l. 69) — each says \"Record that return into `backlog.json` under the label your prompt names, the way the shared brief describes.\" They name no form, so they already say the same thing as the brief.\n- agents/reviewer.md l. 93-98 (\"You never read `backlog.json`\") — states the reviewer records and never reads; no command, no form.\n- agents/planner.md l. 93-111 — documents `read`, `init` and `close` for writing the cut. The cut is not a step return, and `init` is unchanged, so nothing here drifts.\n- workflows/loop.js l. 633-637 and workflows/agile-loop.js l. 678-682, 955-959 — the planner's `init`/`close` prompts; they name no payload file at all.\n- workflows/loop.js l. 552-555 and workflows/agile-loop.js l. 586-589 — the load-state prompt, which runs `read`.\n- README.md l. 98-106 — describes recording as a concept, names no command.\n- rulebook.md l. 52-54 — session-facing, names no command.\n- .claude/rules/agents.md l. 38-47 — points at the shared brief as the home of the recording rule, deliberately restating nothing.\n- skills/retro/SKILL.md l. 33, skills/argus/SKILL.md, skills/grill/SKILL.md — no recording instruction.\n- docs/issues/** — the record of past runs; quotations, not instructions.\n\nThe repository holds no other file naming `backlog.mjs` outside docs/issues and test-repo.sh.\n\n=== Where the tree differs from the issue's account ===\n\nNothing material: `record` is exactly the four-positional-argument CLI the issue describes, and the brief and both workflows carry exactly the file-path instruction it blames. The one thing the issue does not mention is that the instruction lives in three places, not one.",
-            "moduleMap": "/home/user/uroboros/skills/agent-brief/assets/backlog.mjs — the recorder CLI, only writer of backlog.json; zero-dependency ESM, entry points `USAGE` (l. 23), `fail` (l. 35), `readJson` (l. 40), `record` (l. 132), the argv switch at l. 204 where `case 'record'` calls `need(4)`.\n/home/user/uroboros/skills/agent-brief/assets/backlog.test.mjs — node:test suite for that CLI; helpers `tmpDir`, `writeJson`, `run`, `runFails`, `backlogTemplate`, `incrementPayload`; 16 cases today.\n/home/user/uroboros/skills/agent-brief/SKILL.md — the shared brief every agent preloads; the `## Your step return` section (l. 74-109) carries the record instruction at l. 87-99.\n/home/user/uroboros/workflows/loop.js — the plain loop workflow script; `recordStep(incrementId, label)` at l. 392-398 builds the per-dispatch record instruction.\n/home/user/uroboros/workflows/agile-loop.js — the incremental workflow script; the identical `recordStep()` at l. 399-405.\n/home/user/uroboros/test-repo.sh — the repository's own guard suite, bash, `ok`/`no` counters, sections opened by `echo \"=== ...\"`; the brief/backlog greps live at l. 269-335, the embedded workflow driver is the `<<'JS'` heredoc at l. 350-1036 (modes w1-w19, `contextFor` at l. 650-709, mode dispatch from l. 761, `run_driver` loop at l. 1052-1071), and the file closes with the `PASS: $passed cases` line.\n/home/user/uroboros/test.sh — runs every suite; already lists both suites this increment touches. Not edited.",
-            "environment": "Node v22.22.2 is installed and is all either suite needs — no npm install, no build step, no dependencies at any level for these two suites. There is no linter and no formatter anywhere in this repository (no root package.json, no eslint or prettier config). Both commands run from the repository root, /home/user/uroboros:\n\n  node --test skills/agent-brief/assets/backlog.test.mjs\n  bash test-repo.sh\n\n`bash test-repo.sh` shells out to `git -C <root> ls-files` and to `node`, and creates and removes its own mktemp directories; it needs nothing else. Both commands are also reachable through ./test.sh, which is not part of this increment's check list.",
-            "testPlan": "Tests are needed. Two suites, both already listed in test.sh, both already exercised by every earlier increment of this run.\n\n================ A. skills/agent-brief/assets/backlog.test.mjs ================\n\nFramework: node:test with `node:assert/strict`, ESM, no runner config. Conventions of this file, follow them exactly:\n- One `test('<a full sentence describing the behaviour, lower case>', () => { ... })` per case; names are long and behavioural, e.g. `record with an increment id of \"-\" lands the step in run.steps and touches no increment`.\n- Every case builds its own throwaway directory with `tmpDir()`, its own `backlogPath = path.join(dir, 'backlog.json')`, and seeds state by calling the CLI itself: `run(['init', backlogPath, writeJson(dir, 'init.json', backlogTemplate([incrementPayload('i1', 'First')]))])`. No shared fixture, no mocks — the real CLI is spawned through `execFileSync` and the real file on disk is read back with `fs.readFileSync` + `JSON.parse`.\n- Failures are asserted with `runFails([...])`, which returns the thrown error object carrying `status`, `stdout`, `stderr`, and which itself fails the case if the CLI unexpectedly exits 0.\n- Assertions carry a message explaining the rule, not the mechanics.\n- Comments above a case explain why the case exists when that is not obvious.\n\nOne helper change first, and it is the only edit to existing lines in this file: give `run(args)` and `runFails(args)` an optional second parameter `input`, passed straight through to `execFileSync` as `{ encoding: 'utf8', input }`. Existing call sites stay as they are (`input: undefined` leaves the child's stdin inherited-as-pipe and is harmless). Do not change any existing case.\n\nCases to add (7):\n\nA1. Criterion 1. `record reads the step return from stdin when the payload argument is \"-\", quotes and markup and all`\n   State: init a backlog with `i1`. Input: `run(['record', backlogPath, 'i1', 'research:i1.0', '-'], JSON.stringify(payload))` where `payload = { summary: 'a lane keyed by data-lane-id=\"main\"', plan: 'line one\\nline two, with a backslash \\\\ and an apostrophe it\\'s', questions: [] }` — the exact three things the criterion names: double quotes, an HTML attribute, a newline (plus a backslash, free).\n   Expected: exit 0; `i1.steps` has length 1; `i1.steps[0].label === 'research:i1.0'`; `i1.steps[0].at` matches `/^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$/`; `assert.deepEqual(i1.steps[0].return, payload)` — byte-for-byte round trip, which is what \"records correctly\" means; stdout is exactly one line and matches `/research:i1\\.0/`.\n   Level: unit (CLI process).\n\nA2. Criterion 1, the edge where the two meanings of `-` meet. `record on stdin with an increment id of \"-\" lands the run-level step in run.steps`\n   State: init a backlog with `i1`. Input: `run(['record', backlogPath, '-', 'decompose', '-'], JSON.stringify({ summary: 'opened' }))`.\n   Expected: exit 0; `backlog.run.steps` has length 1 with label `decompose`; `backlog.increments[0].steps` is `[]`. Proves the payload dash is read as stdin and the increment dash still as run-level, in one call.\n\nA3. Criterion 2 against criterion 1. `the same return recorded from a file and recorded on stdin lands the same stored return`\n   State: init a backlog with `i1` and `i2`. Input: the payload from A1; record it to `i1` with `writeJson(dir, 'payload.json', payload)`, and to `i2` with `'-'` and the same JSON on stdin.\n   Expected: `assert.deepEqual(i1.steps[0].return, i2.steps[0].return)` and both deep-equal the payload. Compare the `return` only — the `at` timestamps legitimately differ.\n\nA4. Criterion 2. `record with a payload file that does not exist exits 2 and leaves the backlog untouched`\n   State: init a backlog with `i1`; capture the file's bytes.\n   Input: `runFails(['record', backlogPath, 'i1', 'research:i1.0', path.join(dir, 'nope.json')])`.\n   Expected: `status === 2`; `stderr` non-empty and matches `/nope\\.json/`; the backlog file is byte-identical to before. This is the case that goes red if the dash branch swallows the file branch.\n\nA5. Criterion 1's failure edge. `record with \"-\" and nothing on stdin exits 2 and leaves the backlog untouched`\n   Input: `runFails(['record', backlogPath, 'i1', 'research:i1.0', '-'], '')`.\n   Expected: `status === 2`; `stderr` matches `/stdin/`; the backlog is byte-identical to before.\n\nA6. Criterion 1's failure edge. `record with malformed JSON on stdin exits 2, says so of stdin, and leaves the backlog untouched`\n   Input: `runFails(['record', backlogPath, 'i1', 'research:i1.0', '-'], '{\"summary\": \"unterminated')`.\n   Expected: `status === 2`; `stderr` matches `/stdin/` and does not name a file path; the backlog is byte-identical to before.\n\nA7. Criterion 2, the arity. `record without a payload argument exits 2 rather than waiting for stdin`\n   Input: `runFails(['record', backlogPath, 'i1', 'research:i1.0'], '')`.\n   Expected: `status === 2`; `stderr` matches `/usage:/`. Pins that the stdin form was not implemented by making the fourth argument optional.\n\nRegression cover for criterion 2 beyond A3/A4/A7 is the file's existing cases and needs nothing new: `record appends a step to the named increment ...` (l. 120), `recording the same label twice replaces the entry ...` (l. 145), `record with an increment id of \"-\" ...` (l. 159), `record against an increment id no increment has ...` (l. 172), `record against a path with no file ...` (l. 185), the reviewer-classification case (l. 195), both `close` shed cases and `a successful record leaves no .tmp file behind` (l. 345) all drive `record` through a payload file. Do not duplicate them for stdin.\n\nCommand that runs just this file, from the repository root:\n  node --test skills/agent-brief/assets/backlog.test.mjs\n\n================ B. test-repo.sh — the page guards ================\n\nFramework: plain bash, `ok \"<sentence>\"` / `no \"<sentence>\"` counters, sections opened with `echo` + `echo \"=== <section title>\"`, and a comment above each case saying which finding or criterion it defends. Add a new section immediately before the closing `echo` / `if [ \"$failed\" -eq 0 ]` block at the end of the file:\n\n  echo\n  echo \"=== the recorder takes the step return on stdin\"\n\nB1. Criterion 3, positively. `grep -qF 'record <issueDir>/backlog.json <incrementId> <label> -' \"$root/skills/agent-brief/SKILL.md\"` →\n   ok \"the shared brief's record command ends in the stdin argument\"\n   no \"the shared brief does not show the record command with the stdin argument:\" plus `grep -n 'backlog.json <incrementId>' ... | sed 's/^/       /'`\n   Use `-F`: the string carries `<`, `>` and `/`. This is the case that goes red if the brief regresses to `<thatFile>`, and it asserts what the page says now rather than the absence of the old phrase.\n\nB2. Criterion 3, the reason. `grep -qi 'stdin' \"$root/skills/agent-brief/SKILL.md\"` →\n   ok \"the shared brief names stdin as the channel a step return is recorded through\"\n   no \"the shared brief never mentions stdin\"\n\nB3+B4. Criterion 4 for the two workflow scripts, behaviourally rather than by grep, because that is how this file already guards a per-dispatch instruction (see w8 and the comment at l. 807-810): add driver mode `w20` to the embedded JS.\n   - In `contextFor`, add `case 'w20':` to the fallthrough group that already holds `case 'w4': case 'w5': case 'w6': case 'w8':` (l. 662-666), so w20 runs a fresh run with one increment.\n   - In the mode dispatch, add before the final `else { throw new Error('unknown mode ' + mode) }`:\n\n     } else if (mode === 'w20') {\n       // The stdin form has to reach the agent in the prompt it is actually\n       // dispatched with, not only in the brief: a `<that file>` regression in\n       // recordStep would leave both pages disagreeing with each other.\n       for (const c of calls) {\n         if (c.label === 'load-state' || c.label === 'publish') continue;\n         assertTrue(/record \\S*backlog\\.json \\S+ \\S+ -/.test(c.prompt),\n           c.label + \" is not told to record its return with the stdin argument\");\n         assertTrue(/stdin/i.test(c.prompt),\n           c.label + ' is not told that its return goes to the recorder on stdin');\n       }\n\n   - In the `for wf in ...` loop (l. 1052-1071), after the w19 line, add:\n     run_driver \"$wf\" w20 \"$wf_name: every step's prompt tells the agent to pipe its return to the recorder on stdin\"\n   That is two cases, one per workflow. Nothing else in the driver changes; `w8` keeps its own assertions and must stay green with the new wording.\n\nCommand that runs these, from the repository root (this suite has no per-case filter — it runs whole):\n  bash test-repo.sh\n\n================ What is left untested, and why ================\n\n- The `process.stdin.isTTY` guard in `readPayload`: reaching it needs a pseudo-terminal, which neither suite has any machinery for, and the behaviour it prevents (a hang) cannot be asserted without a timeout harness this repository does not have. A7 covers the realistic version of the same mistake.\n- `init`'s payload handling: unchanged this increment, and already covered by the two existing `init` cases.\n- The pages that were checked and deliberately not corrected (the agent pages, README.md, rulebook.md, .claude/rules/agents.md, the retro/argus/grill skills): they carry no form to guard, and a grep asserting they stay silent would fire on any future rewording. The existing case at test-repo.sh l. 271-279 already holds every agent page to naming backlog.json.\n- No end-to-end test dispatches a real agent through the new instruction; the workflow driver's stubbed `agent()` is this repository's established substitute and is what w20 uses.\n\n================ What is already red ================\n\nI ran nothing — not the suites, not a baseline. From reading: both commands are expected green at this commit (the last increment closed on `bash test-repo.sh` 73 cases exit 0 and ./test.sh all 6 suites exit 0), and the seven new node:test cases plus the four new test-repo.sh cases are expected red until the implementation lands, which is the test-author's proof. The first run of the list belongs to whoever runs it downstream. Report both commands with their case counts: node --test prints its own `# pass` totals, and test-repo.sh prints `PASS: <n> cases` (73 today, 77 expected after B1-B4).",
-            "checks": [
-              "node --test skills/agent-brief/assets/backlog.test.mjs",
-              "bash test-repo.sh"
-            ],
-            "questions": [],
-            "summary": "Give `record` a `-` payload argument that reads the step return from stdin (file-path form and `init` untouched), rewrite the record instruction in the shared brief and in both workflows' recordStep() to the stdin form, and guard it with seven new recorder cases plus two brief greps and a new per-prompt driver mode w20 in test-repo.sh."
-          }
-        },
-        {
-          "label": "tests:agent-affordances.0",
-          "at": "2026-08-07T21:59:59.181Z",
-          "return": {
-            "summary": "Added 7 failing node:test cases to skills/agent-brief/assets/backlog.test.mjs proving the stdin form of `backlog.mjs record` does not exist yet while the file-path form keeps passing, and 4 failing test-repo.sh cases (2 grep guards on the shared brief, 2 behavioural driver cases on both workflow scripts) proving neither the brief nor either workflow's dispatched prompts carry the stdin instruction yet.",
-            "cases": [
-              {
-                "case": "record accepts the step return on stdin as well as from a file path, and a return containing quotes, HTML attributes and newlines records correctly through the stdin form.",
-                "file": "skills/agent-brief/assets/backlog.test.mjs",
-                "testName": "record reads the step return from stdin when the payload argument is \"-\", quotes and markup and all",
-                "expected": "with payload argument `-` and the JSON payload on stdin, record exits 0, the confirmation names the label, and i1.steps[0].return deep-equals the exact payload (double quotes, a data-lane-id=\"main\" attribute, an embedded newline, a backslash and an apostrophe) byte-for-byte.",
-                "got": "Command failed: node backlog.mjs record ... i1 research:i1.0 - / cannot read the step return at - (stdin reading not implemented)."
-              },
-              {
-                "case": "record accepts the step return on stdin as well as from a file path (the edge where the increment-id dash and the payload dash meet).",
-                "file": "skills/agent-brief/assets/backlog.test.mjs",
-                "testName": "record on stdin with an increment id of \"-\" lands the run-level step in run.steps",
-                "expected": "`record backlog.json - decompose -` with JSON on stdin lands the step in backlog.run.steps (label decompose) and leaves increments[0].steps empty, proving the payload dash is read as stdin while the increment dash still means run-level in the same call.",
-                "got": "Command failed: node backlog.mjs record ... - decompose - / cannot read the step return at - (stdin reading not implemented)."
-              },
-              {
-                "case": "The file-path form of backlog.mjs record keeps working unchanged (checked against the stdin form storing the same thing).",
-                "file": "skills/agent-brief/assets/backlog.test.mjs",
-                "testName": "the same return recorded from a file and recorded on stdin lands the same stored return",
-                "expected": "the same payload recorded to i1 via a payload file and to i2 via `-`/stdin produces deepEqual stored `return` values on both increments (timestamps aside).",
-                "got": "Command failed: node backlog.mjs record ... i2 research:i2.0 - / cannot read the step return at - (the stdin half of the comparison cannot be produced yet)."
-              },
-              {
-                "case": "The file-path form of backlog.mjs record keeps working unchanged (missing payload file still exits 2 and leaves the backlog untouched).",
-                "file": "skills/agent-brief/assets/backlog.test.mjs",
-                "testName": "record with a payload file that does not exist exits 2 and leaves the backlog untouched",
-                "expected": "record against a nonexistent payload file path exits 2, stderr names the missing file, and the backlog file is byte-identical to before. Guards against a dash-branch regression swallowing the file branch.",
-                "got": "Already passes against the current file-path implementation; no regression to report. Kept in the suite as the guard the plan asks for."
-              },
-              {
-                "case": "backlog.mjs record accepts the step return on stdin, and a return containing quotes, HTML attributes and newlines records correctly through the stdin form (failure edge: empty stdin).",
-                "file": "skills/agent-brief/assets/backlog.test.mjs",
-                "testName": "record with \"-\" and nothing on stdin exits 2 and leaves the backlog untouched",
-                "expected": "record with payload argument `-` and empty stdin exits 2, stderr matches /stdin/, and the backlog file is byte-identical to before.",
-                "got": "AssertionError: 'the message names stdin as the source that carried nothing' — actual stderr is 'cannot read the step return at -\\n', exit code was 2 but the message does not mention stdin (current message is file-path shaped, not stdin-aware)."
-              },
-              {
-                "case": "backlog.mjs record accepts the step return on stdin, and a return containing quotes, HTML attributes and newlines records correctly through the stdin form (failure edge: malformed JSON on stdin).",
-                "file": "skills/agent-brief/assets/backlog.test.mjs",
-                "testName": "record with malformed JSON on stdin exits 2, says so of stdin, and leaves the backlog untouched",
-                "expected": "record with payload argument `-` and unterminated JSON on stdin exits 2, stderr matches /stdin/ and names no file path, and the backlog file is byte-identical to before.",
-                "got": "AssertionError: 'the message names stdin, not a file path, as the source of the malformed JSON' — actual stderr is 'cannot read the step return at -\\n' (stdin form not implemented, so the dash is still treated as a literal, nonexistent file path)."
-              },
-              {
-                "case": "The file-path form of backlog.mjs record keeps working unchanged (arity: no payload argument at all exits 2 rather than hanging on stdin).",
-                "file": "skills/agent-brief/assets/backlog.test.mjs",
-                "testName": "record without a payload argument exits 2 rather than waiting for stdin",
-                "expected": "record with only backlogPath, incrementId and label (no fourth argument) exits 2 with stderr matching /usage:/, never blocking on stdin.",
-                "got": "Already passes against the current implementation, which already treats a missing fourth argument as a usage error. Kept as the arity guard the plan names."
-              },
-              {
-                "case": "The agent brief instructs agents to record their step return through the stdin form.",
-                "file": "test-repo.sh",
-                "testName": "the shared brief's record command ends in the stdin argument",
-                "expected": "`grep -qF 'record <issueDir>/backlog.json <incrementId> <label> -' skills/agent-brief/SKILL.md` succeeds — the brief's own record command example ends in the stdin argument, not a payload-file placeholder.",
-                "got": "FAIL: the shared brief does not show the record command with the stdin argument: line 91 still reads 'node \"<base>/assets/backlog.mjs\" record <issueDir>/backlog.json <incrementId> <label> <thatFile>'."
-              },
-              {
-                "case": "The agent brief instructs agents to record their step return through the stdin form (names the channel).",
-                "file": "test-repo.sh",
-                "testName": "the shared brief names stdin as the channel a step return is recorded through",
-                "expected": "`grep -qi stdin skills/agent-brief/SKILL.md` succeeds.",
-                "got": "FAIL: the shared brief never mentions stdin."
-              },
-              {
-                "case": "Every other page that tells an agent how to record a step return says the same thing as the brief (the workflow scripts' dispatched prompts, checked behaviourally through the existing driver, for loop.js).",
-                "file": "test-repo.sh",
-                "testName": "loop.js: every step's prompt tells the agent to pipe its return to the recorder on stdin (driver mode w20)",
-                "expected": "for every dispatched step but load-state and publish, the prompt matches /record \\S*backlog\\.json \\S+ \\S+ -/ and /stdin/i.",
-                "got": "FAIL: decompose, research:i1.0, tests:i1.0, implement:i1.0, review:i1.0 and close:i1 are each 'not told to record its return with the stdin argument' and 'not told that its return goes to the recorder on stdin' — the dispatched prompts still carry only the file-path instruction inherited from the current brief."
-              },
-              {
-                "case": "Every other page that tells an agent how to record a step return says the same thing as the brief (the workflow scripts' dispatched prompts, checked behaviourally through the existing driver, for agile-loop.js).",
-                "file": "test-repo.sh",
-                "testName": "agile-loop.js: every step's prompt tells the agent to pipe its return to the recorder on stdin (driver mode w20)",
-                "expected": "same as above, for agile-loop.js, with replan:i1 in place of close:i1.",
-                "got": "FAIL: decompose, research:i1.0, tests:i1.0, implement:i1.0, review:i1.0 and replan:i1 are each 'not told to record its return with the stdin argument' and 'not told that its return goes to the recorder on stdin'."
-              }
-            ],
-            "openQuestions": [
-              "The plan's expected-red predictions for A4 ('record with a payload file that does not exist exits 2...') and A7 ('record without a payload argument exits 2...') both already pass against the current file-path-only implementation — the current CLI already exits 2 with a usage message for a missing fourth argument, and already exits 2 naming the missing file for a bad payload path. That is not a defect in the test plan (both are legitimate regression guards named by the plan, criterion 2), but the run's 'what is already red' section predicted all seven new node:test cases would be red before the implementation; two of the seven are not. Flagging so the implementer and reviewer are not surprised the count is 5 red / 2 already-green rather than 7/0.",
-              "The exact wording the implementer should use for the stdin-empty (A5) and malformed-stdin (A6) error messages is left to the plan's own regex (/stdin/) rather than a literal string, so any message mentioning stdin satisfies both cases; no gap there, noted only because it is the one piece of wording this plan leaves to the implementer's judgement."
-            ],
-            "questions": [],
-            "commands": [
-              "node --test skills/agent-brief/assets/backlog.test.mjs, 23 cases (7 new), exit 1: 18 pass, 5 fail (A1, A2, A3, A5, A6 fail as expected; A4 and A7 already pass against the current file-path implementation; all 16 pre-existing cases still pass unchanged).",
-              "bash test-repo.sh, 77 cases (4 new), exit 1: 73 pass, 4 fail (the 2 new grep cases on skills/agent-brief/SKILL.md and the 2 new w20 driver cases for loop.js and agile-loop.js; all 73 pre-existing cases stay green)."
-            ]
-          }
-        },
-        {
-          "label": "implement:agent-affordances.0",
-          "at": "2026-08-07T22:01:58.101Z",
-          "return": {
-            "summary": "backlog.mjs `record` now reads the step return from stdin when its payload argument is `-`, and the shared brief plus both workflow scripts' recordStep() tell agents that form.",
-            "deviations": [],
-            "commands": [
-              {
-                "command": "node --test skills/agent-brief/assets/backlog.test.mjs",
-                "exitCode": 0,
-                "note": "23 cases, all pass; the 5 that were red before the change (stdin payload, run-level dash-dash, file-vs-stdin parity, empty stdin, malformed stdin JSON) are green."
-              },
-              {
-                "command": "bash test-repo.sh",
-                "exitCode": 0,
-                "note": "PASS: 77 cases; the 4 that were red (brief's stdin command, brief names stdin, loop.js w20, agile-loop.js w20) are green."
-              }
-            ],
-            "blockers": [],
-            "questions": [],
-            "notes": [
-              "The test-author's count note holds: A4 (missing payload file) and A7 (missing payload argument) already passed against the file-path-only CLI and were kept as regression guards; the readPayload wrapper leaves readJson and therefore `init` untouched.",
-              "Outside scope, noticed and left alone: the agents/*.md record lines and the planner's init/close prompts name no payload form, so they need no edit."
-            ]
-          }
-        },
-        {
-          "label": "review:agent-affordances.0",
-          "at": "2026-08-07T22:05:46.967Z",
-          "return": {
-            "findings": [],
-            "reason": "",
-            "questions": [],
-            "summary": "Increment 4 accepted. Listed commands, one call: `node --test skills/agent-brief/assets/backlog.test.mjs`, 23 cases, exit 0; `bash test-repo.sh`, 77 cases, exit 0 — nothing skipped, no pre-existing red. Criterion by criterion: backlog.mjs gains readPayload, which delegates to the unchanged readJson for any payload argument other than `-` and reads fd 0 for `-`, with exit 2 and a stdin-naming message for empty stdin, malformed stdin and a TTY; I ran the exact command the brief now documents (quoted heredoc into `record ... -`) against a throwaway backlog outside the checkout with a return carrying `data-lane-id=\"main\"`, an apostrophe, `<b>bold</b>` and an embedded newline, and it round-tripped byte-for-byte, exit 0. The file-path form is untouched and still guarded by the pre-existing record cases plus a new one that records the identical payload both ways and asserts the stored returns are deepEqual, and one that a missing payload file still exits 2 without touching the backlog. Pages checked for how an agent records a step return: skills/agent-brief/SKILL.md (corrected — the record command now ends in `-`, the heredoc is quoted, the file form is named as still working), workflows/loop.js and workflows/agile-loop.js recordStep (both corrected to the identical stdin wording, and their comments with them), agents/planner.md, agents/researcher.md, agents/test-author.md, agents/implementer.md, agents/reviewer.md (all five defer to the brief verbatim, nothing to correct), README.md, rulebook.md, GEMINI.md, skills/retro/SKILL.md, skills/CLAUDE.md, .claude/rules/agents.md, hooks/ and bin/ (none carries the record command); .agents/plugins/uroboros/{agents,skills} are symlinks to the same files, and the docs/issues/2026-08-07-structured-prompts-replace-handoffs pages are a past run's record rather than an instruction page. Coverage: seven new node cases pin the stdin form, the dual meaning of `-` in one call (increment id and payload argument), file/stdin equivalence, the three failure modes, and that omitting the payload argument exits 2 rather than hanging on stdin; test-repo.sh adds two positive greps asserting what SKILL.md now says and a w20 driver mode asserting every dispatched prompt of both workflows carries `record <path>/backlog.json <id> <label> -` and the word stdin, which the old `<that file>` wording does not match. Blast radius traced: no other caller of readJson changed, the stored step shape is unchanged so close/read/resume are unaffected, both suites are wired into test.sh, and nothing else in the tree documents the recorder. Two observations that need no correction: the brief's rationale is that no agent has to survive a heredoc, yet the form it now documents is a heredoc — a quoted one, which is what makes the bytes pass untouched, so the escaping failure the issue describes is genuinely gone, but the wording and the mechanism read as in tension; and that heredoc truncates early if a return ever contains a line that is exactly `RETURN`, an edge no criterion covers. Criterion 4's second half — that the report names each page checked and corrected — lives in the step return I am blind to by design, so I name the pages above from my own reading."
-          }
-        }
-      ]
+      "status": "done",
+      "note": "Accepted at review round 0 with no findings: record delegates any payload argument other than `-` to the unchanged file reader and reads fd 0 for `-`, exiting 2 with a stdin-naming message on empty stdin, malformed stdin and a TTY; the shared brief and both workflows' recordStep() now document the same quoted-heredoc stdin form, and the five agent pages defer to the brief verbatim. Guarded by seven new node cases (stdin round-trip of quotes, HTML attributes and newlines; the dual meaning of `-` in one call; file/stdin parity; three failure modes; missing payload argument exits rather than hangs), two positive greps on the brief and a w20 driver mode over both workflows' dispatched prompts. node --test skills/agent-brief/assets/backlog.test.mjs 23 cases exit 0; bash test-repo.sh 77 cases exit 0.",
+      "steps": []
     },
     {
       "id": "collector-fixture",
@@ -222,12 +73,12 @@
       "criteria": [
         "A documented way to start and stop a collector for ad-hoc inspection exists - a script or an existing test helper made reachable.",
         "Starting and then stopping it leaves no process holding the port, and the report shows that checked.",
-        "The agent brief names that way, so an agent needing a live instance is told what to run instead of improvising a pkill.",
-        "The report states where the tree differs from the issue's account of it - a helper that is not there, or a way that already exists - and each criterion is judged by the start-and-stop way existing and being documented rather than by a file the issue named having been edited.",
+        "The agent brief names that way, so an agent needing a live instance is told what to run instead of improvising a pkill; the report names every page checked for where an agent is told how to reach a running collector and every page corrected.",
+        "The report states where the tree differs from the issue account of it - a helper that is not there, or a way that already exists - and each criterion is judged by the start-and-stop way existing and being documented rather than by a file the issue named having been edited.",
         "The change has test coverage that goes red when start or stop breaks, or when the agent brief stops naming the way, and the test run is reported with its case count."
       ],
       "status": "todo",
-      "note": "Extended the coverage criterion to the brief naming the way, for the same reason as agent-affordances: a doc line that nothing asserts positively regresses silently. The account-for-the-tree criterion stays and is now twice vindicated - run-report found the tool a shim over another package and the journal missing the field its report needed.",
+      "note": "Extended criterion 3 to a page sweep: agent-affordances found the record instruction living in four places at once (the brief, both workflow scripts, five agent pages that defer to it) and the reviewer had to enumerate them, so the collector instruction is to be checked the same way rather than assumed to live only in the brief. The positive-assertion doc guard and the account-for-the-tree criterion stay; both have now paid twice.",
       "steps": []
     },
     {
@@ -277,40 +128,51 @@
       },
       {
         "label": "replan:run-report",
-        "at": "2026-08-07T21:48:45.143Z",
+        "at": "2026-08-07T21:48:45.143Z"
+      },
+      {
+        "label": "replan:agent-affordances",
+        "at": "2026-08-07T22:07:54.328Z",
         "return": {
-          "questions": [],
-          "summary": "Closed run-report as done (accepted at review round 0, no findings) and re-cut the four open increments. Three increments are spent of at most eight, four remain, so the run has room for all four and none needed merging or dropping. What run-report taught, and what changed because of it: (1) its reviewer observed that the README line it had just corrected was guarded only by a grep for the banned old phrasing, which would stay green if the line regressed - so the doc criteria of agent-affordances, collector-fixture and liveness-docs now require a guard that asserts what the page says now, not only that it no longer says the old thing. (2) The account-for-the-tree criterion paid a second time: the tool was a shim over another package, the journal lacked the field the report needed, and no page had ever carried the instruction the issue said to delete, so criterion 5 was met by adding rather than removing. That criterion stays on collector-fixture, the one remaining increment whose criteria lean on the issue's account of code that already exists. (3) signing-check's third criterion was sharpened to separate an environment where signing is legitimately unconfigured from one where signing is configured and fails, because the failure the issue evidences is the second and a naive is-it-configured skip would pass over it. Order unchanged: agent-affordances first because it fixes the recording path every remaining agent of this run uses, then collector-fixture as the riskiest remaining work (process lifecycle and an account of the tree that may be stale), then signing-check, then liveness-docs, which is documentation and cheapest to land last. No increment was re-opened, split or dropped; nothing else was touched.",
           "increments": [
             {
               "id": "coverage-only-round",
-              "status": "done"
+              "status": "done",
+              "note": ""
             },
             {
               "id": "ui-harness-null",
-              "status": "done"
+              "status": "done",
+              "note": ""
             },
             {
               "id": "run-report",
-              "status": "done"
+              "status": "done",
+              "note": ""
             },
             {
               "id": "agent-affordances",
-              "status": "todo"
+              "status": "done",
+              "note": "Closed done on this call: the review accepted it with no findings."
             },
             {
               "id": "collector-fixture",
-              "status": "todo"
+              "status": "todo",
+              "note": "Criterion 3 extended to a page sweep, taught by agent-affordances."
             },
             {
               "id": "signing-check",
-              "status": "todo"
+              "status": "todo",
+              "note": ""
             },
             {
               "id": "liveness-docs",
-              "status": "todo"
+              "status": "todo",
+              "note": ""
             }
-          ]
+          ],
+          "questions": [],
+          "summary": "Closed agent-affordances as done: the review accepted it at round 0 with no findings, record now reads fd 0 for a payload argument of `-` while the file-path form delegates to the unchanged reader, and the brief plus both workflows' recordStep() document the stdin form, pinned by seven node cases, two positive greps and a w20 driver mode (node --test backlog.test.mjs 23 cases exit 0; bash test-repo.sh 77 cases exit 0). Three increments stay open and four of at most eight are spent, so collector-fixture, signing-check and liveness-docs each still get a chain and the order stands: the two that touch the environment first, the pure-documentation one last. One change to the cut, and it is the only thing this increment taught that bears on the rest: agent-affordances found the record instruction living in four places at once - the shared brief, both workflow scripts, and five agent pages that defer to the brief verbatim - and its reviewer had to enumerate them to prove nothing stale was left. collector-fixture's third criterion said only that the agent brief names the way to start and stop a collector; it now also requires the report to name every page checked for where an agent is told how to reach a running collector, and every page corrected. liveness-docs already carries that sweep in its fifth criterion, so it is unchanged. Two things I deliberately did not turn into work. The reviewer noted the brief now documents a quoted heredoc while its rationale says no agent has to survive a heredoc, and that the heredoc truncates if a return ever contains a line that is exactly RETURN; the criterion the issue set - a summary with quotes or markup records correctly - is met, and both observations are outside the issue's acceptance criteria, so inventing an increment for them would be scope this run was not given. I also left the order alone: risk-first would put signing-check ahead of collector-fixture, but both depend on the environment in the same way and nothing this increment showed separates them, so the reorder would be churn a reader pays for."
         }
       }
     ]
