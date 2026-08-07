@@ -390,6 +390,22 @@
               "Not touched, per the plan: skills/argus/SKILL.md's route table, the skeleton file list in tools/argus-ui/test/independence.test.mjs, and the out-of-increment features (activity marks, context curve, scrubbing, per-lane detail, chosen-time marker)."
             ]
           }
+        },
+        {
+          "label": "review:timeline-landing.0",
+          "at": "2026-08-07T10:32:43.297Z",
+          "return": {
+            "summary": "Ran the two listed suites — `npm --prefix tools/argus test` (176 cases, exit 0) and `npm --prefix tools/argus-ui test` (30 cases, exit 0), nothing skipped — and reviewed the whole diff against main: the collector-side lane join, the /api/sessions/:id/agents route, the new timeline module and the app.js rewiring meet all five criteria, with one test gap on the drawn lane lifetime.",
+            "reason": "Nothing pins that the rendered timeline actually positions each lane bar by its computed lifetime: every lane bar could be emitted at a fixed left/width and both suites stay green, so the criterion that a vertical slice answers which agents are running is unverified at the only place the human sees it.",
+            "findings": [
+              {
+                "claim": "No test fails if timelineHtml stops applying each lane's computed geometry, so the drawn lane lifetime — the visible half of the lane-spans-its-lifetime criterion — is unverified.",
+                "reproduction": "In tools/argus-ui/public/timeline.js line 125-126, replace the lane bar's style expression with the constant `style=\"left:0%;width:100%\"`. Two lanes with different firstMs/lastMs (e.g. agt-a 100..400 and agt-b 200..500 in a 0..1000 window) then both draw across the whole window, so a vertical slice no longer says which agents run — yet `npm --prefix tools/argus-ui test` still passes 30/30: laneGeometry is asserted directly (25/50, clamping, 0.4 minimum), while every timelineHtml case only checks lane-id count, agent ids, escaping, the placeholder and the absence of NaN, and none reads the left/width the markup carries.",
+                "criterion": "Each agent lane spans that agent's lifetime, so any vertical slice answers which agents are running at that moment."
+              }
+            ],
+            "questions": []
+          }
         }
       ]
     },
