@@ -156,37 +156,60 @@ export function contextAreaPoints(lane, { startMs = 0, endMs = 0 } = {}, peak = 
   return `${firstX.toFixed(3)},100.000 ${body} ${lastX.toFixed(3)},100.000`;
 }
 
+/**
+ * The chosen time as a percentage of the shared window.
+ *
+ * Deliberately the same arithmetic as `activityMarks` and `contextAreaPoints`:
+ * that is what makes the playhead land on the mark and the curve sample it
+ * points at, rather than a pixel beside them.
+ */
+export function chosenTimePct(atMs, { startMs = 0, endMs = 0 } = {}) {
+  const value = Number(atMs);
+  if (!Number.isFinite(value)) return 0;
+  const total = Math.max(endMs - startMs, 1);
+  return clampPct(((value - startMs) / total) * 100);
+}
+
+/**
+ * The chosen time forced into the window. The scrub control can only reach a
+ * point of the recorded session, and a broken value parks at the head rather
+ * than putting NaN into the whole view.
+ */
+export function clampChosenTime(atMs, { startMs = 0, endMs = 0 } = {}) {
+  const value = Number(atMs);
+  if (!Number.isFinite(value)) return endMs;
+  return Math.min(Math.max(value, startMs), endMs);
+}
+
 /** What one activity mark says on hover. */
 function markTitle(mark) {
   const kind = mark.kind === 'llm_request' ? 'API request' : 'tool call';
   return mark.name ? `${kind}: ${mark.name}` : kind;
 }
 
-/** The timeline panel: an axis, then one row per lane. */
-export function timelineHtml(items = [], window = { startMs: 0, endMs: 0 }) {
-  if (!items.length) {
-    return `<div class="placeholder">
-      No spans for this session, so there are no agent lanes to draw. Spans are the beta signal —
-      set <code>CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1</code> and <code>OTEL_TRACES_EXPORTER=otlp</code>.
-    </div>`;
-  }
-
+/**
+ * Every lane row, with the playhead of the chosen time drawn on each track.
+ *
+ * Split out of `timelineHtml` because the page repaints these rows in place
+ * while the scrub control is being dragged — re-rendering the whole panel
+ * would replace the very input the pointer is holding. Both paths call this,
+ * so the in-place repaint cannot drift from the full render.
+ *
+ * @param {object[]} items the lanes of the `/agents` payload
+ * @param {{startMs: number, endMs: number}} window
+ * @param {number|null} atMs the chosen time, or null for no playhead
+ */
+export function laneRowsHtml(items = [], window = { startMs: 0, endMs: 0 }, atMs = null) {
   const startMs = window?.startMs ?? 0;
   const endMs = window?.endMs ?? 0;
-  const span = Math.max(endMs - startMs, 0);
-  const ticks = [0, 0.25, 0.5, 0.75, 1]
-    .map(
-      (fraction) =>
-        `<span class="axis-tick" style="left:${(fraction * 100).toFixed(2)}%">${esc(
-          fmtClock(startMs + span * fraction),
-        )}</span>`,
-    )
-    .join('');
-
   // One scale for every curve on the page, computed once.
   const peak = contextPeakOf(items);
+  const playhead =
+    atMs === null
+      ? ''
+      : `<span class="lane-playhead" style="left:${chosenTimePct(atMs, { startMs, endMs }).toFixed(3)}%"></span>`;
 
-  const rows = laneRows(items, { startMs, endMs })
+  return laneRows(items, { startMs, endMs })
     .map((lane) => {
       // Two instances of one agent type share a label, so the id rides along:
       // it is the only thing on screen that tells them apart.
@@ -223,11 +246,67 @@ export function timelineHtml(items = [], window = { startMs: 0, endMs: 0 }) {
           <span class="lane-bar" data-kind="${esc(lane.kind)}"
             style="left:${lane.leftPct.toFixed(3)}%;width:${lane.widthPct.toFixed(3)}%"></span>
           ${marks}
+          ${playhead}
         </span>
         <span class="lane-duration">${esc(fmtDur(lane.durationMs))}</span>
       </div>`;
     })
     .join('');
+}
+
+/**
+ * The readout of the chosen time plus the control that returns to the head.
+ *
+ * Repainted on its own while scrubbing, for the same reason the lane rows are.
+ * The button stays enabled while following — clicking it then is a no-op, and
+ * `aria-pressed` is what says which mode the timeline is in.
+ */
+export function scrubStateHtml(atMs = null, following = true) {
+  return `<span class="chosen-time">${esc(fmtClock(atMs))}</span><button type="button" class="ghost-button" data-timeline-live aria-pressed="${following}">Live</button>`;
+}
+
+/**
+ * The timeline panel: an axis, one row per lane, and — once a chosen time
+ * exists — the control that moves it.
+ *
+ * @param {object[]} items the lanes of the `/agents` payload
+ * @param {{startMs: number, endMs: number}} window
+ * @param {{atMs?: number|null, following?: boolean}} chosen
+ */
+export function timelineHtml(items = [], window = { startMs: 0, endMs: 0 }, { atMs = null, following = true } = {}) {
+  if (!items.length) {
+    return `<div class="placeholder">
+      No spans for this session, so there are no agent lanes to draw. Spans are the beta signal —
+      set <code>CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1</code> and <code>OTEL_TRACES_EXPORTER=otlp</code>.
+    </div>`;
+  }
+
+  const startMs = window?.startMs ?? 0;
+  const endMs = window?.endMs ?? 0;
+  const span = Math.max(endMs - startMs, 0);
+  const ticks = [0, 0.25, 0.5, 0.75, 1]
+    .map(
+      (fraction) =>
+        `<span class="axis-tick" style="left:${(fraction * 100).toFixed(2)}%">${esc(
+          fmtClock(startMs + span * fraction),
+        )}</span>`,
+    )
+    .join('');
+
+  // One scale for every curve on the page, computed once.
+  const peak = contextPeakOf(items);
+
+  const rows = laneRowsHtml(items, { startMs, endMs }, atMs);
+
+  // The scrub row repeats the lane grid so the slider sits over the track
+  // column, exactly above the playheads it moves.
+  const scrub =
+    atMs === null
+      ? ''
+      : `<div class="timeline-scrub"><span></span><input type="range" id="timeline-scrub"
+          min="${startMs}" max="${endMs}" step="1" value="${atMs}"
+          aria-label="Chosen time on the timeline"><span></span></div>
+        <div class="scrub-state" id="timeline-scrub-state">${scrubStateHtml(atMs, following)}</div>`;
 
   // What the shapes mean, in the words of the measure they are made of.
   const legend = peak > 0
@@ -239,7 +318,8 @@ export function timelineHtml(items = [], window = { startMs: 0, endMs: 0 }) {
   return `<div class="panel" style="padding:12px">
     <div class="timeline">
       <div class="timeline-axis"><span></span><span class="axis-ticks">${ticks}</span><span></span></div>
-      ${rows}
+      <div id="timeline-lanes">${rows}</div>
+      ${scrub}
       <p class="timeline-legend">${legend}</p>
     </div>
   </div>`;

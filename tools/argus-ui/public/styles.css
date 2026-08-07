@@ -914,6 +914,44 @@ td.name {
   white-space: nowrap;
 }
 
+/* The chosen time, over the full height of the track so the lanes read as one
+   line rather than one dash per row. */
+.lane-playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  margin-left: -0.5px;
+  background: var(--text);
+  opacity: 0.75;
+  pointer-events: none;
+}
+
+/* Repeats the lane grid, so the slider sits over the track column and its
+   thumb lands on the playheads it moves. */
+.timeline-scrub {
+  display: grid;
+  grid-template-columns: var(--label-w) 1fr 72px;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.timeline-scrub input[type="range"] {
+  width: 100%;
+}
+
+.scrub-state {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--text-faint);
+}
+
 .timeline-legend {
   margin: 8px 0 0;
   font-size: 10.5px;

@@ -8,7 +8,14 @@
  */
 
 import { esc, fmtAgo, fmtClock, fmtCost, fmtDur, fmtNum, shortId } from './format.js';
-import { DEFAULT_VIEW, timelineHtml, viewStripHtml } from './timeline.js';
+import {
+  DEFAULT_VIEW,
+  clampChosenTime,
+  laneRowsHtml,
+  scrubStateHtml,
+  timelineHtml,
+  viewStripHtml,
+} from './timeline.js';
 
 const TOKEN = new URLSearchParams(location.search).get('token');
 
@@ -23,6 +30,11 @@ const state = {
   view: DEFAULT_VIEW,
   agents: [],
   agentWindow: { startMs: 0, endMs: 0 },
+  // The one chosen time the whole session view is read at, in the same
+  // milliseconds as `agentWindow`; null until a session is loaded. `following`
+  // is live mode: while it holds, every refresh re-pins `atMs` to the head.
+  atMs: null,
+  following: true,
   trace: null,
   selectedTraceId: null,
   selectedSpanId: null,
@@ -165,13 +177,32 @@ function renderDetail() {
       </div>
     </div>
 
-    ${timelineHtml(state.agents, state.agentWindow)}
+    ${timelineHtml(state.agents, state.agentWindow, { atMs: state.atMs, following: state.following })}
 
     ${viewStripHtml(state.view, counts)}
 
     <div id="view-body"></div>
   `;
   renderViewBody();
+}
+
+/**
+ * Repaints just the parts that carry the chosen time, leaving the rest of the
+ * detail pane — the scrub control included — untouched.
+ *
+ * A full `renderDetail()` replaces `detail.innerHTML`, which would destroy the
+ * range input the user is dragging, so the scrub handler comes here instead.
+ * Accepted limitation: while the timeline is scrubbed away from the head, an
+ * SSE ingest still triggers the wholesale refresh and so does replace the
+ * slider. `refresh()` restores focus by element id and the slider has a stable
+ * one, so keyboard scrubbing survives it; a mouse drag interrupted by an
+ * ingest does not.
+ */
+function renderChosenTime() {
+  const lanes = document.getElementById('timeline-lanes');
+  if (lanes) lanes.innerHTML = laneRowsHtml(state.agents, state.agentWindow, state.atMs);
+  const scrubState = document.getElementById('timeline-scrub-state');
+  if (scrubState) scrubState.innerHTML = scrubStateHtml(state.atMs, state.following);
 }
 
 function renderViewBody() {
@@ -819,6 +850,8 @@ async function loadSession() {
     state.session = null;
     state.agents = [];
     state.agentWindow = { startMs: 0, endMs: 0 };
+    state.atMs = null;
+    state.following = true;
     return;
   }
   try {
@@ -828,6 +861,8 @@ async function loadSession() {
     state.selectedSessionId = null;
     state.agents = [];
     state.agentWindow = { startMs: 0, endMs: 0 };
+    state.atMs = null;
+    state.following = true;
     return;
   }
   await loadAgents();
@@ -847,10 +882,23 @@ async function loadAgents() {
       startMs: Math.min(session.firstSeenMs, payload.firstMs || Infinity),
       endMs: Math.max(session.lastSeenMs, payload.lastMs ?? 0),
     };
+    syncChosenTime();
   } catch {
     state.agents = [];
     state.agentWindow = { startMs: session.firstSeenMs, endMs: session.lastSeenMs };
+    syncChosenTime();
   }
+}
+
+/**
+ * Re-pins the chosen time to whatever window the fresh data spans. While
+ * following, that is the head — which is the whole of live mode. A time
+ * scrubbed away from the head is kept where it is, and only forced back inside
+ * the window if the new data no longer covers it.
+ */
+function syncChosenTime() {
+  if (state.following || state.atMs === null) state.atMs = state.agentWindow.endMs;
+  else state.atMs = clampChosenTime(state.atMs, state.agentWindow);
 }
 
 async function loadViewData() {
@@ -928,6 +976,9 @@ function selectSession(id, { render = true } = {}) {
   state.metrics = [];
   state.agents = [];
   state.agentWindow = { startMs: 0, endMs: 0 };
+  // Opening a session lands live at its head, however the last one was scrubbed.
+  state.atMs = null;
+  state.following = true;
   // Opening a session lands on the timeline, whatever was open under the last one.
   state.view = DEFAULT_VIEW;
   location.hash = `#/session/${encodeURIComponent(id)}`;
@@ -985,6 +1036,15 @@ function wireEvents() {
       copyFrom(copy.dataset.copy);
       return;
     }
+    const live = event.target.closest('[data-timeline-live]');
+    if (live) {
+      // The one path that must re-render wholesale: the slider's own value has
+      // to jump to the head with it, and nobody is mid-drag when they click.
+      state.following = true;
+      state.atMs = state.agentWindow.endMs;
+      renderDetail();
+      return;
+    }
     const view = event.target.closest('[data-view]');
     if (view) {
       // Clicking the open view closes it again, back to the timeline alone.
@@ -1025,6 +1085,14 @@ function wireEvents() {
 
   let searchTimer = null;
   document.getElementById('detail').addEventListener('input', (event) => {
+    // A range input fires `input` for a drag and for an arrow key alike, so
+    // keyboard scrubbing needs nothing of its own.
+    if (event.target.id === 'timeline-scrub') {
+      state.following = false;
+      state.atMs = clampChosenTime(event.target.value, state.agentWindow);
+      renderChosenTime();
+      return;
+    }
     if (event.target.id !== 'event-search') return;
     state.eventFilters.search = event.target.value;
     clearTimeout(searchTimer);

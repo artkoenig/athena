@@ -209,6 +209,23 @@
             ],
             "questions": []
           }
+        },
+        {
+          "label": "implement:scrub-live.0",
+          "at": "2026-08-07T12:04:26.521Z",
+          "return": {
+            "deviations": [],
+            "commands": [
+              {
+                "command": "npm --prefix tools/argus-ui test",
+                "exitCode": 0,
+                "note": "70 cases over test/*.test.mjs, nothing skipped or excluded; the 10 new timeline cases (A1-A10) and the 6 new app cases (B1-B6) all pass, and the 54 pre-existing cases stay green."
+              }
+            ],
+            "blockers": [],
+            "questions": [],
+            "summary": "Added a shared chosen time to the session timeline: chosenTimePct, clampChosenTime, laneRowsHtml and scrubStateHtml in public/timeline.js with a third options argument on timelineHtml, state.atMs/state.following plus renderChosenTime, syncChosenTime and the scrub/live event branches in public/app.js, the three new rules in the timeline section of public/styles.css, and one sentence on the README's Timeline bullet."
+          }
         }
       ]
     },

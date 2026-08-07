@@ -60,7 +60,10 @@ for an `HttpOnly; SameSite=Strict` cookie and drops it from the address bar.
 
 - **Timeline** — one lane for the main session and one per subagent instance,
   each spanning that agent's lifetime. It is what opening a session shows; the
-  views below open under it, one at a time, and none is open to begin with.
+  views below open under it, one at a time, and none is open to begin with. It
+  carries a chosen time that can be scrubbed to any point of the session and
+  follows the newest data until it is scrubbed, with a Live control that
+  returns it to the head.
 - **Sessions** — every session by last activity, with cost, tokens and errors.
 - **Overview** — cost, tokens by type including cache hit rate, interactions,
   requests, tool calls, lines of code, commits, active time; tables per model
