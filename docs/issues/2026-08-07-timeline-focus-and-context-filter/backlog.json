@@ -347,6 +347,31 @@
             ],
             "questions": []
           }
+        },
+        {
+          "label": "tests:tabs-out.1",
+          "at": "2026-08-07T18:46:23.760Z",
+          "return": {
+            "summary": "Wrote the reviewer's reproduction spec as tests: a new repository-level section in test-repo.sh scanning every tools/argus/*.md for six phrases that promise a removed argus-ui view (red today against README.md, exit 1), and a whitespace-normalising hardening of the existing page.test.mjs guard (unchanged green, both before and after).",
+            "cases": [
+              {
+                "case": "Case 1 (new) — no page under tools/argus describes an argus-ui view that does not exist",
+                "file": "/home/user/uroboros/test-repo.sh",
+                "testName": "=== no page under tools/argus describes an argus-ui view that does not exist (ok/no case: \"no page under tools/argus describes an argus-ui view that does not exist\")",
+                "expected": "For every *.md file directly under tools/argus (README.md, CLAUDE.md), collapse whitespace with tr '\\n' ' ' | tr -s ' ' and grep -qiE each of six patterns (\\btabs?\\b, \\bwaterfall\\b, 'overview, *tasks', 'tools table', 'under \"Attributes\"', 'writes the source under') against the collapsed text; with the README as it stands all six hit README.md so the case reports FAIL and bash test-repo.sh exits 1, and CLAUDE.md matches nothing today and must keep matching nothing; after the README edits land no pattern hits either file, the case reports ok, and bash test-repo.sh exits 0.",
+                "got": "Ran `bash test-repo.sh`: exit code 1 overall (\"FAIL: 1 of 56 cases\"), with this new section printing\n  FAIL — these pages under tools/argus still describe a removed argus-ui view:\n       README.md matches \\btabs?\\b\n       README.md matches \\bwaterfall\\b\n       README.md matches overview, *tasks\n       README.md matches tools table\n       README.md matches under \"Attributes\"\n       README.md matches writes the source under\nCLAUDE.md produced no hits, matching the plan's requirement that it keep matching nothing. `bash -n test-repo.sh` confirms the added section parses. This is the sole failing case in the whole script — every other of the 56 cases still passes, so the script's exit 1 is attributable to this new case alone, as the plan requires."
+              },
+              {
+                "case": "Case 2 (change to an existing case) — the argus-ui doc scan stops depending on line wrapping",
+                "file": "/home/user/uroboros/tools/argus-ui/test/page.test.mjs",
+                "testName": "no page under tools/argus-ui promises a removed view",
+                "expected": "Before matching the existing eight patterns, normalise each scanned file's text with source.replace(/\\s+/g, ' '); do not add, remove or reword a pattern, and keep the existing assert.deepEqual(problems, [], '...') message. Green before and after the README edits — a hardening, not a new red — because none of the eight patterns matches tools/argus-ui/README.md or tools/argus-ui/CLAUDE.md, normalised or not.",
+                "got": "Ran `npm --prefix tools/argus-ui test -- test/page.test.mjs`: 234 tests, 234 pass, 0 fail, exit 0 (this test and the whole file's other 233 tests unaffected). This case never goes red under this change, matching the plan's description of a hardening rather than a regression guard that ever fires; I recorded that fact in a comment in the test so a later reader does not mistake the passing state for an untested change."
+              }
+            ],
+            "openQuestions": [],
+            "questions": []
+          }
         }
       ]
     }

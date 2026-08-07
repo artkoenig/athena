@@ -976,7 +976,14 @@ test('no page under tools/argus-ui promises a removed view', () => {
   ];
   const problems = [];
   for (const name of files) {
-    const source = fs.readFileSync(path.join(PROJECT, name), 'utf8');
+    const raw = fs.readFileSync(path.join(PROJECT, name), 'utf8');
+    // Normalised so a reworded but still-promising sentence cannot slip past
+    // this guard by being wrapped onto a different line than the pattern
+    // expects. This is a hardening, not a new red: every pattern below was
+    // checked against tools/argus-ui/README.md and tools/argus-ui/CLAUDE.md
+    // as they stand, normalised or not, and none of them matches either file
+    // — this test was green before this change and stays green after it.
+    const source = raw.replace(/\s+/g, ' ');
     for (const pattern of patterns) {
       if (pattern.test(source)) problems.push(`${name} matches ${pattern}`);
     }
