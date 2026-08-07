@@ -747,3 +747,186 @@ test('with every parent resolvable, no unattributed lane appears', () => {
   const { items } = store.getAgents(SESSION);
   assert.ok(!items.some((item) => item.kind === 'unattributed'));
 });
+
+/* --------------- getAgents: activity and context per lane --------------- */
+
+test('activity is placed on the lane of the agent instance it belongs to, at the time it occurred', () => {
+  const store = new TelemetryStore();
+  store.ingest('traces', [
+    span('claude_code.interaction', {}, { spanId: 'root' }),
+    subagentSpan(
+      'claude_code.tool',
+      'agt-a',
+      { tool_name: 'Read' },
+      { spanId: 'tool-a', parentSpanId: 'root', startMs: 100 },
+    ),
+    subagentSpan(
+      'claude_code.llm_request',
+      'agt-a',
+      { model: 'claude-opus-5' },
+      { spanId: 'llm-a', parentSpanId: 'root', startMs: 300 },
+    ),
+  ]);
+  const { items } = store.getAgents(SESSION);
+  const lane = items.find((item) => item.id === 'agent:agt-a');
+  const main = items.find((item) => item.id === 'main');
+  assert.deepEqual(lane.activity, [
+    { atMs: NOW + 100, kind: 'tool', name: 'Read' },
+    { atMs: NOW + 300, kind: 'llm_request', name: 'claude-opus-5' },
+  ]);
+  assert.equal(lane.activityTotal, 2);
+  assert.deepEqual(main.activity, [], 'an interaction span is not activity');
+});
+
+test('activity that resolves to no agent instance stays on the unattributed lane', () => {
+  const store = new TelemetryStore();
+  store.ingest('traces', [
+    span('claude_code.interaction', {}, { spanId: 'root' }),
+    span('claude_code.tool', {}, { spanId: 'orphan-tool', parentSpanId: 'ghost', startMs: 50 }),
+  ]);
+  const { items } = store.getAgents(SESSION);
+  const unattributed = items.find((item) => item.kind === 'unattributed');
+  const main = items.find((item) => item.kind === 'main');
+  assert.ok(unattributed);
+  assert.equal(unattributed.activity.length, 1);
+  assert.equal(unattributed.activity[0].kind, 'tool');
+  assert.deepEqual(main.activity, []);
+});
+
+test("the context curve is per lane, joined through the record's span because the record carries no agent_id", () => {
+  const store = new TelemetryStore();
+  store.ingest('traces', [
+    span('claude_code.interaction', {}, { spanId: 'root' }),
+    subagentSpan('claude_code.llm_request', 'agt-a', {}, { spanId: 'llm-a', parentSpanId: 'root' }),
+  ]);
+  store.ingest('logs', [
+    { ...log('claude_code.api_request_body', { body: '{"m":1}', body_length: '4096' }, NOW + 50), spanId: 'llm-a' },
+  ]);
+  const { items } = store.getAgents(SESSION);
+  const lane = items.find((item) => item.id === 'agent:agt-a');
+  const main = items.find((item) => item.id === 'main');
+  assert.deepEqual(lane.context, [{ atMs: NOW + 50, length: 4096 }]);
+  assert.equal(lane.contextPeak, 4096);
+  assert.deepEqual(main.context, []);
+});
+
+test('the reported untruncated length survives truncation', () => {
+  const store = new TelemetryStore();
+  store.ingest('traces', [
+    span('claude_code.interaction', {}, { spanId: 'root' }),
+    subagentSpan('claude_code.llm_request', 'agt-a', {}, { spanId: 'llm-a', parentSpanId: 'root' }),
+  ]);
+  store.ingest('logs', [
+    {
+      ...log(
+        'claude_code.api_request_body',
+        { body: '{"m":1}', body_truncated: 'true', body_length: '120000' },
+        NOW + 50,
+      ),
+      spanId: 'llm-a',
+    },
+  ]);
+  const { items } = store.getAgents(SESSION);
+  const lane = items.find((item) => item.id === 'agent:agt-a');
+  assert.equal(lane.context[0].length, 120000, 'the reported body_length must win, not the truncated body string');
+  assert.equal(lane.contextPeak, 120000);
+});
+
+test('a context record that resolves to no agent instance stays visible on the unattributed lane', () => {
+  // Repeated for spanId 'gone' (no such span exists) and '' (no span context at all,
+  // the fixture default) — both must land on unattributed, never dropped.
+  for (const spanId of ['gone', '']) {
+    const store = new TelemetryStore();
+    store.ingest('traces', [span('claude_code.interaction', {}, { spanId: 'root' })]);
+    store.ingest('logs', [
+      { ...log('claude_code.api_request_body', { body_length: '900' }, NOW + 400), spanId },
+    ]);
+    const { items } = store.getAgents(SESSION);
+    const unattributed = items.find((item) => item.kind === 'unattributed');
+    const main = items.find((item) => item.id === 'main');
+    assert.ok(unattributed, `an unattributed lane must exist for spanId ${JSON.stringify(spanId)}`);
+    assert.equal(unattributed.context.length, 1);
+    assert.equal(unattributed.context[0].length, 900);
+    assert.deepEqual(main.context, []);
+    assert.ok(unattributed.firstMs <= NOW + 400, 'firstMs must include the content sample so its bar is drawable');
+    assert.ok(unattributed.lastMs >= NOW + 400, 'lastMs must include the content sample so its bar is drawable');
+  }
+});
+
+test('only request bodies feed the curve', () => {
+  const store = new TelemetryStore();
+  store.ingest('traces', [
+    span('claude_code.interaction', {}, { spanId: 'root' }),
+    span('claude_code.llm_request', {}, { spanId: 'llm-a', parentSpanId: 'root' }),
+  ]);
+  store.ingest('logs', [
+    { ...log('claude_code.api_response_body', { body_length: '5000' }, NOW + 10), spanId: 'llm-a' },
+    { ...log('claude_code.user_prompt', { prompt: 'hi', prompt_length: '2' }, NOW + 20), spanId: 'llm-a' },
+    { ...log('claude_code.api_request_body', { body_length: '1000' }, NOW + 30), spanId: 'llm-a' },
+  ]);
+  const { items } = store.getAgents(SESSION);
+  const main = items.find((item) => item.id === 'main');
+  assert.equal(main.context.length, 1);
+  assert.equal(main.context[0].length, 1000);
+  assert.equal(main.contextPeak, 1000);
+});
+
+test('a lane with no tool/llm spans and no bodies still carries the four keys', () => {
+  const store = new TelemetryStore();
+  store.ingest('traces', [span('claude_code.interaction', {}, { spanId: 'root' })]);
+  const { items } = store.getAgents(SESSION);
+  const main = items.find((item) => item.id === 'main');
+  assert.deepEqual(
+    {
+      activity: main.activity,
+      activityTotal: main.activityTotal,
+      context: main.context,
+      contextPeak: main.contextPeak,
+    },
+    { activity: [], activityTotal: 0, context: [], contextPeak: 0 },
+  );
+});
+
+test('activity is bounded without losing the ends', () => {
+  const store = new TelemetryStore();
+  const spans = [span('claude_code.interaction', {}, { spanId: 'root' })];
+  for (let i = 1; i <= 3000; i++) {
+    spans.push(
+      subagentSpan(
+        'claude_code.tool',
+        'agt-a',
+        { tool_name: 'Read' },
+        { spanId: `tool-${i}`, parentSpanId: 'root', startMs: i },
+      ),
+    );
+  }
+  store.ingest('traces', spans);
+  const { items } = store.getAgents(SESSION);
+  const lane = items.find((item) => item.id === 'agent:agt-a');
+  assert.equal(lane.activityTotal, 3000);
+  assert.ok(lane.activity.length < 3000, 'the drawn marks must be thinned below the raw count');
+  assert.equal(lane.activity[0].atMs, NOW + 1);
+  assert.equal(lane.activity.at(-1).atMs, NOW + 3000);
+});
+
+test('the context peak survives thinning', () => {
+  const store = new TelemetryStore();
+  store.ingest('traces', [
+    span('claude_code.interaction', {}, { spanId: 'root' }),
+    subagentSpan('claude_code.llm_request', 'agt-a', {}, { spanId: 'llm-a', parentSpanId: 'root' }),
+  ]);
+  const logs = [];
+  for (let i = 0; i < 1500; i++) {
+    const length = i === 750 ? 999999 : 1000;
+    logs.push({
+      ...log('claude_code.api_request_body', { body_length: String(length) }, NOW + i),
+      spanId: 'llm-a',
+    });
+  }
+  store.ingest('logs', logs);
+  const { items } = store.getAgents(SESSION);
+  const lane = items.find((item) => item.id === 'agent:agt-a');
+  assert.equal(lane.contextPeak, 999999, 'the peak must survive even though the drawn samples are thinned');
+  assert.ok(lane.context.length < 1500, 'the drawn samples must be thinned below the raw count');
+  assert.ok(lane.context.some((sample) => sample.length === 999999));
+});

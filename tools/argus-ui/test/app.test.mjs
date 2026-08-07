@@ -205,20 +205,62 @@ function sessionDetail(id, name) {
   };
 }
 
-/** `/api/sessions/sess-1/agents`: two concurrent instances of one agent type plus an unattributed lane. */
+/**
+ * `/api/sessions/sess-1/agents`: two concurrent instances of one agent type plus an
+ * unattributed lane, now carrying activity marks and a context curve per lane — this
+ * is the only fixture that proves the drawn result reaches the page (see D1/D2 below).
+ */
 const agentsOne = {
   sessionId: 'sess-1',
   firstMs: T0,
   lastMs: T0 + 10_000,
   items: [
-    { id: 'main', kind: 'main', agentId: null, parentAgentId: null, agentType: null, firstMs: T0, lastMs: T0 + 10_000, durationMs: 10_000, spanCount: 4 },
-    { id: 'agent:agt-a', kind: 'subagent', agentId: 'agt-a', parentAgentId: null, agentType: 'agent:builtin:researcher', firstMs: T0 + 1_000, lastMs: T0 + 4_000, durationMs: 3_000, spanCount: 3 },
-    { id: 'agent:agt-b', kind: 'subagent', agentId: 'agt-b', parentAgentId: null, agentType: 'agent:builtin:researcher', firstMs: T0 + 2_000, lastMs: T0 + 5_000, durationMs: 3_000, spanCount: 2 },
-    { id: 'unattributed', kind: 'unattributed', agentId: null, parentAgentId: null, agentType: null, firstMs: T0 + 6_000, lastMs: T0 + 7_000, durationMs: 1_000, spanCount: 1 },
+    {
+      id: 'main', kind: 'main', agentId: null, parentAgentId: null, agentType: null,
+      firstMs: T0, lastMs: T0 + 10_000, durationMs: 10_000, spanCount: 4,
+      activity: [
+        { atMs: T0 + 500, kind: 'llm_request', name: 'claude-opus-5' },
+        { atMs: T0 + 3_000, kind: 'tool', name: 'Read' },
+      ],
+      activityTotal: 2,
+      context: [
+        { atMs: T0 + 500, length: 20_000 },
+        { atMs: T0 + 8_000, length: 90_000 },
+      ],
+      contextPeak: 90_000,
+    },
+    {
+      id: 'agent:agt-a', kind: 'subagent', agentId: 'agt-a', parentAgentId: null, agentType: 'agent:builtin:researcher',
+      firstMs: T0 + 1_000, lastMs: T0 + 4_000, durationMs: 3_000, spanCount: 3,
+      activity: [{ atMs: T0 + 1_500, kind: 'tool', name: 'Grep' }],
+      activityTotal: 1,
+      context: [{ atMs: T0 + 1_500, length: 30_000 }],
+      contextPeak: 30_000,
+    },
+    {
+      id: 'agent:agt-b', kind: 'subagent', agentId: 'agt-b', parentAgentId: null, agentType: 'agent:builtin:researcher',
+      firstMs: T0 + 2_000, lastMs: T0 + 5_000, durationMs: 3_000, spanCount: 2,
+      activity: [],
+      activityTotal: 0,
+      context: [],
+      contextPeak: 0,
+    },
+    {
+      id: 'unattributed', kind: 'unattributed', agentId: null, parentAgentId: null, agentType: null,
+      firstMs: T0 + 6_000, lastMs: T0 + 7_000, durationMs: 1_000, spanCount: 1,
+      activity: [{ atMs: T0 + 6_500, kind: 'tool', name: 'Bash' }],
+      activityTotal: 1,
+      context: [{ atMs: T0 + 6_500, length: 5_000 }],
+      contextPeak: 5_000,
+    },
   ],
 };
 
-/** `/api/sessions/sess-2/agents`: main plus one subagent of a different type. */
+/**
+ * `/api/sessions/sess-2/agents`: main plus one subagent of a different type. Deliberately
+ * left without activity/context fields, so it doubles as the old-shape case in the
+ * existing switch-session test.
+ */
 const agentsTwo = {
   sessionId: 'sess-2',
   firstMs: T0,
@@ -319,4 +361,44 @@ test('a session whose agent lanes cannot be fetched still lands on the timeline,
   assert.ok(!html.includes('aria-selected="true"'));
   assert.ok(placeholder.index < html.indexOf('role="tablist"'));
   assert.equal(handle.el('view-body').innerHTML, '');
+});
+
+/* ------------------------ activity marks and the context curve ------------------------ */
+
+/** The substring of `html` from `data-lane-id="<id>"` to the next `data-lane-id="` (or the end). */
+function laneRow(html, id) {
+  const start = html.indexOf(`data-lane-id="${id}"`);
+  if (start === -1) return '';
+  const next = html.indexOf('data-lane-id="', start + 1);
+  return next === -1 ? html.slice(start) : html.slice(start, next);
+}
+
+test('booting the app draws activity marks and the context curve reaches the page', async () => {
+  const handle = await bootApp({ ...baseRoutes });
+  const html = handle.el('detail').innerHTML;
+
+  const mainRow = laneRow(html, 'main');
+  assert.match(mainRow, /data-activity-kind="llm_request"/);
+  assert.match(mainRow, /data-activity-kind="tool"/);
+  const mainPolygon = (mainRow.match(/<polygon points="([^"]*)"/) || [])[1];
+  assert.ok(
+    mainPolygon && mainPolygon.trim().length > 0,
+    'expected a non-empty context curve on the main lane',
+  );
+
+  const agtBRow = laneRow(html, 'agent:agt-b');
+  assert.ok(!agtBRow.includes('<polygon'), 'a lane with no context samples must draw no curve');
+
+  assert.equal((html.match(/data-lane-id="/g) || []).length, 4);
+  assert.ok(!html.includes('aria-selected="true"'));
+});
+
+test('unattributed activity reaches the page, and the page names the measure', async () => {
+  const handle = await bootApp({ ...baseRoutes });
+  const html = handle.el('detail').innerHTML;
+
+  const unattributedRow = laneRow(html, 'unattributed');
+  assert.match(unattributedRow, /data-activity-kind="tool"/);
+
+  assert.match(html, /request body length/i);
 });

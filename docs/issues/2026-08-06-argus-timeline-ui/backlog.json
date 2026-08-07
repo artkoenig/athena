@@ -67,6 +67,197 @@
             ],
             "questions": []
           }
+        },
+        {
+          "label": "tests:lane-activity.0",
+          "at": "2026-08-07T11:27:06.116Z",
+          "return": {
+            "summary": "Added 9 store.test.mjs cases, 1 server.test.mjs case (plus a spanId extension to contentLogsPayloadJson), 13 timeline.test.mjs cases (plus lane()/laneRow()/activityMarkTags() fixture extensions), and 2 app.test.mjs cases (plus new activity/context fields on the agentsOne fixture and a laneRow() helper) for increment 3 (activity marks and the context curve per lane); all four files run red for missing behaviour, none for import typos of my own making.",
+            "cases": [
+              {
+                "case": "A1 — activity is placed on the lane of the agent instance it belongs to, at the time it occurred",
+                "file": "tools/argus/test/store.test.mjs",
+                "testName": "activity is placed on the lane of the agent instance it belongs to, at the time it occurred",
+                "expected": "agent:agt-a lane.activity is [{atMs:NOW+100,kind:'tool',name:'Read'},{atMs:NOW+300,kind:'llm_request',name:'claude-opus-5'}], activityTotal 2; main.activity is []",
+                "got": "AssertionError deepEqual: actual undefined vs expected the two-entry array — lane.activity is not yet populated"
+              },
+              {
+                "case": "A2 — activity that resolves to no agent instance stays on the unattributed lane",
+                "file": "tools/argus/test/store.test.mjs",
+                "testName": "activity that resolves to no agent instance stays on the unattributed lane",
+                "expected": "the unattributed lane's activity has one mark, main's activity is empty",
+                "got": "TypeError: Cannot read properties of undefined (reading 'length') — unattributed.activity is undefined"
+              },
+              {
+                "case": "A3 — the context curve is per lane, joined through the record's span because the record carries no agent_id",
+                "file": "tools/argus/test/store.test.mjs",
+                "testName": "the context curve is per lane, joined through the record's span because the record carries no agent_id",
+                "expected": "agent:agt-a lane.context is [{atMs:NOW+50,length:4096}], contextPeak 4096, main.context is []",
+                "got": "AssertionError deepEqual: actual undefined vs expected [{atMs:...,length:4096}] — lane.context is not yet populated"
+              },
+              {
+                "case": "A4 — the reported untruncated length survives truncation (headline)",
+                "file": "tools/argus/test/store.test.mjs",
+                "testName": "the reported untruncated length survives truncation",
+                "expected": "sample length is 120000 (not 7, the raw body's character count), contextPeak 120000",
+                "got": "TypeError: Cannot read properties of undefined (reading '0') — lane.context[0] does not exist yet"
+              },
+              {
+                "case": "A5 — a context record that resolves to no agent instance stays visible on the unattributed lane, for spanId 'gone' and spanId ''",
+                "file": "tools/argus/test/store.test.mjs",
+                "testName": "a context record that resolves to no agent instance stays visible on the unattributed lane",
+                "expected": "an unattributed lane exists holding the sample (length 900), main.context empty, firstMs/lastMs bracket NOW+400, for both spanId 'gone' and spanId ''",
+                "got": "AssertionError: 'an unattributed lane must exist for spanId \"gone\"' — no unattributed lane is produced for an orphan content record"
+              },
+              {
+                "case": "A6 — only request bodies feed the curve",
+                "file": "tools/argus/test/store.test.mjs",
+                "testName": "only request bodies feed the curve",
+                "expected": "main.context has exactly one sample, length 1000 (from the api_request_body log only), contextPeak 1000",
+                "got": "TypeError: Cannot read properties of undefined (reading 'length') — main.context is undefined"
+              },
+              {
+                "case": "A7 — edge, empty: a lane with no tool/llm spans and no bodies still carries the four keys",
+                "file": "tools/argus/test/store.test.mjs",
+                "testName": "a lane with no tool/llm spans and no bodies still carries the four keys",
+                "expected": "main lane deep-equals {activity:[],activityTotal:0,context:[],contextPeak:0} on those four keys",
+                "got": "AssertionError deepEqual: actual {activity:undefined,activityTotal:undefined,context:undefined,contextPeak:undefined} vs expected the zero-value shape"
+              },
+              {
+                "case": "A8 — edge, limit: activity is bounded without losing the ends (3000 tool spans)",
+                "file": "tools/argus/test/store.test.mjs",
+                "testName": "activity is bounded without losing the ends",
+                "expected": "activityTotal 3000, activity.length < 3000, first entry atMs NOW+1, last entry atMs NOW+3000",
+                "got": "AssertionError strictEqual: actual undefined vs expected 3000 — lane.activityTotal is not yet computed"
+              },
+              {
+                "case": "A9 — edge, limit: the context peak survives thinning (1500 request-body logs)",
+                "file": "tools/argus/test/store.test.mjs",
+                "testName": "the context peak survives thinning",
+                "expected": "contextPeak 999999, context.length < 1500, one sample has length 999999",
+                "got": "AssertionError 'the peak must survive even though the drawn samples are thinned': actual undefined vs expected 999999"
+              },
+              {
+                "case": "B1 — the drawn data actually reaches a client over HTTP, decoded from the wire",
+                "file": "tools/argus/test/server.test.mjs",
+                "testName": "the drawn data actually reaches a client over HTTP, decoded from the wire",
+                "expected": "GET /api/sessions/:id/agents returns an agent:agt-a lane with one 'tool' activity entry and one context entry of length 65000 (surviving truncation over the wire), contextPeak 65000, and every lane carries activity/activityTotal/context/contextPeak",
+                "got": "TypeError: Cannot read properties of undefined (reading 'length') — lane.activity is undefined, so the payload never reaches the shape asked for"
+              },
+              {
+                "case": "C1 — activity is placed at the time it occurred",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "activity is placed at the time it occurred",
+                "expected": "activityMarks(lane, window) returns leftPct 25 and 75 with kinds 'tool' and 'llm_request', in order",
+                "got": "Whole file fails at import: SyntaxError — '../public/timeline.js' does not export 'activityMarks' yet"
+              },
+              {
+                "case": "C2 — edges: an entry at atMs 0 or below is dropped; out-of-window entries clamp to 0/100",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "an entry at atMs 0 or below is dropped, and out-of-window entries clamp to the window edges",
+                "expected": "atMs 0 and atMs -50 both drop; entries at 500 and 5000 against window {1000,2000} clamp to leftPct 0 and 100",
+                "got": "Whole file fails at import: SyntaxError — 'activityMarks' is not exported"
+              },
+              {
+                "case": "C3 — marks are drawn on their own lane's row",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "marks are drawn on their own lane's row",
+                "expected": "laneRow(html,'main') has exactly one data-activity-kind=\"llm_request\" and no \"tool\"; laneRow(html,'agent:agt-a') has exactly two \"tool\" marks; each mark's left% matches activityMarks for that lane",
+                "got": "Whole file fails at import: SyntaxError — 'activityMarks' is not exported"
+              },
+              {
+                "case": "C4 — activity that resolves to no agent instance stays visible",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "activity that resolves to no agent instance stays visible",
+                "expected": "laneRow(html,'unattributed') contains the mark, laneRow(html,'main') contains none",
+                "got": "Whole file fails at import: SyntaxError — 'activityMarks' is not exported"
+              },
+              {
+                "case": "C5 — the curve's geometry",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "contextAreaPoints traces the curve's geometry",
+                "expected": "contextAreaPoints(lane, window, 400) equals exactly '0.000,100.000 0.000,75.000 50.000,50.000 100.000,0.000 100.000,100.000'",
+                "got": "Whole file fails at import: SyntaxError — 'contextAreaPoints' is not exported"
+              },
+              {
+                "case": "C6 — edge, empty: contextAreaPoints returns '' for empty context, and '' when peak is 0",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "contextAreaPoints returns nothing for an empty context or a zero peak",
+                "expected": "'' for an empty context array; '' when the passed peak is 0 even though samples exist",
+                "got": "Whole file fails at import: SyntaxError — 'contextAreaPoints' is not exported"
+              },
+              {
+                "case": "C7 — edge, single sample: MIN_AREA_WIDTH_PCT keeps an instant curve visible",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "a single sample keeps a minimum-width instant curve visible",
+                "expected": "a lone sample at atMs 500 equal to the peak yields '50.000,100.000 50.000,0.000 50.400,0.000 50.400,100.000'",
+                "got": "Whole file fails at import: SyntaxError — 'contextAreaPoints' is not exported"
+              },
+              {
+                "case": "C8 — growth is readable, and lanes are comparable",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "growth is readable, and lanes are comparable",
+                "expected": "contextPeakOf(items) is 400 for peaks 100 and 400; the 400-lane's polygon reaches y 0.000 while the 100-lane's smallest y is 75.000",
+                "got": "Whole file fails at import: SyntaxError — 'contextPeakOf' is not exported"
+              },
+              {
+                "case": "C9 — the curve is drawn behind the activity, in the rendered markup",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "the curve is drawn behind the activity, in the rendered markup",
+                "expected": "inside a lane row with samples: class=\"lane-context\" precedes class=\"lane-bar\" precedes the first class=\"activity-mark\", polygon points non-empty; a lane with no samples has no lane-context element",
+                "got": "Whole file fails at import: SyntaxError — the new exports do not exist"
+              },
+              {
+                "case": "C10 — the view names the measure",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "the view names the measure",
+                "expected": "with context present, output matches /request body length/i and /characters/i; with every contextPeak 0, output still matches /request bod/i and has no <polygon",
+                "got": "Whole file fails at import: SyntaxError — the new exports do not exist"
+              },
+              {
+                "case": "C11 — per-lane growth is readable as a number",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "per-lane growth is readable as a number",
+                "expected": "a lane with contextPeak 90000 and activityTotal 12 renders '90.0k' and '12' in its row",
+                "got": "Whole file fails at import: SyntaxError — the new exports do not exist"
+              },
+              {
+                "case": "C12 — regression, old shape: a lane without activity/activityTotal/context/contextPeak renders cleanly",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "the old lane shape without activity/context renders cleanly",
+                "expected": "no activity-mark, no lane-context, no NaN anywhere in the output",
+                "got": "Whole file fails at import: SyntaxError — the new exports do not exist"
+              },
+              {
+                "case": "C13 — escaping: a mark whose name is '<script>x</script>' produces no <script in the output",
+                "file": "tools/argus-ui/test/timeline.test.mjs",
+                "testName": "a hostile activity name is escaped in the rendered output",
+                "expected": "no '<script' substring anywhere in timelineHtml's output",
+                "got": "Whole file fails at import: SyntaxError — the new exports do not exist"
+              },
+              {
+                "case": "D1 — booting the app renders activity marks and a non-empty context curve on the drawn page (what proves the increment)",
+                "file": "tools/argus-ui/test/app.test.mjs",
+                "testName": "booting the app draws activity marks and the context curve reaches the page",
+                "expected": "main row has data-activity-kind=\"llm_request\" and \"tool\" marks and a non-empty <polygon points=\"…\">; agt-b row has no polygon; still 4 data-lane-id rows, no technical view selected",
+                "got": "AssertionError: input did not match /data-activity-kind=\"llm_request\"/ — app.js does not yet render activity marks or the context curve"
+              },
+              {
+                "case": "D2 — unattributed activity reaches the page, and the page names the measure",
+                "file": "tools/argus-ui/test/app.test.mjs",
+                "testName": "unattributed activity reaches the page, and the page names the measure",
+                "expected": "the unattributed row contains its activity mark, detail.innerHTML matches /request body length/i",
+                "got": "AssertionError: input did not match /data-activity-kind=\"tool\"/ — the unattributed row carries no activity marks yet"
+              }
+            ],
+            "openQuestions": [
+              "C3/C4/C8/C9/C11 assume a rendered mark is a single element carrying class=\"activity-mark\" plus data-activity-kind and a left:NN.NNN% style, and that lane-context/lane-bar/activity-mark are sibling elements within one lane row (matched via substring search independent of attribute order) — the plan gives this shape only for C9's class ordering and C1/C2's leftPct numbers, not the element's other attributes, so an implementation that nests marks differently (e.g. a wrapping element) may need these assertions loosened even though the underlying behaviour is met.",
+              "C5/C7's contextAreaPoints(lane, window, peak) third argument is read as a peak passed in from outside the lane (confirmed by C6's 'peak is 0 even though samples exist' and C8's cross-lane comparison using contextPeakOf(items)), not necessarily the lane's own contextPeak field — this reading is inferred from the literal output strings the plan gives, not stated as a rule; confirm before implementing that timelineHtml passes contextPeakOf(items) rather than each lane's own contextPeak into contextAreaPoints.",
+              "A2's orphan claude_code.tool span (parentSpanId 'ghost', no agent attributes) is not given a tool_name in the plan, so the test only asserts the unattributed lane's activity has one entry of kind 'tool' rather than a full deep-equal including name — confirm whether a name (e.g. undefined, null, or omitted) is expected on that entry.",
+              "Repeat the whole store.test.mjs, server.test.mjs, timeline.test.mjs, and app.test.mjs cases against the implementation once increment 3 lands, since timeline.test.mjs currently fails at module import (the three new named exports do not exist yet) and so its 13 cases could not be confirmed individually, only that the whole file is red for the right reason."
+            ],
+            "questions": []
+          }
         }
       ]
     },

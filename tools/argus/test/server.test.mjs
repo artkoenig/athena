@@ -158,6 +158,7 @@ function contentLogsPayloadJson(sessionId, records) {
               timeUnixNano: String(BigInt(record.timeMs) * 1000000n),
               severityNumber: 9,
               eventName: record.eventName,
+              ...(record.spanId ? { spanId: record.spanId } : {}),
               attributes: [
                 otlpAttr('session.id', sessionId),
                 ...Object.entries(record.attrs).map(([key, value]) => otlpAttr(key, value)),
@@ -667,6 +668,54 @@ test('GET /api/sessions/:id/agents for an unknown session is a 404', async () =>
     const response = await fetch(`${base}/api/sessions/nope/agents`);
     assert.equal(response.status, 404);
     assert.deepEqual(await response.json(), { error: 'unknown session' });
+  });
+});
+
+test('the drawn data actually reaches a client over HTTP, decoded from the wire', async () => {
+  await withServer({}, async ({ base }) => {
+    // Assert the ingest itself, so a failed POST reports as a failed POST rather
+    // than as a confusing empty-lanes assertion further down.
+    const ingestedTrace = await fetch(`${base}/v1/traces`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-protobuf' },
+      body: agentsTracePayload('s-lane-activity'),
+    });
+    assert.equal(ingestedTrace.status, 200);
+
+    const toolASpanId = '33'.repeat(8); // the tool span id agentsTracePayload already uses for agt-a
+    const t = Date.now();
+    const ingestedLogs = await fetch(`${base}/v1/logs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: contentLogsPayloadJson('s-lane-activity', [
+        {
+          eventName: 'claude_code.api_request_body',
+          timeMs: t,
+          spanId: toolASpanId,
+          attrs: { body: '{"m":1}', body_truncated: 'true', body_length: '65000' },
+        },
+      ]),
+    });
+    assert.equal(ingestedLogs.status, 200);
+
+    const response = await fetch(`${base}/api/sessions/s-lane-activity/agents`);
+    assert.equal(response.status, 200);
+    const result = await response.json();
+
+    const lane = result.items.find((item) => item.id === 'agent:agt-a');
+    assert.ok(lane, 'expected an agent:agt-a lane');
+    assert.equal(lane.activity.length, 1);
+    assert.equal(lane.activity[0].kind, 'tool');
+    assert.equal(lane.context.length, 1);
+    assert.equal(lane.context[0].length, 65000, 'the reported body_length must survive truncation over the wire');
+    assert.equal(lane.contextPeak, 65000);
+
+    for (const item of result.items) {
+      assert.ok('activity' in item, `${item.id} is missing activity`);
+      assert.ok('activityTotal' in item, `${item.id} is missing activityTotal`);
+      assert.ok('context' in item, `${item.id} is missing context`);
+      assert.ok('contextPeak' in item, `${item.id} is missing contextPeak`);
+    }
   });
 });
 
