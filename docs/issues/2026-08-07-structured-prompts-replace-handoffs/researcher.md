@@ -1251,3 +1251,388 @@ disjointness assertion are green on arrival, and each names above the mutation
 it exists to catch. The rest of `test.sh` was exit 0 in the reviewer's round-1
 run and nothing here touches it. Whoever runs the list first reports what it
 says.
+
+## Round 3
+
+The reviewer filed two findings, both in the workflow scripts, both about a
+step return the script throws away or replays wrongly. Finding 1 is a real
+divergence: `workflows/loop.js` discards the closing planner's return, so a
+question asked at the Close step reaches nobody, while `workflows/agile-loop.js`
+handles the same role in the same position correctly. Finding 2 is a regression
+the resume mechanism caused: `workflows/agile-loop.js` keys its step labels on
+the increment id, so the second attempt at an increment the planner handed back
+finds every one of its labels in the in-session `recorded` map, dispatches
+nobody and re-reads the first attempt's verdict — `MAX_ATTEMPTS` turned from
+"worked twice" into "worked once, then a no-op iteration".
+
+Neither `skills/agent-brief/assets/backlog.mjs`, nor any agent page, skill,
+`rulebook.md` or `README.md` is touched this round. The whole change is
+`workflows/loop.js`, `workflows/agile-loop.js` and `test-repo.sh`.
+
+### Implementation plan
+
+**Finding 1 — the plain loop throws away the closing planner's question.**
+`workflows/loop.js` line 656 dispatches the Close step and drops the value:
+
+```js
+  await step(closeLabel, 'Close', () =>
+    agent(
+```
+
+Bind it and put it through `asksTheHuman`, exactly as `agile-loop.js` line 772
+does for `replan`. Replace lines 656 and 673-674 so the block reads:
+
+```js
+  const closed = await step(closeLabel, 'Close', () =>
+    agent(
+      ... unchanged prompt ...
+    ),
+  )
+  task.status = accepted ? 'done' : 'blocked'
+  // The planner may end its own step with a question — a status only the human
+  // can settle. Same call, same position as the incremental loop's replan: a
+  // question here ends the run as a regular exit, and the run state the planner
+  // recorded carries it into the session that picks the run back up.
+  asksTheHuman(closeLabel, closed)
+  if (!accepted) {
+```
+
+Nothing else in the block moves: the prompt, `answeredBlock(closeLabel)`, the
+`recordStep('-', closeLabel)` and the schema stay as they are, `task.status` is
+still mirrored before the question is triaged (agile-loop's order), and the
+existing `if (blockedOnHuman.length)` log at lines 680-685 then fires on its
+own, which is the whole of what the run has to do about it. The name `closed`
+is free in this file — no other binding uses it.
+
+Order matters in one respect only: `asksTheHuman` must run before the
+`blockedOnHuman.length` log, which it does. Placing it before `task.status`
+instead would be equally correct but would diverge from `agile-loop.js`, which
+is the thing this finding is about.
+
+What this fix does **not** do, stated so it is a decision and not an oversight:
+a resumed run does not re-dispatch the Close step that asked. The planner
+closed the increment in `backlog.json` before it asked, so the resumed run finds
+no `todo` increment, skips the chain and ends as already complete. That is the
+same limit `agile-loop.js`'s `replan` already has and that Round 2 recorded for
+it; the question is in the state, which is what criterion 10 asks for, and the
+human's answer stands in `issue.md` for whoever reads it next.
+
+Rejected: re-raising, at the end of a resumed run, every carried question whose
+step was never re-dispatched. It reads well and costs little, but it would put
+an already-answered question back into `blockedOnHuman` on every subsequent
+run, and in `agile-loop.js` `accepted` is computed as
+`!stopped && !blockedOnHuman.length && ...`, so a finished run would report
+itself unfinished forever. Rejected: dispatching the Close step again on resume
+even though the increment is closed — the planner would be asked to close what
+is already closed, and `close` on a closed increment sheds nothing new but does
+re-write the file.
+
+Rejected: moving the `questions` triage inside `step()` so every dispatch is
+triaged automatically. It would be one line instead of two and would have
+caught this class of bug, but `step()` returns the recorded payload on a resume
+too, so triaging there would re-raise every recorded question on every resumed
+run — the exact bug Round 2 fixed.
+
+**Finding 2 — an increment handed back is never worked a second time.** In
+`workflows/agile-loop.js` the labels are keyed on the increment id on purpose
+(the comment at lines 527-530 says why: an ordinal moves when a re-cut
+reorders the backlog, and a moving label breaks resume across sessions). Keep
+that. The repair is to forget the in-session recordings of an increment the
+planner hands back, which is exactly what the file itself already did: `close`
+sets `increment.steps = []`, so on a fresh session that increment starts with
+no recorded steps at all. The in-session map is the only thing that still
+remembers them.
+
+Add, next to `step()` in `workflows/agile-loop.js` (after line 540, and in that
+file only — the plain loop never re-cuts):
+
+```js
+// Every step label that belongs to one increment: `research:<id>.<round>` and
+// its siblings, plus `replan:<id>`. `load-state`, `decompose` and `publish`
+// carry no id and are never forgotten.
+function forgetSteps(id) {
+  for (const label of [...recorded.keys()]) {
+    const at = label.indexOf(':')
+    if (at < 0) continue
+    const rest = label.slice(at + 1)
+    if (rest === id || rest.startsWith(`${id}.`)) recorded.delete(label)
+  }
+}
+```
+
+and call it right after the re-cut replaces the backlog, between lines 770 and
+771:
+
+```js
+    if (recut && Array.isArray(recut.increments) && recut.increments.length) {
+      increments = recut.increments
+    }
+    // The planner may hand an increment already worked back as `todo` — the
+    // second chance MAX_ATTEMPTS exists for. Closing it emptied its steps in
+    // the run state, so the in-session map forgets them too: left there, every
+    // label of the next attempt would be found recorded, the attempt would
+    // dispatch nobody and would re-read this iteration's verdict and this
+    // iteration's re-cut as if they were the new ones.
+    for (const t of increments) {
+      if (t.status === 'todo' && attempts.has(t.id)) forgetSteps(t.id)
+    }
+    log(`After increment ${n}: ...`)
+```
+
+`attempts.has(t.id)` is what keeps this from touching anything else: only an
+increment this session already worked is forgotten, so an untouched `todo`
+increment and a re-cut that returns no list of its own both leave the map
+alone. The exact-match `rest === id` plus the `${id}.` prefix is what keeps
+increment `i1` from forgetting `i10`'s steps.
+
+Rejected: putting the attempt ordinal in the label
+(`research:${task.id}.${attempt}.${round}`). `attempts` is session-local by
+design (the comment at lines 44-51 says so, and closing an increment sheds the
+returns that would count attempts), so the ordinal differs between a run and its
+resume and the labels stop matching across sessions — resume would re-dispatch
+recorded steps. Rejected: clearing `recorded` wholesale after a re-cut — it
+would forget `decompose` and every other increment's steps and turn a resumed
+multi-increment run into a full re-run. Rejected: leaving the behaviour as it
+is and only correcting the stop message ("was worked 2 times") to match — the
+second attempt is the backstop's whole point, and a truthful message about a
+useless retry is not the repair.
+
+There is no cross-session half of this fix to write: a handed-back increment
+comes out of `backlog.json` with `steps: []`, because `close` empties them, so
+a resumed session already dispatches its chain fresh.
+
+### Module map
+
+| Path | What it holds | What changes this round |
+| --- | --- | --- |
+| `workflows/loop.js` | The plain chain, 720 lines. `asksTheHuman` at l. 513-520, the Close block at l. 652-678, the `blockedOnHuman` log at l. 680-685, the return at l. 720. | Bind the Close step's return and pass it to `asksTheHuman`. Three lines. |
+| `workflows/agile-loop.js` | The incremental chain, 841 lines. `step()` at l. 531-540, the increment loop at l. 615-780, `attempts` at l. 587, the re-cut at l. 765-772. | Add `forgetSteps()` after `step()`; call it after the re-cut. Nothing else. |
+| `test-repo.sh` | The repository's own suite, 47 cases. Driver heredoc l. 280-613: markers l. 304-317, fixtures l. 319-434, `contextFor` l. 436-458, `returnFor` l. 462-476, mode branches l. 504-601. `run_driver` at l. 615-623, the two-workflow loop at l. 629-641. | One marker, two `contextFor` arms, one `returnFor` line, two mode branches, three `run_driver` lines. |
+| `skills/agent-brief/assets/backlog.mjs`, the agent pages, `rulebook.md`, `README.md`, `skills/*/SKILL.md` | — | Unchanged. Do not touch them. |
+
+One standing constraint for whoever edits the workflow scripts: `test-repo.sh`
+lines 136-159 grep `workflows/*.js` for the word `handoff` in any spelling and
+for the file names `researcher.md`, `test-author.md`, `implementer.md`,
+`reviewer.md`, `planner.md` and `backlog.md`. Do not write any of them into a
+comment or a prompt.
+
+### Environment
+
+- Repository root `/home/user/uroboros`, branch `claude/structured-prompts-issues-dphlv9`, working tree clean.
+- `node` is v22.22.2 on `PATH`; `bash`, `git` and `mktemp` are present.
+- `test.sh` and `test-repo.sh` are **not executable** in this checkout (mode
+  `-rw-r--r--`, unchanged from `origin/main`), so they are invoked as
+  `bash test.sh` and `bash test-repo.sh`. Do not `chmod` them.
+- There is no linter and no formatter in this repository. Nothing to run.
+- The `tools/` suites `test.sh` runs are zero-install; `npm` is present and no
+  command below needs network access.
+
+### Test plan
+
+Tests are needed. Finding 1 needs a failing test first: no driver mode has ever
+given the closing planner a question to ask, and the mode that does is red on
+`loop.js` and green on `agile-loop.js`, which is the divergence stated as an
+exit code. Finding 2 needs a failing test first too: no mode has ever exercised
+a re-cut that hands an increment back.
+
+#### What proves each finding
+
+**Finding 1.** Driver mode `w11`, run against **both** workflow scripts: a
+fresh run in which the closing planner (`close:i1` in the plain loop,
+`replan:i1` in the incremental one) returns a question. The run must end at
+Publish with that question in `blockedOnHuman`, attributed to the step that
+asked, and logged for the human. Running it on both is the point — it is green
+on `agile-loop.js` before the change and red on `loop.js`, and afterwards it
+holds the two to one behaviour.
+
+Left untested, deliberately: the resumed run after a Close question, because
+the increment is closed and no step is re-dispatched — there is no behaviour
+there to pin beyond `w3`, which already covers a fully-closed backlog; and the
+`decompose` planner's question, which `asksTheHuman('decompose', backlog)` at
+`loop.js` l. 538 / `agile-loop.js` l. 570 has always handled and no finding
+touches.
+
+**Finding 2.** Driver mode `w12`, run against `agile-loop.js` **only**: the
+plain loop has no re-cut and no `replan` step, so the mode has nothing to mean
+there. The first `replan:i1` hands `i1` back as `todo`; the second closes it as
+`done`. The run must dispatch the whole chain a second time and finish without
+`stopped` being set.
+
+Left untested, deliberately: a re-cut that hands back an increment worked two
+iterations earlier rather than the one just finished — the `attempts.has(t.id)`
+loop treats every increment the same way and a second mode would pin the same
+three lines twice; and the third attempt hitting `MAX_ATTEMPTS`, which is
+pre-existing behaviour this change does not touch.
+
+#### The cases
+
+All work this round is in one test file, `test-repo.sh`. The command that runs
+just it is `bash test-repo.sh`. Its conventions, unchanged: a driver case is one
+`run_driver "$wf" <mode> "<description>"` call whose description opens with
+`$wf_name` when it runs inside the two-workflow loop; inside the heredoc,
+assertions push a sentence onto `failures` via `assertTrue` /
+`assertEqualArrays` and the process exits 1 with them on stderr; `agent`, `log`
+and `phase` are the only stubs, `logs` captures every `log` call, `calls` holds
+every dispatch as `{ label, agentType, prompt }`, and the whole workflow script
+is run through `new AsyncFunction`. Every new fixture carries a comment naming
+the round and finding it exists for, as the round-1 and round-2 fixtures do.
+
+**1. Shared driver changes** (no case of their own).
+
+- `DISJOINT_MARKERS` (l. 307-317) gains `'MARKER-CLOSE-QUESTION'`. It passes:
+  no existing marker contains it and it contains none of them.
+- `returnFor` (l. 473) takes a per-mode override, so every existing mode keeps
+  the fixed return it has today:
+
+  ```js
+  // Round 3, w11 and w12: the closing planner's return is a channel of its
+  // own — it can carry a question for the human (w11) and it can hand an
+  // increment back as todo (w12) — so these two labels take a per-mode
+  // override instead of the one fixed fixture.
+  if (label.startsWith('close:') || label.startsWith('replan:')) {
+    return ctx.closeFor ? ctx.closeFor(label) : { summary: 'closed' };
+  }
+  ```
+
+- `contextFor` (l. 436-458) gains two arms, before `default`:
+
+  ```js
+  case 'w11':
+    return { stateReturn: { exists: false, backlogJson: '', summary: '' }, decomposeReturn: decomposeReturnOne, researchReturn: planReturn, closeFor: () => ({ questions: ['MARKER-CLOSE-QUESTION'], summary: 'closed' }) };
+  case 'w12': {
+    // Round 3, finding 2: the planner closes the increment and hands it
+    // straight back as todo — the second chance MAX_ATTEMPTS exists for —
+    // and settles it on the second pass.
+    let replans = 0;
+    return {
+      stateReturn: { exists: false, backlogJson: '', summary: '' },
+      decomposeReturn: decomposeReturnOne,
+      researchReturn: planReturn,
+      closeFor: () => {
+        replans += 1;
+        return replans === 1
+          ? { increments: [increment('i1')], questions: [], summary: 'handed back' }
+          : { increments: [Object.assign(increment('i1'), { status: 'done' })], questions: [], summary: 'closed' };
+      },
+    };
+  }
+  ```
+
+  `increment('i1')` (l. 370-372) returns a fresh `todo` increment each call, so
+  the two returns share no object.
+
+**2. `w11` on both workflows** — "a question from the closing planner ends the
+run and reaches the human". Input: a fresh run, one increment, every step clean
+until the close, whose return is `{ questions: ['MARKER-CLOSE-QUESTION'],
+summary: 'closed' }`. New mode branch, after the `w10` branch:
+
+```js
+  } else if (mode === 'w11') {
+    // Round 3, finding 1: loop.js dispatched the Close step and dropped its
+    // return, so a question the closing planner asked reached nobody — no
+    // blockedOnHuman, no log line, and a run that reported itself finished.
+    // agile-loop.js already handled the same role in the same position, so
+    // this mode runs on both and pins them to one behaviour.
+    const closeLabel = isAgile ? 'replan:i1' : 'close:i1';
+    assertEqualArrays(labels,
+      ['load-state', 'decompose', 'research:i1.0', 'tests:i1.0', 'implement:i1.0', 'review:i1.0', closeLabel, 'publish'],
+      'a question from the closing planner does not stop the run at publish');
+    assertTrue(!!result && Array.isArray(result.blockedOnHuman) && result.blockedOnHuman.length === 1,
+      "the closing planner's question did not end the run as blocked on the human");
+    const blocked = JSON.stringify((result && result.blockedOnHuman) || []);
+    assertTrue(blocked.includes('MARKER-CLOSE-QUESTION'),
+      'blockedOnHuman does not carry the question the closing planner asked');
+    assertTrue(blocked.includes(closeLabel),
+      'blockedOnHuman does not name ' + closeLabel + ' as the step that asked');
+    assertTrue(logs.some((l) => l.includes('MARKER-CLOSE-QUESTION')),
+      "the closing planner's question never reached the human in the chat");
+  } else if (mode === 'w12') {
+```
+
+Expected before the change: **red on `loop.js`** — `blockedOnHuman` is `[]`, so
+the second assertion and the two after it fail; the label sequence itself is
+already right. **Green on `agile-loop.js`**, which is the divergence made
+visible. Expected after: green on both.
+
+**3. `w12` on `agile-loop.js` only** — "an increment the planner hands back is
+worked a second time". Input: as above, with the stateful `closeFor`. New mode
+branch, after `w11`:
+
+```js
+  } else if (mode === 'w12') {
+    // Round 3, finding 2: labels are keyed on the increment id, so the second
+    // attempt at an increment the planner handed back re-used the first
+    // attempt's labels, found them all in the in-session recorded map,
+    // dispatched nobody and re-read the first attempt's verdict and re-cut.
+    // MAX_ATTEMPTS' second chance is what that cost.
+    assertTrue(isAgile, 'w12 is the incremental loop's mode: the plain loop never re-cuts');
+    assertEqualArrays(labels,
+      ['load-state', 'decompose',
+       'research:i1.0', 'tests:i1.0', 'implement:i1.0', 'review:i1.0', 'replan:i1',
+       'research:i1.0', 'tests:i1.0', 'implement:i1.0', 'review:i1.0', 'replan:i1',
+       'publish'],
+      'an increment the planner handed back as todo was not worked a second time');
+    assertTrue(calls.filter((c) => c.label === 'research:i1.0').length === 2,
+      'the researcher was not dispatched again for the second attempt');
+    assertTrue(!!result && result.stopped === '',
+      'the run stopped on the attempt backstop instead of working the increment again');
+    assertTrue(!!result && result.delivered === 1 && Array.isArray(result.increments) && result.increments.length === 2,
+      'the second attempt did not deliver the increment');
+  } else {
+```
+
+Note for whoever writes it: the `assertTrue(isAgile, ...)` message contains an
+apostrophe inside a single-quoted JavaScript string — write it as
+`"w12 is the incremental loop's mode: the plain loop never re-cuts"` with double
+quotes, the idiom the surrounding assertions already use.
+
+Expected before the change: **red on `agile-loop.js`** — the second attempt
+dispatches nothing, so `labels` is the eight-entry sequence
+`[... 'replan:i1', 'publish']`, `research:i1.0` is called once, and
+`result.stopped` names the `MAX_ATTEMPTS` backstop. Expected after: green.
+
+**4. Three `run_driver` lines.** Two inside the two-workflow loop (l. 629-641),
+after the `w10` line:
+
+```
+  run_driver "$wf" w11 "$wf_name: a question from the closing planner ends the run and reaches the human"
+```
+
+and one after the loop closes at l. 641, before `rm -rf "$driver_tmp"`:
+
+```
+# Round 3, finding 2: only the incremental loop re-cuts, so an increment
+# handed back is agile-loop.js's case alone.
+run_driver "$root/workflows/agile-loop.js" w12 "agile-loop.js: an increment the planner hands back is worked a second time, not skipped as recorded"
+```
+
+Nothing else in `test-repo.sh` changes. No case is written against
+`skills/agent-brief/assets/`, no grep case is added or removed, and no existing
+mode, fixture or assertion is edited beyond the three insertions named above.
+
+#### What counts as done
+
+Run these two, from the repository root, and nothing else:
+
+```
+bash test-repo.sh
+bash test.sh
+```
+
+`test-repo.sh` holds every case of this round and runs in seconds, so it is
+listed on its own for a diagnosable exit code; `test.sh` is the criterion the
+issue states in as many words, and it is the only run that reaches the recorder
+suite and the three `tools/` suites this round's edits cannot touch. Expect
+`test-repo.sh` to report **50 cases** when this round is done — 47 today, plus
+`w11` on two workflows and `w12` on one.
+
+#### What is already red
+
+I ran neither command and state this from reading alone. Before the
+implementer's change: `w11` on `loop.js` is red (the Close step's return is
+discarded, so `blockedOnHuman` is empty and no log line carries the question),
+`w11` on `agile-loop.js` is green, and `w12` on `agile-loop.js` is red (the
+second attempt dispatches nobody). Everything else in both commands was exit 0
+in the reviewer's round-2 run — `bash test-repo.sh`, 47 cases, and `bash
+test.sh`, all 6 suites — and nothing planned here touches it. Whoever runs the
+list first reports what it says.
