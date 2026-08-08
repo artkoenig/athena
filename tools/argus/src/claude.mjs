@@ -38,6 +38,7 @@ export const EVENT = {
   apiRefusal: 'claude_code.api_refusal',
   apiRequestBody: 'claude_code.api_request_body',
   apiResponseBody: 'claude_code.api_response_body',
+  subagentCompleted: 'claude_code.subagent_completed',
   permissionModeChanged: 'claude_code.permission_mode_changed',
   auth: 'claude_code.auth',
   mcpServerConnection: 'claude_code.mcp_server_connection',
@@ -78,6 +79,66 @@ export const SECURITY_EVENTS = new Set([
 
 /** Events that always mean something went wrong. */
 export const ERROR_EVENTS = new Set([EVENT.apiError, EVENT.apiRefusal, EVENT.internalError]);
+
+/**
+ * Events that carry a whole request or response body — the context an agent was
+ * working from at that moment. They only arrive with `OTEL_LOG_RAW_API_BODIES=1`,
+ * they are the largest records by far, and their `body` attribute is served only
+ * by the routes built for one point in time, never by a list.
+ */
+export const CONTENT_EVENTS = new Set([EVENT.apiRequestBody, EVENT.apiResponseBody]);
+
+/** Lane key for everything a session did outside a subagent. */
+export const MAIN_AGENT = 'main';
+
+/**
+ * The agent type named by a `query_source` attribute.
+ *
+ * Body events carry no `agent.name` (verified against Claude Code 2.1.226), but
+ * they do carry `query_source`: `sdk` for the main session and
+ * `agent:builtin:general-purpose` / `agent:user:<name>` for a subagent. The last
+ * segment is the agent type; anything that is not an `agent:` value names no
+ * agent at all.
+ */
+export function agentNameFromQuerySource(value) {
+  if (typeof value !== 'string' || !value.startsWith('agent:')) return null;
+  const name = value.slice(value.lastIndexOf(':') + 1).trim();
+  return name || null;
+}
+
+/**
+ * Which agent a record's own attributes name, and on what evidence.
+ *
+ * `agent.name` arrives on `claude_code.api_request` for subagent traffic;
+ * `query_source` arrives on the body events. `source` is `'agent.name'` for the
+ * first and the exact `query_source` value for the second, so a reader can tell
+ * how the lane was named. Returns null when nothing in the attributes names an
+ * agent, which is the main session's case.
+ */
+export function agentHintOf(attrs = {}) {
+  const named = attrs?.['agent.name'];
+  if (typeof named === 'string' && named.trim()) return { name: named.trim(), source: 'agent.name' };
+  const fromQuery = agentNameFromQuerySource(attrs?.query_source);
+  if (fromQuery) return { name: fromQuery, source: String(attrs.query_source) };
+  return null;
+}
+
+/**
+ * The body-less description of a content record: everything a timeline needs to
+ * draw it, and none of the text. `body_length` is the length the CLI reported,
+ * which stays right after the body itself has been dropped by the byte budget.
+ */
+export function contentMetaOf(log) {
+  const attrs = log?.attrs ?? {};
+  const body = typeof attrs.body === 'string' ? attrs.body : null;
+  return {
+    model: attrs.model ?? null,
+    bodyLength: num(attrs.body_length, body ? body.length : 0),
+    bodyTruncated: bool(attrs.body_truncated),
+    querySource: attrs.query_source ?? null,
+    requestId: attrs.request_id ?? null,
+  };
+}
 
 /** `claude_code.token.usage` `type` attribute -> our aggregate key. */
 export const TOKEN_TYPES = {
@@ -215,6 +276,16 @@ export function describeEvent(log) {
       return `${a.decision ?? '?'} ${a.tool_name ?? 'tool'} (${a.source ?? 'unknown source'})`;
     case EVENT.apiRequest:
       return `${a.model ?? 'model'} · ${num(a.input_tokens)} in / ${num(a.output_tokens)} out · ${num(a.duration_ms)}ms`;
+    case EVENT.apiRequestBody:
+    case EVENT.apiResponseBody: {
+      // Never the text: this line goes into the live tail and the event list,
+      // and a body runs to hundreds of kilobytes.
+      const meta = contentMetaOf(log);
+      const kind = log.eventName === EVENT.apiRequestBody ? 'request' : 'response';
+      return `${meta.model ?? 'model'} ${kind} body (${meta.bodyLength} chars${meta.bodyTruncated ? ', truncated' : ''})`;
+    }
+    case EVENT.subagentCompleted:
+      return `${a.agent_type ?? 'subagent'} done · ${num(a.total_tool_uses)} tool uses · ${num(a.duration_ms)}ms`;
     case EVENT.apiError:
       return `${a.model ?? 'model'} ${a.status_code ?? ''} ${a.error ?? 'error'}`.trim();
     case EVENT.apiRefusal:
@@ -244,11 +315,33 @@ export function otelEnvFor(endpoint, { traces = true, token = null, fastFlush = 
     OTEL_LOGS_EXPORTER: 'otlp',
     OTEL_EXPORTER_OTLP_PROTOCOL: 'http/protobuf',
     OTEL_EXPORTER_OTLP_ENDPOINT: endpoint,
+    // Content, on by default. Without it a recording holds durations and token
+    // counts but not one word of what was said, which is the half a timeline is
+    // read for. Everything a session sees and writes therefore lands in the
+    // collector: prompts, assistant responses, tool parameters and the whole
+    // request/response bodies. See "Sensitive data" in the README.
+    OTEL_LOG_USER_PROMPTS: '1',
+    // Falls back to OTEL_LOG_USER_PROMPTS when unset; stated so the block says
+    // what it turns on rather than implying it.
+    OTEL_LOG_ASSISTANT_RESPONSES: '1',
+    OTEL_LOG_TOOL_DETAILS: '1',
+    // Inline bodies, not `file:<dir>`: file mode leaves them on the agent's own
+    // disk with a path in the event, and the collector is reached over HTTP and
+    // may be on another machine, so it could never read them back.
+    OTEL_LOG_RAW_API_BODIES: '1',
+    // The CLI default of 61440 cuts a real main-session request body mid-JSON
+    // (measured: 113845 characters), and a truncated body parses into nothing.
+    // ~1M UTF-16 units keeps whole contexts while leaving an export batch well
+    // under the collector's 32 MB body cap.
+    CLAUDE_CODE_OTEL_CONTENT_MAX_LENGTH: '1000000',
   };
   if (traces) {
     // Spans are the beta signal and need their own opt-in flag.
     env.CLAUDE_CODE_ENHANCED_TELEMETRY_BETA = '1';
     env.OTEL_TRACES_EXPORTER = 'otlp';
+    // Tool output is written onto span events, so without tracing this flag has
+    // nowhere to put anything.
+    env.OTEL_LOG_TOOL_CONTENT = '1';
   }
   if (token) env.OTEL_EXPORTER_OTLP_HEADERS = `Authorization=Bearer ${token}`;
   // The same address and secret once more, under the stable names this tool's

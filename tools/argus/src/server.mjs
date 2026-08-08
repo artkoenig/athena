@@ -12,7 +12,14 @@ import crypto from 'node:crypto';
 import zlib from 'node:zlib';
 
 import { decodeExportRequest } from './otlp/decode.mjs';
-import { attributionOf, describeEvent, otelEnvFor } from './claude.mjs';
+import {
+  CONTENT_EVENTS,
+  MAIN_AGENT,
+  attributionOf,
+  contentMetaOf,
+  describeEvent,
+  otelEnvFor,
+} from './claude.mjs';
 
 const MAX_BODY_BYTES = 32 * 1024 * 1024;
 const SSE_FLUSH_MS = 250;
@@ -87,6 +94,27 @@ function intParam(params, key, fallback, max = Number.MAX_SAFE_INTEGER) {
   const value = Number.parseInt(raw, 10);
   if (!Number.isFinite(value) || value < 0) return fallback;
   return Math.min(value, max);
+}
+
+/**
+ * One event as the feed serves it: with the lane it belongs to, and — for the
+ * body events — with the body itself replaced by what describes it. The tail is
+ * polled, so shipping megabytes of context on it would cost that on every poll,
+ * and `/api/sessions/:id/context` is the route that hands out the text.
+ */
+function eventItem(store, event) {
+  const item = {
+    ...event,
+    summary: describeEvent(event),
+    attribution: attributionOf(event.attrs),
+    agent: store.agentOf(event).key,
+  };
+  if (CONTENT_EVENTS.has(event.eventName)) {
+    const { body, ...rest } = event.attrs ?? {};
+    item.attrs = rest;
+    Object.assign(item, contentMetaOf(event), { bodyLength: event.bodyLength ?? contentMetaOf(event).bodyLength });
+  }
+  return item;
 }
 
 export function createServer({ store, token = null, endpoint = '', persist = null, log = console.error } = {}) {
@@ -208,6 +236,44 @@ export function createServer({ store, token = null, endpoint = '', persist = nul
       else sendJson(res, 200, session);
       return true;
     }
+    const contentMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/content$/);
+    if (contentMatch) {
+      const sessionId = decodeURIComponent(contentMatch[1]);
+      if (!store.sessions.has(sessionId)) {
+        sendJson(res, 404, { error: 'unknown session' });
+        return true;
+      }
+      sendJson(res, 200, {
+        items: store.queryContent({
+          sessionId,
+          agent: searchParams.get('agent'),
+          sinceMs: intParam(searchParams, 'since', 0),
+          untilMs: searchParams.has('until') ? intParam(searchParams, 'until', 0) : Infinity,
+          limit: intParam(searchParams, 'limit', 2000, 20000),
+        }),
+      });
+      return true;
+    }
+    const contextMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/context$/);
+    if (contextMatch) {
+      const sessionId = decodeURIComponent(contextMatch[1]);
+      const session = store.sessions.get(sessionId);
+      if (!session) {
+        sendJson(res, 404, { error: 'unknown session' });
+        return true;
+      }
+      const agent = searchParams.get('agent') || MAIN_AGENT;
+      const atMs = intParam(searchParams, 'at', session.lastSeenMs);
+      // A lane with nothing at or before that moment answers null: an empty
+      // answer is what "nothing had been sent yet" looks like, not an error.
+      sendJson(res, 200, {
+        sessionId,
+        agent,
+        atMs,
+        context: store.getContextAt(sessionId, atMs, { agent }),
+      });
+      return true;
+    }
     const traceMatch = pathname.match(/^\/api\/traces\/([^/]+)$/);
     if (traceMatch) {
       const trace = store.getTrace(decodeURIComponent(traceMatch[1]));
@@ -220,18 +286,15 @@ export function createServer({ store, token = null, endpoint = '', persist = nul
         sessionId: searchParams.get('session'),
         eventName: searchParams.get('event'),
         traceId: searchParams.get('trace'),
+        agent: searchParams.get('agent'),
         search: searchParams.get('search') ?? '',
         errorsOnly: searchParams.get('errors') === '1',
         sinceSeq: intParam(searchParams, 'sinceSeq', 0),
+        sinceMs: intParam(searchParams, 'since', 0),
+        untilMs: searchParams.has('until') ? intParam(searchParams, 'until', 0) : Infinity,
         limit: intParam(searchParams, 'limit', 200, 2000),
       });
-      sendJson(res, 200, {
-        items: events.map((event) => ({
-          ...event,
-          summary: describeEvent(event),
-          attribution: attributionOf(event.attrs),
-        })),
-      });
+      sendJson(res, 200, { items: events.map((event) => eventItem(store, event)) });
       return true;
     }
     if (pathname === '/api/metrics') {

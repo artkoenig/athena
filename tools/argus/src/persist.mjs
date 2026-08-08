@@ -20,7 +20,14 @@ import readline from 'node:readline';
 import { runDirName } from './config.mjs';
 
 const SIGNALS = ['traces', 'metrics', 'logs'];
-const DEFAULT_MAX_BYTES = 64 * 1024 * 1024;
+/**
+ * With raw API bodies on — which the env block turns on by default — `logs.jsonl`
+ * passes 64 MB within a few hundred API requests, and only one previous
+ * generation is kept. At that cap the start of a measured session would be gone
+ * before the run ended, which is exactly the part a scrub back through the
+ * timeline wants.
+ */
+const DEFAULT_MAX_BYTES = 512 * 1024 * 1024;
 
 /**
  * Create the directory this measurement writes into: `<root>/<timestamp>`,

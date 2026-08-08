@@ -75,7 +75,9 @@ The collector serves JSON on its own port:
 | Route                   | Answers                                             |
 | ----------------------- | --------------------------------------------------- |
 | `GET /api/sessions`     | Every session with tokens, cost and error counts     |
-| `GET /api/sessions/:id` | One session in full, traces included                 |
+| `GET /api/sessions/:id` | One session in full, traces and agent lanes included  |
+| `GET /api/sessions/:id/content` | Every request/response body, described, without the text |
+| `GET /api/sessions/:id/context` | What one lane was working from at `at=<ms>`, text included |
 | `GET /api/stats`        | Totals, top models, top tools                        |
 | `GET /api/events`       | The event timeline, filterable                       |
 | `GET /api/config`       | Endpoint, limits and the measurement directory        |

@@ -74,8 +74,14 @@ export OTEL_METRICS_EXPORTER="otlp"
 export OTEL_LOGS_EXPORTER="otlp"
 export OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"
 export OTEL_EXPORTER_OTLP_ENDPOINT="http://127.0.0.1:4318"
+export OTEL_LOG_USER_PROMPTS="1"                 # content, on by default — see "Sensitive data"
+export OTEL_LOG_ASSISTANT_RESPONSES="1"
+export OTEL_LOG_TOOL_DETAILS="1"
+export OTEL_LOG_RAW_API_BODIES="1"               # the whole context of every API call
+export CLAUDE_CODE_OTEL_CONTENT_MAX_LENGTH="1000000"  # the 61440 default truncates a real body mid-JSON
 export CLAUDE_CODE_ENHANCED_TELEMETRY_BETA="1"   # required for spans (beta)
 export OTEL_TRACES_EXPORTER="otlp"
+export OTEL_LOG_TOOL_CONTENT="1"                 # tool output; rides on span events, so traces only
 export OTEL_METRIC_EXPORT_INTERVAL="1000"        # the 60s default is too sluggish for short runs
 export OTEL_LOGS_EXPORT_INTERVAL="1000"
 export OTEL_TRACES_EXPORT_INTERVAL="1000"
@@ -413,8 +419,8 @@ Two things hold for all of these variants:
   `--persist` only ever writes, so the service comes up on a fresh measurement while the
   earlier records stay on the volume, unread — reading one back needs `--open` on a
   process that has that disk. Without a disk they are gone instead.
-- **The data then lives there.** With `CLAUDE_CODE_ENHANCED_TELEMETRY_BETA` switched on,
-  prompts and answers flow through the collector as well. On your own machine that has no
+- **The data then lives there.** The printed block turns content on, so prompts, answers
+  and whole API bodies flow through the collector as well. On your own machine that has no
   consequences; on someone else's infrastructure it is a decision. See
   [Sensitive data](#sensitive-data).
 
@@ -503,11 +509,24 @@ argus start --open .uroboros-telemetry/2026-08-03T14-22-05
 ## Sensitive data
 
 By default Claude Code exports structure only: durations, model names, tool names, token
-counts. Prompts, tool arguments and API bodies arrive only with
-`OTEL_LOG_USER_PROMPTS=1`, `OTEL_LOG_TOOL_DETAILS=1`, `OTEL_LOG_TOOL_CONTENT=1` and
-`OTEL_LOG_RAW_API_BODIES`. `argus env` deliberately does **not** set these. Anyone
-who switches them on should know that prompt and file contents then live in the
-collector's memory and — with `--persist` — on disk.
+counts. `argus env` **does** switch the content on, in every format it prints:
+`OTEL_LOG_USER_PROMPTS=1`, `OTEL_LOG_ASSISTANT_RESPONSES=1`, `OTEL_LOG_TOOL_DETAILS=1`,
+`OTEL_LOG_RAW_API_BODIES=1` and `OTEL_LOG_TOOL_CONTENT=1` (that last one only alongside
+traces, because it writes onto span events), plus
+`CLAUDE_CODE_OTEL_CONTENT_MAX_LENGTH=1000000` so a whole context arrives instead of a body
+cut mid-JSON.
+
+So know what that means before pasting the block: prompts, assistant responses, tool
+arguments, tool output and the **complete request and response bodies** — the entire
+conversation as the model saw it, including file contents it read — then live in the
+collector's memory and, with `--persist`, in the measurement directory on disk. There is no
+flag that turns it off, because a recording without it cannot answer what an agent was
+working from. Point a measured session at a collector you control, and treat the
+measurement directory as you would the transcript itself.
+
+`argus` never puts that text on a list: `/api/events` and `/api/sessions/:id/content`
+report a body's model, length and truncation flag, and only
+`/api/sessions/:id/context` — one lane, one point in time — hands the text out.
 
 `user.email`, `user.account_uuid` and `organization.id` are standard attributes and appear
 in the interface under "Attributes".
@@ -537,9 +556,11 @@ and new Claude Code attributes.
 | ------------------------ | ---------------------------------------------------------- |
 | `POST /v1/{traces,metrics,logs}` | OTLP ingest (`http/protobuf`, `http/json`, gzip)   |
 | `GET /api/sessions`      | Session list (`search`, `limit`, `offset`)                 |
-| `GET /api/sessions/:id`  | Session aggregates including traces                        |
+| `GET /api/sessions/:id`  | Session aggregates including traces and `agents` (the lanes) |
+| `GET /api/sessions/:id/content` | Request/response body records, described, never quoted (`agent`, `since`, `until`, `limit`) |
+| `GET /api/sessions/:id/context` | The request body one lane was working from at `at=<ms>` (`agent`), body text included |
 | `GET /api/traces/:id`    | Spans of a trace, flat with `depth` in render order        |
-| `GET /api/events`        | Events (`session`, `event`, `trace`, `search`, `errors`)   |
+| `GET /api/events`        | Events (`session`, `event`, `trace`, `agent`, `since`, `until`, `search`, `errors`) |
 | `GET /api/metrics`       | Metric points (`session`, `name`)                          |
 | `GET /api/stats`         | Totals, top models, top tools, buffer sizes                |
 | `GET /api/facets`        | Event and metric names that occur, with frequency          |
@@ -563,6 +584,19 @@ npm run demo      # emit a synthetic session
 - **Not usable as a `console` exporter.** With the Agent SDK, stdout is the message
   channel; `console` would destroy it. So always `otlp`.
 - Histograms are stored and listed, but not drawn as a distribution.
+- **A measurement with bodies is orders of magnitude larger.** Content is on by default, and
+  a single request body runs to hundreds of kilobytes, so `logs.jsonl` grows by megabytes
+  per minute of real work — plan for gigabytes where the same run without content wrote
+  megabytes. In memory a separate budget bounds it: past `maxContentBytes` (256 MB) the
+  oldest body **text** is dropped, while its length, timing and lane stay, so the timeline
+  is unchanged and only the message list of a long-past moment is gone. On disk the file
+  rotates at 512 MB with one previous generation kept.
+- **Attribution to a subagent needs traces.** `agent.name` does not arrive on body events
+  (checked: 2.1.226); the lane is resolved from the record's span, up the tree to the
+  `claude_code.tool.execution` span of the `Agent` call that dispatched it. Without traces
+  the fallback is the `query_source` attribute, which names the agent *type* — so two
+  concurrent subagents of the same type then share one lane. Each lane reports the evidence
+  it rests on in its `source` field.
 - **"Result tokens" is almost always an estimate with current CLI versions (checked:
   2.1.220).** The documented `result_tokens` attribute on `claude_code.tool` spans is not
   sent by the CLI at the moment. When it is missing, the store extrapolates it from

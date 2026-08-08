@@ -28,6 +28,7 @@ const LIVE = Boolean(flags.live);
 
 const MODELS = ['claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'];
 const TOOLS = ['Read', 'Bash', 'Edit', 'Grep', 'Glob', 'WebFetch'];
+const SUBAGENT_TYPES = ['general-purpose', 'code-reviewer', 'test-runner'];
 const PROMPTS = [
   'Add OpenTelemetry export to the worker service',
   'Why is the nightly job flaking?',
@@ -90,6 +91,39 @@ function span({ traceId, spanId, parentSpanId, name, startMs, durationMs, attrib
   };
 }
 
+/**
+ * A Messages-API request body, in the shape `OTEL_LOG_RAW_API_BODIES=1` puts on
+ * `claude_code.api_request_body`: the whole conversation as it stood when the
+ * call was made. Small here — a real one runs to hundreds of kilobytes — but the
+ * same structure, so a message list rendered from it renders from the real one.
+ */
+function requestBodyOf(model, prompt, turnSequence) {
+  const messages = [{ role: 'user', content: [{ type: 'text', text: prompt }] }];
+  for (let i = 1; i < turnSequence; i++) {
+    messages.push({ role: 'assistant', content: [{ type: 'text', text: `Working on it (turn ${i}).` }] });
+    messages.push({ role: 'user', content: [{ type: 'text', text: 'Carry on.' }] });
+  }
+  return JSON.stringify({
+    model,
+    max_tokens: 8192,
+    system: [{ type: 'text', text: 'You are Claude Code, running in a demo session.' }],
+    messages,
+  });
+}
+
+/** The matching response body: what the model sent back. */
+function responseBodyOf(model, outputTokens) {
+  return JSON.stringify({
+    id: `msg_${hexId(8)}`,
+    type: 'message',
+    role: 'assistant',
+    model,
+    content: [{ type: 'text', text: 'Here is what I found.' }],
+    stop_reason: 'tool_use',
+    usage: { input_tokens: 0, output_tokens: outputTokens },
+  });
+}
+
 /** One agent turn: prompt -> model call -> tools -> model call -> response. */
 function buildTurn(sessionId, sequence, startMs) {
   const traceId = hexId(16);
@@ -101,7 +135,9 @@ function buildTurn(sessionId, sequence, startMs) {
   const model = pick(MODELS);
   let cursor = startMs;
 
-  const record = (name, attributes, timeMs = cursor, severity = 9) => {
+  // `spanId` is what attributes a log to a lane: a subagent's events sit on the
+  // execution span of the Agent call that dispatched it, not on the interaction.
+  const record = (name, attributes, timeMs = cursor, severity = 9, spanId = interactionId) => {
     logs.push({
       timeUnixNano: nanos(timeMs),
       observedTimeUnixNano: nanos(timeMs),
@@ -110,7 +146,7 @@ function buildTurn(sessionId, sequence, startMs) {
       eventName: name,
       body: { stringValue: name.replace('claude_code.', '') },
       traceId,
-      spanId: interactionId,
+      spanId,
       attributes: attrs({
         'session.id': sessionId,
         'event.name': name.replace('claude_code.', ''),
@@ -131,7 +167,12 @@ function buildTurn(sessionId, sequence, startMs) {
   let cacheCreation = 0;
   let cost = 0;
 
-  const emitLlmCall = () => {
+  const emitLlmCall = ({
+    parentSpanId = interactionId,
+    logSpanId = interactionId,
+    querySource = 'sdk',
+    agentId = null,
+  } = {}) => {
     const duration = rand(700, 4200);
     const ttft = rand(180, 900);
     const input = randInt(400, 2500);
@@ -149,7 +190,7 @@ function buildTurn(sessionId, sequence, startMs) {
       span({
         traceId,
         spanId: hexId(8),
-        parentSpanId: interactionId,
+        parentSpanId,
         name: 'claude_code.llm_request',
         startMs: cursor,
         durationMs: duration,
@@ -159,6 +200,7 @@ function buildTurn(sessionId, sequence, startMs) {
           'span.type': 'claude_code.llm_request',
           'gen_ai.system': 'anthropic',
           model,
+          agent_id: agentId ?? undefined,
           query_source: 'repl_main_thread',
           llm_request_context: 'interaction',
           duration_ms: Math.round(duration),
@@ -174,14 +216,47 @@ function buildTurn(sessionId, sequence, startMs) {
         },
       }),
     );
+    // What the call was sent, with the context it carried — the pair
+    // OTEL_LOG_RAW_API_BODIES=1 produces, and what a timeline scrub reads back.
+    const requestBody = requestBodyOf(model, prompt, sequence);
+    record(
+      'claude_code.api_request_body',
+      {
+        model,
+        body: requestBody,
+        body_length: requestBody.length,
+        body_truncated: false,
+        query_source: querySource,
+        'prompt.id': `prompt_${hexId(4)}`,
+      },
+      cursor,
+      9,
+      logSpanId,
+    );
     if (failed) {
       record(
         'claude_code.api_error',
         { model, error: 'overloaded_error', status_code: 529, duration_ms: Math.round(duration), attempt: 1 },
         cursor + duration,
         17,
+        logSpanId,
       );
     } else {
+      const responseBody = responseBodyOf(model, output);
+      record(
+        'claude_code.api_response_body',
+        {
+          model,
+          body: responseBody,
+          body_length: responseBody.length,
+          body_truncated: false,
+          query_source: querySource,
+          request_id: `req_${hexId(6)}`,
+        },
+        cursor + duration,
+        9,
+        logSpanId,
+      );
       record(
         'claude_code.api_request',
         {
@@ -193,11 +268,93 @@ function buildTurn(sessionId, sequence, startMs) {
           cache_creation_tokens: created,
           cost_usd_micros: Math.round(callCost * 1e6),
           query_source: 'main',
+          'agent.name': agentId ? querySource.slice(querySource.lastIndexOf(':') + 1) : undefined,
         },
         cursor + duration,
+        9,
+        logSpanId,
       );
     }
     cursor += duration;
+  };
+
+  /**
+   * One dispatched subagent: the `Agent` tool call, the execution span every one
+   * of its records hangs beneath, its own model calls, and the completion event
+   * that closes it. Without this the generator produces a single lane and the
+   * lane view has nothing to show without a live agent.
+   */
+  const emitSubagent = () => {
+    const agentType = pick(SUBAGENT_TYPES);
+    const toolUseId = `toolu_${hexId(6)}`;
+    const agentId = hexId(8);
+    const toolSpanId = hexId(8);
+    const execSpanId = hexId(8);
+    const startedAt = cursor;
+
+    record(
+      'claude_code.tool_decision',
+      { tool_name: 'Agent', tool_use_id: toolUseId, decision: 'accept', tool_source: 'builtin', source: 'config' },
+      cursor,
+    );
+    for (let i = 0; i < 2; i++) {
+      emitLlmCall({
+        parentSpanId: execSpanId,
+        logSpanId: execSpanId,
+        querySource: `agent:builtin:${agentType}`,
+        agentId,
+      });
+    }
+    const duration = cursor - startedAt;
+
+    children.push(
+      span({
+        traceId,
+        spanId: toolSpanId,
+        parentSpanId: interactionId,
+        name: 'claude_code.tool',
+        startMs: startedAt,
+        durationMs: duration,
+        attributes: {
+          'session.id': sessionId,
+          'span.type': 'claude_code.tool',
+          tool_name: 'Agent',
+          tool_use_id: toolUseId,
+          subagent_type: agentType,
+          duration_ms: Math.round(duration),
+        },
+      }),
+      span({
+        traceId,
+        spanId: execSpanId,
+        parentSpanId: toolSpanId,
+        name: 'claude_code.tool.execution',
+        startMs: startedAt,
+        durationMs: duration,
+        attributes: {
+          'session.id': sessionId,
+          'span.type': 'claude_code.tool.execution',
+          tool_use_id: toolUseId,
+          duration_ms: Math.round(duration),
+          success: true,
+        },
+      }),
+    );
+    record(
+      'claude_code.subagent_completed',
+      {
+        agent_type: agentType,
+        'agent.source': 'builtin',
+        is_built_in: true,
+        is_async: false,
+        duration_ms: Math.round(duration),
+        total_tokens: randInt(2000, 40_000),
+        total_tool_uses: randInt(1, 6),
+      },
+      cursor,
+      9,
+      execSpanId,
+    );
   };
 
   emitLlmCall();
@@ -286,6 +443,10 @@ function buildTurn(sessionId, sequence, startMs) {
     );
     cursor += blocked + execution;
   }
+
+  // One subagent per session, in its first turn: enough for a second lane to
+  // exist everywhere, without every turn sprouting one.
+  if (sequence === 1) emitSubagent();
 
   emitLlmCall();
   record('claude_code.assistant_response', { model, response_length: randInt(200, 4000) }, cursor);

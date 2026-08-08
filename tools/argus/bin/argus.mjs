@@ -31,6 +31,9 @@ argus — monitor Claude Agent SDK / Claude Code sessions over OpenTelemetry
   argus [start]                 Start the OTLP collector. It serves data, not a
                                 page: run argus-ui to look at what it collects.
   argus env                     Print the OTEL_* variables that point an agent here.
+                                They turn content on: prompts, assistant responses,
+                                tool parameters, tool content and raw API bodies all
+                                land in the collector, and on disk with --persist.
   argus check                   Verify a collector is reachable from *here* and
                                 actually stores what it accepts. Run it inside the
                                 environment the agent runs in.

@@ -16,14 +16,18 @@
  */
 
 import {
+  CONTENT_EVENTS,
   EVENT,
   ERROR_EVENTS,
+  MAIN_AGENT,
   METRIC,
   SPAN,
   TASK_TOOL_NAMES,
   TOKEN_TYPES,
   EMPTY_TOKENS,
+  agentHintOf,
   bool,
+  contentMetaOf,
   num,
   serviceNameOf,
   sessionIdOf,
@@ -36,12 +40,27 @@ const MAX_UNLINKED_CREATES = 200;
 /** Bound on the per-task status history kept for the Tasks tab. */
 const MAX_TASK_HISTORY = 50;
 
+/** Tool calls that dispatch a subagent; their span names the lane it runs in. */
+const SUBAGENT_TOOL_NAMES = new Set(['Agent', 'Task']);
+/** Cap on how far a record's span is chased up the tree looking for a lane. */
+const MAX_AGENT_WALK_HOPS = 16;
+/**
+ * Cap on the parent links one session keeps for that walk. A link is two short
+ * strings, and beyond this many the session's spans have long since rolled out
+ * of the window anyway — the oldest are dropped so the map cannot grow forever.
+ */
+const MAX_SPAN_PARENTS = 100_000;
+
 const DEFAULTS = {
   maxSpans: 50_000,
   maxLogs: 50_000,
   maxMetricPoints: 50_000,
   maxSessions: 500,
   retentionMs: 24 * 60 * 60 * 1000,
+  // Raw API bodies make the count-based log window unbounded in bytes: 50 000
+  // records of up to a megabyte each. This is the separate budget that bounds
+  // them, and it drops body text only — never a record and never its metadata.
+  maxContentBytes: 256 * 1024 * 1024,
 };
 
 /**
@@ -146,6 +165,23 @@ function newSession(id, now) {
     // tool_use_id -> tool_result_size_bytes, for the reverse ordering.
     pendingToolResultBytes: new Map(),
     traceIds: new Set(),
+    // References to the api_request_body/api_response_body records already in
+    // this.logs, in arrival order — an index, not a second copy.
+    content: [],
+    // spanId -> parentSpanId, for walking a record's span up to the subagent
+    // execution span that owns it.
+    spanParents: new Map(),
+    // spanId -> subagent type, for every `claude_code.tool` span that dispatches
+    // one (`Agent`/`Task`, or anything carrying `subagent_type`).
+    subagentToolSpans: new Map(),
+    // spanId -> parentSpanId, for `claude_code.tool.execution` spans only. One
+    // whose parent dispatched a subagent *is* that subagent's lane. Kept as a
+    // lookup rather than resolved at ingest because spans and logs export on
+    // independent pipelines, so neither arrival order may be assumed.
+    execSpans: new Map(),
+    // agent_id -> the span that carried it, so a record naming only the opaque
+    // subagent id still reaches a lane.
+    agentIds: new Map(),
     lastError: null,
     // Todo/task state reconstructed from TodoWrite/TaskCreate/TaskUpdate
     // call parameters — see #applyTodo.
@@ -190,6 +226,8 @@ export class TelemetryStore {
     this.seq = 0;
     this.startedAt = Date.now();
     this.received = { traces: 0, metrics: 0, logs: 0 };
+    /** Bytes of body text held across every session, against maxContentBytes. */
+    this.contentBytes = 0;
   }
 
   /** Drop everything but keep subscribers attached. */
@@ -201,6 +239,7 @@ export class TelemetryStore {
     this.sessions.clear();
     this.traces.clear();
     this.received = { traces: 0, metrics: 0, logs: 0 };
+    this.contentBytes = 0;
   }
 
   /* ------------------------------ pub/sub ------------------------------ */
@@ -352,6 +391,7 @@ export class TelemetryStore {
     }
 
     const attrs = span.attrs ?? {};
+    this.#indexAgentSpan(session, span, attrs);
     switch (span.name) {
       case SPAN.interaction:
         session.counts.interactions++;
@@ -409,6 +449,28 @@ export class TelemetryStore {
     }
   }
 
+  /**
+   * Everything a span contributes to agent attribution: the parent link, the
+   * dispatch spans that name a subagent, the execution spans that are its lane,
+   * and the opaque `agent_id` its own spans carry.
+   */
+  #indexAgentSpan(session, span, attrs) {
+    if (!span.spanId) return;
+    if (span.parentSpanId) {
+      session.spanParents.set(span.spanId, span.parentSpanId);
+      if (session.spanParents.size > MAX_SPAN_PARENTS) {
+        session.spanParents.delete(session.spanParents.keys().next().value);
+      }
+    }
+    if (span.name === SPAN.tool && (attrs.subagent_type || SUBAGENT_TOOL_NAMES.has(attrs.tool_name))) {
+      session.subagentToolSpans.set(span.spanId, attrs.subagent_type ? String(attrs.subagent_type) : null);
+    }
+    if (span.name === SPAN.toolExecution) session.execSpans.set(span.spanId, span.parentSpanId ?? '');
+    if (attrs.agent_id && !session.agentIds.has(attrs.agent_id)) {
+      session.agentIds.set(attrs.agent_id, span.spanId);
+    }
+  }
+
   #applyTrace(session, span) {
     let trace = this.traces.get(span.traceId);
     if (!trace) {
@@ -445,6 +507,14 @@ export class TelemetryStore {
     this.logs.push(log);
     const attrs = log.attrs ?? {};
     log.isError = ERROR_EVENTS.has(log.eventName) || log.severity === 'ERROR' || log.severity === 'FATAL';
+    if (CONTENT_EVENTS.has(log.eventName)) {
+      // The length is pinned now, while the text is still here: the byte budget
+      // may drop the body later, and the timeline still has to draw its size.
+      log.bodyLength = contentMetaOf(log).bodyLength;
+      log.bodyEvicted = false;
+      session.content.push(log);
+      this.contentBytes += bodyBytesOf(log);
+    }
 
     switch (log.eventName) {
       case EVENT.userPrompt:
@@ -663,6 +733,7 @@ export class TelemetryStore {
     this.#trim('logs', this.options.maxLogs, cutoff, (log) => log.timeMs);
     this.#trim('metricPoints', this.options.maxMetricPoints, cutoff, (point) => point.timeMs);
     this.#evictSessions(cutoff);
+    this.#evictContent();
   }
 
   #trim(field, max, cutoff, timeOf) {
@@ -673,6 +744,47 @@ export class TelemetryStore {
     if (drop <= 0) return;
     const removed = list.splice(0, drop);
     if (field === 'spans') this.#unindexSpans(removed);
+    else if (field === 'logs') this.#unindexLogs(removed);
+  }
+
+  /** A log that left the window leaves the content index with it. */
+  #unindexLogs(removed) {
+    for (const log of removed) {
+      if (!CONTENT_EVENTS.has(log.eventName)) continue;
+      const session = this.sessions.get(log.sessionId);
+      this.contentBytes -= bodyBytesOf(log);
+      dropBody(log);
+      if (!session) continue;
+      const at = session.content.indexOf(log);
+      if (at >= 0) session.content.splice(at, 1);
+    }
+  }
+
+  /**
+   * Hold the total body text under `maxContentBytes` by dropping the oldest
+   * bodies first. Only the text goes: the record keeps its place in the event
+   * window, its reported length and its timing, so a timeline drawn from it is
+   * unchanged and only the message list of an old point in time is gone.
+   *
+   * This is a memory bound and nothing else. A recording made without the
+   * content flags has no bodies to begin with, and nothing here invents one.
+   */
+  #evictContent() {
+    const budget = this.options.maxContentBytes;
+    if (!(budget >= 0) || this.contentBytes <= budget) return;
+    const withBodies = [];
+    for (const session of this.sessions.values()) {
+      for (const record of session.content) {
+        if (typeof record.attrs?.body === 'string') withBodies.push(record);
+      }
+    }
+    withBodies.sort((a, b) => a.timeMs - b.timeMs || a.seq - b.seq);
+    for (const record of withBodies) {
+      if (this.contentBytes <= budget) break;
+      this.contentBytes -= bodyBytesOf(record);
+      dropBody(record);
+      record.bodyEvicted = true;
+    }
   }
 
   #unindexSpans(removed) {
@@ -714,6 +826,9 @@ export class TelemetryStore {
     const session = this.sessions.get(id);
     if (!session) return;
     this.sessions.delete(id);
+    // The session object carries the content index and the agent maps, so they
+    // go with it — but the bytes they accounted for have to be given back.
+    for (const record of session.content) this.contentBytes -= bodyBytesOf(record);
     for (const traceId of session.traceIds) {
       this.traces.delete(traceId);
       this.spansByTrace.delete(traceId);
@@ -764,7 +879,168 @@ export class TelemetryStore {
         durationMs: Math.max(0, trace.lastMs - trace.firstMs),
       }))
       .sort((a, b) => b.firstMs - a.firstMs);
-    return { ...summarizeSession(session), traces };
+    return { ...summarizeSession(session), traces, agents: this.listAgents(id) };
+  }
+
+  /* ------------------------------ agent lanes -------------------------- */
+
+  /**
+   * Which agent produced a record: its lane key, the agent's name and the
+   * evidence the answer rests on.
+   *
+   * Resolved at query time, never at ingest — spans and logs flush on
+   * independent pipelines, so a body event routinely arrives before the span
+   * tree that explains it, and an answer computed on arrival would be wrong for
+   * exactly the subagents this exists to separate.
+   */
+  agentOf(record) {
+    const session = this.sessions.get(record?.sessionId);
+    if (!session) return { key: MAIN_AGENT, name: null, source: 'main' };
+    return this.#resolveAgent(session, record);
+  }
+
+  #resolveAgent(session, record) {
+    const instance = this.#walkToInstance(session, record.spanId);
+    if (instance) return instance;
+    const agentId = record.attrs?.agent_id;
+    if (agentId && session.agentIds.has(agentId)) {
+      const viaId = this.#walkToInstance(session, session.agentIds.get(agentId));
+      if (viaId) return viaId;
+    }
+    // No span tree to walk — the only path when traces are off, and what keeps
+    // bodies attributable to a per-type lane without them.
+    const hint = agentHintOf(record.attrs);
+    if (hint) return { key: `agent:${hint.name}`, name: hint.name, source: hint.source };
+    return { key: MAIN_AGENT, name: null, source: 'main' };
+  }
+
+  /** Climb from a span to the subagent execution span that contains it. */
+  #walkToInstance(session, spanId) {
+    let current = spanId;
+    for (let hops = 0; current && hops < MAX_AGENT_WALK_HOPS; hops++) {
+      const instance = this.#instanceOf(session, current);
+      if (instance) return instance;
+      current = session.spanParents.get(current);
+    }
+    return null;
+  }
+
+  /**
+   * A `claude_code.tool.execution` span whose parent dispatched a subagent is
+   * that subagent's one instance: it is the only per-instance key on a log
+   * record, and it is what tells two concurrent subagents of the same type apart.
+   */
+  #instanceOf(session, spanId) {
+    const parent = session.execSpans.get(spanId);
+    if (parent === undefined) return null;
+    if (!session.subagentToolSpans.has(parent)) return null;
+    return { key: spanId, name: session.subagentToolSpans.get(parent), source: 'span' };
+  }
+
+  /**
+   * The lanes of a session: one per agent that produced a record, `main`
+   * included. Times bound each lane's own records, so a lane covers when that
+   * agent was heard from and not when its span happened to be opened.
+   */
+  listAgents(sessionId) {
+    const session = this.sessions.get(sessionId);
+    if (!session) return [];
+    const lanes = new Map();
+    for (const log of this.logs) {
+      if (log.sessionId !== sessionId) continue;
+      const resolved = this.#resolveAgent(session, log);
+      let lane = lanes.get(resolved.key);
+      if (!lane) {
+        lane = {
+          key: resolved.key,
+          name: resolved.name,
+          source: resolved.source,
+          firstMs: log.timeMs,
+          lastMs: log.timeMs,
+          eventCount: 0,
+          contentCount: 0,
+          requestCount: 0,
+          toolCallCount: 0,
+        };
+        lanes.set(resolved.key, lane);
+      }
+      if (lane.name === null && resolved.name !== null) {
+        lane.name = resolved.name;
+        lane.source = resolved.source;
+      }
+      if (log.timeMs > 0) {
+        lane.firstMs = Math.min(lane.firstMs || log.timeMs, log.timeMs);
+        lane.lastMs = Math.max(lane.lastMs, log.timeMs);
+      }
+      lane.eventCount++;
+      if (CONTENT_EVENTS.has(log.eventName)) lane.contentCount++;
+      else if (log.eventName === EVENT.apiRequest) lane.requestCount++;
+      else if (log.eventName === EVENT.toolResult) lane.toolCallCount++;
+    }
+    return [...lanes.values()].sort((a, b) => {
+      if (a.key === MAIN_AGENT) return -1;
+      if (b.key === MAIN_AGENT) return 1;
+      return a.firstMs - b.firstMs;
+    });
+  }
+
+  /* -------------------------------- content ---------------------------- */
+
+  /**
+   * The content records of a session (or of one lane across sessions), oldest
+   * first — metadata only. This is what a timeline is drawn from, so it stays
+   * small: the body text is served one point in time at a time by getContextAt.
+   */
+  queryContent({
+    sessionId = null,
+    agent = null,
+    sinceMs = 0,
+    untilMs = Infinity,
+    limit = 2000,
+  } = {}) {
+    const sessions = sessionId
+      ? [this.sessions.get(sessionId)].filter(Boolean)
+      : [...this.sessions.values()];
+    const items = [];
+    for (const session of sessions) {
+      for (const record of session.content) {
+        if (record.timeMs < sinceMs || record.timeMs > untilMs) continue;
+        const lane = this.#resolveAgent(session, record);
+        if (agent && lane.key !== agent) continue;
+        items.push(contentItem(record, lane));
+      }
+    }
+    items.sort((a, b) => a.timeMs - b.timeMs || a.seq - b.seq);
+    // Keep the newest when there are more than asked for, like queryEvents.
+    return items.length > limit ? items.slice(items.length - limit) : items;
+  }
+
+  /**
+   * The context one lane was working from at a point in time: the newest request
+   * body at or before `atMs`, body text included. Null when that lane sent
+   * nothing by then — an empty answer, not a failure.
+   */
+  getContextAt(sessionId, atMs, { agent = MAIN_AGENT } = {}) {
+    const session = this.sessions.get(sessionId);
+    if (!session) return null;
+    let best = null;
+    let bestLane = null;
+    for (const record of session.content) {
+      if (record.eventName !== EVENT.apiRequestBody) continue;
+      if (record.timeMs > atMs) continue;
+      if (best && (record.timeMs < best.timeMs || (record.timeMs === best.timeMs && record.seq < best.seq))) {
+        continue;
+      }
+      const lane = this.#resolveAgent(session, record);
+      if (lane.key !== agent) continue;
+      best = record;
+      bestLane = lane;
+    }
+    if (!best) return null;
+    return {
+      ...contentItem(best, bestLane),
+      body: typeof best.attrs?.body === 'string' ? best.attrs.body : null,
+    };
   }
 
   /** All spans of a trace, arranged into the parent/child tree OTLP implies. */
@@ -817,9 +1093,12 @@ export class TelemetryStore {
     sessionId = null,
     eventName = null,
     traceId = null,
+    agent = null,
     search = '',
     errorsOnly = false,
     sinceSeq = 0,
+    sinceMs = 0,
+    untilMs = Infinity,
     limit = 200,
   } = {}) {
     const needle = search.trim().toLowerCase();
@@ -831,11 +1110,10 @@ export class TelemetryStore {
       if (sessionId && log.sessionId !== sessionId) continue;
       if (eventName && log.eventName !== eventName) continue;
       if (traceId && log.traceId !== traceId) continue;
+      if (log.timeMs < sinceMs || log.timeMs > untilMs) continue;
       if (errorsOnly && !log.isError) continue;
-      if (needle) {
-        const haystack = `${log.eventName} ${JSON.stringify(log.attrs)}`.toLowerCase();
-        if (!haystack.includes(needle)) continue;
-      }
+      if (needle && !searchHaystack(log).includes(needle)) continue;
+      if (agent && this.agentOf(log).key !== agent) continue;
       matches.push(log);
     }
     matches.reverse();
@@ -930,6 +1208,48 @@ export class TelemetryStore {
       topTools: [...tools.values()].sort((a, b) => b.calls - a.calls).slice(0, 15),
     };
   }
+}
+
+/** Bytes of body text one content record is holding, 0 once it has none. */
+function bodyBytesOf(record) {
+  const body = record.attrs?.body;
+  return typeof body === 'string' ? Buffer.byteLength(body) : 0;
+}
+
+/** Let go of the text, keep everything that describes it. */
+function dropBody(record) {
+  if (record.attrs && 'body' in record.attrs) delete record.attrs.body;
+}
+
+/**
+ * What a text search runs over. Body text is left out deliberately: stringifying
+ * every body on every keystroke would scan hundreds of megabytes, and the length
+ * and model that describe it are in the attributes either way.
+ */
+function searchHaystack(log) {
+  const attrs = log.attrs ?? {};
+  if (!CONTENT_EVENTS.has(log.eventName) || typeof attrs.body !== 'string') {
+    return `${log.eventName} ${JSON.stringify(attrs)}`.toLowerCase();
+  }
+  const { body, ...rest } = attrs;
+  return `${log.eventName} ${JSON.stringify(rest)}`.toLowerCase();
+}
+
+/** One content record as every list serves it: described, never quoted. */
+function contentItem(record, lane) {
+  return {
+    seq: record.seq,
+    sessionId: record.sessionId,
+    timeMs: record.timeMs,
+    eventName: record.eventName,
+    traceId: record.traceId,
+    spanId: record.spanId,
+    agent: lane.key,
+    agentName: lane.name,
+    ...contentMetaOf(record),
+    bodyLength: record.bodyLength ?? contentMetaOf(record).bodyLength,
+    bodyEvicted: Boolean(record.bodyEvicted),
+  };
 }
 
 const hasTokens = (tokens) => Object.values(tokens).some((value) => value > 0);
