@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "issue": "docs/issues/2026-08-08-dummy-duration-formatter/issue.md",
+  "workflow": "agile-loop",
+  "codemap": "tools/humanize/duration.mjs — new; the module the issue asks for, exporting the named `formatDuration(ms)` helper with no dependency beyond the Node standard library.\ntools/humanize/duration.test.mjs — new; the `node --test` suite the issue asks for, one case per formatting and rejection rule.\ntools/humanize/CLAUDE.md — new; test-repo.sh (\"every test suite carries its doc\", around line 1179) fails any directory that holds a `*.test.mjs` without a CLAUDE.md, so `bash test.sh` cannot exit 0 without this file.\ntest.sh — existing; the one-line `run` registration that makes the new test file its own named suite, per the issue's out-of-scope note that this is the only existing file to change.",
+  "increments": [
+    {
+      "id": "inc-1",
+      "title": "The duration formatter, its suite, and its registration in test.sh",
+      "goal": "Add `tools/humanize/duration.mjs` exporting `formatDuration(ms)` with the four printed forms and the rejection rule, cover it with a `node --test` suite, and register that suite in test.sh so the whole repository suite still exits 0.",
+      "criteria": [
+        "A new module `tools/humanize/duration.mjs` exists.",
+        "It exports a named function `formatDuration(ms)`.",
+        "`formatDuration` returns `\"850ms\"` for any input below 1000, printed as a whole number of milliseconds.",
+        "It returns `\"1.4s\"` for any input from 1000 up to but not including 60000, printed with exactly one decimal place.",
+        "It returns `\"2m 5s\"` for any input from 60000 up to but not including 3600000, printed as whole minutes and whole seconds.",
+        "It returns `\"1h 3m\"` for any input of 3600000 or more, printed as whole hours and whole minutes.",
+        "It rounds down to the unit it prints, so 1999 becomes `\"1.9s\"` and 119999 becomes `\"1m 59s\"`.",
+        "It throws a `TypeError` when the input is not a number, is `NaN`, is infinite, or is negative.",
+        "The module has no dependencies beyond the Node standard library.",
+        "A new test file `tools/humanize/duration.test.mjs` covers one case per rule above, written for `node --test`.",
+        "`test.sh` runs that new test file as its own named suite.",
+        "`bash test.sh` exits 0, which includes the repository's own case that every directory holding a `*.test.mjs` carries a CLAUDE.md suite doc.",
+        "No existing file changes beyond the one line that registers the new suite in `test.sh`, and no caller of `formatDuration` is added anywhere else in the repository."
+      ],
+      "status": "todo",
+      "note": "",
+      "branch": "",
+      "steps": [],
+      "attempts": []
+    }
+  ],
+  "run": {
+    "steps": [
+      {
+        "label": "decompose",
+        "at": "2026-08-08T17:25:56.379Z",
+        "return": {
+          "questions": [],
+          "summary": "Cut the dummy duration-formatter issue as a single increment (inc-1) — the module, its node --test suite and the one-line test.sh registration are one deliverable that only stands up together — with a four-file codemap that adds tools/humanize/CLAUDE.md, required because test-repo.sh fails any directory holding a *.test.mjs without a suite doc."
+        },
+        "prompt": "Issue directory: docs/issues/2026-08-08-dummy-duration-formatter\nOpen the run state for docs/issues/2026-08-08-dummy-duration-formatter/issue.md: map the issue against the codebase, then decide the cut and write docs/issues/2026-08-08-dummy-duration-formatter/backlog.json with the `init` subcommand of the backlog helper your shared brief names, with workflow \"agile-loop\".\nThe codemap comes first: every file the issue has to change, path and why, one line per file, in the payload's `codemap` field. Every researcher of this run reads it back out of the state, so it exists nowhere else and no prompt carries it.\nWhether and how to cut is yours: a backlog of one increment is the right cut for an issue that is one change. This run works at most 8 increments, so a cut that needs more than that is a cut that is too fine.\nIf the state is already there, read its skeleton first with the helper's `index` subcommand.\nAnnounce this step before you begin it.\n1. Write the prompt you were given, verbatim and whole, to a file outside the repository. Keep that file: the record below wants the same one.\n2. Run the `start` subcommand of the backlog helper your shared brief names, as `start docs/issues/2026-08-08-dummy-duration-formatter/backlog.json - decompose <the prompt file>`, before you do any other work. It is what puts you in the run state as the step now running, so a human watching the run sees what you were asked while you are still working on it. It writes no commit of its own — the state change rides along with the commit you make at the end.\n\nRecord this step before you return.\n1. Write these fields to a JSON file outside the repository. That file is the only copy of your work anyone downstream ever reads, so put the substance in it, in full — no placeholders, no summaries that drop detail:\n   - `questions`: Decisions only the human can make. A non-empty list ends the run.\n   - `summary`: One or two sentences a human reads in the chat.\n2. Run the `record` subcommand of the backlog helper your shared brief names, as `record docs/issues/2026-08-08-dummy-duration-formatter/backlog.json - decompose <the return file> <the prompt file>`, with the prompt file you already wrote.\nYour structured return is not that file: it carries only the few values the script steers on, and its schema names them.\nYou are running inside a workflow script. Do NOT dispatch any subagent and do NOT hand over to anyone — the script calls the next agent itself. Record your step return, commit it with your work, then push the commit.\n"
+      }
+    ],
+    "attempts": []
+  }
+}
