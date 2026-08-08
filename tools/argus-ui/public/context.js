@@ -35,9 +35,34 @@ function textOf(payload) {
   return JSON.stringify(payload, null, 2) ?? '';
 }
 
-const makeBlock = (index, kind, label, payload) => {
+/**
+ * The key a block is remembered by: what the block is, and how many blocks of
+ * the same entry came before it in this body.
+ *
+ * The obvious key is the seq of the record plus the position of the block, and
+ * that is what this used to be. But a live session writes a new record every
+ * time the agent calls the API, and under a live cursor the panel follows the
+ * head — so every one of those keys stopped matching on the next request and
+ * every block the reader had open shut under them mid-read. A conversation only
+ * ever grows at its end, so "the third tool result" and "the tools field" name
+ * the same thing in the next record as in this one, and a block a reader opened
+ * stays open while the session goes on.
+ *
+ * `seen` is the running count per entry id and is advanced here, so the blocks
+ * of one body have to be built in order and through one counter.
+ */
+function keyOf(block, seen) {
+  const entry = entryIdOf(block);
+  const nth = seen.get(entry) ?? 0;
+  seen.set(entry, nth + 1);
+  return `${entry}#${nth}`;
+}
+
+const makeBlock = (index, kind, label, payload, seen) => {
   const text = textOf(payload);
-  return { index, kind, label, chars: text.length, preview: previewOf(text), text };
+  const block = { index, kind, label, chars: text.length, preview: previewOf(text), text };
+  block.key = keyOf(block, seen);
+  return block;
 };
 
 /**
@@ -47,12 +72,17 @@ const makeBlock = (index, kind, label, payload) => {
  * content limit still has to render, so it comes back as a single `raw` block
  * carrying every character that did arrive rather than as nothing at all.
  *
+ * Every block carries a `key` naming what it is rather than which record it
+ * came from — see `keyOf` for why the expansion state is remembered by that.
+ *
  * @param {string} body the exact body as `/api/content/at` served it
  * @returns {{ ok: boolean, chars: number, blocks: object[] }}
  */
 export function contextBlocks(body) {
   if (typeof body !== 'string' || body === '') return { ok: false, chars: 0, blocks: [] };
   const chars = body.length;
+  // One counter for the whole body, so the keys count blocks and not calls.
+  const seen = new Map();
 
   let parsed;
   try {
@@ -61,11 +91,11 @@ export function contextBlocks(body) {
     parsed = null;
   }
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    return { ok: false, chars, blocks: [makeBlock(0, 'raw', 'raw body', body)] };
+    return { ok: false, chars, blocks: [makeBlock(0, 'raw', 'raw body', body, seen)] };
   }
 
   const blocks = [];
-  const push = (kind, label, payload) => blocks.push(makeBlock(blocks.length, kind, label, payload));
+  const push = (kind, label, payload) => blocks.push(makeBlock(blocks.length, kind, label, payload, seen));
 
   // 1. The system prompt, which this CLI sends as an array of text blocks but
   //    the API also allows as a plain string.
@@ -224,7 +254,7 @@ export function blockMatches(block, query) {
  * kind stays hidden however well it matches, and searching never brings back
  * what the filter turned off.
  *
- * Every survivor keeps its own `index`, so the expansion keys stay the same
+ * Every survivor keeps its own `key`, so the expansion keys stay the same
  * whether the list is filtered or not: hiding one kind must not shut an
  * expanded block of another. No argument is mutated, and `hidden` may be an
  * array or a Set — the same freedom `expanded` already has.
@@ -589,10 +619,11 @@ export function renderContextPanel({
 
   const rows = shownBlocks
     .map((block) => {
-      // Keyed by the record too: when the cursor lands on a different request
-      // the keys stop matching and everything collapses, which is right — it is
-      // a different context.
-      const key = `${item.seq}:${block.index}`;
+      // Keyed by what the block is and never by the record it came from: a live
+      // session writes a new record on every API call, and a key carrying the
+      // seq of that record would shut every open block under a reader each time
+      // one arrived.
+      const key = block.key;
       return `<details class="ctx-block" data-kind="${esc(block.kind)}"${openKeys.has(key) ? ' open' : ''}>
       <summary data-block="${esc(key)}">
         <span class="ctx-label">${esc(block.label)}</span><span class="ctx-preview">${esc(block.preview)}</span>
