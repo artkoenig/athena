@@ -640,6 +640,7 @@ function contextFor(m) {
     case 'w16':
       return { stateReturn: noState, decomposeReturn: decomposeReturnOne, researchReturn: planReturn, verdictFor: (label) => (label === 'review:i1.0' ? verdictReturnWithDirectFinding : verdictReturnClean) };
     case 'w17':
+    case 'w18':
       // Every review round finds the same needs-plan defect, so the increment
       // burns its correction rounds and closes blocked.
       return { stateReturn: noState, decomposeReturn: decomposeReturnOne, researchReturn: planReturn, verdictFor: () => verdictReturnWithFinding };
@@ -696,6 +697,16 @@ async function main() {
       .filter((line) => line.includes('steps ' + STATE_PATH) && !line.includes('--fields'));
     assertTrue(unfiltered.length === 0,
       c.label + ' reads a step without naming the fields it may see: ' + JSON.stringify(unfiltered));
+  }
+
+  // The publishing agent is handed the run in its prompt and reads no part of
+  // the state. It carries no shared brief, so every read it is sent on it pays
+  // for twice — once finding the helper, once asking a closed increment for the
+  // steps `close` has already moved into its attempts. Checked in every mode.
+  const publishing = calls.find((c) => c.label === 'publish');
+  if (publishing) {
+    assertTrue(!/\b(index|steps|codemap|read) docs\/issues\/x\/backlog\.json/.test(publishing.prompt),
+      'the publish prompt sends the agent to read the run state instead of handing it the run');
   }
 
   if (mode === 'w1') {
@@ -969,6 +980,26 @@ async function main() {
       'the blocked replan is not told to keep the increment branch unmerged');
     assertTrue(!!closeCall && !/Land it first/.test(closeCall.prompt),
       'the blocked replan carries the accepted-merge instruction');
+  } else if (mode === 'w18') {
+    // Everything the pull request body is made of reaches the publishing agent
+    // in its prompt. Same run as w17 — one increment, blocked with a finding
+    // open on an unmerged branch — because that is the run whose body needs the
+    // most: what the review said, what is still open, and where the work that
+    // is not in the diff lives.
+    const publishCall = calls.find((c) => c.label === 'publish');
+    assertTrue(!!publishCall, 'publish was never dispatched');
+    assertTrue(!!publishCall && publishCall.prompt.includes('MARKER-VERDICT-REASON'),
+      "the publish prompt does not carry the review's reason, so the body cannot say why the increment is open");
+    assertTrue(!!publishCall && /Deliver i1[^\n]*\[blocked\]/.test(publishCall.prompt),
+      'the publish prompt does not carry the increment and the status it closed with');
+    assertTrue(!!publishCall && publishCall.prompt.includes('issue-branch--i1'),
+      'the publish prompt does not name the blocked increment\'s branch, so its unmerged work is unfindable');
+    assertTrue(!!publishCall && /NOT accepted/.test(publishCall.prompt),
+      'the publish prompt does not say the increment was not accepted');
+    assertTrue(!!publishCall && /Do NOT open docs\/issues\/x\/backlog\.json/.test(publishCall.prompt),
+      'the publish prompt does not forbid reading the run state it was just handed');
+    assertTrue(!!publishCall && /[Ff]etch the default branch before you compare/.test(publishCall.prompt),
+      'the publish prompt does not tell the agent to fetch the default branch before diffing against it');
   } else {
     throw new Error('unknown mode ' + mode);
   }
@@ -1012,6 +1043,7 @@ for wf in "$root/workflows/agile-loop.js"; do
   run_driver "$wf" w14 "$wf_name: a Decompose worked again after a session died before recording it has its new cut worked"
   run_driver "$wf" w16 "$wf_name: a correction round whose findings are all direct fixes skips the researcher and the test-author, and is still reviewed"
   run_driver "$wf" w17 "$wf_name: a blocked increment's branch is closed unmerged and named to the closing planner"
+  run_driver "$wf" w18 "$wf_name: the publish prompt carries the run's outcome and sends the agent to read nothing"
 done
 
 # Round 3, finding 2: only the incremental loop re-cuts, so an increment
