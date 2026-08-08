@@ -112,9 +112,11 @@ export function createServer({ store, token = null, endpoint = '', persist = nul
 
   // Coalesce bursts: an agent flushing every second can produce hundreds of
   // records per push, and the UI only needs to know that something changed.
-  store.subscribe(({ signal, records = [], sessionIds, seq, replay }) => {
+  store.subscribe((change) => {
+    if (change.kind !== 'ingest') return;
+    const { signal, records = [], sessionIds, seq, replay } = change;
     if (replay || !clients.size) return;
-    pending ??= { seq: 0, sessionIds: [], counts: { traces: 0, metrics: 0, logs: 0 }, events: [] };
+    pending ??={ seq: 0, sessionIds: [], counts: { traces: 0, metrics: 0, logs: 0 }, events: [] };
     pending.seq = Math.max(pending.seq, seq);
     pending.counts[signal] += records.length;
     for (const id of sessionIds) {
@@ -138,6 +140,19 @@ export function createServer({ store, token = null, endpoint = '', persist = nul
     flushTimer ??= setTimeout(flush, SSE_FLUSH_MS);
   });
 
+  // A run write happens a handful of times per run, and the frame is the whole
+  // point of it — so it goes out immediately, uncoalesced, and on its own event
+  // name rather than sharing one with telemetry ingest.
+  store.subscribe((change) => {
+    if (change.kind !== 'runState') return;
+    if (change.replay || !clients.size) return;
+    const frame = `event: run\ndata: ${JSON.stringify({
+      id: change.runId,
+      updatedAtMs: change.run.updatedAtMs,
+    })}\n\n`;
+    for (const client of clients) client.write(frame);
+  });
+
   /*
    * Two ways in, both for a program: the header an OTLP exporter sets, and the
    * query parameter `check` uses. No browser session — nothing here is opened
@@ -156,6 +171,34 @@ export function createServer({ store, token = null, endpoint = '', persist = nul
     const records = decodeExportRequest(signal, body, contentType);
     store.ingest(signal, records);
     sendOtlpAck(res, contentType);
+  };
+
+  /**
+   * Take one run's whole state: `{ id?, state }` as JSON.
+   *
+   * `id` is the run's identity; without a usable one the issue the state names
+   * stands in, so a caller never has to invent a second name for what the state
+   * already carries. The state itself is not validated beyond being an object —
+   * the collector holds it opaquely.
+   */
+  const handleRunState = async (req, res) => {
+    const raw = await readBody(req);
+    const body = decompress(raw, req.headers['content-encoding'] ?? '');
+    const payload = JSON.parse(body.toString('utf8') || 'null');
+    const state = payload?.state;
+    if (!state || typeof state !== 'object' || Array.isArray(state)) {
+      sendJson(res, 400, { error: 'run state required' });
+      return;
+    }
+    const named = typeof payload.id === 'string' ? payload.id.trim() : '';
+    const fromIssue = typeof state.issue === 'string' ? state.issue.trim() : '';
+    const id = named || fromIssue;
+    if (!id) {
+      sendJson(res, 400, { error: 'run id required' });
+      return;
+    }
+    const entry = store.putRunState(id, state);
+    sendJson(res, 200, { ok: true, id, updatedAtMs: entry.updatedAtMs });
   };
 
   const handleApi = (req, res, url) => {
@@ -207,6 +250,17 @@ export function createServer({ store, token = null, endpoint = '', persist = nul
       const session = store.getSession(decodeURIComponent(sessionMatch[1]));
       if (!session) sendJson(res, 404, { error: 'unknown session' });
       else sendJson(res, 200, session);
+      return true;
+    }
+    if (pathname === '/api/runs') {
+      sendJson(res, 200, store.listRuns());
+      return true;
+    }
+    const runMatch = pathname.match(/^\/api\/runs\/([^/]+)$/);
+    if (runMatch) {
+      const run = store.getRun(decodeURIComponent(runMatch[1]));
+      if (!run) sendJson(res, 404, { error: 'unknown run' });
+      else sendJson(res, 200, run);
       return true;
     }
     const traceMatch = pathname.match(/^\/api\/traces\/([^/]+)$/);
@@ -369,6 +423,16 @@ export function createServer({ store, token = null, endpoint = '', persist = nul
       if (req.method === 'DELETE' && url.pathname === '/api/data') {
         store.clear();
         sendJson(res, 200, { ok: true });
+        return;
+      }
+      // Below the auth gate above, so the run routes are gated like the rest,
+      // and above the method gate below, so every other method on /api/runs
+      // still answers 405.
+      if (req.method === 'POST' && url.pathname === '/api/runs') {
+        handleRunState(req, res).catch((error) => {
+          log(`run state failed: ${error.message}`);
+          sendJson(res, error.status ?? 400, { error: error.message });
+        });
         return;
       }
       if (req.method !== 'GET') {

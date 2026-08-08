@@ -190,6 +190,33 @@
             ],
             "questions": []
           }
+        },
+        {
+          "label": "implement:collector.0",
+          "at": "2026-08-08T10:27:19.925Z",
+          "return": {
+            "summary": "Added run state to the collector: TelemetryStore.putRunState/listRuns/getRun with a maxRuns bound and a kind-discriminated change stream, POST/GET /api/runs plus GET /api/runs/:id and an uncoalesced SSE run frame in the server, a runs.jsonl append/replay pass in persistence, and the matching README/CLAUDE.md documentation.",
+            "deviations": [],
+            "commands": [
+              {
+                "command": "npm --prefix tools/argus test",
+                "exitCode": 0,
+                "note": "179 cases, 0 failures, nothing skipped; covers store, server, persist, decode, protobuf, config, claude, probe, background, tunnel, version."
+              },
+              {
+                "command": "./test.sh",
+                "exitCode": 0,
+                "note": "All 6 suites pass, test-repo.sh included, so no forbidden argus-ui-view wording entered tools/argus/*.md."
+              },
+              {
+                "command": "node --test --test-timeout=15000 tools/argus/test/store.test.mjs",
+                "exitCode": 1,
+                "note": "Pre-implementation red baseline: 7 of 46 failed with 'store.putRunState is not a function'; 46/46 pass after the store change."
+              }
+            ],
+            "blockers": [],
+            "questions": []
+          }
         }
       ]
     },

@@ -20,6 +20,8 @@ import readline from 'node:readline';
 import { runDirName } from './config.mjs';
 
 const SIGNALS = ['traces', 'metrics', 'logs'];
+/** Run states get a stream of their own, rotated like any other. */
+const RUNS = 'runs';
 const DEFAULT_MAX_BYTES = 64 * 1024 * 1024;
 
 /**
@@ -145,14 +147,30 @@ export class JsonlPersistence {
         restored += batch.length;
       }
     }
+    // Latest-wins across a restart falls out of replay order: a later line for
+    // one id simply overwrites the earlier one, so no de-duplication is needed.
+    for await (const record of this.#read(RUNS)) {
+      if (typeof record?.id !== 'string' || !record.id) continue;
+      if (!record.state || typeof record.state !== 'object') continue;
+      store.putRunState(record.id, record.state, {
+        updatedAtMs: record.updatedAtMs,
+        replay: true,
+      });
+      restored++;
+    }
     return restored;
   }
 
-  /** Persist every future non-replay ingest. */
+  /** Persist every future non-replay change. */
   attach(store) {
     fs.mkdirSync(this.dir, { recursive: true });
-    this.unsubscribe = store.subscribe(({ signal, records, replay }) => {
-      if (replay) return;
+    this.unsubscribe = store.subscribe((change) => {
+      if (change.replay) return;
+      if (change.kind === 'runState') {
+        this.#append(RUNS, [`${JSON.stringify(change.run)}\n`]);
+        return;
+      }
+      const { signal, records } = change;
       if (!records?.length) return;
       this.#append(
         signal,
