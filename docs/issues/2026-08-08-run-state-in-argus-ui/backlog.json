@@ -351,6 +351,35 @@
             ],
             "questions": []
           }
+        },
+        {
+          "label": "review:ui.0",
+          "at": "2026-08-08T11:50:07.522Z",
+          "return": {
+            "findings": [
+              {
+                "claim": "A test this increment adds can never pass: its fixture increment id contains the very word the assertion forbids, so both listed commands exit 1.",
+                "reproduction": "tools/argus-ui/test/run.test.mjs:227-230, case 'an increment with an empty branch renders no branch label at all', builds increment({ id: 'no-branch', branch: '' }) and then asserts !/branch/i.test(html). renderRun prints the id at tools/argus-ui/public/run.js:101 as <span class=\"run-increment-id\">no-branch</span>, which is the only occurrence of 'branch' in the markup, so the regex always matches. Result: `npm --prefix tools/argus-ui test` exits 1 (283 cases, 282 pass, 1 fail, 'not ok 191'), and `./test.sh` exits 1 with 'FAIL: 1 of 6 suite(s)'. Right result: give the fixture an id that does not contain the substring 'branch' (for example id: 'plain-one'), keeping the assertion as it stands, so the case tests the absent branch label instead of its own fixture name.",
+                "criterion": "npm --prefix tools/argus-ui test exits 0 and ./test.sh exits 0",
+                "fix": "direct"
+              },
+              {
+                "claim": "Nothing tests that the page ever fetches and paints run state — neither on open nor when a run frame arrives — so both the 'opens on the latest run' and the 'live over SSE' criteria could break with the suite still green.",
+                "reproduction": "Delete `await refreshRuns();` from start() at tools/argus-ui/public/app.js:876, or empty the body of refreshRuns() at tools/argus-ui/public/app.js:575 (drop its loadRuns/loadRun/renderRunPicker/renderRunView calls): `npm --prefix tools/argus-ui test` still exits 0 with all cases passing, while the run pane stays blank when the page opens and never repaints when the collector's `run` frame arrives. The only guards that name refreshRuns are page.test.mjs's 'connectStream reacts to the run frame' (the listener names runFrame( and refreshRuns() and 'no timer fetches run state' (refresh and boot do not name it); neither asserts refreshRuns loads the run's state and repaints, and nothing asserts the boot path calls it at all. app.js is read as source text throughout page.test.mjs, so a source guard is the form this project already uses for such wiring.",
+                "criterion": "The view opens on the run written to most recently and the reader can switch to any other run the collector holds; and a write to the shown run's state reaches an already-open page live over the collector's Server-Sent-Events stream",
+                "fix": "needs-plan"
+              },
+              {
+                "claim": "tools/argus-ui/CLAUDE.md now states a rule that is false for the project as it stands: public/format.js is a pure public module with no test file of its own.",
+                "reproduction": "tools/argus-ui/CLAUDE.md, section 'Tests', new sentence 'One test file per module — each `src/` module and each pure `public/` one, `public/run.js` covered by `test/run.test.mjs`'. tools/argus-ui/public/ holds format.js, timeline.js, context.js and run.js as pure modules, while tools/argus-ui/test/ holds config, server, timeline, context, run, page and independence test files and no format.test.mjs. Right result: word the rule so it covers the pure public modules that do have their own file without claiming every one does — for example 'One test file per module under test — each `src/` module and each pure `public/` one the suite imports directly, `public/run.js` covered by `test/run.test.mjs`'.",
+                "criterion": "tools/argus-ui/CLAUDE.md is current for the cases and modules this increment adds",
+                "fix": "direct"
+              }
+            ],
+            "reason": "The increment ships a test whose own fixture id contains the word its assertion forbids, so the run view suite fails and both `npm --prefix tools/argus-ui test` and `./test.sh` exit 1, missing the criterion that both exit 0; and no test would catch the page losing its run fetch on open or on a run frame, leaving the 'opens on the latest run' and 'live over SSE' criteria unguarded.",
+            "questions": [],
+            "summary": "Reviewed increment 3 (the run view in argus-ui) against its eight criteria over the diff claude/argus-workflow-backlog-status-nvqmvr...HEAD. Both listed commands were run: `npm --prefix tools/argus-ui test` exits 1 (283 cases, 282 pass, 1 fail) and `./test.sh` exits 1 ('FAIL: 1 of 6 suite(s)', the other five suites green); the single failure is 'an increment with an empty branch renders no branch label at all' in test/run.test.mjs, a file this diff adds, so the red is this change's. Everything else lines up: renderRun holds the issue, workflow, write time, the increments in document order with id, title, status, branch and note, the closed/open counts and the codemap, with the closed card marked data-closed=\"true\"; pickRunId opens on the collector's first (latest-write-first) item and falls back when the wanted run is gone; loadRuns/loadRun go through the page's own api() helper to /api/runs and /api/runs/:id and nowhere else; the SSE 'run' listener matches the collector's frame at tools/argus/src/server.mjs:149 exactly ({ id, updatedAtMs }) and refreshRuns re-fetches only the shown run; the session view's containers, ids and stream listeners are untouched and its suites still pass; independence.test.mjs lists public/run.js in all three of its checks. Two observations that need no correction: on a collector whose /api/runs 404s, refreshRuns swallows the error before renderRunView runs, so the run pane stays literally empty rather than showing the 'No run yet' placeholder renderRun(null) provides; and the reflowed CLAUDE.md 'Tests' paragraph leaves one overlong line beside its rewrapped neighbours."
+          }
         }
       ]
     },
