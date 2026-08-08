@@ -217,6 +217,16 @@
             "blockers": [],
             "questions": []
           }
+        },
+        {
+          "label": "review:collector.0",
+          "at": "2026-08-08T10:33:15.419Z",
+          "return": {
+            "findings": [],
+            "reason": "",
+            "questions": [],
+            "summary": "Round 0 of increment 1 (collector) is accepted. Both listed commands were run in one call from the increment branch: `npm --prefix tools/argus test` (179 cases, exit 0) and `./test.sh` (6 suites, exit 0), nothing skipped. Every criterion is met and covered by a test that would fail if the behaviour broke: POST /api/runs takes a state and files it under `id` or, when that is missing or blank, under the `issue` the state names (400 with neither, and on non-JSON); a second POST replaces the first and listRuns stays at one, so no history is kept; GET /api/runs lists id, issue, workflow, increment count and updatedAtMs latest-write-first and never the state, GET /api/runs/:id serves the state whole and answers 404 for a run not held; all three routes sit below the same auth gate as the rest of /api and answer 401 with www-authenticate, tested unauthenticated and authenticated, header and query token; run state persists as its own runs.jsonl beside the signal files, rotating and replaying like them, with latest-line-wins and replayed writes not written back, proven at unit level and bin level (--persist then --open serves the same state); a write emits an immediate uncoalesced `event: run` frame carrying the run id and updatedAtMs to an already-connected /api/stream client. README, tools/argus/CLAUDE.md and test/CLAUDE.md are updated in the same commit and their factual claims check out (the `--persist` never replays claim matches bin/argus.mjs, maxRuns 100 matches the store). Blast radius traced: the store's change stream gained a `kind` discriminator and both subscribers (persist.attach and the two in createServer) filter on it, and there are no other subscribers; clear() now also drops runs, matching the documented meaning of DELETE /api/data; skills/argus/SKILL.md's endpoint table is an explicit subset and is not made stale. Two observations that need no correction: server.mjs line 119 lost a space in an otherwise untouched line (`pending ??={ seq: 0, ...`), inconsistent with the file's other `??=` but behaviourally identical and unflagged by any linter (the project has none); and the README line about --open reopening a measurement is now one long unwrapped line, in a file that already carries longer ones."
+          }
         }
       ]
     },
