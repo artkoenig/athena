@@ -93,27 +93,32 @@ function shapeIncrement(raw, steps) {
 // It is a merge, not an overwrite: the payload decides which increments exist
 // and what they say, the file decides what they have already recorded. An
 // increment the payload drops is gone with its steps; `run.steps` belongs to
-// the run rather than to any increment, so a re-cut never touches it.
+// the run rather than to any increment, so a re-cut never touches it. The
+// codemap is the payload's when it carries one and the file's when it does
+// not, so a re-cut that says nothing about the map cannot erase it.
 function init(backlogPath, payloadFile) {
   const payload = readJson(payloadFile, 'the init payload')
   if (!payload || typeof payload !== 'object' || !Array.isArray(payload.increments)) {
-    fail('the init payload needs { issue, workflow, increments: [...] }', 2)
+    fail('the init payload needs { issue, workflow, increments: [...] }, codemap optional', 2)
   }
 
   let priorSteps = new Map()
   let runSteps = []
+  let priorCodemap = ''
   if (fs.existsSync(backlogPath)) {
     const existing = loadBacklog(backlogPath)
     for (const increment of existing.increments || []) {
       priorSteps.set(increment.id, Array.isArray(increment.steps) ? increment.steps : [])
     }
     runSteps = (existing.run && Array.isArray(existing.run.steps) && existing.run.steps) || []
+    priorCodemap = typeof existing.codemap === 'string' ? existing.codemap : ''
   }
 
   const backlog = {
     version: 1,
     issue: payload.issue || '',
     workflow: payload.workflow || '',
+    codemap: typeof payload.codemap === 'string' ? payload.codemap : priorCodemap,
     increments: payload.increments.map((increment) =>
       shapeIncrement(increment, priorSteps.get(String(increment.id)) || []),
     ),

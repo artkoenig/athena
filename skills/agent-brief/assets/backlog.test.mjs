@@ -39,7 +39,7 @@ function runFails(args) {
 
 const backlogTemplate = (increments) => ({
   issue: 'docs/issues/x',
-  workflow: 'loop',
+  workflow: 'agile-loop',
   increments,
 });
 
@@ -115,6 +115,53 @@ test('init merges into an existing backlog: kept increments keep their steps, dr
   assert.deepEqual(i3.steps, []);
   assert.equal(backlog.run.steps.length, 1, 'run.steps is preserved untouched by a later init');
   assert.equal(backlog.run.steps[0].label, 'decompose');
+});
+
+test('init stores the payload codemap at the top level, and a fresh init without one stores the empty string', () => {
+  const dir = tmpDir();
+  const backlogPath = path.join(dir, 'backlog.json');
+  const withMap = { ...backlogTemplate([incrementPayload('i1', 'First')]), codemap: 'a.js — the parser' };
+
+  run(['init', backlogPath, writeJson(dir, 'with-map.json', withMap)]);
+  assert.equal(JSON.parse(fs.readFileSync(backlogPath, 'utf8')).codemap, 'a.js — the parser');
+
+  const freshPath = path.join(dir, 'fresh.json');
+  run(['init', freshPath, writeJson(dir, 'no-map.json', backlogTemplate([incrementPayload('i1', 'First')]))]);
+  assert.equal(JSON.parse(fs.readFileSync(freshPath, 'utf8')).codemap, '', 'a backlog opened without a codemap carries the empty string, not undefined');
+});
+
+test('a re-cut without a codemap keeps the one already in the file, and one with a codemap replaces it', () => {
+  const dir = tmpDir();
+  const backlogPath = path.join(dir, 'backlog.json');
+  run(['init', backlogPath, writeJson(dir, 'first.json', {
+    ...backlogTemplate([incrementPayload('i1', 'First')]),
+    codemap: 'a.js — the parser',
+  })]);
+
+  run(['init', backlogPath, writeJson(dir, 'silent.json', backlogTemplate([incrementPayload('i1', 'First')]))]);
+  assert.equal(JSON.parse(fs.readFileSync(backlogPath, 'utf8')).codemap, 'a.js — the parser', 'an init payload that says nothing about the codemap cannot erase it');
+
+  run(['init', backlogPath, writeJson(dir, 'replacing.json', {
+    ...backlogTemplate([incrementPayload('i1', 'First')]),
+    codemap: 'a.js — the parser\nb.js — its one caller',
+  })]);
+  assert.equal(JSON.parse(fs.readFileSync(backlogPath, 'utf8')).codemap, 'a.js — the parser\nb.js — its one caller');
+});
+
+test('close sheds step returns and leaves the codemap standing', () => {
+  const dir = tmpDir();
+  const backlogPath = path.join(dir, 'backlog.json');
+  run(['init', backlogPath, writeJson(dir, 'init.json', {
+    ...backlogTemplate([incrementPayload('i1', 'First')]),
+    codemap: 'a.js — the parser',
+  })]);
+  run(['record', backlogPath, 'i1', 'research:i1.0', writeJson(dir, 'step.json', { plan: 'x' })]);
+
+  run(['close', backlogPath, 'i1', 'done']);
+
+  const backlog = JSON.parse(fs.readFileSync(backlogPath, 'utf8'));
+  assert.deepEqual(backlog.increments[0].steps, []);
+  assert.equal(backlog.codemap, 'a.js — the parser', 'the codemap is run-level state, not a step return the close may shed');
 });
 
 test('record appends a step to the named increment and prints only the confirmation, nothing from the file', () => {
@@ -272,7 +319,7 @@ test('close on a backlog that carries no run key exits 0 and writes the status',
   fs.writeFileSync(backlogPath, JSON.stringify({
     version: 1,
     issue: 'docs/issues/x',
-    workflow: 'loop',
+    workflow: 'agile-loop',
     increments: [
       { id: 'i1', title: 'First', goal: 'First.', criteria: ['does i1'], status: 'todo', note: '', steps: [] },
     ],
