@@ -74,6 +74,244 @@
             "questions": [],
             "summary": "Add a pure public/run.js (counts, run picker, one run's backlog as HTML strings, SSE frame parsing) and wire it into index.html, app.js and styles.css as a switchable run view that reads GET /api/runs and GET /api/runs/:id, opens on the latest-written run, and reloads only on the collector's `run` SSE frame — never on a timer."
           }
+        },
+        {
+          "label": "tests:ui.0",
+          "at": "2026-08-08T11:30:19.429Z",
+          "return": {
+            "summary": "Wrote tools/argus-ui/test/run.test.mjs (20 cases against the not-yet-written public/run.js), appended 11 source-text cases to test/page.test.mjs under a new '// Increment ui' section, extended test/independence.test.mjs's three guarded lists with public/run.js, and updated test/CLAUDE.md's files/fixtures/real-vs-faked sections in the same commit; npm --prefix tools/argus-ui test now reports 264 cases, 250 pass, 14 fail, all for the missing run view.",
+            "cases": [
+              {
+                "case": "renderRun(runEntry()) names the issue, the workflow and when it was last written, with the exact ISO instant in data-updated",
+                "file": "tools/argus-ui/test/run.test.mjs",
+                "testName": "the head names the issue, the workflow and when the run was last written, with the ISO instant in data-updated",
+                "expected": "markup contains the issue text, the workflow text, fmtAgo(updatedAtMs), and data-updated=\"<ISO of updatedAtMs>\"",
+                "got": "whole file fails to load: Cannot find module '.../public/run.js' (the module does not exist yet)"
+              },
+              {
+                "case": "one card per increment, in the document's order, each carrying its id, title, status, branch and note; order proved via indexOf",
+                "file": "tools/argus-ui/test/run.test.mjs",
+                "testName": "one card per increment, in the document's own order, each carrying its id, title, status, branch and note",
+                "expected": "three distinct-id increments (a, b, c; b closed with note+branch) all render their id/title/status/note/branch text, in document order",
+                "got": "whole file fails to load: Cannot find module '.../public/run.js'. Note: I proved order with distinguishable titles ('Card Alpha'/'Card Bravo'/'Card Charlie') rather than the bare literal characters a/b/c the plan's indexOf example names — see openQuestions."
+              },
+              {
+                "case": "the counts: closed 2, open 2 over done/blocked/todo/'' statuses, both rendered and summing to the total",
+                "file": "tools/argus-ui/test/run.test.mjs",
+                "testName": "the closed and open counts are rendered, and sum to the number of increments",
+                "expected": "incrementCounts gives {total:4, closed:2, open:2} and both numbers appear in renderRun's markup",
+                "got": "whole file fails to load: Cannot find module '.../public/run.js'"
+              },
+              {
+                "case": "the codemap is rendered whole, with both lines present and & escaped as &amp;",
+                "file": "tools/argus-ui/test/run.test.mjs",
+                "testName": "the codemap is rendered whole, escaped",
+                "expected": "both codemap lines present in the markup and the raw & replaced by &amp;",
+                "got": "whole file fails to load: Cannot find module '.../public/run.js'"
+              },
+              {
+                "case": "everything is escaped: a <script> title, a note with quotes, an issue containing <",
+                "file": "tools/argus-ui/test/run.test.mjs",
+                "testName": "everything printed is escaped",
+                "expected": "no raw <script appears anywhere in the markup",
+                "got": "whole file fails to load: Cannot find module '.../public/run.js'"
+              },
+              {
+                "case": "renderRun(null) renders a placeholder saying no run state is held, and no increment card",
+                "file": "tools/argus-ui/test/run.test.mjs",
+                "testName": "renderRun(null) is a placeholder with no increment card, for the collector holding no run at all yet",
+                "expected": "non-empty markup carrying the page's existing empty/placeholder styling and no data-closed attribute",
+                "got": "whole file fails to load: Cannot find module '.../public/run.js'. I could not pin the exact wording (deliberately left to the implementer per the plan), so I asserted class=\"empty\" or class=\"placeholder\" — see openQuestions."
+              },
+              {
+                "case": "the increments come from state.increments, never from the entry's own count (shape trap: increments:99)",
+                "file": "tools/argus-ui/test/run.test.mjs",
+                "testName": "the increments come from state.increments and never from the entry's own count",
+                "expected": "two cards render (from state.increments) and the literal string 99 never appears",
+                "got": "whole file fails to load: Cannot find module '.../public/run.js'"
+              },
+              {
+                "case": "an opaque document with no increments/codemap/workflow still renders a head and a placeholder, no undefined/NaN",
+                "file": "tools/argus-ui/test/run.test.mjs",
+                "testName": "an opaque document carrying none of the known fields still renders a head and a placeholder, never undefined or NaN",
+                "expected": "whatever the document carries reaches the page; no 'undefined', no 'NaN', no data-closed",
+                "got": "whole file fails to load: Cannot find module '.../public/run.js'"
+              },
+              {
+                "case": "zero increments: zero closed, zero open, a placeholder instead of an empty block",
+                "file": "tools/argus-ui/test/run.test.mjs",
+                "testName": "a run with zero increments shows zero closed and zero open, and a placeholder instead of an empty block",
+                "expected": "incrementCounts([]) is {total:0,closed:0,open:0}; no data-closed, no undefined, no NaN in the markup",
+                "got": "whole file fails to load: Cannot find module '.../public/run.js'"
+              },
+              {
+                "case": "isClosedIncrement/CLOSED_STATUSES: done/blocked/dropped closed, todo/''/unknown open, exactly those three statuses",
+                "file": "tools/argus-ui/test/run.test.mjs",
+                "testName": "CLOSED_STATUSES holds exactly the recorder's three closing statuses, and isClosedIncrement matches them",
+                "expected": "CLOSED_STATUSES === {'done','blocked','dropped'}; the six status/openness pairs all match",
+                "got": "whole file fails to load: Cannot find module '.../public/run.js'"
+              },
+              {
+                "case": "incrementCounts over four statuses, over [], over undefined",
+                "file": "tools/argus-ui/test/run.test.mjs",
+                "testName": "incrementCounts totals closed and open, tolerating an empty or a missing array",
+                "expected": "{total:4,closed:2,open:2} / {total:0,closed:0,open:0} / {total:0,closed:0,open:0} for undefined, no throw",
+                "got": "whole file fails to load: Cannot find module '.../public/run.js'"
+              },
+              {
+                "case": "a closed increment's card is marked closed and shows status+note; an open one carries neither",
+                "file": "tools/argus-ui/test/run.test.mjs",
+                "testName": "a closed increment's card is marked closed and shows its status and its note; an open one carries neither the mark nor a note",
+                "expected": "exactly one data-closed=\"true\", positioned before the open card; the closed card's own status and note text precede the open card's start; no 'undefined'",
+                "got": "whole file fails to load: Cannot find module '.../public/run.js'"
+              },
+              {
+                "case": "a closed increment with an empty note still reads as closed, no empty note element, no undefined",
+                "file": "tools/argus-ui/test/run.test.mjs",
+                "testName": "a closed increment with an empty note still reads as closed, printing no undefined",
+                "expected": "data-closed=\"true\" and the status text present; no literal 'undefined' anywhere",
+                "got": "whole file fails to load: Cannot find module '.../public/run.js'"
+              },
+              {
+                "case": "an increment with an empty branch renders no branch label at all",
+                "file": "tools/argus-ui/test/run.test.mjs",
+                "testName": "an increment with an empty branch renders no branch label at all",
+                "expected": "the word 'branch' does not appear anywhere in the markup",
+                "got": "whole file fails to load: Cannot find module '.../public/run.js'"
+              },
+              {
+                "case": "pickRunId: [] -> null; [a,b] with none picked -> first item's id; existing selection kept; a gone selection falls back to the latest",
+                "file": "tools/argus-ui/test/run.test.mjs",
+                "testName": "pickRunId opens on the run written to most recently, and falls back when the wanted run is gone",
+                "expected": "pickRunId matches the four described outcomes exactly",
+                "got": "whole file fails to load: Cannot find module '.../public/run.js'"
+              },
+              {
+                "case": "renderRunList: one button per run, data-run carrying the id, aria-current true/false, issue and fmtAgo time shown per row",
+                "file": "tools/argus-ui/test/run.test.mjs",
+                "testName": "renderRunList renders one button per run, marking the selected one current, with its issue and time",
+                "expected": "both buttons render with the right data-run/aria-current, and both rows' own issue and fmtAgo text",
+                "got": "whole file fails to load: Cannot find module '.../public/run.js'"
+              },
+              {
+                "case": "renderRunList({items:[]}) renders a placeholder row, not an empty string",
+                "file": "tools/argus-ui/test/run.test.mjs",
+                "testName": "renderRunList({ items: [] }) renders a placeholder row, not an empty string",
+                "expected": "non-empty markup containing an <li but no data-run=",
+                "got": "whole file fails to load: Cannot find module '.../public/run.js'"
+              },
+              {
+                "case": "renderRunList escapes the id and the issue so a quote cannot break out of data-run",
+                "file": "tools/argus-ui/test/run.test.mjs",
+                "testName": "renderRunList escapes the id and the issue, so a quote cannot break out of the data-run attribute",
+                "expected": "no raw onclick= and no raw <script> in the markup for a hostile id/issue",
+                "got": "whole file fails to load: Cannot find module '.../public/run.js'"
+              },
+              {
+                "case": "runFrame parses the collector's frame verbatim",
+                "file": "tools/argus-ui/test/run.test.mjs",
+                "testName": "runFrame parses the collector's frame verbatim",
+                "expected": "runFrame('{\"id\":\"docs/issues/x\",\"updatedAtMs\":1712}') === {id:'docs/issues/x', updatedAtMs:1712}",
+                "got": "whole file fails to load: Cannot find module '.../public/run.js'"
+              },
+              {
+                "case": "runFrame of not-json / {} / null / '' each return null",
+                "file": "tools/argus-ui/test/run.test.mjs",
+                "testName": "a malformed frame costs the page nothing",
+                "expected": "all four malformed inputs return null, no throw",
+                "got": "whole file fails to load: Cannot find module '.../public/run.js'"
+              },
+              {
+                "case": "index.html carries the run view's shell (run-sidebar/run-list/run-count/run-detail/data-view controls) and still carries the session shell",
+                "file": "tools/argus-ui/test/page.test.mjs",
+                "testName": "index.html carries the run view's shell, beside the session view's, which stays",
+                "expected": "all six new ids/attributes present, plus the five existing session-view ids still present",
+                "got": "'index.html must carry id=\"run-sidebar\"' (ERR_ASSERTION)"
+              },
+              {
+                "case": "app.js imports the run module; index.html still loads app.js as a module",
+                "file": "tools/argus-ui/test/page.test.mjs",
+                "testName": "app.js imports the run module, and index.html still loads app.js as a module",
+                "expected": "app.js matches /from\\s+['\"]\\.\\/run\\.js['\"]/; index.html still has <script type=\"module\" src=\"/app.js\">",
+                "got": "'app.js must import run.js so the run view is reached by the page, not tested as an island' (ERR_ASSERTION)"
+              },
+              {
+                "case": "loadRuns asks /api/runs, loadRun asks /api/runs/ with encodeURIComponent; both go through api(), never a bare fetch()",
+                "file": "tools/argus-ui/test/page.test.mjs",
+                "testName": "the run loaders ask the collector's run endpoints, and nowhere else",
+                "expected": "loadRuns/loadRun source matches the run endpoints and encodeURIComponent, call api(), and never call fetch( directly",
+                "got": "'app.js must still declare loadRuns()' (ERR_ASSERTION — functionSource cannot find the not-yet-written function)"
+              },
+              {
+                "case": "the state literal carries runs: [], selectedRunId: null, run: null, view: 'sessions'",
+                "file": "tools/argus-ui/test/page.test.mjs",
+                "testName": "the state literal carries the run view's own fields",
+                "expected": "all four fields present in the sliced state literal",
+                "got": "'the page must hold the runs list it fetched' (ERR_ASSERTION)"
+              },
+              {
+                "case": "loadRuns calls pickRunId with state.runs and state.selectedRunId",
+                "file": "tools/argus-ui/test/page.test.mjs",
+                "testName": "pickRunId decides what is shown, from the page's own runs and selection",
+                "expected": "the pickRunId( call inside loadRuns is handed state.runs and state.selectedRunId",
+                "got": "'app.js must still declare loadRuns()' (ERR_ASSERTION)"
+              },
+              {
+                "case": "the #run-list click listener matches [data-run] and calls selectRun(",
+                "file": "tools/argus-ui/test/page.test.mjs",
+                "testName": "clicking a run in the picker switches to it",
+                "expected": "a delegated click listener on #run-list recognises [data-run] and calls selectRun(",
+                "got": "'app.js must delegate a click listener on #run-list' (ERR_ASSERTION)"
+              },
+              {
+                "case": "a [data-view] click reaches setView(; setView writes state.view and document.body.dataset.view",
+                "file": "tools/argus-ui/test/page.test.mjs",
+                "testName": "the view switch is wired to setView, which writes both the state and the body flag",
+                "expected": "wireEvents wires a [data-view] branch calling setView(; setView's own source writes both fields",
+                "got": "'wireEvents must wire a listener on [data-view]' (ERR_ASSERTION)"
+              },
+              {
+                "case": "connectStream registers a 'run' listener that parses with runFrame( and calls refreshRuns(; hello/ingest listeners survive",
+                "file": "tools/argus-ui/test/page.test.mjs",
+                "testName": "connectStream reacts to the run frame, and the existing listeners stay",
+                "expected": "connectStream still has hello/ingest listeners, plus a run listener calling runFrame( and refreshRuns(",
+                "got": "'connectStream must register a run listener' (ERR_ASSERTION)"
+              },
+              {
+                "case": "no polling: refresh() never calls loadRuns/loadRun/refreshRuns; boot's setInterval only names renderSessionList(); no setInterval anywhere names a run loader",
+                "file": "tools/argus-ui/test/page.test.mjs",
+                "testName": "no timer fetches run state",
+                "expected": "none of refresh()/boot's interval/any setInterval body names loadRuns, loadRun or refreshRuns",
+                "got": "currently passes (vacuously true): no run loaders exist yet, so nothing violates the guard. It is not a known-red case now, but it will fail the moment a timer is given one of those names, which is its purpose."
+              },
+              {
+                "case": "renderRunPicker names run-list/run-count; renderRunView names run-detail; renderDetail names none of the three",
+                "file": "tools/argus-ui/test/page.test.mjs",
+                "testName": "the run view paints only in its own containers, and renderDetail is untouched by it",
+                "expected": "renderRunPicker/renderRunView paint only their own containers; renderDetail's source names none of run-list/run-count/run-detail",
+                "got": "'app.js must still declare renderRunPicker()' (ERR_ASSERTION)"
+              },
+              {
+                "case": "README.md describes the run view: the runs list, the increments with status, and the codemap",
+                "file": "tools/argus-ui/test/page.test.mjs",
+                "testName": "README.md describes the run view: the runs list, the increments with status, and the codemap",
+                "expected": "README.md names runs, increments, their status, and the codemap",
+                "got": "'README must name the increments the run view shows' (ERR_ASSERTION)"
+              },
+              {
+                "case": "independence.test.mjs: add 'public/run.js' to the project-completeness list, the owned list, and the browser-global-scan list; no new case, the rule itself unchanged",
+                "file": "tools/argus-ui/test/independence.test.mjs",
+                "testName": "the interface is a project of its own, with everything a project needs / nothing in the interface reaches outside the interface / the pure modules the tests import reach for no browser global",
+                "expected": "public/run.js exists, is scanned for outside imports, and is scanned for document./fetch(/location.",
+                "got": "'tools/argus-ui/public/run.js is missing' and (twice) 'the scan does not cover public/run.js — it is not there to check'"
+              }
+            ],
+            "openQuestions": [
+              "Case 2's plan wording asks for indexOf('a') < indexOf('b') < indexOf('c') as the order proof over increments with bare ids a/b/c. Common markup vocabulary for a card (e.g. classes containing 'card', 'branch', 'closed') is likely to contain those same single characters ahead of the actual card boundaries, which could make a literal single-character indexOf check fail against a correct implementation or pass vacuously against a wrong one. I proved the ordering with distinguishable titles ('Card Alpha'/'Card Bravo'/'Card Charlie') instead, while still asserting the bare ids' presence separately — flag if the literal single-character check was intended and needs to replace or supplement mine.",
+              "Case 6 (renderRun(null)) and case 17/renderRunList empty-state markup: the plan leaves the exact placeholder wording and wrapper class to the implementer ('the exact wording... is the implementer's'). I asserted a generic class=\"empty\"|class=\"placeholder\" for the null-run case, following the page's existing convention (renderSessionList's 'No sessions yet' placeholder, index.html's #empty-state); this is an assumption, not a pin, and may need loosening if the implementer's markup differs."
+            ],
+            "questions": []
+          }
         }
       ]
     },
