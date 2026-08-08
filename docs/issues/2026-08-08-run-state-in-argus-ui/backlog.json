@@ -397,6 +397,52 @@
             ],
             "questions": []
           }
+        },
+        {
+          "label": "tests:ui.1",
+          "at": "2026-08-08T12:00:07.996Z",
+          "return": {
+            "summary": "Fixed the broken fixture in run.test.mjs's branch-label case and added three source-text guards to page.test.mjs (refreshRuns' load-and-repaint wiring, start()'s run fetch on open, selectRun's fetch-and-repaint), plus the matching CLAUDE.md clause; npm --prefix tools/argus-ui test now exits 0 (286 cases) and ./test.sh exits 0 (6 suites), with no production code touched.",
+            "cases": [
+              {
+                "case": "CASE 1 — the broken fixture: increment({ id: 'no-branch', branch: '' }) renamed to 'plain-one' so the case's own regex no longer matches its fixture's id",
+                "file": "/home/user/uroboros/tools/argus-ui/test/run.test.mjs",
+                "testName": "an increment with an empty branch renders no branch label at all",
+                "expected": "renderRun's output for this fixture must never contain the substring 'branch' (case-insensitive)",
+                "got": "Before the fix, node --test tools/argus-ui/test/run.test.mjs reported 'not ok 191' because the fixture id 'no-branch' itself matched /branch/i; after renaming the id to 'plain-one' the same run of the suite passes: node --test tools/argus-ui/test/run.test.mjs, 20/20 cases, exit 0. Full suite confirmed: npm --prefix tools/argus-ui test, 286 cases, exit 0; ./test.sh, 6/6 suites, exit 0."
+              },
+              {
+                "case": "CASE 2 — refreshRuns actually loads and repaints: the slice matches loadRuns(, loadRun(, renderRunPicker( and renderRunView(",
+                "file": "/home/user/uroboros/tools/argus-ui/test/page.test.mjs",
+                "testName": "refreshRuns loads the runs, the shown run's state, and repaints both halves of the view",
+                "expected": "functionSource(appJs, 'refreshRuns') matches /loadRuns\\(/, /loadRun\\(/, /renderRunPicker\\(/ and /renderRunView\\(/, each with a message naming why that call matters",
+                "got": "Passes against the committed public/app.js (node --test tools/argus-ui/test/page.test.mjs, 77/77, exit 0). Proved it is not vacuous by temporarily emptying refreshRuns' body (not committed, reverted immediately after): the same case then failed with 'not ok 74 ... error: without loadRuns the picker never learns which runs exist'; file restored byte-identical (git diff on public/app.js is empty)."
+              },
+              {
+                "case": "CASE 3 — the page fetches run state as it opens: start() calls refreshRuns() and start() is itself invoked at load",
+                "file": "/home/user/uroboros/tools/argus-ui/test/page.test.mjs",
+                "testName": "the page fetches and paints run state as it opens",
+                "expected": "functionSource(appJs, 'start') matches /refreshRuns\\(/, and the whole file (not the slice) matches /^start\\(\\);\\s*$/m",
+                "got": "Passes against the committed public/app.js. Proved it is not vacuous by temporarily deleting 'await refreshRuns();' from start() (not committed, reverted immediately after): the case then failed with 'not ok 70 ... error: start() must fetch and paint the run view as the page opens, or it would not open on the latest run'; file restored byte-identical."
+              },
+              {
+                "case": "CASE 4 — switching runs fetches and repaints: selectRun records the selection, fetches the new run's state and repaints both the picker and the pane",
+                "file": "/home/user/uroboros/tools/argus-ui/test/page.test.mjs",
+                "testName": "switching to a run fetches that run's state and repaints the picker and the pane",
+                "expected": "functionSource(appJs, 'selectRun') matches /state\\.selectedRunId\\s*=/, /loadRun\\(/, /renderRunPicker\\(/ and /renderRunView\\(/, with no negative assertion about refetching the list",
+                "got": "Passes against the committed public/app.js: node --test tools/argus-ui/test/page.test.mjs, 77/77, exit 0. No red-state proof was requested for this case in the plan, so none was performed against production code beyond the green run."
+              },
+              {
+                "case": "DOC — extend the page.test.mjs bullet in test/CLAUDE.md's 'The files' section to name the boot path and the run wiring among what that file guards, changing nothing else on the page",
+                "file": "/home/user/uroboros/tools/argus-ui/test/CLAUDE.md",
+                "testName": "",
+                "expected": "One clause added to the existing page.test.mjs bullet; 'Where a new case goes', 'Helpers and fixtures', 'Naming' and 'Real vs faked' left untouched",
+                "got": "Done: the bullet now reads '...imports, event wiring, the boot path and the run view's fetch-and-repaint wiring, state shape, and deleted views staying deleted.' No other section of the file was touched (git diff on test/CLAUDE.md shows exactly this one-line change)."
+              }
+            ],
+            "openQuestions": [],
+            "questions": []
+          }
         }
       ]
     },

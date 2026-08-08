@@ -1104,6 +1104,26 @@ test('clicking a run in the picker switches to it', () => {
   assert.match(slice, /selectRun\(/, 'clicking a run row must select it');
 });
 
+test('the page fetches and paints run state as it opens', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const start = functionSource(appJs, 'start');
+  assert.match(start, /refreshRuns\(/, 'start() must fetch and paint the run view as the page opens, or it would not open on the latest run');
+  assert.match(
+    appJs,
+    /^start\(\);\s*$/m,
+    'start() must actually be invoked at load, not merely declared, or nothing runs it',
+  );
+});
+
+test('switching to a run fetches that run\'s state and repaints the picker and the pane', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const selectRun = functionSource(appJs, 'selectRun');
+  assert.match(selectRun, /state\.selectedRunId\s*=/, 'selectRun must record which run is now selected');
+  assert.match(selectRun, /loadRun\(/, 'selectRun must fetch the newly chosen run\'s state');
+  assert.match(selectRun, /renderRunPicker\(/, 'selectRun must repaint the picker so it marks the new current row');
+  assert.match(selectRun, /renderRunView\(/, 'selectRun must repaint the pane with the newly chosen run\'s state');
+});
+
 test('the view switch is wired to setView, which writes both the state and the body flag', () => {
   const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
   const wireEvents = functionSource(appJs, 'wireEvents');
@@ -1136,6 +1156,15 @@ test('connectStream reacts to the run frame, and the existing listeners stay', (
   const runListener = endIdx === -1 ? runListenerTail : runListenerTail.slice(0, endIdx);
   assert.match(runListener, /runFrame\(/, 'the run listener must parse the frame with runFrame');
   assert.match(runListener, /refreshRuns\(/, 'the run listener must refresh the run view');
+});
+
+test('refreshRuns loads the runs, the shown run\'s state, and repaints both halves of the view', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const refreshRuns = functionSource(appJs, 'refreshRuns');
+  assert.match(refreshRuns, /loadRuns\(/, 'without loadRuns the picker never learns which runs exist');
+  assert.match(refreshRuns, /loadRun\(/, 'without loadRun the pane never gets the shown run\'s state');
+  assert.match(refreshRuns, /renderRunPicker\(/, 'without renderRunPicker a run frame changes nothing in the picker');
+  assert.match(refreshRuns, /renderRunView\(/, 'without renderRunView a run frame changes nothing in the pane');
 });
 
 test('no timer fetches run state', () => {

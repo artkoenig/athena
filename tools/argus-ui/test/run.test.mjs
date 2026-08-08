@@ -225,7 +225,7 @@ test('a closed increment with an empty note still reads as closed, printing no u
 });
 
 test('an increment with an empty branch renders no branch label at all', () => {
-  const entry = runEntry({ increments: 1, state: doc({ increments: [increment({ id: 'no-branch', branch: '' })] }) });
+  const entry = runEntry({ increments: 1, state: doc({ increments: [increment({ id: 'plain-one', branch: '' })] }) });
   const html = renderRun(entry);
   assert.ok(!/branch/i.test(html), 'a dangling "branch" label with nothing after it must never render');
 });
