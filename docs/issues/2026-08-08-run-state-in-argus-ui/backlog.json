@@ -580,6 +580,16 @@
             "questions": [],
             "summary": "Moved the run-refresh decision out of refreshRuns into a new exported shouldLoadRun in tools/argus-ui/public/run.js and made app.js delegate to it, behaviour unchanged."
           }
+        },
+        {
+          "label": "review:ui.2",
+          "at": "2026-08-08T12:28:17.735Z",
+          "return": {
+            "findings": [],
+            "reason": "",
+            "questions": [],
+            "summary": "Review round 2 of increment ui, judged on `git diff claude/argus-workflow-backlog-status-nvqmvr...HEAD` (11 files, backlog.json excluded from judgement). Both listed commands ran in one call: `npm --prefix tools/argus-ui test` — 291 cases across config/server/timeline/context/run/page/independence, exit 0; `./test.sh` — all 6 suites (30, 179, 291, 23 cases and the rest), exit 0. All eight acceptance criteria are met: run.js renders issue, workflow, write time (with the ISO instant in data-updated), the increments in the document's own array order with id, title, status, branch and note, the closed/open counts and the codemap; CLOSED_STATUSES matches the recorder's exact done|blocked|dropped set and a closed card carries data-closed plus its status and note; pickRunId opens on the collector's first (latest-write-first, confirmed by store.listRuns's descending sort) item and falls back when the wanted run is gone, and loadRuns/loadRun go through api() to /api/runs and /api/runs/:id only; the SSE `run` listener parses the collector's {id, updatedAtMs} frame and shouldLoadRun re-fetches only when the frame names the shown run, with a source-text guard that no setInterval anywhere in app.js names a run loader; the session view's shell, renderDetail and stream listeners are untouched and only added to; independence.test.mjs lists public/run.js in all three of its scans and passes; and README.md, CLAUDE.md and test/CLAUDE.md landed with the code. Blast radius traced: the run id is the issue path, encodeURIComponent'd by the page, preserved verbatim through the argus-ui proxy's `req.url` forwarding and matched by the collector's `[^/]+` route, so slashes survive; the four-child CSS grid resolves correctly because the hidden pair is display:none; no document outside tools/argus-ui/ describes what the interface shows. Three observations, none needing a correction: the README's opening sentence (line 3-5) still enumerates only sessions, timeline and context while the \"What it shows\" section now carries Runs; one line in tools/argus-ui/CLAUDE.md (\"...its formatters to build their expectations. Every server binds port 0...\") runs past the file's wrap width; and if the selected run were evicted by the collector's maxRuns cap while an SSE frame named a third run, the pane would keep the evicted run's state until the next frame — an unreachable corner at the default cap, and no criterion covers it."
+          }
         }
       ]
     },
