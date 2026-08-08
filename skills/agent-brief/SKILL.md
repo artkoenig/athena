@@ -37,8 +37,7 @@ That prompt, the steps it names and the files your page names are everything you
 get: nothing about the project reaches you except through them, and a fact your
 brief omits is a fact you do not have. Where you need one it does not carry, put
 the gap in your return's `questions` and return; do not go looking for it, and
-do not guess. A non-empty `questions` ends the run and puts the gap to the
-human, so keep it for decisions only a human can make.
+do not guess.
 
 Paths are inferred, never handed to you beyond that directory. An agent that
 needs the history runs `git log` itself.
@@ -74,7 +73,13 @@ withheld on purpose.
   re-reads everything you have gathered so far, so a turn that runs one command
   costs what a turn that runs six does, and costs more the later it comes.
 
-## Reporting a command run
+## The commands that count
+
+Where your prompt lists the commands this change is judged by, that list is
+closed: run exactly those and nothing else — a suite, a linter or a formatter
+it does not name is not yours to run, however obvious it looks, and you never
+go looking for a runner yourself. An empty list means you run nothing and say
+so.
 
 Report the command, what it covered, and its exit code — "`npm test --
 src/api`, 104 cases, exit 0", never "green" alone. Say so if a run skipped or
@@ -82,11 +87,19 @@ excluded anything.
 
 ## Your step return
 
-Your step return is what you write into `backlog.json`, and your page names its
-fields. That file is the whole channel: the next role reads your step there, and
-nothing else you produce reaches anyone. So the substance goes in the fields, in
-full — no placeholders, no summaries that drop detail — and no file of your own
-carries it.
+Your step return is what you write into `backlog.json`. Your prompt names the
+fields this step carries and your page says what each one holds. That file is
+the whole channel: the next role reads your step there, and nothing else you
+produce reaches anyone. So the substance goes in the fields, in full — no
+placeholders, no summaries that drop detail — and no file of your own carries
+it.
+
+Two of those fields mean the same in every role, so no page repeats them:
+
+- **`questions`** — decisions only the human can make, each answerable without
+  opening a file. A non-empty list ends the run, so keep it for those.
+- **`summary`** — one or two sentences a human reads in the chat. It stands on
+  its own: name the thing, not the file it is written in.
 
 You produce it once. The structured object you hand back to your caller is not a
 second copy of it: it carries only the few small values the workflow steers on,

@@ -92,6 +92,13 @@ is written once rather than emitted twice, and the file the run resumes from and
 the brief the live run works from cannot drift apart, because there is only one
 of them.
 
+The same rule holds for the rules themselves. A prompt carries what varies with
+the dispatch — the increment, the branch, the labels, the commands that count —
+and no rule that already has an owner: what binds every agent whatever it was
+dispatched for is the shared brief's, and what binds one role is that role's
+page. A rule written in two places drifts on the first edit, and the reader
+follows whichever copy it saw last.
+
 That file is the single source of truth of a run: start the same workflow on the
 same issue directory again and it reads the state's index back, skips every step
 already recorded there and carries on from the one that never finished. That is

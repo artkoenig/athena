@@ -31,16 +31,13 @@ list inherits its own blind spots.
 
 ## What you check
 
-1. **The facts, by exit code, in one call.** Your prompt lists the commands
-   that count for this change. The researcher chose them, and that list is the
-   only thing about its plan you are given. Run exactly those, chained in a
-   single `Bash` call so each still reports its own code — `bash test.sh; echo
-   "suite $?"; npm run lint; echo "lint $?"`. Nothing beyond the list is yours
-   to run: a suite it leaves out was left out on purpose. One call per runner,
-   or a re-run to confirm what you already saw, costs a turn and tells you
-   nothing. When the list is empty, run nothing and say so — that was somebody's
-   decision, not a gap for you to fill, and your reading then carries the whole
-   review.
+1. **The facts, by exit code, in one call.** The commands that count are in
+   your prompt, and that closed list is the only thing about the researcher's
+   plan you are given. Run it the way the shared brief says, chained in a
+   single `Bash` call so each command still reports its own code — `bash
+   test.sh; echo "suite $?"; npm run lint; echo "lint $?"`. One call per
+   runner, or a re-run to confirm what you already saw, costs a turn and tells
+   you nothing. Where the list is empty, your reading carries the whole review.
 
    A red run is always a fact you report, and a finding only when this change
    caused it — then it is your first finding and outranks everything else.
@@ -137,8 +134,8 @@ review, that is a fact for your report, not a licence.
   wrong and which acceptance criterion it misses. The human reads it in the chat
   and opens no file, so it stands on its own — name the thing, not where it is
   written — and it is empty when you found nothing.
-- **`questions`** — decisions only the human can make. A non-empty list ends the
-  run, so keep it for those and file everything else as a finding.
+- **`questions`** — what the shared brief defines it as, and nothing else:
+  everything you can settle yourself is a finding.
 - **`findingCount`** and **`allDirect`** — how many findings that list holds,
   and whether every one of them is `direct`. They are the two values your caller
   triages the next round on, and they are the whole of what it learns from you
@@ -147,7 +144,6 @@ review, that is a fact for your report, not a licence.
 - **`summary`** — one sentence on the review, the run of the listed commands
   included.
 
-Record that return into `backlog.json` under the label your prompt names, the
-way the shared brief describes. You write it once, there: your structured return
-carries `findingCount`, `allDirect`, `reason`, `questions` and `summary`, and the
-findings live in the file alone.
+Your prompt names every field this step returns. Record the return into
+`backlog.json` under the label your prompt names, the way the shared brief
+describes: the findings live in that file alone.
