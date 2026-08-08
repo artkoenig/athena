@@ -2,9 +2,10 @@
  * argus-ui — the session timeline.
  *
  * One lane for the main session and one per subagent, each spanning that
- * agent's lifetime. A lane is a *span*, never a name: two subagents of one type
- * running at once share their `query_source` and differ only by `spanId`, so
- * grouping by name would merge them into a single bar.
+ * agent's lifetime. A lane is a span *and* a name, because neither alone tells
+ * two subagents apart: the CLI gives every subagent of one conversation the
+ * same `spanId`, and two subagents of one type running at once share their
+ * `query_source`.
  *
  * Everything here is a pure function over the payloads of
  * `GET /api/sessions/<id>`, `GET /api/content` and `GET /api/events` — no
@@ -17,7 +18,7 @@ import { esc, fmtClock, fmtDur, fmtNum } from './format.js';
 /** A bar narrower than this is invisible, so an instant of activity gets this much. */
 export const MIN_LANE_WIDTH_PCT = 0.6;
 
-/** The log event a tool call leaves behind. Its span is the lane's span. */
+/** The log event a tool call leaves behind. It carries the lane's span, and often its name. */
 export const TOOL_EVENT = 'claude_code.tool_result';
 
 /** The content record that *is* the context at that moment. */
@@ -64,20 +65,63 @@ export function laneByKey(view, key) {
 }
 
 /**
- * Which lane each span belongs to — agent lanes by their own span, and nothing
- * else.
+ * The agent name a `query_source` carries, or none for main-session traffic.
  *
- * A tool call carries the span of the conversation that made it, so this map
- * plus "the main lane otherwise" is the whole attribution rule, and the density
- * counts are its one consumer.
+ * The grammar is the collector's own — `agent:<source>:<name>` — and so is the
+ * fallback to the source segment where the name was redacted (`agent:custom`
+ * arrives with none): a name derived here and a lane label derived there have
+ * to be the same string, or nothing matches.
  */
-export function spanLaneKeys(lanes) {
+export function agentNameOf(querySource) {
+  if (typeof querySource !== 'string' || !querySource.startsWith('agent:')) return null;
+  const rest = querySource.slice('agent:'.length);
+  const colon = rest.indexOf(':');
+  if (colon === -1) return rest || null;
+  return rest.slice(colon + 1) || rest.slice(0, colon) || null;
+}
+
+/**
+ * The agent lanes of each span, in the order `buildLanes` put them in — which
+ * is by start time.
+ *
+ * A span holds *several* agent lanes, not one: every subagent of a conversation
+ * gets the same span id, so a span says that a record came from a subagent and
+ * never which one. Lanes with no span, and the main lane, are not in here at
+ * all — that is how a call reaches the main lane, by matching nothing.
+ */
+export function spanLaneIndex(lanes) {
   const bySpan = new Map();
   for (const lane of Array.isArray(lanes) ? lanes : []) {
     if (lane?.kind !== 'agent' || !lane.spanId) continue;
-    if (!bySpan.has(lane.spanId)) bySpan.set(lane.spanId, lane.key);
+    const held = bySpan.get(lane.spanId);
+    if (held) held.push(lane);
+    else bySpan.set(lane.spanId, [lane]);
   }
   return bySpan;
+}
+
+/**
+ * The lane a tool call belongs to.
+ *
+ * The span narrows the call to the subagents of one conversation, or to the
+ * main lane when no agent lane carries it. Which of those subagents made it is
+ * then its own `query_source`; where that name was redacted, it is the lane
+ * that was last to start before the call — the subagents of a span run one
+ * after another, so a moment names one of them, including in the gap after an
+ * agent's last request body. Two genuinely concurrent unnamed agents are the
+ * one case this cannot resolve, and there it takes the earlier.
+ */
+export function toolLaneKey(mark, bySpan) {
+  const lanes = bySpan?.get?.(mark?.spanId ?? null);
+  if (!lanes?.length) return 'main';
+  if (lanes.length === 1) return lanes[0].key;
+  const named = mark?.agent ? lanes.find((lane) => lane.agent === mark.agent) : null;
+  if (named) return named.key;
+  let chosen = lanes[0];
+  if (Number.isFinite(mark?.timeMs)) {
+    for (const lane of lanes) if (lane.startMs <= mark.timeMs) chosen = lane;
+  }
+  return chosen.key;
 }
 
 /**
@@ -249,9 +293,8 @@ export function activityMarks(items, window) {
  * argument untouched.
  *
  * A request belongs to the lane that made it, by the same key rule the lanes
- * were built with. A tool call carries no attribution attribute at all — only
- * the span of the conversation that made it, which is exactly the lane's span —
- * so it lands on that lane, and on the main lane when the span owns none.
+ * were built with. A tool call carries its span and, unless the CLI redacted
+ * it, its agent's name, and `toolLaneKey` weighs the two.
  *
  * @param {{ startMs: number, endMs: number, lanes: object[] }} view
  * @param {{ content?: object[], tools?: object[] }} sources
@@ -265,7 +308,7 @@ export function buildDensity(view, { content = [], tools = [] } = {}) {
   );
   const maxBodyLength = requests.reduce((peak, record) => Math.max(peak, sizeOf(record)), 0);
 
-  const spanToLane = spanLaneKeys(lanes);
+  const bySpan = spanLaneIndex(lanes);
 
   // A key that matches no lane is dropped rather than inventing a lane:
   // `buildLanes` owns which lanes exist.
@@ -273,7 +316,7 @@ export function buildDensity(view, { content = [], tools = [] } = {}) {
   for (const record of requests) owned.get(laneKeyOf(record))?.requests.push(record);
   for (const tool of Array.isArray(tools) ? tools : []) {
     if (!usableTime(tool)) continue;
-    owned.get(spanToLane.get(tool.spanId) ?? 'main')?.tools.push(tool);
+    owned.get(toolLaneKey(tool, bySpan))?.tools.push(tool);
   }
 
   return {
@@ -303,10 +346,11 @@ export function buildDensity(view, { content = [], tools = [] } = {}) {
  * One tool-result event turned into a mark: *when* the call happened and
  * *whose* lane it belongs to.
  *
- * The call carries no attribution of its own — only the span of the
- * conversation that made it — so `spanId` is what later decides whose lane it
- * belongs to, and a missing one becomes `null` rather than absent so every mark
- * has the same shape.
+ * Both halves of the attribution are kept, because neither answers alone: the
+ * `spanId` of the conversation that made the call, and the agent its
+ * `query_source` names — often nothing, since the CLI redacts that segment
+ * inconsistently. A missing one of either becomes `null` rather than absent, so
+ * every mark has the same shape.
  *
  * The parameters the call was made with are deliberately not held: a single
  * Write call carries a file's entire content, and a session's worth of those
@@ -318,6 +362,7 @@ export function toolCallOf(item) {
     seq: item.seq,
     timeMs: item.timeMs,
     spanId: item?.spanId ?? null,
+    agent: agentNameOf(item?.attribution?.query_source ?? item?.attrs?.query_source ?? null),
   };
 }
 
