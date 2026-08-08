@@ -1,15 +1,8 @@
-// The second workflow, beside `loop.js`, and a session runs it as
-// `uroboros:agile-loop`. Both ship because `plugin.json` declares the whole
-// `workflows/` directory, and they are two files rather than one with a switch
-// because a workflow is picked by name at dispatch: a run that wants the plain
-// chain should not carry the backlog machinery, and a session choosing between
-// them reads two `whenToUse` lines instead of one flag.
-//
-// It repeats a good deal of `loop.js` — the schemas, the prompts of the four
-// agents, the publish step — because a workflow script is evaluated on its own
-// and cannot import a sibling. Anything changed in one of the two chains
-// belongs in the other; `test-repo.sh` guards the parts of that where a
-// divergence would be silent.
+// The one workflow of the plugin, and a session runs it as
+// `uroboros:agile-loop`. It ships because `plugin.json` declares the whole
+// `workflows/` directory. There is no separate plain loop: the planner
+// decides whether and how to cut, and a backlog of one increment is the
+// plain chain, run by the same script.
 //
 // Every value in `meta` is one whole literal: the harness parses this object
 // before it runs a line of the script and rejects anything it has to evaluate,
@@ -18,11 +11,11 @@
 // run long for that reason.
 export const meta = {
   name: 'agile-loop',
-  description: 'Runs the issue as a backlog: cut it into increments, work one per iteration through research, tests, implementation and review, and re-cut the increments still open after each.',
-  whenToUse: 'When an issue file with confirmed acceptance criteria describes work worth delivering in steps — several criteria, or a change whose later parts depend on what the earlier ones turn up. For a single change use uroboros:loop instead; the backlog costs an extra agent per iteration and buys nothing when there is nothing to re-cut. Pass the issue directory as args.issueDir.',
+  description: 'Runs the issue as a backlog: the planner maps the files the issue changes and cuts it into increments — one is a valid cut — then each increment runs through research, tests, implementation and review, and the planner re-cuts what is still open after each.',
+  whenToUse: 'When an issue file with confirmed acceptance criteria exists and the whole chain should run without the main session steering it. The planner decides whether and how to cut the issue; nothing has to be decided before starting it. Pass the issue directory as args.issueDir.',
   phases: [
     { title: 'Load state', detail: 'the run state is read, so a restart resumes where it stopped' },
-    { title: 'Decompose', detail: 'planner cuts the issue into a backlog of increments' },
+    { title: 'Decompose', detail: 'planner maps the files the issue changes and cuts it into a backlog of increments' },
     { title: 'Research', detail: 'researcher plans the current increment' },
     { title: 'Tests', detail: 'test-author writes failing tests' },
     { title: 'Implement', detail: 'implementer makes them pass' },
@@ -138,6 +131,13 @@ const BACKLOG = {
         additionalProperties: false,
       },
     },
+    codemap: {
+      type: 'string',
+      description:
+        'Every file the issue has to change: path and why, one line per file. The map of ' +
+        'the whole issue, not of one increment, updated on every call against what the ' +
+        'run has shown.',
+    },
     questions: {
       type: 'array',
       items: { type: 'string' },
@@ -147,7 +147,7 @@ const BACKLOG = {
     },
     summary: { type: 'string' },
   },
-  required: ['increments', 'questions', 'summary'],
+  required: ['increments', 'codemap', 'questions', 'summary'],
   additionalProperties: false,
 }
 
@@ -406,7 +406,8 @@ function answeredBlock(label) {
     : ''
 }
 
-// The slice each role gets, and no more. The test-author is given the test plan
+// The slice each role gets, and no more. The researcher is given the planner's
+// codemap and builds its research on it; the test-author is given the test plan
 // and nothing else about the change; the implementer the plan, the map, the
 // environment, the checks and the tests that now exist; the reviewer the checks
 // alone.
@@ -620,10 +621,15 @@ const backlog = await step('decompose', 'Decompose', () =>
   agent(
     `Issue directory: ${dir}\n` +
       answeredBlock('decompose') +
-      `Cut ${dir}/issue.md into a backlog of increments and write it to ${dir}/backlog.json ` +
-      `with the \`init\` subcommand of the backlog helper your shared brief names, with ` +
-      `workflow "agile-loop". This run works at most ${maxIncrements} of them, so a cut that ` +
-      `needs more than that is a cut that is too fine.\n` +
+      `Open the run state for ${dir}/issue.md: map the issue against the codebase, then ` +
+      `decide the cut and write ${dir}/backlog.json with the \`init\` subcommand of the ` +
+      `backlog helper your shared brief names, with workflow "agile-loop".\n` +
+      `The codemap comes first: every file the issue has to change, path and why, one ` +
+      `line per file, in the payload's \`codemap\` field and in your return. The ` +
+      `researcher builds its research on it.\n` +
+      `Whether and how to cut is yours: a backlog of one increment is the right cut for ` +
+      `an issue that is one change. This run works at most ${maxIncrements} increments, ` +
+      `so a cut that needs more than that is a cut that is too fine.\n` +
       `Read ${dir}/backlog.json with the helper's \`read\` subcommand first if it is already ` +
       `there.\n` +
       recordStep('-', 'decompose') +
@@ -648,6 +654,25 @@ const cutIncrements =
     : null
 let increments =
   (cutWasReplayed ? savedIncrements || cutIncrements : cutIncrements || savedIncrements) || []
+
+// The codemap follows the same freshness rule as the cut it was written with:
+// a replayed Decompose means the file's copy is the current one, a Decompose
+// dispatched this session means its return is.
+const savedCodemap = saved && typeof saved.codemap === 'string' && saved.codemap ? saved.codemap : null
+const cutCodemap =
+  backlog && typeof backlog.codemap === 'string' && backlog.codemap ? backlog.codemap : null
+let codemap = (cutWasReplayed ? savedCodemap || cutCodemap : cutCodemap || savedCodemap) || ''
+
+// The planner said what files the issue changes; the researcher decides how.
+// Handed to every research dispatch, so no researcher rebuilds the map from
+// the filesystem.
+function codemapBlock() {
+  return codemap
+    ? `The planner's codemap — every file the issue has to change, and why:\n${codemap}\n` +
+        `Build your research on it: verify it where your increment touches, and where it ` +
+        `is wrong or incomplete, say so in your moduleMap.\n`
+    : ''
+}
 
 log(`Backlog: ${increments.map((t, i) => `${i + 1}. ${t.title}`).join(' | ')}`)
 
@@ -747,6 +772,7 @@ if (!blockedOnHuman.length) {
             `Issue directory: ${dir}\n` +
               answeredBlock(researchLabel) +
               scope(task, increments, n) +
+              codemapBlock() +
               (round === 0 ? '' : findingsBlock(verdict, round)) +
               openQuestionsBlock(previousTests) +
               recordStep(task.id, researchLabel) +
@@ -869,7 +895,9 @@ if (!blockedOnHuman.length) {
           `Read ${dir}/backlog.json with the backlog helper's \`read\` subcommand. Close that ` +
           `increment with the \`close\` subcommand and the status the verdict earns — closing ` +
           `sheds its recorded step returns — then re-cut every increment still open against ` +
-          `what this one showed and write the new cut with the \`init\` subcommand. ${n} of at ` +
+          `what this one showed and write the new cut with the \`init\` subcommand. Update ` +
+          `the codemap against what this increment showed and hand the whole of it back, in ` +
+          `the payload's \`codemap\` field and in your return. ${n} of at ` +
           `most ${maxIncrements} increments are spent.\n` +
           recordStep('-', replanLabel) +
           noDispatch,
@@ -882,6 +910,9 @@ if (!blockedOnHuman.length) {
     task.status = accepted ? 'done' : 'blocked'
     if (recut && Array.isArray(recut.increments) && recut.increments.length) {
       increments = recut.increments
+    }
+    if (recut && typeof recut.codemap === 'string' && recut.codemap) {
+      codemap = recut.codemap
     }
     // The planner may hand an increment already worked back as `todo` — the
     // second chance MAX_ATTEMPTS exists for. Closing it emptied its steps in
