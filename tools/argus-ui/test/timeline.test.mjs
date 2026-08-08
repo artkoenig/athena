@@ -16,7 +16,9 @@ import {
   scrubCursor,
   resolveCursor,
   toolCallOf,
-  spanLaneKeys,
+  agentNameOf,
+  spanLaneIndex,
+  toolLaneKey,
   laneByKey,
 } from '../public/timeline.js';
 import * as timeline from '../public/timeline.js';
@@ -338,6 +340,71 @@ test('two concurrent agents of one type keep their own tool calls, never merged'
   }
 });
 
+// Three subagents running one after another on a single span — what the CLI
+// actually exports for a workflow, and what used to pile every one of their
+// tool calls onto whichever of them started first.
+
+const sharedSpanContent = () => [
+  record({ seq: 1, timeMs: 1200 }),
+  record({ seq: 2, timeMs: 2000, spanId: 'sp', agent: 'general-purpose', isSubagent: true }),
+  record({ seq: 3, timeMs: 2300, spanId: 'sp', agent: 'uroboros:planner', isSubagent: true }),
+  record({ seq: 4, timeMs: 3000, spanId: 'sp', agent: 'uroboros:researcher', isSubagent: true }),
+  record({ seq: 5, timeMs: 3600, spanId: 'sp', agent: 'uroboros:researcher', isSubagent: true }),
+];
+
+test('agents sharing one span each keep their own tool calls', () => {
+  const content = sharedSpanContent();
+  const view = buildDensity(buildLanes({ session: session(), content }), {
+    content,
+    tools: [
+      toolMark({ seq: 11, spanId: 'sp', timeMs: 2100, agent: 'general-purpose' }),
+      toolMark({ seq: 12, spanId: 'sp', timeMs: 2400, agent: 'uroboros:planner' }),
+      toolMark({ seq: 13, spanId: 'sp', timeMs: 2600, agent: 'uroboros:planner' }),
+      toolMark({ seq: 14, spanId: 'sp', timeMs: 3100, agent: 'uroboros:researcher' }),
+    ],
+  });
+  const byAgent = new Map(view.lanes.filter((lane) => lane.kind === 'agent').map((lane) => [lane.agent, lane]));
+  assert.equal(byAgent.get('general-purpose').toolCalls, 1);
+  assert.equal(byAgent.get('uroboros:planner').toolCalls, 2);
+  assert.equal(byAgent.get('uroboros:researcher').toolCalls, 1);
+  assert.equal(view.lanes.find((lane) => lane.kind === 'main').toolCalls, 0);
+});
+
+test('a redacted call on a shared span goes to the agent of its moment, not the first agent', () => {
+  const content = sharedSpanContent();
+  const view = buildDensity(buildLanes({ session: session(), content }), {
+    content,
+    tools: [
+      toolMark({ seq: 21, spanId: 'sp', timeMs: 2500 }),
+      toolMark({ seq: 22, spanId: 'sp', timeMs: 3200 }),
+      toolMark({ seq: 23, spanId: 'sp', timeMs: 4000 }),
+    ],
+  });
+  const byAgent = new Map(view.lanes.filter((lane) => lane.kind === 'agent').map((lane) => [lane.agent, lane]));
+  assert.equal(byAgent.get('general-purpose').toolCalls, 0, 'the first agent of a span is not every agent of it');
+  assert.equal(byAgent.get('uroboros:planner').toolCalls, 1);
+  assert.equal(byAgent.get('uroboros:researcher').toolCalls, 2);
+});
+
+test('a tick mark sits on the lane that made the call, so the first agent shows only its own', () => {
+  const content = sharedSpanContent();
+  const view = buildDensity(buildLanes({ session: session(), content }), {
+    content,
+    tools: [
+      toolMark({ seq: 31, spanId: 'sp', timeMs: 2050, agent: 'general-purpose' }),
+      toolMark({ seq: 32, spanId: 'sp', timeMs: 3500, agent: 'uroboros:researcher' }),
+    ],
+  });
+  const first = view.lanes.find((lane) => lane.agent === 'general-purpose');
+  const toolMarksOf = (lane) => (lane.activity ?? []).filter((mark) => mark.kind === 'tool');
+  assert.equal(toolMarksOf(first).length, 1);
+  assert.ok(
+    toolMarksOf(first).every((mark) => mark.leftPct < 50),
+    'the first agent ended early — a tick of its at the far right is another agent\'s call on its lane',
+  );
+  assert.equal(toolMarksOf(view.lanes.find((lane) => lane.agent === 'uroboros:researcher')).length, 1);
+});
+
 test('a response body is neither activity nor context', () => {
   const content = [
     record({ seq: 1, timeMs: 1500 }),
@@ -584,12 +651,36 @@ test('the timeline still renders from a bare buildLanes view, with no density at
 // only what a mark needs, and holds no per-call ballast any more.
 
 test('a tool call is kept as a mark and nothing more, whatever the event carried', () => {
-  assert.deepEqual(toolCallOf(toolEvent()), { seq: 5, timeMs: 2200, spanId: 'sp-a' });
+  assert.deepEqual(toolCallOf(toolEvent()), { seq: 5, timeMs: 2200, spanId: 'sp-a', agent: null });
 });
 
 test('an event with no attributes at all is still a mark, and a missing span becomes null', () => {
-  assert.deepEqual(toolCallOf({ seq: 1, timeMs: 1000, spanId: 'sp-a' }), { seq: 1, timeMs: 1000, spanId: 'sp-a' });
-  assert.deepEqual(toolCallOf({ seq: 1, timeMs: 1000 }), { seq: 1, timeMs: 1000, spanId: null });
+  assert.deepEqual(toolCallOf({ seq: 1, timeMs: 1000, spanId: 'sp-a' }), {
+    seq: 1,
+    timeMs: 1000,
+    spanId: 'sp-a',
+    agent: null,
+  });
+  assert.deepEqual(toolCallOf({ seq: 1, timeMs: 1000 }), { seq: 1, timeMs: 1000, spanId: null, agent: null });
+});
+
+test('the agent a call names is kept, from either place the API puts it', () => {
+  assert.equal(toolCallOf(toolEvent({ attribution: { query_source: 'agent:custom:uroboros:planner' } })).agent, 'uroboros:planner');
+  assert.equal(
+    toolCallOf(toolEvent({ attrs: { tool_name: 'Bash', query_source: 'agent:builtin:general-purpose' } })).agent,
+    'general-purpose',
+  );
+  assert.equal(toolCallOf(toolEvent({ attrs: { query_source: 'sdk' } })).agent, null, 'main traffic names no agent');
+});
+
+test('the agent name is read off query_source exactly as the collector reads it', () => {
+  assert.equal(agentNameOf('agent:builtin:general-purpose'), 'general-purpose');
+  assert.equal(agentNameOf('agent:custom:uroboros:planner'), 'uroboros:planner', 'a name may hold colons of its own');
+  assert.equal(agentNameOf('agent:custom'), 'custom', 'a redacted name falls back to its source, as the lane label does');
+  assert.equal(agentNameOf('sdk'), null);
+  assert.equal(agentNameOf('repl_main_thread'), null);
+  assert.equal(agentNameOf(null), null);
+  assert.equal(agentNameOf(undefined), null);
 });
 
 test('a call whose parameters are a whole file leaves the mark the same size as any other', () => {
@@ -597,7 +688,7 @@ test('a call whose parameters are a whole file leaves the mark the same size as 
   const out = toolCallOf(
     toolEvent({ attrs: { tool_name: 'Write', tool_input: JSON.stringify({ file_path: '/tmp/big', content: big }) } }),
   );
-  assert.deepEqual(out, { seq: 5, timeMs: 2200, spanId: 'sp-a' });
+  assert.deepEqual(out, { seq: 5, timeMs: 2200, spanId: 'sp-a', agent: null });
   assert.ok(
     JSON.stringify(out).length < 200,
     'a mark that grows with the call it describes is the megabytes this increment removed',
@@ -610,23 +701,74 @@ test('the parameter cap is gone from the module, not merely unused', () => {
 
 // Increment 7 — a call lands on the lane that made it, and on no other.
 
-test('each agent lane\'s span names that lane, and nothing else does', () => {
+test('a span holds every agent lane that carries it, and the main lane holds none', () => {
   const view = buildLanes({ session: session(), content: threeRecordContent() });
-  const map = spanLaneKeys(view.lanes);
-  assert.equal(map.size, 1, 'the main lane owns no span — a tool call reaches it by not matching any agent');
-  assert.equal(map.get('sp-a'), 'agent:sp-a:code-reviewer');
-  assert.equal(map.get(undefined), undefined);
+  const index = spanLaneIndex(view.lanes);
+  assert.equal(index.size, 1, 'the main lane owns no span — a tool call reaches it by not matching any agent');
+  assert.deepEqual(
+    index.get('sp-a').map((lane) => lane.key),
+    ['agent:sp-a:code-reviewer'],
+  );
+  assert.equal(index.get(undefined), undefined);
 
-  const dup = spanLaneKeys([
+  const shared = spanLaneIndex([
     { kind: 'agent', spanId: 's', key: 'a' },
     { kind: 'agent', spanId: 's', key: 'b' },
   ]);
-  assert.equal(dup.get('s'), 'a', 'two agent lanes on one span keep the first');
+  assert.deepEqual(
+    shared.get('s').map((lane) => lane.key),
+    ['a', 'b'],
+    'two agent lanes on one span are two lanes here — keeping only the first is what put every call on one of them',
+  );
 
-  const noSpan = spanLaneKeys([{ kind: 'agent', spanId: null, key: 'x' }]);
+  const noSpan = spanLaneIndex([{ kind: 'agent', spanId: null, key: 'x' }]);
   assert.equal(noSpan.size, 0, 'an agent lane with no span is skipped');
 
-  assert.deepEqual([...spanLaneKeys(undefined).entries()], []);
+  assert.deepEqual([...spanLaneIndex(undefined).entries()], []);
+});
+
+// The CLI gives every subagent of a conversation the same span, so the span
+// alone cannot say which of them made a call.
+
+test('a call on a span no lane carries belongs to the main session', () => {
+  const index = spanLaneIndex(buildLanes({ session: session(), content: threeRecordContent() }).lanes);
+  assert.equal(toolLaneKey({ timeMs: 2000, spanId: 'sp-main' }, index), 'main');
+  assert.equal(toolLaneKey({ timeMs: 2000, spanId: null }, index), 'main');
+  assert.equal(toolLaneKey({ timeMs: 2000, spanId: 'sp-a' }, index), 'agent:sp-a:code-reviewer');
+  assert.equal(toolLaneKey({ timeMs: 2000, spanId: 'sp-a' }, undefined), 'main');
+});
+
+test('among the agents of one span, the call\'s own name says which one made it', () => {
+  const index = spanLaneIndex([
+    { kind: 'agent', spanId: 'sp', key: 'k-first', agent: 'general-purpose', startMs: 1000, endMs: 1100 },
+    { kind: 'agent', spanId: 'sp', key: 'k-planner', agent: 'uroboros:planner', startMs: 1100, endMs: 2000 },
+  ]);
+  assert.equal(
+    toolLaneKey({ timeMs: 1500, spanId: 'sp', agent: 'uroboros:planner' }, index),
+    'k-planner',
+    'a named call must reach its own agent, never the first agent of the span',
+  );
+  assert.equal(toolLaneKey({ timeMs: 1050, spanId: 'sp', agent: 'general-purpose' }, index), 'k-first');
+});
+
+test('a call whose name the CLI redacted goes to the agent that was running', () => {
+  const index = spanLaneIndex([
+    { kind: 'agent', spanId: 'sp', key: 'k-first', agent: 'general-purpose', startMs: 1000, endMs: 1100 },
+    { kind: 'agent', spanId: 'sp', key: 'k-planner', agent: 'uroboros:planner', startMs: 1100, endMs: 2000 },
+  ]);
+  assert.equal(toolLaneKey({ timeMs: 1500, spanId: 'sp', agent: null }, index), 'k-planner');
+  assert.equal(toolLaneKey({ timeMs: 1050, spanId: 'sp' }, index), 'k-first');
+  assert.equal(
+    toolLaneKey({ timeMs: 9000, spanId: 'sp' }, index),
+    'k-planner',
+    'a call after an agent\'s last request body is still that agent\'s call',
+  );
+  assert.equal(
+    toolLaneKey({ timeMs: 1500, spanId: 'sp', agent: 'custom' }, index),
+    'k-planner',
+    'a name no lane carries is no name at all',
+  );
+  assert.equal(toolLaneKey({ timeMs: 10, spanId: 'sp' }, index), 'k-first', 'before every agent started, the first');
 });
 
 test('a key names its lane, and a key no lane carries names none', () => {
@@ -714,9 +856,9 @@ test('out-of-order items still leave the highest seq as the watermark', () => {
   assert.equal(result.seq, 9, 'the watermark is the maximum seq held, not the last item merged');
 });
 
-test('a missing spanId becomes null rather than undefined', () => {
+test('a missing spanId or agent becomes null rather than undefined', () => {
   const result = mergeToolMarks([], [{ seq: 3, timeMs: 2000 }]);
-  assert.deepEqual(result.marks, [{ seq: 3, timeMs: 2000, spanId: null }]);
+  assert.deepEqual(result.marks, [{ seq: 3, timeMs: 2000, spanId: null, agent: null }]);
 });
 
 test('the merged index is what the density reads', () => {
