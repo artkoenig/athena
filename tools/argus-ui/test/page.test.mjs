@@ -1213,11 +1213,12 @@ test('the run view paints only in its own containers, and renderDetail is untouc
 
 // Criterion 7 — the documentation.
 
-test('README.md describes the run view: the runs list, the increments with status, and the codemap', () => {
+test('README.md describes the run view: the runs list, the recorded document it shows, and that it folds', () => {
   const readme = fs.readFileSync(path.join(PROJECT, 'README.md'), 'utf8');
   assert.match(readme, /\brun/i, 'README must describe the run view at all');
   assert.match(readme, /increment/i, 'README must name the increments the run view shows');
-  assert.match(readme, /status/i, 'README must say the increments show their status');
+  assert.match(readme, /backlog\.json/i, 'README must name the document the run view shows');
+  assert.match(readme, /fold|collapse/i, 'README must say the document folds, which is the whole of how it is read');
   assert.match(readme, /codemap/i, 'README must name the codemap the run view shows');
 });
 
@@ -1275,27 +1276,46 @@ test('the run pane is repainted wholesale from the state the page holds', () => 
   assert.match(refreshRuns, /renderRunView\(/, 'refreshRuns must still call renderRunView( — this is a guard, already green');
 });
 
-test('the stylesheet styles a step collapsed to a line and expanded to its whole return', () => {
+test('the stylesheet styles the document tree: a node folded to a line and opened onto what is inside it', () => {
   const css = fs.readFileSync(path.join(PUBLIC, 'styles.css'), 'utf8');
-  for (const cls of ['.run-steps', '.run-step-label', '.run-step-preview', '.run-step-time', '.run-step-return']) {
+  for (const cls of ['.json-tree', '.json-node', '.json-leaf', '.json-key', '.json-badge', '.json-hint', '.json-text']) {
     assert.ok(css.includes(cls), `styles.css must style ${cls}`);
   }
 
-  const returnRuleMatch = css.match(/\.run-step-return\s*\{([^}]*)\}/);
-  assert.ok(returnRuleMatch, '.run-step-return must have a rule of its own');
-  const returnRule = returnRuleMatch[1];
   assert.match(
-    returnRule,
-    /max-height/,
-    'the return\'s own rule must cap its height, or one enormous return can bury the increments',
+    css,
+    /\.json-tree \.json-tree\s*\{[^}]*(margin-left|padding-left)/,
+    'a nested tree must step in, or a path down the document is unfollowable',
   );
-  assert.match(returnRule, /overflow/, 'the return\'s own rule must scroll rather than overflow the page');
+
+  const textRuleMatch = css.match(/\.json-text\s*\{([^}]*)\}/);
+  assert.ok(textRuleMatch, '.json-text must have a rule of its own');
+  const textRule = textRuleMatch[1];
+  assert.match(
+    textRule,
+    /max-height/,
+    'the opened text\'s own rule must cap its height, or one page of prompt can bury the document under it',
+  );
+  assert.match(textRule, /overflow/, 'and it must scroll rather than overflow the page');
 
   const runJs = fs.readFileSync(path.join(PUBLIC, 'run.js'), 'utf8');
-  for (const cls of ['run-steps', 'run-step-label', 'run-step-preview', 'run-step-time', 'run-step-return']) {
+  for (const cls of ['json-tree', 'json-node', 'json-leaf', 'json-key', 'json-badge', 'json-hint', 'json-text']) {
     const re = new RegExp(`class="[^"]*\\b${cls}\\b[^"]*"`);
     assert.match(runJs, re, `public/run.js must emit ${cls} in a class="…" attribute, or the stylesheet rule styles nothing`);
   }
+});
+
+test('the whole document opens and folds from one control, which touches the markup and no state of the page\'s own', () => {
+  const runJs = fs.readFileSync(path.join(PUBLIC, 'run.js'), 'utf8');
+  assert.match(runJs, /data-tree="open"/, 'the pane must offer a control that opens every node at once');
+  assert.match(runJs, /data-tree="close"/, 'and one that folds them all back');
+
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const setTreeOpen = functionSource(appJs, 'setTreeOpen');
+  assert.match(setTreeOpen, /details\[data-panel\]/, 'it must reach the nodes by the key each one is restored through');
+  assert.match(setTreeOpen, /\.open = open/, 'and set the native flag, so the next repaint reads it back like any click');
+  assert.doesNotMatch(setTreeOpen, /innerHTML/, 'opening every node must never repaint the pane');
+  assert.doesNotMatch(setTreeOpen, /api\(/, 'and must never ask the collector for anything');
 });
 
 test('README.md\'s opening description names the runs the interface shows', () => {
@@ -1342,5 +1362,6 @@ test('the run module exports the reader for the step in flight, and app.js paint
   const runJs = fs.readFileSync(path.join(PUBLIC, 'run.js'), 'utf8');
   assert.match(runJs, /export function runningView\(/, 'run.js must expose the step in flight as a tested pure function');
   assert.match(runJs, /export function renderRunning\(/, 'and the banner that paints it');
-  assert.match(runJs, /export function renderValue\(/, 'and the laid-out rendering of a recorded return');
+  assert.match(runJs, /export function renderTree\(/, 'and the tree the recorded document is shown as');
+  assert.match(runJs, /export function renderNode\(/, 'and the one node renderer the whole tree is built from');
 });

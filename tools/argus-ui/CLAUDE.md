@@ -20,22 +20,26 @@ here is the user-facing page; this file is for changing the code.
   `app.js` boots the page and owns every browser global; `format.js`,
   `timeline.js`, `context.js` and `run.js` beside it are pure modules returning
   strings, which is what makes them testable without a DOM. `run.js` is the run
-  view — the workflow state the collector serves over `/api/runs`, down to the
-  step in flight, each increment's goal, criteria and recorded steps and the
-  run's own, every step collapsed to a line that opens onto what the agent was
-  asked, what it returned and the attempts it superseded.
-- **Nothing recorded is summarised away, and nothing is dumped as JSON.** What
-  the pane decides is only what is open by default: the running step's prompt,
-  because that is the question a reader has while a run is going, and nothing
-  else. A return is laid out as the shape it is — fields under their names, a
-  list as a list, prose as prose — and the raw JSON stays behind a disclosure
-  for whatever the layout could not shape.
+  view — the workflow state the collector serves over `/api/runs`, shown as the
+  `backlog.json` document it is.
+- **The run pane shows the document, not a description of it.** `renderNode` is
+  the one renderer every level is built from: a key is printed as the recorder
+  wrote it, a list keeps its order and is keyed by index, every record and every
+  list is a `<details>` that folds, and nothing is renamed, reordered,
+  summarised or dropped on the way. An earlier version laid each part out under
+  a heading of its own and a run of any size arrived as one page of prose with
+  no way to fold a part of it away. What the pane decides is only what is open
+  when it arrives: the top level, the increment being worked, and the running
+  step's prompt, because that is the question a reader has while a run is going.
 - **A repaint is not how the ages stay current.** A run writes its state once
   per step and a step runs for minutes, so between two writes the only thing
   that moved is the clock. `retimeRunView` in `app.js` rewrites the text of the
   elements carrying a `data-at` instant and touches nothing else — repainting
   the pane would collapse every `<details>` the reader had opened, and fetching
-  would ask the collector for a state that has not changed.
+  would ask the collector for a state that has not changed. A write that does
+  repaint the pane restores each disclosure by its `data-panel` key, which is
+  its path in the document — so a key must name where a value sits, never where
+  it landed on the page.
 - **Local only.** No entry on the `PATH`, no skill, no mention in the plugin
   manifest, never deployed. The collector is the half that travels.
 

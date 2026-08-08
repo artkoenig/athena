@@ -558,6 +558,19 @@ function renderRunView() {
 }
 
 /**
+ * Every node of the document tree opened or folded at once.
+ *
+ * The tree is native `<details>`, so this is the whole of it: no state of the
+ * page's own is touched, and the next repaint reads the flags back off the
+ * markup by their `data-panel` keys exactly as it does after a click.
+ */
+function setTreeOpen(open) {
+  const container = document.getElementById('run-detail');
+  if (!container) return;
+  for (const node of container.querySelectorAll('details[data-panel]')) node.open = open;
+}
+
+/**
  * The ages in the run pane, brought current without repainting it.
  *
  * A run writes its state once per step, and a step runs for minutes: between
@@ -739,6 +752,11 @@ function wireEvents() {
   document.getElementById('run-list').addEventListener('click', (event) => {
     const button = event.target.closest('[data-run]');
     if (button) selectRun(button.dataset.run);
+  });
+
+  document.getElementById('run-detail').addEventListener('click', (event) => {
+    const control = event.target.closest('[data-tree]');
+    if (control) setTreeOpen(control.dataset.tree === 'open');
   });
 
   document.querySelector('.view-switch').addEventListener('click', (event) => {
