@@ -56,7 +56,7 @@
       ],
       "status": "todo",
       "note": "Split from the single UI increment the last cut carried, because the collector and recorder increments together showed how much this half now has to land at once: a second view in a page built for one, a run picker, a second kind of SSE frame, and the whole of a backlog's shape on screen. This increment takes the load-bearing half — the view, its data path and its live update — and the step returns follow in ui-steps.",
-      "branch": "",
+      "branch": "claude/argus-workflow-backlog-status-nvqmvr--ui",
       "steps": []
     },
     {
