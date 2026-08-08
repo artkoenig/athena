@@ -4,8 +4,9 @@
 
 The run works one branch, so "what did this increment change" is not a fact
 anyone can cheaply ask of git. Two costs follow, both measured or visible in
-the run of 2026-08-07 (evidence:
-`docs/issues/2026-08-08-carry-the-map-across-rounds`):
+the run of 2026-08-07 (session
+`claude/timeline-implementation-adjustments-t8s8rz`, PR #65, measured from its
+35 subagent transcripts):
 
 1. **The reviewer re-derives its scope every round.** It checks the whole
    diff against main, and from the second increment on that diff carries the
@@ -88,10 +89,10 @@ Recorded from the discussion of 2026-08-08; each answer is the human's.
 
 ## Out of scope
 
-- **The recorder size ceiling** from
-  `docs/issues/2026-08-08-carry-the-map-across-rounds`. It stays there;
-  that issue's reviewer-file-list criterion is superseded by this one, and
-  its re-cut now has three predecessors to cut against.
+- **A size ceiling on the codemap in the recorder.** The
+  carry-the-map issue that proposed one was closed unimplemented; if the
+  codemap ever grows into the bloat `close` exists to prevent, a cap is its
+  own small issue.
 - **Parallel increments.** Branches would permit working increments
   concurrently; the run stays sequential, and nothing here may depend on
   two increment branches being live at once.

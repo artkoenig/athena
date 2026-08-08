@@ -77,9 +77,14 @@ const STATE = {
       description:
         'The exact content of backlog.json, byte for byte. Empty string when it does not exist.',
     },
+    branch: {
+      type: 'string',
+      description:
+        'What `git branch --show-current` printed in the checkout. Empty string when it failed.',
+    },
     summary: { type: 'string' },
   },
-  required: ['exists', 'backlogJson', 'summary'],
+  required: ['exists', 'backlogJson', 'branch', 'summary'],
   additionalProperties: false,
 }
 
@@ -411,7 +416,8 @@ function answeredBlock(label) {
 // codemap and builds its research on it; the test-author is given the test plan
 // and nothing else about the change; the implementer the plan, the map, the
 // environment, the checks and the tests that now exist; the reviewer the checks
-// alone.
+// and the increment's diff range alone — the range is a fact of git, never a
+// part of the plan.
 function casesBlock(tests, directFix) {
   if (!tests) {
     return directFix
@@ -534,7 +540,17 @@ const state = await agent(
     `If your context names no such skill base directory, find the helper with ` +
     `\`find "$HOME/.claude/plugins" -path '*agent-brief/assets/backlog.mjs' | head -1\`.\n` +
     `If the file does not exist, return exists false and backlogJson "".\n` +
-    `Read nothing else, change nothing, run no git command, and do not dispatch any subagent.`,
+    `Return the branch the checkout is on, from \`git branch --show-current\`, in branch.\n` +
+    `The checkout's copy of the state can trail the copy an in-flight increment carries: ` +
+    `where an increment in the file has status "todo" and a non-empty \`branch\` field, run ` +
+    `\`git fetch origin <that branch>\` and then ` +
+    `\`git merge-base --is-ancestor HEAD origin/<that branch>\`. Exit 0 means that branch ` +
+    `continues this checkout, so return the output of ` +
+    `\`git show origin/<that branch>:${dir}/backlog.json\` in backlogJson instead. A failed ` +
+    `fetch, or any other exit, means the branch is an abandoned attempt: keep the ` +
+    `checkout's copy.\n` +
+    `Read nothing else, change nothing, run no git command beyond the read-only ones named ` +
+    `here, and do not dispatch any subagent.`,
   { agentType: 'general-purpose', phase: 'Load state', label: 'load-state', schema: STATE },
 )
 
@@ -548,6 +564,16 @@ if (state && state.exists && state.backlogJson) {
     log(`backlog.json did not parse (${err.message}) — starting this run from no state.`)
     saved = null
   }
+}
+
+// The branch the run publishes: whatever the checkout was on when it started.
+// Every increment is worked on its own branch off it and merged back into it
+// on acceptance, so the issue branch only ever holds accepted work. When the
+// state loader could not name it, the branch machinery stands down and the
+// run works the checkout as it is.
+const issueBranch = (state && typeof state.branch === 'string' && state.branch.trim()) || ''
+if (!issueBranch) {
+  log('The state loader named no branch — increments are worked on the current checkout.')
 }
 
 // A step that ended the run with a question for the human is not replayed from
@@ -572,6 +598,66 @@ if (saved) {
 if (recorded.size) log(`Resuming: ${recorded.size} step(s) already recorded in the run state.`)
 if (carriedQuestions.size) {
   log(`${carriedQuestions.size} step(s) ended the last run with a question and are worked again.`)
+}
+
+// Which branch each increment is worked on, by id. Seeded from the state so a
+// resumed run continues on the branch the dead session recorded; kept current
+// in-session so a fresh attempt gets a fresh name.
+const branches = new Map()
+if (saved) {
+  for (const t of saved.increments || []) {
+    if (typeof t.branch === 'string' && t.branch) branches.set(t.id, t.branch)
+  }
+}
+
+// Whether any step of this increment is recorded, or ended the last run asking
+// the human. That is the mid-flight test: a recorded branch is continued only
+// for an increment with history — a handed-back increment keeps its abandoned
+// branch in the state, and resuming onto it would resume the failed attempt.
+// The trailing dot keeps one id from matching another it prefixes.
+function incrementHasHistory(id) {
+  for (const source of [recorded, carriedQuestions]) {
+    for (const label of source.keys()) {
+      if (label.includes(`:${id}.`)) return true
+    }
+  }
+  return false
+}
+
+// The name of a fresh attempt's branch. The first attempt gets
+// `<issueBranch>--<id>`; a later one bumps a `-take<n>` suffix onto the name
+// the state still holds, so the abandoned branch keeps its name on the remote
+// and the new one never collides with it.
+function nextBranchName(id) {
+  const base = `${issueBranch}--${id}`
+  const prior = branches.get(id)
+  if (!prior) return base
+  const taken = prior.match(/-take(\d+)$/)
+  return `${base}-take${taken ? Number(taken[1]) + 1 : 2}`
+}
+
+// What every dispatch of an increment is told about the branch it works on.
+// The first dispatch of a fresh attempt records the name in the run state
+// while still on the issue branch — that commit is how a resumed session finds
+// the branch — and then creates it; every later dispatch makes sure it is on
+// it. The shared brief owns the rule that the step's commits and pushes belong
+// to the branch the prompt names.
+function branchBlock(taskId, incrementBranch, create) {
+  if (!incrementBranch) return ''
+  if (create) {
+    return (
+      `This increment is worked on its own branch: \`${incrementBranch}\`, off \`${issueBranch}\`.\n` +
+      `Before anything else, on \`${issueBranch}\`: record the name with the backlog helper's ` +
+      `\`branch\` subcommand, as \`branch ${dir}/backlog.json ${taskId} ${incrementBranch}\`, ` +
+      `commit that state change and push \`${issueBranch}\`. Then create the branch with ` +
+      `\`git checkout -b ${incrementBranch}\`, push it with \`-u\`, and work on it from there.\n`
+    )
+  }
+  return (
+    `This increment is worked on branch \`${incrementBranch}\`. Before anything else make sure ` +
+    `you are on it: \`git fetch origin ${incrementBranch}\` and check it out; if the remote ` +
+    `does not have it, create it from \`${issueBranch}\` and push it with \`-u\`.\n`
+  )
 }
 
 // The whole of resume. A recorded step returns its stored payload and is never
@@ -687,11 +773,10 @@ let stopped = ''
 
 // A resumed run picks up counting where the state left off. Every increment
 // the file already holds closed was worked by an earlier session: it keeps its
-// ordinal, its line in the result, and its place in the reviewer's baseline
-// block below — `done` is the accepted case, `blocked` the not-accepted one,
-// and a dropped increment was never worked and counts for nothing. The
-// findings behind a restored `blocked` were shed when it closed, so its note
-// is the reason the state still carries.
+// ordinal and its line in the result — `done` is the accepted case, `blocked`
+// the not-accepted one, and a dropped increment was never worked and counts
+// for nothing. The findings behind a restored `blocked` were shed when it
+// closed, so its note is the reason the state still carries.
 for (const t of increments) {
   if (t.status === 'done' || t.status === 'blocked') {
     worked.push({
@@ -703,31 +788,6 @@ for (const t of increments) {
       reason: t.note || `closed as ${t.status} in an earlier session`,
     })
   }
-}
-
-// The reviewer sees the whole diff against main, so from the second increment
-// on that diff carries work an earlier review already ruled on. Saying which is
-// what keeps it from re-litigating a settled increment every round, without
-// costing it the one thing it is for: catching the regression this increment
-// just caused in one. A blocked increment is named as blocked — telling the
-// reviewer it was accepted would have it re-report the open findings as this
-// increment's, and telling it nothing would have it fix them.
-function baseline(n) {
-  if (n === 1) return ''
-  const name = (ns) => (ns.length === 1 ? `Increment ${ns[0]} was` : `Increments ${ns.join(', ')} were`)
-  const ok = worked.filter((i) => i.accepted).map((i) => i.n)
-  const bad = worked.filter((i) => !i.accepted).map((i) => i.n)
-  return (
-    (ok.length
-      ? `${name(ok)} reviewed and accepted in an earlier iteration. That code is in your ` +
-        `diff: treat it as the baseline increment ${n} builds on, and raise it again only ` +
-        `where increment ${n} broke it.\n`
-      : '') +
-    (bad.length
-      ? `${name(bad)} worked but not accepted, and those findings stand. That code is in ` +
-        `your diff too: it is not increment ${n}'s to fix and not yours to report again.\n`
-      : '')
-  )
 }
 
 if (!blockedOnHuman.length) {
@@ -749,6 +809,24 @@ if (!blockedOnHuman.length) {
     }
 
     log(`Increment ${n}: ${task.title}`)
+
+    // The branch this attempt is worked on. An increment with recorded history
+    // continues on the branch the state names; anything else — the first
+    // attempt, or one after a hand-back — starts a fresh branch off the issue
+    // branch, and the attempt's first dispatch records and creates it.
+    let incrementBranch = ''
+    let freshBranch = false
+    if (issueBranch) {
+      const prior = branches.get(task.id)
+      if (prior && incrementHasHistory(task.id)) {
+        incrementBranch = prior
+      } else {
+        incrementBranch = nextBranchName(task.id)
+        freshBranch = true
+      }
+      branches.set(task.id, incrementBranch)
+      log(`Increment ${n} is worked on ${incrementBranch}${freshBranch ? ' (fresh)' : ''}`)
+    }
 
     let plan = null
     let tests = null
@@ -772,6 +850,7 @@ if (!blockedOnHuman.length) {
           agent(
             `Issue directory: ${dir}\n` +
               answeredBlock(researchLabel) +
+              branchBlock(task.id, incrementBranch, freshBranch && round === 0) +
               scope(task, increments, n) +
               codemapBlock() +
               (round === 0 ? '' : findingsBlock(verdict, round)) +
@@ -794,6 +873,7 @@ if (!blockedOnHuman.length) {
             agent(
               `Issue directory: ${dir}\n` +
                 answeredBlock(testsLabel) +
+                branchBlock(task.id, incrementBranch, false) +
                 scope(task, increments, n) +
                 `Your work order is the test plan below, and it is the whole of what you are ` +
                 `given about the change:\n\n${plan.testPlan}\n\n` +
@@ -814,6 +894,7 @@ if (!blockedOnHuman.length) {
         agent(
           `Issue directory: ${dir}\n` +
             answeredBlock(buildLabel) +
+            branchBlock(task.id, incrementBranch, false) +
             (directFix
               ? directFixBlock(verdict, round)
               : `Your brief is the plan below.\n\n` +
@@ -842,10 +923,18 @@ if (!blockedOnHuman.length) {
         agent(
           `Issue directory: ${dir}\n` +
             answeredBlock(reviewLabel) +
-            `Review round ${round} of increment ${n}. Check the whole ` +
-            `diff against main.\n` +
+            branchBlock(task.id, incrementBranch, false) +
+            `Review round ${round} of increment ${n}. ` +
+            // The increment's diff is a fact of git — its branch against the
+            // merge-base with the issue branch — so no prose list of settled
+            // increments is needed: what earlier increments delivered is
+            // simply not in the range.
+            (incrementBranch
+              ? `The increment's diff is its branch against the merge-base with ` +
+                `\`${issueBranch}\`: judge \`git diff ${issueBranch}...HEAD\` (three dots), ` +
+                `whole, and nothing outside it.\n`
+              : `Check the whole diff against main.\n`) +
             scope(task, increments, n) +
-            baseline(n) +
             checkList(plan.checks) +
             recordStep(task.id, reviewLabel) +
             noDispatch,
@@ -893,6 +982,16 @@ if (!blockedOnHuman.length) {
             : `did not accept it after ${MAX_CORRECTIONS} correction rounds, with ` +
               `${(verdict.findings || []).length} findings open: ` +
               `${verdict.reason || verdict.summary}\n`) +
+          (incrementBranch
+            ? accepted
+              ? `Land it first: check out \`${issueBranch}\`, run ` +
+                `\`git fetch origin ${incrementBranch}\`, merge that branch and push ` +
+                `\`${issueBranch}\`. A conflict there is a blocker: merge nothing, close ` +
+                `nothing, and put it in your summary.\n`
+              : `Its work was not accepted, so it stays off the issue branch: do not merge ` +
+                `\`${incrementBranch}\`. Check out \`${issueBranch}\` first, so the state you ` +
+                `write lands there, and name that unmerged branch in the note you close with.\n`
+            : '') +
           `Read ${dir}/backlog.json with the backlog helper's \`read\` subcommand. Close that ` +
           `increment with the \`close\` subcommand and the status the verdict earns — closing ` +
           `sheds its recorded step returns — then re-cut every increment still open against ` +
@@ -956,10 +1055,17 @@ if (blockedOnHuman.length) {
 phase('Publish')
 const push = await agent(
   `Issue directory: ${dir}\n` +
-    'Push the current branch and make sure an open pull request exists for it. ' +
-    'Nothing else.\n\n' +
-    '1. Run `git push -u origin "$(git branch --show-current)"`. On a network error ' +
-    'retry up to 4 times, waiting 2s, 4s, 8s, 16s.\n' +
+    (issueBranch
+      ? `Push the issue branch \`${issueBranch}\` and make sure an open pull request exists ` +
+        'for it. Nothing else.\n\n' +
+        `1. Check out \`${issueBranch}\` if the checkout is elsewhere — a run that stopped ` +
+        `mid-increment leaves it on an increment branch. Then run ` +
+        `\`git push -u origin ${issueBranch}\`. On a network error ` +
+        'retry up to 4 times, waiting 2s, 4s, 8s, 16s.\n'
+      : 'Push the current branch and make sure an open pull request exists for it. ' +
+        'Nothing else.\n\n' +
+        '1. Run `git push -u origin "$(git branch --show-current)"`. On a network error ' +
+        'retry up to 4 times, waiting 2s, 4s, 8s, 16s.\n') +
     '2. Find the pull request whose head is this branch. Use the GitHub MCP tools — ' +
     'load them with ToolSearch first; there is no `gh` CLI. If an OPEN one exists, ' +
     'leave it alone: pushing already updated it. Report its URL.\n' +
@@ -969,14 +1075,16 @@ const push = await agent(
     'review said, and every open finding or recorded observation the human should see ' +
     'before merging. This run worked the issue in increments, so say plainly in the body ' +
     'when the backlog did NOT empty and name what is left, and when a question for the ' +
-    'human ended the run. End the body with a blank line, `---`, and ' +
+    'human ended the run. Name the branch of every blocked increment — its `branch` ' +
+    'field in `backlog.json` — so its unmerged work is findable without being in the ' +
+    'diff. End the body with a blank line, `---`, and ' +
     '`🤖 Generated with [Claude Code](https://claude.com/claude-code)`.\n' +
     '4. If the only pull request for this branch is already MERGED, do NOT open a ' +
     'second one on top of merged history and do NOT rebase — report `prUrl` of the ' +
     "merged one and say so in the summary. That is the human's call.\n\n" +
-    'Do NOT commit, do NOT stage, do NOT change any file, do NOT force-push, do NOT ' +
-    'switch branches, and do NOT merge anything. If the working tree is dirty, leave ' +
-    'it dirty and report it.\n' +
+    'Do NOT commit, do NOT stage, do NOT change any file, do NOT force-push, and do ' +
+    'NOT merge anything. Beyond the one checkout step 1 names, do NOT switch ' +
+    'branches. If the working tree is dirty, leave it dirty and report it.\n' +
     'You are running inside a workflow script. Do NOT dispatch any subagent.',
   { agentType: 'general-purpose', phase: 'Publish', label: 'publish', schema: PUSH },
 )

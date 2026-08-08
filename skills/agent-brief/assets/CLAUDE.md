@@ -4,7 +4,7 @@ Tests for `backlog.mjs`, the CLI that is the only writer of a run's `backlog.jso
 
 ## What the suite covers
 
-`backlog.test.mjs` exercises all four CLI commands — `init`, `record`, `close`, `read` — end to end: the init merge rules (kept increments keep steps, dropped ones vanish, `run.steps` and the codemap survive a re-cut), record's replace-on-same-label and `-` routing into `run.steps`, close's status validation and shedding of step returns, read's byte-exact output, exit codes with untouched files on failure, and the atomic `.tmp`-rename write.
+`backlog.test.mjs` exercises all five CLI commands — `init`, `record`, `branch`, `close`, `read` — end to end: the init merge rules (kept increments keep steps and their branch, dropped ones vanish, `run.steps` and the codemap survive a re-cut, a payload cannot set a branch), record's replace-on-same-label and `-` routing into `run.steps`, branch's record-and-replace as the one writer of an increment's branch, close's status validation and shedding of step returns while codemap and branch stand, read's byte-exact output, exit codes with untouched files on failure, and the atomic `.tmp`-rename write.
 
 ## Helpers and fixtures
 
@@ -20,7 +20,7 @@ All defined at the top of `backlog.test.mjs`; every case reuses them.
 
 ## Where a new case belongs
 
-The file is helpers first, then flat top-level `test(...)` calls grouped by command in CLI order: init (including codemap and close-vs-codemap interplay), record, close, read, and a final atomic-write case. Insert a new case inside the block for the command it exercises; a shared-mechanics case (like the `.tmp` one) goes at the end.
+The file is helpers first, then flat top-level `test(...)` calls grouped by command in CLI order: init (including codemap and close-vs-codemap interplay), record, branch, close, read, and a final atomic-write case. Insert a new case inside the block for the command it exercises; a shared-mechanics case (like the `.tmp` one) goes at the end.
 
 ## Naming
 

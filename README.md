@@ -39,7 +39,7 @@ flowchart LR
         RES["researcher<br/>writes the implementation plan<br/>and the test plan"]
         TEST["test-author<br/>turns the planned cases<br/>into failing tests"]
         IMPL["implementer<br/>builds until they pass"]
-        REV["reviewer<br/>checks the diff against main"]
+        REV["reviewer<br/>checks the increment's diff"]
         RES --> TEST --> IMPL --> REV
         REV -.->|"findings: correction<br/>round, at most two"| RES
         REV -.->|"every finding a direct fix:<br/>no plan, no test"| IMPL
@@ -126,12 +126,18 @@ flowchart LR
     BACK ==>|"nothing left,<br/>or the run gives up"| PUB["Publish: push the branch,<br/>open the pull request"]
 ```
 
-Each increment is reviewed on its own: the workflow hands the reviewer that
-increment's criteria and names the increments still to come, so unfinished work
-reads as scheduled rather than as a finding. Closing an increment sheds the
-step returns that got it there, so the state stays the size of the work still
-open rather than the size of the run so far — the codemap is run-level state,
-not a step return, and stays.
+Each increment is worked on its own branch off the issue branch, and the
+planner merges it back when the review accepts it — so the issue branch, and
+the pull request, only ever hold accepted work, and a blocked increment's
+branch stays unmerged on the remote, named in its note. The reviewer's scope
+falls out of that for free: it judges the increment branch against its
+merge-base, a diff that carries this increment's work and nothing settled
+earlier. Each increment is reviewed on its own: the workflow hands the reviewer
+that increment's criteria and names the increments still to come, so unfinished
+work reads as scheduled rather than as a finding. Closing an increment sheds
+the step returns that got it there, so the state stays the size of the work
+still open rather than the size of the run so far — the codemap and each
+increment's branch are run-level state, not a step return, and stay.
 
 The run stops on its own when the backlog empties, and hands back when it will
 not: eight increments spent, one increment worked twice and handed back again

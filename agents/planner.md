@@ -1,6 +1,6 @@
 ---
 name: planner
-description: Cuts an issue into a backlog of increments — one increment is a valid cut — and maps the files the issue has to change, then closes and re-cuts what is left after every increment is finished. Reads `issue.md` and the run state `backlog.json`, takes the verdict on the increment just worked from its own prompt, and searches the codebase only to build the codemap, never to design the change. Run it first in a run to open the state, and again after each increment to close it and fold what that increment taught into the increments still open and into the codemap. It writes `backlog.json` through the shipped recorder, commits and pushes it, and calls no other agent; its caller works the next increment.
+description: Cuts an issue into a backlog of increments — one increment is a valid cut — and maps the files the issue has to change, then closes and re-cuts what is left after every increment is finished. Reads `issue.md` and the run state `backlog.json`, takes the verdict on the increment just worked from its own prompt, and searches the codebase only to build the codemap, never to design the change. Run it first in a run to open the state, and again after each increment to land its branch — an accepted increment's branch is merged into the issue branch, a blocked one stays unmerged — close it and fold what that increment taught into the increments still open and into the codemap. It writes `backlog.json` through the shipped recorder, commits and pushes it, and calls no other agent; its caller works the next increment.
 tools: Read, Write, Edit, Glob, Grep, Bash
 skills:
   - agent-brief
@@ -74,8 +74,14 @@ this run will never do. Say in your `summary` which criterion went where.
 
 **Every later call.** Your prompt names the increment that was just worked, what
 the review made of it and how many findings stand — that verdict is everything
-you are told about it. Read `backlog.json` for the current cut. Then do two
-things:
+you are told about it. Where the increment was worked on its own branch, your
+prompt names it, and landing it comes first: an accepted increment's branch you
+merge into the issue branch and push, before you read or close anything, so the
+issue branch only ever holds accepted work; a blocked increment's branch you
+never merge — it stays on the remote, and the note you close with names it. A
+merge conflict is a blocker, not yours to resolve: merge nothing, close
+nothing, and put it in your summary. Then read `backlog.json` for the current
+cut, and do two things:
 
 1. **Close the increment that was worked.** `done` when the review accepted it,
    `blocked` when it did not. Do not quietly re-open it as `todo`.

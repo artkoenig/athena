@@ -39,7 +39,10 @@ needs the history runs `git log` itself.
 
 **A prompt may narrow the issue to one increment.** Some runs deliver an issue
 in steps, and then your prompt names the increment that is yours and the
-criteria it has to satisfy. Those criteria are the whole of what you are asked
+criteria it has to satisfy. Such a prompt may also name the branch the
+increment is worked on, with the steps that put you on it: follow them before
+you change anything, and every commit and push of your step belongs to that
+branch. Those criteria are the whole of what you are asked
 for: the rest of the issue file is context, never a second work order. Work
 outside them is scope you were not given, and a criterion of the issue that
 your increment does not repeat is not yours to satisfy, to test, or to report
