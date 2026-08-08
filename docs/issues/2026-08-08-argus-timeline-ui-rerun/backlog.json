@@ -1,0 +1,102 @@
+{
+  "version": 1,
+  "issue": "docs/issues/2026-08-08-argus-timeline-ui-rerun/issue.md",
+  "workflow": "agile-loop",
+  "codemap": "Codemap for \"A session timeline as the argus UI's central view\". Every file the issue has to change, path and why. Collector work is in tools/argus, interface work in tools/argus-ui, per the issue's own split.\n\nCollector — content in\n- tools/argus/src/claude.mjs — holds `otelEnvFor`, the env block `argus env` prints, and the EVENT/SPAN/attribute constants (`api_request_body`, `api_response_body`, `agent.name`, `toolParametersOf`) the content flags and the timeline are named by.\n- tools/argus/bin/argus.mjs — the `env` command and its four output formats (shell, json, dotenv, settings) plus the setup and tunnel paths that print the same block; its help text describes what the block sets.\n- tools/argus/src/store.mjs — the in-memory store: ingests every record, aggregates per session, holds the bounded log/span/metric windows and answers `queryEvents`/`getSession`; the content-bearing records and any per-agent, per-time view of them live here.\n- tools/argus/src/server.mjs — the JSON API (`/api/sessions`, `/api/events`, `/api/metrics`, `/api/traces/:id`, `/api/stream`) the UI is the only client of; whatever the timeline asks for is served from here.\n- tools/argus/src/persist.mjs — appends every normalized record as JSONL and loads a measurement back; request/response bodies multiply record size, and the rotation cap plus the single kept generation decide how much of a recorded session survives to be scrubbed.\n- tools/argus/scripts/demo-emit.mjs — the synthetic session generator used to see the UI without a real agent run; it emits no agent attribution and no body events, so the timeline has nothing to draw from it as it stands.\n\nCollector — tests\n- tools/argus/test/claude.test.mjs — the pure-function suite that pins what the `otelEnvFor` block does and does not carry.\n- tools/argus/test/store.test.mjs — the store's ingest, aggregation and query suite.\n- tools/argus/test/server.test.mjs — the API suite over a real server on port 0.\n- tools/argus/test/persist.test.mjs — the append/rotate/load suite.\n- tools/argus/test/CLAUDE.md — the suite page that owns this project's test conventions and lists the suite file by file; it grows a line whenever the suite does.\n\nInterface\n- tools/argus-ui/public/app.js — the whole page in one file: state, session list, the tab set (overview, traces, events, metrics, raw) and every renderer; the timeline view, its lanes, the time control and the selection detail all land here or in modules split out of it.\n- tools/argus-ui/public/index.html — the served page shell: topbar, sidebar and the `detail` section the views mount into.\n- tools/argus-ui/public/styles.css — every class the page renders; lanes, activity, a context curve, a playhead and a collapsible message list have no styling yet.\n- tools/argus-ui/test/independence.test.mjs — the project-independence suite, and today the only coverage over `public/` at all, through source-text guards.\n- tools/argus-ui/test/server.test.mjs — the proxy suite, including a source-text guard that the proxy names no route under `/api/`.\n- tools/argus-ui/test/CLAUDE.md — the suite page: it records that there is no suite over `public/` and what happens to that rule when pure functions are pulled out of `app.js`.\n\nDocumentation\n- tools/argus/README.md — states that `argus env` deliberately does not set the content flags (\"Content and privacy\"), and carries the API route table and the signal/flag table.\n- tools/argus-ui/README.md — describes the page's views (Overview, Traces, Events, Metrics, Raw) as the interface's structure.\n- skills/argus/SKILL.md — the procedure a session follows to measure itself, with its own API route table.\n",
+  "increments": [
+    {
+      "id": "content-data-path",
+      "title": "Content arrives: the env block turns it on and the API serves it",
+      "goal": "Make the content the timeline needs actually reach the UI: `argus env` sets the content flags by default in every format it prints, and the collector keeps the content-bearing records and serves them over the JSON API with the attribution and timing a per-agent, per-time question needs.",
+      "criteria": [
+        "`argus env` includes the content flags by default in every format it prints: user prompts, tool details, tool content, and the flag(s) the CLI requires to emit `claude_code.api_request_body` / `claude_code.api_response_body`.",
+        "The exact flag names are verified against the CLI's monitoring documentation rather than assumed; if request/response body events turn out not to be emittable by the current CLI, that is recorded as a finding and stated as what the context view will be built from instead.",
+        "The collector stores what those events carry and exposes the content-bearing records over the JSON API like the existing signals, so a client can ask for the context belonging to a point in time.",
+        "What agent attribution actually arrives on subagent activity and on request bodies is verified against real or emitted telemetry, and any gap is recorded as a finding rather than papered over.",
+        "Recordings made without the content flags are out of contract: no fallback path, no compatibility notice, and no test pins behaviour for them — this holds for the whole run and is checked here, where content first enters.",
+        "`./test.sh` is green — the standing gate every later increment inherits by the definition of a finished increment, recorded here so it belongs to exactly one."
+      ],
+      "status": "todo",
+      "note": "",
+      "branch": "",
+      "steps": [],
+      "attempts": []
+    },
+    {
+      "id": "timeline-central-view",
+      "title": "The timeline is the session view, with a lane per agent",
+      "goal": "Opening a session lands on a timeline that draws one lane for the main session and one per subagent, each spanning that agent's lifetime, with the existing technical views kept reachable underneath it.",
+      "criteria": [
+        "Opening a session in the argus UI lands on the timeline view.",
+        "The previous technical views (event tail, traces, raw inspectors) stay reachable from the timeline and are subordinate to it, not the other way round.",
+        "The timeline draws one lane for the main session and one lane per subagent, each agent lane spanning that agent's lifetime, so any vertical slice answers which agents are running at that moment.",
+        "Where the telemetry attributes subagent traffic incompletely, the lanes show what is attributable and the gap is reported as a finding."
+      ],
+      "status": "todo",
+      "note": "",
+      "branch": "",
+      "steps": [],
+      "attempts": []
+    },
+    {
+      "id": "lane-activity-and-context-curve",
+      "title": "Each lane shows its activity and its context growth",
+      "goal": "Fill the lanes: activity over time, and behind it the context size over time, so where token consumption grows is visible on the timeline itself.",
+      "criteria": [
+        "Each lane shows that agent's activity over time — tool calls and API requests — positioned at the times they happened.",
+        "Behind that activity each lane draws the context size over time as a curve or area.",
+        "Growth in token consumption is readable from the timeline alone, without opening any detail."
+      ],
+      "status": "todo",
+      "note": "",
+      "branch": "",
+      "steps": [],
+      "attempts": []
+    },
+    {
+      "id": "scrub-and-live",
+      "title": "Scrubbing the session, and following it live",
+      "goal": "Give the timeline its time control: a point in time the human moves backward and forward over the whole recorded session, and a live mode that follows the newest data.",
+      "criteria": [
+        "The timeline can be scrubbed backward and forward to any point of the recorded session.",
+        "A live mode follows the newest data as it arrives.",
+        "Scrubbing away from the head leaves live mode, and a control returns to it."
+      ],
+      "status": "todo",
+      "note": "",
+      "branch": "",
+      "steps": [],
+      "attempts": []
+    },
+    {
+      "id": "selection-context-and-tools",
+      "title": "Selecting a lane shows that agent's context and tools at that moment",
+      "goal": "Answer the two per-agent questions at the chosen time: what the context looked like, and which tools that agent had used with what parameters.",
+      "criteria": [
+        "Selecting a lane at the chosen time shows that agent's (or the main session's) context as of that moment: the body of the nearest API request at or before that time.",
+        "That context is rendered as a structured message list — system prompt, user, assistant, tool call, tool result — with each block collapsed to one line carrying its size.",
+        "Each block expands to the exact full text.",
+        "Selecting a lane at the chosen time also shows the tools that agent has used up to that moment, with tool name and the call's parameters, so \"which tools, and what for\" is answerable per agent and per time."
+      ],
+      "status": "todo",
+      "note": "",
+      "branch": "",
+      "steps": [],
+      "attempts": []
+    }
+  ],
+  "run": {
+    "steps": [
+      {
+        "label": "decompose",
+        "at": "2026-08-08T14:27:27.963Z",
+        "return": {
+          "questions": [],
+          "summary": "Cut the timeline issue into five increments: the content data path first (env flags plus collector storage and API), then the timeline as the central session view with a lane per agent, lane activity plus the context-size curve, scrubbing and live mode, and the per-agent context and tool detail at the chosen time. The codemap is in the backlog's codemap field."
+        },
+        "prompt": "Issue directory: docs/issues/2026-08-08-argus-timeline-ui-rerun\nOpen the run state for docs/issues/2026-08-08-argus-timeline-ui-rerun/issue.md: map the issue against the codebase, then decide the cut and write docs/issues/2026-08-08-argus-timeline-ui-rerun/backlog.json with the `init` subcommand of the backlog helper your shared brief names, with workflow \"agile-loop\".\nThe codemap comes first: every file the issue has to change, path and why, one line per file, in the payload's `codemap` field. Every researcher of this run reads it back out of the state, so it exists nowhere else and no prompt carries it.\nWhether and how to cut is yours: a backlog of one increment is the right cut for an issue that is one change. This run works at most 8 increments, so a cut that needs more than that is a cut that is too fine.\nIf the state is already there, read its skeleton first with the helper's `index` subcommand.\nRecord this step before you return.\n1. Write these fields to a JSON file outside the repository. That file is the only copy of your work anyone downstream ever reads, so put the substance in it, in full — no placeholders, no summaries that drop detail:\n   - `questions`: Decisions only the human can make. A non-empty list ends the run.\n   - `summary`: One or two sentences a human reads in the chat.\n2. Write the prompt you were given, verbatim and whole, to a second file outside the repository.\n3. Run the `record` subcommand of the backlog helper your shared brief names, as `record docs/issues/2026-08-08-argus-timeline-ui-rerun/backlog.json - decompose <the return file> <the prompt file>`.\nYour structured return is not that file: it carries only the few values the script steers on, and its schema names them.\nYou are running inside a workflow script. Do NOT dispatch any subagent and do NOT hand over to anyone — the script calls the next agent itself. Record your step return, commit it with your work, then push the commit.\n"
+      }
+    ],
+    "attempts": []
+  }
+}
