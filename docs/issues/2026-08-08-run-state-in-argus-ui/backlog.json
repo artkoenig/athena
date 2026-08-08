@@ -220,6 +220,44 @@
             ],
             "questions": []
           }
+        },
+        {
+          "label": "implement:ui-steps.0",
+          "at": "2026-08-08T12:56:22.172Z",
+          "return": {
+            "deviations": [],
+            "commands": [
+              {
+                "command": "node --test tools/argus-ui/test/run.test.mjs",
+                "exitCode": 1,
+                "note": "Run before the change to confirm the planned red: the whole file failed to load with SyntaxError, no export named 'STEP_SHED_NOTE'. After the change: 36 cases, exit 0."
+              },
+              {
+                "command": "node --test tools/argus-ui/test/page.test.mjs",
+                "exitCode": 1,
+                "note": "Run before the change to confirm the planned red: 82 cases, 80 pass, 2 fail — the stylesheet case and the README opening-description case. Both green after the change, inside the suite run below."
+              },
+              {
+                "command": "npm --prefix tools/argus-ui test",
+                "exitCode": 0,
+                "note": "The interface's whole suite, 307 cases, 0 failures, nothing skipped or excluded."
+              },
+              {
+                "command": "./test.sh",
+                "exitCode": 0,
+                "note": "Every suite in the repository, 6 suites, all pass, nothing skipped."
+              }
+            ],
+            "blockers": [],
+            "questions": [],
+            "summary": "public/run.js now renders every recorded step — each increment's inside its card and the run's own in a panel between the increments and the codemap — as a native <details> row collapsing to label, preview and time and opening onto the whole return, with styles.css and both .md pages updated to match.",
+            "detail": {
+              "runJs": "tools/argus-ui/public/run.js gained: the import of previewOf from ./format.js; the exported STEP_SHED_NOTE = 'return shed at close'; a file-local isPlainObject helper; the exported stepView(step) returning { label, at, timeMs, hasReturn, text, preview } with timeMs 0 for an unparseable instant (so fmtAgo prints 'never', never NaN) and hasReturn decided by Object.hasOwn plus an undefined check rather than truthiness; a file-local renderStep(step) emitting <li class=\"run-step\"><details><summary> of run-step-label / run-step-preview / run-step-time (data-at through the existing attr() helper) </summary> plus <pre class=\"run-step-return\"> only when a return was recorded; the exported renderSteps(steps) returning '' for a missing, non-array or empty list and otherwise <ol class=\"run-steps\"> of one row per step in the array's own order. renderIncrement calls renderSteps(increment?.steps) as its last child; renderRun reads held.run.steps defensively and emits <div class=\"panel run-steps-panel\"> with a run-steps-head heading between the increments list and the codemap, and nothing when that list is empty.",
+              "css": "tools/argus-ui/public/styles.css gained, appended after .run-codemap pre in the run-view section: .run-steps, .run-step, .run-step > details > summary (grid 160px 1fr auto, list-style none plus the ::-webkit-details-marker rule and a hover), .run-step-label, .run-step-preview (the ellipsis rule that keeps a collapsed row on one line), .run-step-time, .run-step-return (max-height 50vh, overflow auto, pre-wrap, mono, sunken), .run-steps-panel and .run-steps-head.",
+              "docs": "tools/argus-ui/README.md: the opening description now names the uroboros runs and their recorded steps, and the Runs bullet now describes each increment's steps and the run's own, the one-line collapsed form, the expansion to the whole return, and that a closed increment shows none because the recorder sheds them while a shed run step keeps its label and time. tools/argus-ui/CLAUDE.md: the 'No build step and no framework' bullet's run.js sentence now says it renders those steps too. No other production file was touched — app.js, index.html and format.js needed nothing, as the plan's codemap corrections said.",
+              "openNotes": "The test-author's open note that case 16 ('README.md says the run view shows each step, collapsed and expandable') was already vacuously green stands: the README wording written here genuinely describes run steps and their expansion, but that case cannot prove it. No test was edited or added."
+            }
+          }
         }
       ]
     }

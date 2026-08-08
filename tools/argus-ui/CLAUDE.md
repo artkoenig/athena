@@ -20,7 +20,9 @@ here is the user-facing page; this file is for changing the code.
   `app.js` boots the page and owns every browser global; `format.js`,
   `timeline.js`, `context.js` and `run.js` beside it are pure modules returning
   strings, which is what makes them testable without a DOM. `run.js` is the run
-  view — the workflow state the collector serves over `/api/runs`.
+  view — the workflow state the collector serves over `/api/runs`, down to each
+  increment's recorded steps and the run's own, every one collapsed to a line
+  that opens onto the whole return the agent made.
 - **Local only.** No entry on the `PATH`, no skill, no mention in the plugin
   manifest, never deployed. The collector is the half that travels.
 
