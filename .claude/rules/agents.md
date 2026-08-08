@@ -49,9 +49,11 @@ for the agents.
 An agent holds exactly three things: its own page, the shared brief, and
 whatever memory the host project itself provides. Nothing uroboros owns may
 reach it by any other route, or the same agent behaves differently here than in
-a project that installed the plugin. That is why the rulebook is `rulebook.md`
-rather than a `CLAUDE.md` — a `CLAUDE.md` here would load as project memory and
-be inherited, which no installing project can reproduce — and why every page in
+a project that installed the plugin. That is why the rulebook reaches the
+session through the SessionStart hook and is named `rulebook.md` rather than
+`CLAUDE.md` — the hook fires for a session and never for a subagent dispatched
+inside one, while a `CLAUDE.md` here would load as project memory and be
+inherited, which no installing project can reproduce — and why every page in
 `.claude/rules/` carries `paths:`, which `test-repo.sh` checks.
 
 So a page here may only carry what someone developing uroboros needs, and this
