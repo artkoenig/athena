@@ -30,11 +30,11 @@ flowchart LR
     MODE -->|"Direct Mode"| DIRECT["The session does it itself:<br/>read, change, test,<br/>commit, push"]
     MODE -->|"Issue Mode"| CRIT["The session settles<br/>the acceptance criteria"]
     CRIT --> ISSUE[("issue.md<br/>the record of the run")]
-    ISSUE ==> OPEN["planner<br/>opens the run state"]
-    OPEN --> STATE[("backlog.json<br/>every step's return,<br/>and the resume point")]
+    ISSUE ==> OPEN["planner<br/>maps the files, cuts<br/>the backlog"]
+    OPEN --> STATE[("backlog.json<br/>the codemap, every step's<br/>return, and the resume point")]
     STATE ==> RES
 
-    subgraph LOOP["uroboros:loop — one agent per step, each returning a structured object it records into the run state"]
+    subgraph LOOP["one increment of uroboros:agile-loop — one agent per step, each returning a structured object it records into the run state"]
         direction TB
         RES["researcher<br/>writes the implementation plan<br/>and the test plan"]
         TEST["test-author<br/>turns the planned cases<br/>into failing tests"]
@@ -54,9 +54,9 @@ flowchart LR
 The steps are [`researcher`](agents/researcher.md),
 [`test-author`](agents/test-author.md), [`implementer`](agents/implementer.md)
 and [`reviewer`](agents/reviewer.md), run by a script
-([`workflows/loop.js`](workflows/loop.js), which the plugin ships as the
-workflow `uroboros:loop`) and not by an agent, because a subagent cannot start
-another one. Findings from the
+([`workflows/agile-loop.js`](workflows/agile-loop.js), which the plugin ships
+as the workflow `uroboros:agile-loop`) and not by an agent, because a subagent
+cannot start another one. Findings from the
 review open a correction round; after two the loop stops and hands back.
 
 A finding says how much of the chain its correction needs. Where the
@@ -72,7 +72,7 @@ every behaviour unchanged is no finding at all; it goes into the review's
 summary and reaches the human through the pull request, costing no round.
 
 Whether, what and how to test is decided once, by the researcher — the only
-agent that reads the codebase — in the test plan it returns. The test-author is
+agent that reads the codebase in depth — in the test plan it returns. The test-author is
 given that plan and nothing else about the change, the implementer is given the
 implementation plan and never the test plan, and the reviewer is given neither,
 so it checks the result against the intent and remains the check on that plan.
@@ -93,27 +93,33 @@ finished. That is what makes unattended work possible: idea to pull request with
 nobody at the keyboard, and a session picking the work back up hours later
 resumes from the state rather than from a conversation that is gone.
 
-## An issue too big for one pass: `agile-loop`
+## The backlog: the planner says what, the researcher says how
 
-The loop above plans the whole issue once, up front — before anyone has touched
-the code. For a single change that is exactly right. For an issue whose later
-parts depend on what building the earlier ones turns up, it is a guess that
-nothing ever revises, and the run spends its correction rounds on a plan that
-was wrong from the start.
+The chain above works one increment. How many increments the issue is — one,
+or several — is the [`planner`](agents/planner.md)'s first decision, not the
+session's: it opens every run by mapping the files the issue has to change —
+the codemap, one line per file with the reason — and cutting the issue into
+increments, each with its own acceptance criteria. A backlog of one increment
+is a valid cut, and then the chain simply runs once over the whole issue.
 
-The second workflow, [`workflows/agile-loop.js`](workflows/agile-loop.js), does
-not plan it once. A [`planner`](agents/planner.md) cuts the issue into
-increments, each with its own acceptance criteria; the chain above then runs
-once per increment; and after every increment the planner re-cuts the ones still
-open against what that increment actually showed — splitting, merging,
-reordering, sharpening a criterion the researcher found ambiguous, dropping work
-that turned out already done. Steering the rest of the run is the point of the
-arrangement, not an escape hatch in it.
+The planner builds the codemap by searching the codebase, never by designing
+the change: it names files and reasons, and functions, approaches and entry
+points stay the researcher's. Every researcher starts its round from that map
+instead of touring the repository, and reports where the map was wrong or
+incomplete; the planner folds those corrections in when it re-cuts. That is
+the division the run is built on: the planner says what — the increments and
+the files — and the researcher says how.
+
+After every increment the planner re-cuts the ones still open against what
+that increment actually showed — splitting, merging, reordering, sharpening a
+criterion the researcher found ambiguous, dropping work that turned out
+already done — and updates the codemap the same way. Steering the rest of the
+run is the point of the arrangement, not an escape hatch in it.
 
 ```mermaid
 flowchart LR
-    ISSUE[("issue.md")] --> PLAN["planner<br/>cuts the issue<br/>into increments"]
-    PLAN --> BACK[("backlog.json<br/>the current cut, and<br/>every step's return")]
+    ISSUE[("issue.md")] --> PLAN["planner<br/>maps the files, cuts the<br/>issue into increments"]
+    PLAN --> BACK[("backlog.json<br/>the codemap, the current cut,<br/>and every step's return")]
     BACK -->|"the first increment<br/>still open"| CHAIN["researcher → test-author<br/>→ implementer → reviewer<br/>correction rounds as before"]
     CHAIN --> REPLAN["planner<br/>closes that increment and<br/>re-cuts the rest"]
     REPLAN --> BACK
@@ -122,26 +128,20 @@ flowchart LR
 
 Each increment is reviewed on its own: the workflow hands the reviewer that
 increment's criteria and names the increments still to come, so unfinished work
-reads as scheduled rather than as a finding. The planner never reads the
-codebase — the researcher stays the only agent that does — so it re-cuts from
-what the run recorded, and the code facts reach it the same way they reach
-everyone else. Closing an increment sheds the step returns that got it there, so
-the state stays the size of the work still open rather than the size of the run
-so far.
+reads as scheduled rather than as a finding. Closing an increment sheds the
+step returns that got it there, so the state stays the size of the work still
+open rather than the size of the run so far — the codemap is run-level state,
+not a step return, and stays.
 
 The run stops on its own when the backlog empties, and hands back when it will
 not: eight increments spent, one increment worked twice and handed back again
 unchanged, or two increments ending with findings open. Either way the branch is pushed and the
 pull request says what was delivered and what is still open.
 
-Both workflows ship, and the session picks one from the issue it just wrote —
-`uroboros:loop` when the issue is one change, `uroboros:agile-loop` when it is
-several that could land separately. The human may name one instead.
-
 Which mode a task runs in, the human names. **Direct Mode**: the session does it
-itself, no issue file and no subagent. **Issue Mode**: one of the two loops
-above — and for an idea too vague to write criteria for, the
-[`grill`](skills/grill/) skill gets there one question at a time.
+itself, no issue file and no subagent. **Issue Mode**: the loop above — and for
+an idea too vague to write criteria for, the [`grill`](skills/grill/) skill
+gets there one question at a time.
 
 ## It improves itself
 
@@ -160,7 +160,7 @@ claude plugin marketplace add artkoenig/uroboros
 claude plugin install uroboros@uroboros
 ```
 
-A session then gets the subagents, the skills and the `uroboros:loop` workflow
+A session then gets the subagents, the skills and the `uroboros:agile-loop` workflow
 of the current `main`. The plugin pins no version, so every push to `main` is a
 new version, and updates come with the next session, not with a
 re-installation. The rulebook is a page, and the session reads it.
@@ -177,7 +177,7 @@ with the plugin.
 ```mermaid
 flowchart LR
     RB["rulebook.md"] -->|"read at the start of the work"| S["The session"]
-    S -->|"hands it the issue directory"| WF["uroboros:loop"]
+    S -->|"hands it the issue directory"| WF["uroboros:agile-loop"]
     WF -->|"dispatches"| A["An agent"]
     PAGE["its page in agents/"] -->|"its role"| A
     BRIEF["the agent-brief skill"] -->|"preloaded at startup"| A

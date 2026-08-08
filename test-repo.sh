@@ -158,16 +158,13 @@ else
   echo "$handoff_word" | sed 's/^/       /'
 fi
 
-# Both workflows open every run with the same cheap dispatch, so a diverging
-# script would be a second re-entry mechanism no one asked for.
-for f in "$root/workflows/loop.js" "$root/workflows/agile-loop.js"; do
-  name="$(basename "$f")"
-  if grep -q 'backlog.json' "$f" && grep -q 'load-state' "$f"; then
-    ok "$name carries the state loader and the file it loads"
-  else
-    no "$name is missing backlog.json or load-state"
-  fi
-done
+# The workflow opens every run with the same cheap dispatch — the read that
+# makes a restart resume instead of starting over.
+if grep -q 'backlog.json' "$root/workflows/agile-loop.js" && grep -q 'load-state' "$root/workflows/agile-loop.js"; then
+  ok "agile-loop.js carries the state loader and the file it loads"
+else
+  no "agile-loop.js is missing backlog.json or load-state"
+fi
 
 # The reviewer's independence is the one boundary a channel change could
 # quietly erase: recording through the same file it must not read is only
@@ -185,16 +182,17 @@ else
   no "the reviewer's page does not exclude backlog.json from its diff judgment"
 fi
 
-# Decision 5: the planner now opens and closes the plain loop too, not only
-# the incremental one.
-for f in "$root/workflows/loop.js" "$root/workflows/agile-loop.js"; do
-  name="$(basename "$f")"
-  if grep -q 'uroboros:planner' "$f"; then
-    ok "$name dispatches the planner"
-  else
-    no "$name does not dispatch the planner"
-  fi
-done
+# The planner opens the run, closes every increment, and owns the codemap.
+if grep -q 'uroboros:planner' "$root/workflows/agile-loop.js"; then
+  ok "agile-loop.js dispatches the planner"
+else
+  no "agile-loop.js does not dispatch the planner"
+fi
+if grep -q 'codemap' "$root/workflows/agile-loop.js"; then
+  ok "agile-loop.js carries the codemap channel"
+else
+  no "agile-loop.js never mentions the codemap"
+fi
 
 # Every agent records its own step now — the planner's exclusive backlog
 # ownership is what this change ends.
@@ -238,14 +236,6 @@ else
   no "the shared brief does not tell a repeated step what its first run may have left behind"
 fi
 
-# The plain loop's one-increment shape is enforced in the schema, not just
-# asked for in a prompt an agent could misread.
-if grep -q 'maxItems: 1' "$root/workflows/loop.js"; then
-  ok "the plain loop's backlog schema is pinned to exactly one increment"
-else
-  no "the plain loop's schema does not pin maxItems: 1"
-fi
-
 # The helper is the only writer of backlog.json, so it has to exist, parse,
 # and be in the one command that proves the suite green.
 if [ -f "$root/skills/agent-brief/assets/backlog.mjs" ]; then
@@ -279,7 +269,6 @@ echo "=== a run resumes from the state it recorded"
 driver_tmp="$(mktemp -d)"
 cat >"$driver_tmp/driver.js" <<'JS'
 const fs = require('fs');
-const path = require('path');
 
 const file = process.argv[2];
 const mode = process.argv[3];
@@ -292,8 +281,6 @@ function assertEqualArrays(actual, expected, msg) {
   const e = JSON.stringify(expected);
   if (a !== e) fail(msg + ' — expected ' + e + ' got ' + a);
 }
-
-const isAgile = path.basename(file) === 'agile-loop.js';
 
 // Finding 1 (round 1): the two literals used to be 'PLAN-MARKER' and
 // 'TESTPLAN-MARKER', and 'TESTPLAN-MARKER'.includes('PLAN-MARKER') is true —
@@ -320,6 +307,7 @@ const DISJOINT_MARKERS = [
   'MARKER-CUT-QUESTION',
   'MARKER-DIRECT-CLAIM',
   'MARKER-DIRECT-REPRODUCTION',
+  'MARKER-CODEMAP',
 ];
 
 const planReturn = {
@@ -393,14 +381,15 @@ const verdictReturnWithDirectFinding = {
 function increment(id) {
   return { id, title: 'Deliver ' + id, goal: 'Deliver ' + id + '.', criteria: ['does ' + id], status: 'todo', note: '' };
 }
-const decomposeReturnOne = { increments: [increment('i1')], questions: [], summary: 'backlog summary' };
-const decomposeReturnTwo = { increments: [increment('i1'), increment('i2')], questions: [], summary: 'backlog summary' };
+const decomposeReturnOne = { increments: [increment('i1')], codemap: 'MARKER-CODEMAP', questions: [], summary: 'backlog summary' };
+const decomposeReturnTwo = { increments: [increment('i1'), increment('i2')], codemap: 'MARKER-CODEMAP', questions: [], summary: 'backlog summary' };
 
 function resumeBacklog() {
   return {
     version: 1,
     issue: 'docs/issues/x',
-    workflow: isAgile ? 'agile-loop' : 'loop',
+    workflow: 'agile-loop',
+    codemap: 'MARKER-CODEMAP',
     increments: [
       {
         id: 'i1', title: 'Deliver i1', goal: 'Deliver i1.', criteria: ['does i1'], status: 'todo', note: '',
@@ -421,7 +410,8 @@ function questionBacklog() {
   return {
     version: 1,
     issue: 'docs/issues/x',
-    workflow: isAgile ? 'agile-loop' : 'loop',
+    workflow: 'agile-loop',
+    codemap: 'MARKER-CODEMAP',
     increments: [
       {
         id: 'i1', title: 'Deliver i1', goal: 'Deliver i1.', criteria: ['does i1'], status: 'todo', note: '',
@@ -435,11 +425,12 @@ function questionBacklog() {
 }
 
 function doneBacklog() {
-  const closeLabel = isAgile ? 'replan:i1' : 'close:i1';
+  const closeLabel = 'replan:i1';
   return {
     version: 1,
     issue: 'docs/issues/x',
-    workflow: isAgile ? 'agile-loop' : 'loop',
+    workflow: 'agile-loop',
+    codemap: 'MARKER-CODEMAP',
     increments: [
       { id: 'i1', title: 'Deliver i1', goal: 'Deliver i1.', criteria: ['does i1'], status: 'done', note: 'accepted', steps: [] },
     ],
@@ -469,7 +460,8 @@ function recutBacklog(carried) {
   return {
     version: 1,
     issue: 'docs/issues/x',
-    workflow: isAgile ? 'agile-loop' : 'loop',
+    workflow: 'agile-loop',
+    codemap: 'MARKER-CODEMAP',
     increments: [
       { id: 'i1', title: 'MARKER-STALE-CUT', goal: 'Deliver i1.', criteria: ['does i1'], status: 'todo', note: '', steps: [] },
       { id: 'i2', title: 'Deliver i2', goal: 'Deliver i2.', criteria: ['does i2'], status: 'todo', note: '', steps: [] },
@@ -491,6 +483,7 @@ function recutBacklog(carried) {
 // it in the labels it dispatches as well as in the prompts it sends.
 const decomposeReturnRecut = {
   increments: [{ id: 'i3', title: 'MARKER-FRESH-CUT', goal: 'Deliver i3.', criteria: ['does i3'], status: 'todo', note: '' }],
+  codemap: 'MARKER-CODEMAP',
   questions: [],
   summary: 'backlog summary',
 };
@@ -505,6 +498,7 @@ function laterIncrementBacklog() {
     version: 1,
     issue: 'docs/issues/x',
     workflow: 'agile-loop',
+    codemap: 'MARKER-CODEMAP',
     increments: [
       { id: 'i1', title: 'Deliver i1', goal: 'Deliver i1.', criteria: ['does i1'], status: 'done', note: 'accepted', steps: [] },
       { id: 'i2', title: 'Deliver i2', goal: 'Deliver i2.', criteria: ['does i2'], status: 'todo', note: '', steps: [] },
@@ -521,7 +515,7 @@ function laterIncrementBacklog() {
 function contextFor(m) {
   switch (m) {
     case 'w1':
-      return { stateReturn: { exists: false, backlogJson: '', summary: '' }, decomposeReturn: isAgile ? decomposeReturnTwo : decomposeReturnOne, researchReturn: planReturn };
+      return { stateReturn: { exists: false, backlogJson: '', summary: '' }, decomposeReturn: decomposeReturnTwo, researchReturn: planReturn };
     case 'w2':
       return { stateReturn: { exists: true, backlogJson: JSON.stringify(resumeBacklog(), null, 2) + '\n', summary: '' }, decomposeReturn: decomposeReturnOne, researchReturn: planReturn };
     case 'w3':
@@ -620,20 +614,21 @@ async function main() {
   const labels = calls.map((c) => c.label);
 
   if (mode === 'w1') {
-    const closeLabel = isAgile ? 'replan:i1' : 'close:i1';
-    let expected = ['load-state', 'decompose', 'research:i1.0', 'tests:i1.0', 'implement:i1.0', 'review:i1.0', closeLabel];
-    if (isAgile) {
-      expected = expected.concat(['research:i2.0', 'tests:i2.0', 'implement:i2.0', 'review:i2.0', 'replan:i2']);
-    }
-    expected.push('publish');
+    const expected = ['load-state', 'decompose', 'research:i1.0', 'tests:i1.0', 'implement:i1.0', 'review:i1.0', 'replan:i1',
+      'research:i2.0', 'tests:i2.0', 'implement:i2.0', 'review:i2.0', 'replan:i2', 'publish'];
     assertEqualArrays(labels, expected, 'the labels dispatched are not the expected fresh-run sequence');
     const byLabel = (l) => calls.find((c) => c.label === l);
     assertTrue(!!byLabel('decompose') && byLabel('decompose').agentType === 'uroboros:planner', 'decompose is not dispatched as uroboros:planner');
-    assertTrue(!!byLabel(closeLabel) && byLabel(closeLabel).agentType === 'uroboros:planner', closeLabel + ' is not dispatched as uroboros:planner');
+    assertTrue(!!byLabel('replan:i1') && byLabel('replan:i1').agentType === 'uroboros:planner', 'replan:i1 is not dispatched as uroboros:planner');
     assertTrue(!!byLabel('load-state') && byLabel('load-state').agentType === 'general-purpose', 'load-state is not dispatched as general-purpose');
     assertTrue(!!byLabel('publish') && byLabel('publish').agentType === 'general-purpose', 'publish is not dispatched as general-purpose');
-    if (isAgile) {
-      assertTrue(!!byLabel('replan:i2') && byLabel('replan:i2').agentType === 'uroboros:planner', 'replan:i2 is not dispatched as uroboros:planner');
+    assertTrue(!!byLabel('replan:i2') && byLabel('replan:i2').agentType === 'uroboros:planner', 'replan:i2 is not dispatched as uroboros:planner');
+    // The planner said what files the issue changes; every researcher starts
+    // from that map, and the prompt asking for the cut asks for the map too.
+    assertTrue(!!byLabel('decompose') && /codemap/i.test(byLabel('decompose').prompt), "the decompose prompt never asks the planner for the codemap");
+    assertTrue(!!byLabel('replan:i1') && /codemap/i.test(byLabel('replan:i1').prompt), "the replan prompt never asks the planner to update the codemap");
+    for (const l of ['research:i1.0', 'research:i2.0']) {
+      assertTrue(!!byLabel(l) && byLabel(l).prompt.includes('MARKER-CODEMAP'), "the researcher's prompt " + l + ' does not carry the codemap');
     }
   } else if (mode === 'w2') {
     assertTrue(!labels.some((l) => l.startsWith('research:')), 'the researcher was dispatched even though its step was already recorded');
@@ -648,18 +643,21 @@ async function main() {
     assertTrue(!!testsCall, 'the test-author was never dispatched');
     assertTrue(!!testsCall && testsCall.prompt.includes(TESTPLAN_MARKER), "the test-author's prompt does not carry the test plan");
     assertTrue(!!testsCall && !testsCall.prompt.includes(PLAN_MARKER), "the test-author's prompt carries the implementation plan");
+    assertTrue(!!testsCall && !testsCall.prompt.includes('MARKER-CODEMAP'), "the test-author's prompt carries the codemap");
   } else if (mode === 'w5') {
     const implCall = calls.find((c) => c.label.startsWith('implement:'));
     assertTrue(!!implCall, 'the implementer was never dispatched');
     assertTrue(!!implCall && implCall.prompt.includes(PLAN_MARKER), "the implementer's prompt does not carry the plan");
     assertTrue(!!implCall && implCall.prompt.includes('CHECK-MARKER'), "the implementer's prompt does not carry the checks");
     assertTrue(!!implCall && !implCall.prompt.includes(TESTPLAN_MARKER), "the implementer's prompt carries the test plan");
+    assertTrue(!!implCall && !implCall.prompt.includes('MARKER-CODEMAP'), "the implementer's prompt carries the codemap");
   } else if (mode === 'w6') {
     const reviewCall = calls.find((c) => c.label.startsWith('review:'));
     assertTrue(!!reviewCall, 'the reviewer was never dispatched');
     assertTrue(!!reviewCall && reviewCall.prompt.includes('CHECK-MARKER'), "the reviewer's prompt does not carry the checks");
     assertTrue(!!reviewCall && !reviewCall.prompt.includes(PLAN_MARKER), "the reviewer's prompt carries the implementation plan");
     assertTrue(!!reviewCall && !reviewCall.prompt.includes(TESTPLAN_MARKER), "the reviewer's prompt carries the test plan");
+    assertTrue(!!reviewCall && !reviewCall.prompt.includes('MARKER-CODEMAP'), "the reviewer's prompt carries the codemap");
   } else if (mode === 'w7') {
     assertEqualArrays(labels, ['load-state', 'decompose', 'research:i1.0', 'publish'], 'a question from the researcher does not stop the run at publish');
     assertTrue(!!result && !!result.blockedOnHuman, 'the returned result does not carry blockedOnHuman');
@@ -682,7 +680,7 @@ async function main() {
     // load-state and publish, forever. This pins the fix: the step that
     // asked is worked again, with the question and the answer's location in
     // its prompt, and the run makes it all the way to a clean close.
-    const closeLabel = isAgile ? 'replan:i1' : 'close:i1';
+    const closeLabel = 'replan:i1';
     assertEqualArrays(labels,
       ['load-state', 'research:i1.0', 'tests:i1.0', 'implement:i1.0', 'review:i1.0', closeLabel, 'publish'],
       'the resumed run did not work the step that asked the human again, or did not carry on past it');
@@ -697,7 +695,7 @@ async function main() {
     // Round 2, finding 2: nothing exercised a correction round before this
     // mode, so the findings channel (researcher <- reviewer) and the reason
     // sentence (human <- reviewer) were both untested.
-    const closeLabel = isAgile ? 'replan:i1' : 'close:i1';
+    const closeLabel = 'replan:i1';
     assertEqualArrays(labels,
       ['load-state', 'decompose', 'research:i1.0', 'tests:i1.0', 'implement:i1.0', 'review:i1.0',
        'research:i1.1', 'tests:i1.1', 'implement:i1.1', 'review:i1.1', closeLabel, 'publish'],
@@ -720,7 +718,7 @@ async function main() {
     // blockedOnHuman, no log line, and a run that reported itself finished.
     // agile-loop.js already handled the same role in the same position, so
     // this mode runs on both and pins them to one behaviour.
-    const closeLabel = isAgile ? 'replan:i1' : 'close:i1';
+    const closeLabel = 'replan:i1';
     assertEqualArrays(labels,
       ['load-state', 'decompose', 'research:i1.0', 'tests:i1.0', 'implement:i1.0', 'review:i1.0', closeLabel, 'publish'],
       'a question from the closing planner does not stop the run at publish');
@@ -739,7 +737,6 @@ async function main() {
     // attempt's labels, found them all in the in-session recorded map,
     // dispatched nobody and re-read the first attempt's verdict and re-cut.
     // MAX_ATTEMPTS' second chance is what that cost.
-    assertTrue(isAgile, "w12 is the incremental loop's mode: the plain loop never re-cuts");
     assertEqualArrays(labels,
       ['load-state', 'decompose',
        'research:i1.0', 'tests:i1.0', 'implement:i1.0', 'review:i1.0', 'replan:i1',
@@ -759,7 +756,7 @@ async function main() {
     // session rather than replayed. So a planner that read the human's answer,
     // re-cut and rewrote backlog.json had its new cut thrown away, and the run
     // worked the cut the answer had just replaced.
-    const closeLabel = isAgile ? 'replan:i3' : 'close:i3';
+    const closeLabel = 'replan:i3';
     assertEqualArrays(labels,
       ['load-state', 'decompose', 'research:i3.0', 'tests:i3.0', 'implement:i3.0', 'review:i3.0', closeLabel, 'publish'],
       'the run worked the stale cut from the state file instead of the cut the re-dispatched Decompose returned');
@@ -781,10 +778,12 @@ async function main() {
     // baseline(1) is the empty string, and the reviewer was handed the code
     // an earlier iteration had already accepted with nothing naming it. The
     // human's result lost the closed increment's line the same way.
-    assertTrue(isAgile, "w15 is the incremental loop's mode: the plain loop holds one increment");
     assertEqualArrays(labels,
       ['load-state', 'research:i2.0', 'tests:i2.0', 'implement:i2.0', 'review:i2.0', 'replan:i2', 'publish'],
       'the resumed run did not pick up the open increment behind the closed one');
+    const resumedResearch = calls.find((c) => c.label === 'research:i2.0');
+    assertTrue(!!resumedResearch && resumedResearch.prompt.includes('MARKER-CODEMAP'),
+      "the resumed researcher's prompt does not carry the codemap saved in the state file");
     const reviewCall = calls.find((c) => c.label === 'review:i2.0');
     assertTrue(!!reviewCall && reviewCall.prompt.includes('Increment 1 was reviewed and accepted'),
       "the resumed reviewer's prompt does not name the closed increment as its baseline");
@@ -801,7 +800,7 @@ async function main() {
     // afterwards like any other. Without that path the same wrong word in a
     // document costs a researcher, and with it skipping the review as well it
     // would ship unread.
-    const closeLabel = isAgile ? 'replan:i1' : 'close:i1';
+    const closeLabel = 'replan:i1';
     assertEqualArrays(labels,
       ['load-state', 'decompose', 'research:i1.0', 'tests:i1.0', 'implement:i1.0', 'review:i1.0',
        'implement:i1.1', 'review:i1.1', closeLabel, 'publish'],
@@ -846,11 +845,7 @@ run_driver() {
   fi
 }
 
-# Finding 4 (round 1): w4-w7 used to run against loop.js alone, so the same
-# per-role slicing and the same human-question exit could break in
-# agile-loop.js with this whole section still green. w8 (finding 3) is new
-# and joins the loop for the same reason from the start.
-for wf in "$root/workflows/loop.js" "$root/workflows/agile-loop.js"; do
+for wf in "$root/workflows/agile-loop.js"; do
   wf_name="$(basename "$wf")"
   run_driver "$wf" w1 "$wf_name: a fresh run dispatches load-state, decompose, the chain, the close and publish, in order"
   run_driver "$wf" w2 "$wf_name: a resumed run skips the recorded researcher and test-author and starts at the implementer"
@@ -917,11 +912,10 @@ else
 fi
 
 echo
-echo "=== the two workflows coexist"
+echo "=== the workflow registers"
 
-# `loop` and `agile-loop` are two files rather than one with a switch, and the
-# plugin ships the directory, so a new one is live the moment it is written —
-# including one that does not parse. A workflow script is only ever compiled at
+# The plugin ships the `workflows/` directory, so a script there is live the
+# moment it is written — including one that does not parse. A workflow script is only ever compiled at
 # dispatch, minutes into a run, so nothing else in this repository would catch
 # a syntax error before an agent chain had already been paid for. Compiling
 # them here is that check: `new AsyncFunction` parses the body without running
@@ -977,13 +971,11 @@ node -e '
     if (names.has(meta[1])) problems.push(meta[1] + " is declared by " + names.get(meta[1]) + " and " + file);
     names.set(meta[1], file);
   }
-  for (const wanted of ["loop", "agile-loop"]) {
-    if (!names.has(wanted)) problems.push("no workflow declares the name " + wanted);
-  }
+  if (!names.has("agile-loop")) problems.push("no workflow declares the name agile-loop");
   if (problems.length) { console.error(problems.join("; ")); process.exit(1); }
 ' "$root"
 if [ $? -eq 0 ]; then
-  ok "every workflow script parses, keeps meta a pure literal, and declares its own name, loop and agile-loop among them"
+  ok "every workflow script parses, keeps meta a pure literal, and agile-loop is declared"
 else
   no "a workflow script does not parse, its meta is not a pure literal, or two of them claim one name"
 fi
