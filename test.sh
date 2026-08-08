@@ -30,6 +30,11 @@ run "parallel runs: worktrees" \
 run "skills/agent-brief/assets: the backlog recorder" \
   node --test "$root/skills/agent-brief/assets/backlog.test.mjs"
 
+# The hook that pushes a run's state to the collector — the one place in the
+# plugin that talks to one, and the reason the recorder above no longer does.
+run "hooks: the run-state hook" \
+  node --test "$root/hooks/backlog-changed.test.mjs"
+
 # Through the package's own `test` script rather than a `node --test` line
 # repeated here, so the suite this runs stays the suite the tool declares.
 # Zero-dependency, so no install step is needed first.

@@ -68,6 +68,19 @@ exporter takes — reachable, one instance, ingest accepted, record stored — a
 names the step that broke. Exit 1 when anything failed, so it works in a
 script.
 
+## Watch a run while it runs
+
+An issue's run state arrives on its own. A hook of the plugin follows
+`backlog.json`, so every write an agent makes lands at `POST /api/runs` as it
+happens — the cut, each step's return, and the step now in flight while it is
+still in flight. `GET /api/runs` lists what has arrived, `GET /api/runs/<id>`
+is one run whole.
+
+Nothing has to be turned on for it beyond the environment block above, and
+nothing has to be turned off: with no collector named, the hook reads its input
+and stops. The agents of a run know nothing about any of this, which is the
+point — a run must not change because someone is watching it.
+
 ## Read the numbers
 
 The collector serves JSON on its own port:
