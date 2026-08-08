@@ -465,6 +465,29 @@
             "questions": [],
             "summary": "Rewrote the false one-test-file-per-module claim in the 'Tests' section of tools/argus-ui/CLAUDE.md to name the modules that actually carry a suite and to say outright that public/format.js carries no file of its own."
           }
+        },
+        {
+          "label": "review:ui.1",
+          "at": "2026-08-08T12:11:12.663Z",
+          "return": {
+            "summary": "Ran the two listed commands in one call: `npm --prefix tools/argus-ui test` (286 cases, exit 0) and `./test.sh` (6 suites, exit 0); nothing red, nothing skipped. The run view meets criteria 1, 2, 3, 4, 5, 6 and 7 on reading: run.js renders issue/workflow/write-time, the increments in document order with id, title, status, branch and note, closed/open chips and the codemap, all escaped; the closed mark and the status chip come from the recorder's own three closing statuses; the list and the one run come from /api/runs and /api/runs/:id through the page's own api() helper, with the id percent-encoded and the UI proxy passing req.url verbatim; the SSE `run` listener parses only {id, updatedAtMs} and re-fetches, no timer touches run state; the session view keeps its containers and its hello/ingest listeners; independence.test.mjs lists public/run.js in all three of its scans; README and both CLAUDE.md pages describe what landed. Two findings: the re-fetch decision in refreshRuns is verified only by name-matching regexes, and a stale comment in independence.test.mjs. Blast radius checked: the root README's argus-ui line is generic and stays true, the collector's /api/runs contract and the recorder's increment field names (id, title, status, note, branch) match what the view reads, and the two-column grid still resolves because exactly two of the four panes are display:none per view. Observation, no correction needed: in tools/argus-ui/CLAUDE.md the sentence starting `its formatters to build their expectations. Every server binds port 0 ...` runs to about 110 columns while the rest of the file wraps at 80.",
+            "findings": [
+              {
+                "claim": "Nothing would catch a break in the rule that decides when the shown run's state is actually fetched, on boot and on an SSE frame.",
+                "reproduction": "In tools/argus-ui/public/app.js:579 replace `if (changedId === null || !shown || changedId === state.selectedRunId) await loadRun();` with `if (changedId === state.selectedRunId) await loadRun();`. Open the page with no `#/run/` hash against a collector that holds runs: start() calls refreshRuns() with changedId=null and shown=null, loadRun() never runs, state.run stays null and #run-detail renders renderRun(null) -- \"No run yet\" -- instead of the most recently written run; the same mutation drops the live re-fetch when a `run` frame names the shown run and nothing was selected yet. `npm --prefix tools/argus-ui test` still exits 0, because the only assertions about refreshRuns are the four name regexes at tools/argus-ui/test/page.test.mjs:1164-1167 (/loadRuns\\(/, /loadRun\\(/, /renderRunPicker\\(/, /renderRunView\\(/), all of which the mutated function still satisfies, and tools/argus-ui/test/run.test.mjs covers pickRunId, runFrame, incrementCounts and the two renderers but no re-fetch decision.",
+                "criterion": "\"The view opens on the run written to most recently and the reader can switch to any other run the collector holds\" and \"A write to the shown run's state reaches an already-open page live over the collector's Server-Sent-Events stream ... no polling, no reload, no manual refresh.\"",
+                "fix": "needs-plan"
+              },
+              {
+                "claim": "The comment above the browser-global scan in independence.test.mjs still says \"Both files'\" over a list this diff made three files long, and its claim is untrue of the file it added.",
+                "reproduction": "tools/argus-ui/test/independence.test.mjs:85 reads \"Both files' own doc comments use the words document, fetch and location in prose, and context.js exports fetchLaneContext\", while line 88 now reads `const files = ['public/context.js', 'public/timeline.js', 'public/run.js'];` -- three files, and public/run.js's doc comments use none of the words document, fetch or location. Correct the sentence to speak of the listed files rather than \"Both\", and to attribute the prose usage to context.js and timeline.js.",
+                "criterion": "none",
+                "fix": "direct"
+              }
+            ],
+            "reason": "The run view behaves as asked on reading and both suites are green, but the one rule deciding whether the shown run's state is re-fetched -- the rule that makes the view open on the latest run and update live -- is pinned only by regexes matching function names, so inverting it would leave the pane stuck on \"No run yet\" with the suite still exiting 0.",
+            "questions": []
+          }
         }
       ]
     },
