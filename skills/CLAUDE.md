@@ -34,6 +34,23 @@ inside, so they can change without a caller changing.
 Describe each thing once. Where another page owns a rule, point at the owner
 instead of restating it — two descriptions of one rule drift apart.
 
+## Where a rule belongs
+
+A rule that binds more than one skill or more than one agent has one home:
+`agent-brief`, the shared brief every uroboros agent preloads. Write it there,
+and let every other page point at it rather than say it again — the section
+above is why.
+
+Nothing else reaches every agent. The rulebook the session reads is the
+session's alone: a subagent starts no session and inherits none of it, so a
+cross-cutting rule written anywhere but the brief binds only the page it sits
+on, and the agents it was meant for never see it.
+
+What decides is who the rule binds, not what it is about. An instruction only
+one skill can carry out stays on that skill's page even when it reads like
+policy; an instruction every agent has to follow belongs in the brief even
+when it reads like a detail.
+
 ## Assets
 
 Commands and templates live in `assets/`, next to the page that owns them, and
