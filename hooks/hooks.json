@@ -9,6 +9,17 @@
           }
         ]
       }
+    ],
+    "FileChanged": [
+      {
+        "matcher": "backlog.json",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/backlog-changed.mjs"
+          }
+        ]
+      }
     ]
   }
 }

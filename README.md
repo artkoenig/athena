@@ -287,10 +287,17 @@ bin/parse-agent-log --latest auto            # the last session as markdown
 project can measure itself; the [`argus`](skills/argus/) skill carries the
 procedure. It all runs on your own machine — no account, no third-party service.
 
+A run's state gets there on its own: the plugin subscribes to `backlog.json`
+with a `FileChanged` hook, so every write an agent makes reaches the collector
+as it happens. The agents themselves know nothing about it — a run must not
+change because someone is watching it — and with no collector configured the
+hook reads its input and stops.
+
 ## Tests
 
-`bash test.sh` — five suites, one command: the repository's own rules, what a
-parallel run in a worktree needs, and the three tools.
+`bash test.sh` — seven suites, one command: the repository's own rules, what a
+parallel run in a worktree needs, the backlog recorder, the run-state hook, and
+the three tools.
 
 ## Licence
 

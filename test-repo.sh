@@ -191,6 +191,70 @@ else
 fi
 
 echo
+echo "=== the collector is reached from the hook and from nowhere else"
+
+# The recorder every agent writes its step through used to push the document
+# to the collector itself, which put a network call, a two-second timeout and
+# a pair of environment variables inside every step of every run — and gave
+# the workflow's agents a reference to something they are supposed to know
+# nothing about. The FileChanged hook replaced that: the writers write, the
+# session's file watcher notices. These cases pin both halves, because the
+# tree shows neither.
+
+# 1. Wired at all. A hook script nothing dispatches sends nothing, and a run
+#    would look stuck to whoever is watching it with no sign why.
+if grep -q 'FileChanged' "$root/hooks/hooks.json" &&
+  grep -q 'backlog-changed.mjs' "$root/hooks/hooks.json" &&
+  grep -q '"matcher": "backlog.json"' "$root/hooks/hooks.json"; then
+  ok "hooks.json subscribes backlog-changed.mjs to FileChanged on backlog.json"
+else
+  no "hooks.json does not wire backlog-changed.mjs to FileChanged on backlog.json — no run state would reach a collector"
+fi
+
+# 2. The script itself has to exist, parse, and be runnable as the command
+#    hooks.json names — it is invoked directly, so a lost executable bit is a
+#    hook that fails on every change.
+if [ -x "$root/hooks/backlog-changed.mjs" ]; then
+  ok "hooks/backlog-changed.mjs exists and is executable"
+else
+  no "hooks/backlog-changed.mjs is missing or not executable, and hooks.json invokes it directly"
+fi
+if node --check "$root/hooks/backlog-changed.mjs" >/dev/null 2>&1; then
+  ok "the run-state hook parses"
+else
+  no "the run-state hook does not parse (or does not exist)"
+fi
+if grep -q 'hooks/backlog-changed.test.mjs' "$root/test.sh"; then
+  ok "test.sh lists the run-state hook suite"
+else
+  no "test.sh does not list the run-state hook suite"
+fi
+
+# 3. And nowhere else. The workflow, the agent pages, the shared brief and the
+#    recorder are what a run is made of, and none of them may name a
+#    collector, a telemetry variable or argus: an agent that knows it is being
+#    measured is an agent whose run changed because someone watched it. The
+#    argus skill is deliberately outside this file set — it is the session's
+#    own page about measuring, and it reaches no agent.
+telemetry_refs="$(grep -rniE 'argus|OTEL_|UROBOROS_OBS|collector' \
+  "$root"/workflows/*.js "$root"/agents/*.md "$root/skills/agent-brief/SKILL.md" \
+  "$root/skills/agent-brief/assets/backlog.mjs" 2>/dev/null || true)"
+if [ -z "$telemetry_refs" ]; then
+  ok "no workflow, agent page, shared brief or recorder names a collector"
+else
+  no "these reach a run and still name a collector:"
+  echo "$telemetry_refs" | sed "s|^$root/|       |"
+fi
+
+# The same fact one level down: the recorder may not reach a network at all,
+# whatever it calls the thing it reaches.
+if grep -qE '\bfetch\(|node:https?|XMLHttpRequest' "$root/skills/agent-brief/assets/backlog.mjs"; then
+  no "the recorder still opens a connection — writing the state must cost one write and nothing else"
+else
+  ok "the recorder opens no connection: it writes the file and stops there"
+fi
+
+echo
 echo "=== the run state is the channel, and no prose handoff is left"
 
 # The five handoff files used to be the channel between agents and the record
