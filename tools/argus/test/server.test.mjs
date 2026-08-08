@@ -106,6 +106,18 @@ function contentLogsPayloadJson(sessionId, overrides = {}) {
   });
 }
 
+// A backlog-shaped state literal, as `skills/agent-brief/assets/backlog.mjs`
+// writes it — never read from that file, just shaped like its output.
+const backlogState = (overrides = {}) => ({
+  version: 1,
+  issue: 'docs/issues/2026-08-08-x',
+  workflow: 'agile-loop',
+  codemap: '',
+  increments: [{ id: 'one', title: 'First', status: 'todo', note: '', branch: '', steps: [] }],
+  run: { steps: [] },
+  ...overrides,
+});
+
 async function withServer(options, run) {
   const store = new TelemetryStore();
   const server = createServer({ store, endpoint: 'http://test', log: () => {}, ...options });
@@ -487,6 +499,163 @@ test('DELETE /api/data resets the store', async () => {
   });
 });
 
+test("POST /api/runs accepts a run's state and answers with the id it filed it under", async () => {
+  await withServer({}, async ({ base, store }) => {
+    const state = backlogState();
+    const response = await fetch(`${base}/api/runs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: 'run-a', state }),
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(body.ok, true);
+    assert.equal(body.id, 'run-a');
+    assert.equal(typeof body.updatedAtMs, 'number');
+    assert.deepEqual(store.getRun('run-a').state, state);
+  });
+});
+
+test('a POST that names no id is identified by the issue in the state it carries', async () => {
+  await withServer({}, async ({ base }) => {
+    const state = backlogState({ issue: 'docs/issues/2026-08-08-x' });
+    const response = await fetch(`${base}/api/runs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ state }),
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(body.id, 'docs/issues/2026-08-08-x');
+
+    const fetched = await fetch(`${base}/api/runs/${encodeURIComponent('docs/issues/2026-08-08-x')}`);
+    assert.equal(fetched.status, 200);
+    assert.deepEqual((await fetched.json()).state, state);
+  });
+});
+
+test('a second POST for the same run replaces what the collector held', async () => {
+  await withServer({}, async ({ base }) => {
+    const first = backlogState({ issue: 'docs/issues/2026-08-08-a' });
+    const second = backlogState({ issue: 'docs/issues/2026-08-08-b' });
+    for (const state of [first, second]) {
+      const response = await fetch(`${base}/api/runs`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ id: 'run-a', state }),
+      });
+      assert.equal(response.status, 200);
+    }
+
+    const fetched = await (await fetch(`${base}/api/runs/run-a`)).json();
+    assert.deepEqual(fetched.state, second);
+    const list = await (await fetch(`${base}/api/runs`)).json();
+    assert.equal(list.total, 1);
+  });
+});
+
+test('a POST with neither an id nor an issue, and a POST that is not JSON, are both 400 and the collector keeps serving', async () => {
+  await withServer({}, async ({ base }) => {
+    const noId = await fetch(`${base}/api/runs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ state: { increments: [] } }),
+    });
+    assert.equal(noId.status, 400);
+
+    const notJson = await fetch(`${base}/api/runs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{not json',
+    });
+    assert.equal(notJson.status, 400);
+
+    assert.equal((await fetch(`${base}/api/health`)).status, 200);
+    const list = await (await fetch(`${base}/api/runs`)).json();
+    assert.equal(list.total, 0);
+  });
+});
+
+test('GET /api/runs lists the runs held and GET /api/runs/:id serves one whole', async () => {
+  await withServer({}, async ({ base }) => {
+    const stateA = backlogState({ issue: 'docs/issues/2026-08-08-a' });
+    const stateB = backlogState({ issue: 'docs/issues/2026-08-08-b' });
+    await fetch(`${base}/api/runs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: 'run-a', state: stateA }),
+    });
+    await fetch(`${base}/api/runs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: 'run-b', state: stateB }),
+    });
+
+    const list = await (await fetch(`${base}/api/runs`)).json();
+    assert.equal(list.total, 2);
+    assert.deepEqual(list.items.map((item) => item.id).sort(), ['run-a', 'run-b']);
+    for (const item of list.items) {
+      assert.equal(typeof item.updatedAtMs, 'number');
+      assert.ok(!('state' in item), 'the list route must never carry the state');
+    }
+
+    const fetchedA = await (await fetch(`${base}/api/runs/run-a`)).json();
+    assert.deepEqual(fetchedA.state, stateA);
+  });
+});
+
+test('GET /api/runs/:id for a run the collector does not hold is a 404', async () => {
+  await withServer({}, async ({ base }) => {
+    const response = await fetch(`${base}/api/runs/nope`);
+    assert.equal(response.status, 404);
+    const body = await response.json();
+    assert.ok(body.error);
+  });
+});
+
+test('a method the run endpoint does not take is still a 405', async () => {
+  await withServer({}, async ({ base }) => {
+    assert.equal((await fetch(`${base}/api/runs`, { method: 'PUT' })).status, 405);
+    assert.equal((await fetch(`${base}/api/runs`, { method: 'DELETE' })).status, 405);
+  });
+});
+
+test('the run endpoints are gated exactly like the rest of the API', async () => {
+  await withServer({ token: 'secret' }, async ({ base }) => {
+    const state = backlogState();
+    const post = () =>
+      fetch(`${base}/api/runs`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ id: 'run-a', state }),
+      });
+
+    const postUnauth = await post();
+    assert.equal(postUnauth.status, 401);
+    assert.ok(postUnauth.headers.get('www-authenticate'));
+
+    const listUnauth = await fetch(`${base}/api/runs`);
+    assert.equal(listUnauth.status, 401);
+    assert.ok(listUnauth.headers.get('www-authenticate'));
+
+    const getUnauth = await fetch(`${base}/api/runs/run-a`);
+    assert.equal(getUnauth.status, 401);
+    assert.ok(getUnauth.headers.get('www-authenticate'));
+
+    const postAuthed = await fetch(`${base}/api/runs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer secret' },
+      body: JSON.stringify({ id: 'run-a', state }),
+    });
+    assert.equal(postAuthed.status, 200);
+
+    const listAuthed = await fetch(`${base}/api/runs`, { headers: { authorization: 'Bearer secret' } });
+    assert.equal(listAuthed.status, 200);
+
+    assert.equal((await fetch(`${base}/api/runs?token=secret`)).status, 200);
+  });
+});
+
 test('the SSE stream announces ingest', async () => {
   await withServer({}, async ({ base }) => {
     const controller = new AbortController();
@@ -508,6 +677,32 @@ test('the SSE stream announces ingest', async () => {
       frame += decoder.decode((await reader.read()).value);
     }
     assert.match(frame, /"sessionIds":\["s-sse"\]/);
+    controller.abort();
+  });
+});
+
+test('a write to a run state puts a run frame on the stream, naming the run that changed', async () => {
+  await withServer({}, async ({ base }) => {
+    const controller = new AbortController();
+    const response = await fetch(`${base}/api/stream`, { signal: controller.signal });
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+
+    const first = decoder.decode((await reader.read()).value);
+    assert.match(first, /event: hello/);
+
+    await fetch(`${base}/api/runs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: 'run-sse', state: backlogState() }),
+    });
+
+    let frame = '';
+    while (!frame.includes('event: run')) {
+      frame += decoder.decode((await reader.read()).value);
+    }
+    assert.match(frame, /"id":"run-sse"/);
+    assert.match(frame, /"updatedAtMs":\d+/);
     controller.abort();
   });
 });

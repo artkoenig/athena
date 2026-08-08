@@ -7,9 +7,9 @@ helpers module, no mocking library, no fixtures directory.
 
 - `protobuf.test.mjs` — encode/decode round-trips of `src/otlp/protobuf.mjs` against `schema.mjs`: varints, BigInt timestamps, hex ids, unknown fields skipped.
 - `decode.test.mjs` — `decodeExportRequest` normalizing protobuf and OTLP/JSON traces/logs/metrics into flat records; nanosecond-to-ms exactness.
-- `store.test.mjs` — `TelemetryStore` in memory: token/cost rollups, temporality, spans, tool results, todos/tasks, content index and its eviction.
-- `persist.test.mjs` — `JsonlPersistence` round-trip and rotation; then bin-level runs asserting what a start writes into the measured project (`.uroboros-telemetry`, `--persist`, `--open`, `--no-persist`).
-- `server.test.mjs` — the HTTP surface of `createServer`: OTLP ingest (protobuf/JSON/gzip), read API, token gating, content routes, SSE, JSON 404s.
+- `store.test.mjs` — `TelemetryStore` in memory: token/cost rollups, temporality, spans, tool results, todos/tasks, content index and its eviction, run state (`putRunState`/`getRun`/`listRuns`, latest-only, `maxRuns` eviction, subscriber notification with `replay`).
+- `persist.test.mjs` — `JsonlPersistence` round-trip and rotation, including a run state's own line (`runs.jsonl`, latest-only replay, replayed writes not re-persisted); then bin-level runs asserting what a start writes into the measured project (`.uroboros-telemetry`, `--persist`, `--open`, `--no-persist`) and, at that same level, that a run state posted under `--persist` is served again under `--open`.
+- `server.test.mjs` — the HTTP surface of `createServer`: OTLP ingest (protobuf/JSON/gzip), read API, token gating, content routes, SSE, JSON 404s, the run state endpoints (`POST`/`GET /api/runs`, `GET /api/runs/:id`, id-from-issue, replace-on-repost, auth gating, the `event: run` SSE frame).
 - `probe.test.mjs` — `probeCollector` against a real collector and against stub servers playing strangers, login gates and load balancers.
 - `config.test.mjs` — `endpointFor`, `resolveConfig` layering (flags > namespaced env > PaaS env), `runDirName`, `parseDuration`; `argus env` output via the binary.
 - `claude.test.mjs` — pure functions of `claude.mjs`: `sessionNameOf`, `otelEnvFor`, `describeEvent` never leaking a body into a summary.
@@ -26,6 +26,7 @@ helpers module, no mocking library, no fixtures directory.
 - `sacrificialProcess()` (background) — an idle node process for `--exit-with` to watch.
 - `frontedCollector()` (background) — real backgrounded collector behind a proxy that overrides only `/api/config`, for deterministic abnormal answers.
 - payload builders — `tracePayload`/`logsPayloadJson`/`contentLogsPayloadJson` (server), `attrs` (decode), `metric`/`log`/`span`/`bodyLog`/`responseBodyLog` (store, persist): literals shaped like the wire or like decoder output.
+- `backlogState(overrides)` (store, server, persist, defined file-locally in each) — a backlog-shaped state literal (`version`, `issue`, `workflow`, `codemap`, `increments`, `run`), as `skills/agent-brief/assets/backlog.mjs` writes it, with `overrides` spread over it.
 - `fakeBinary(name, script)` (tunnel) — executable shell script; final command is `exec sleep` so SIGTERM reaches it.
 
 ## Where a new case goes

@@ -37,6 +37,159 @@
             ],
             "questions": []
           }
+        },
+        {
+          "label": "tests:collector.0",
+          "at": "2026-08-08T10:21:17.600Z",
+          "return": {
+            "summary": "Added 20 failing unit/integration tests for run-state accept/keep/serve/persist/announce across store.test.mjs, server.test.mjs and persist.test.mjs, plus a file-local backlogState() builder in each and an updated tools/argus/test/CLAUDE.md, all confirmed red against the unimplemented collector.",
+            "cases": [
+              {
+                "case": "store.test.mjs, unit — a run's state is held under its id and served whole",
+                "file": "tools/argus/test/store.test.mjs",
+                "testName": "a run's state is held under its id and served whole",
+                "expected": "getRun('run-a') deep-equals the state under .state, carries issue and workflow copied from it, increments equal to the number of increments in the state, and a numeric updatedAtMs",
+                "got": "TypeError: store.putRunState is not a function"
+              },
+              {
+                "case": "store.test.mjs, unit — a second write for the same run replaces the first, and no history is kept",
+                "file": "tools/argus/test/store.test.mjs",
+                "testName": "a second write for the same run replaces the first, keeping no history",
+                "expected": "getRun('run-a').state is the second write, listRuns().total is 1",
+                "got": "TypeError: store.putRunState is not a function"
+              },
+              {
+                "case": "server.test.mjs, integration — POST /api/runs accepts a run's state and answers with the id it filed it under",
+                "file": "tools/argus/test/server.test.mjs",
+                "testName": "POST /api/runs accepts a run's state and answers with the id it filed it under",
+                "expected": "200; body { ok: true, id: 'run-a', updatedAtMs: <number> }; store.getRun('run-a').state deep-equals what was sent",
+                "got": "AssertionError: Expected values to be strictly equal: 405 !== 200 (route not implemented, falls through the server's generic 'method not allowed' handler)"
+              },
+              {
+                "case": "server.test.mjs, integration — a POST that names no id is identified by the issue in the state it carries",
+                "file": "tools/argus/test/server.test.mjs",
+                "testName": "a POST that names no id is identified by the issue in the state it carries",
+                "expected": "200 with id === 'docs/issues/2026-08-08-x', and GET /api/runs/<encoded issue> answers 200 with that state",
+                "got": "AssertionError: Expected values to be strictly equal: 405 !== 200"
+              },
+              {
+                "case": "server.test.mjs, integration — a second POST for the same run replaces what the collector held",
+                "file": "tools/argus/test/server.test.mjs",
+                "testName": "a second POST for the same run replaces what the collector held",
+                "expected": "GET /api/runs/run-a carries the second state; GET /api/runs has total === 1",
+                "got": "AssertionError: Expected values to be strictly equal: 405 !== 200 (on the first POST)"
+              },
+              {
+                "case": "server.test.mjs, integration (edges) — a POST with neither an id nor an issue, and a POST that is not JSON, are both 400 and the collector keeps serving",
+                "file": "tools/argus/test/server.test.mjs",
+                "testName": "a POST with neither an id nor an issue, and a POST that is not JSON, are both 400 and the collector keeps serving",
+                "expected": "400 for each; GET /api/health is 200 afterwards; GET /api/runs has total === 0",
+                "got": "AssertionError: Expected values to be strictly equal: 405 !== 400 (on the no-id/no-issue POST)"
+              },
+              {
+                "case": "store.test.mjs, unit — listRuns names each run with what a reader picks by, latest write first, and never the state",
+                "file": "tools/argus/test/store.test.mjs",
+                "testName": "listRuns names each run with what a reader picks by, latest write first, and never the state",
+                "expected": "items are ['run-new', 'run-old'] in that order; each item carries id, issue, workflow, increments, updatedAtMs; no item has a state property",
+                "got": "TypeError: store.putRunState is not a function"
+              },
+              {
+                "case": "store.test.mjs, unit (edge: empty) — getRun for a run nobody wrote is null",
+                "file": "tools/argus/test/store.test.mjs",
+                "testName": "getRun for a run nobody wrote is null",
+                "expected": "getRun('nope') is null and listRuns().total is 0 on a fresh store",
+                "got": "TypeError: store.getRun is not a function"
+              },
+              {
+                "case": "store.test.mjs, unit (edge: limit) — past maxRuns the least recently written run is dropped",
+                "file": "tools/argus/test/store.test.mjs",
+                "testName": "past maxRuns the least recently written run is dropped",
+                "expected": "getRun('a') and getRun('c') held, getRun('b') null, listRuns().total is 2 — the re-written 'a' counts as most recent",
+                "got": "TypeError: store.putRunState is not a function"
+              },
+              {
+                "case": "store.test.mjs, unit — clear() drops the run states along with everything else",
+                "file": "tools/argus/test/store.test.mjs",
+                "testName": "clear() drops the run states along with everything else, keeping subscribers attached",
+                "expected": "listRuns().total is 0 and getRun(...) is null after clear(); a subscriber attached before clear() still receives a later run change (notified === 2, matching the existing clear() case's guarantee)",
+                "got": "TypeError: store.putRunState is not a function"
+              },
+              {
+                "case": "server.test.mjs, integration — GET /api/runs lists the runs held and GET /api/runs/:id serves one whole",
+                "file": "tools/argus/test/server.test.mjs",
+                "testName": "GET /api/runs lists the runs held and GET /api/runs/:id serves one whole",
+                "expected": "GET /api/runs has total === 2, both ids present, each item with numeric updatedAtMs and without state; GET /api/runs/<id> answers 200 with state deep-equal to what was posted",
+                "got": "AssertionError: Expected values to be strictly equal: undefined !== 2 (list.total is undefined because /api/runs is unmatched)"
+              },
+              {
+                "case": "server.test.mjs, integration (edge) — GET /api/runs/:id for a run the collector does not hold is a 404",
+                "file": "tools/argus/test/server.test.mjs",
+                "testName": "GET /api/runs/:id for a run the collector does not hold is a 404",
+                "expected": "status 404 and a JSON body carrying an error",
+                "got": "Passes already, but coincidentally: the server's existing generic '/api/* unmatched -> 404 {\"error\":\"unknown endpoint\"}' fallback already satisfies this specific assertion before the route exists, so this case alone does not prove the feature missing — real proof for GET /api/runs/:id comes from case 11's positive (held-run) assertion, which does fail. Once /api/runs/:id is a real route it will need its own explicit not-held check to keep this true, since the generic fallback stops applying to a matched path."
+              },
+              {
+                "case": "server.test.mjs, integration (edge) — a method the run endpoint does not take is still a 405",
+                "file": "tools/argus/test/server.test.mjs",
+                "testName": "a method the run endpoint does not take is still a 405",
+                "expected": "405 — the new POST branch must not have opened the method gate for everything else",
+                "got": "Passes already, but coincidentally: the server already answers any non-GET method on any unmatched /api/* path with 405 {\"error\":\"method not allowed\"}, so PUT/DELETE /api/runs already gets 405 before the route exists. Not a meaningful red today; it will need to keep holding once POST is added to the same path without opening PUT/DELETE."
+              },
+              {
+                "case": "server.test.mjs, integration — the run endpoints are gated exactly like the rest of the API",
+                "file": "tools/argus/test/server.test.mjs",
+                "testName": "the run endpoints are gated exactly like the rest of the API",
+                "expected": "without a credential, POST /api/runs, GET /api/runs and GET /api/runs/run-a each 401 with www-authenticate; with Bearer secret the POST is 200 and GET /api/runs is 200; with ?token=secret GET /api/runs is 200",
+                "got": "AssertionError: Expected values to be strictly equal: 405 !== 200 (the authenticated POST, since /api/runs is not yet a real route)"
+              },
+              {
+                "case": "persist.test.mjs, unit — a run's state survives a restart",
+                "file": "tools/argus/test/persist.test.mjs",
+                "testName": "a run's state survives a restart",
+                "expected": "load counts the run line in its returned total; store B.getRun('run-a').state deep-equals the original and updatedAtMs is the one that was written, not a fresh clock reading",
+                "got": "TypeError: first.putRunState is not a function"
+              },
+              {
+                "case": "persist.test.mjs, unit (edge: repeat) — two writes of one run replay as one run holding the latest state",
+                "file": "tools/argus/test/persist.test.mjs",
+                "testName": "two writes of one run replay as one run holding the latest state",
+                "expected": "after load, listRuns().total is 1 and the state is the second one",
+                "got": "TypeError: store.putRunState is not a function"
+              },
+              {
+                "case": "persist.test.mjs, unit (edge) — a replayed run state is not written back to disk",
+                "file": "tools/argus/test/persist.test.mjs",
+                "testName": "a replayed run state is not written back to disk",
+                "expected": "runs.jsonl does not exist in the directory",
+                "got": "TypeError: store.putRunState is not a function"
+              },
+              {
+                "case": "persist.test.mjs, end-to-end (bin level) — a run state written into a measurement is served again by a collector opened on it",
+                "file": "tools/argus/test/persist.test.mjs",
+                "testName": "a run state written into a measurement is served again by a collector opened on it",
+                "expected": "the second collector (--open dir) answers GET /api/runs with total === 1 and GET /api/runs/<id> with the state posted to the first (--persist dir) collector",
+                "got": "AssertionError: Expected values to be strictly equal: 405 !== 200 (the POST to the first collector)"
+              },
+              {
+                "case": "server.test.mjs, integration — a write to a run's state puts a run frame on the stream, naming the run that changed",
+                "file": "tools/argus/test/server.test.mjs",
+                "testName": "a write to a run state puts a run frame on the stream, naming the run that changed",
+                "expected": "reading on until the accumulated text contains 'event: run', the frame's data carries \"id\":\"run-sse\" and a numeric updatedAtMs",
+                "got": "Hangs indefinitely reading the SSE stream because no 'event: run' frame is ever emitted (no code writes one yet); confirmed as a genuine red via `node --test --test-timeout=4000 --test-name-pattern=\"run frame\" tools/argus/test/server.test.mjs`, which reports failureType 'testTimeoutFailure'. Matches the existing 'the SSE stream announces ingest' case's own unbounded while-loop pattern, which likewise would hang were ingest not implemented."
+              },
+              {
+                "case": "store.test.mjs, unit — a run-state change is announced to subscribers, and a replayed one is marked as replayed",
+                "file": "tools/argus/test/store.test.mjs",
+                "testName": "a run-state change is announced to subscribers, and a replayed one is marked as replayed",
+                "expected": "the first change has kind === 'runState', runId === 'run-a', run.state present and replay === false; the second has replay === true",
+                "got": "TypeError: store.putRunState is not a function"
+              }
+            ],
+            "openQuestions": [
+              "Cases 'GET /api/runs/:id for a run the collector does not hold is a 404' and 'a method the run endpoint does not take is still a 405' already pass against the unimplemented server, because the server's existing generic /api/* fallback already answers unmatched GET paths with 404 and unmatched non-GET methods with 405 — they are not currently red on their own, only case 11's positive assertion and the auth/list/post cases are. The implementer still needs an explicit not-held check inside the real /api/runs/:id handler, since once the route matches, the generic fallback no longer applies."
+            ],
+            "questions": []
+          }
         }
       ]
     },
