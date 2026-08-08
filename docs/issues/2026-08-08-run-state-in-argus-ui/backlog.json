@@ -37,7 +37,7 @@
       ],
       "status": "todo",
       "note": "Criteria sharpened by what the collector increment fixed: the send is judged by the collector serving the same document back under the issue, and the environment is named as the OTLP collector environment uroboros already exports, which is the only such environment in the repository.",
-      "branch": "",
+      "branch": "claude/argus-workflow-backlog-status-nvqmvr--recorder",
       "steps": []
     },
     {
