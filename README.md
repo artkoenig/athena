@@ -152,6 +152,12 @@ attempt: the steps that got it there move into the increment's `attempts`, where
 they stay for whoever reads the run afterwards, and its current steps start empty
 so an increment handed back is worked again rather than skipped as recorded.
 
+One field of it is not a record of something finished: an agent announces itself
+before it works, so the file names the step in flight, the increment it belongs
+to and the prompt it was dispatched with, and drops that the moment the step
+records its return. A step runs for minutes to hours, and without it the state
+said nothing at all in between — which is what a human watching a run sees.
+
 Nothing in the file is ever deleted, so a finished `backlog.json` is the whole
 record of the run — every step return, and the prompt each agent was dispatched
 with, verbatim. What keeps that affordable is that reads are addressed rather

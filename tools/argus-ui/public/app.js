@@ -530,11 +530,50 @@ function renderRunPicker() {
   list.innerHTML = renderRunList({ items: state.runs, selectedId: state.selectedRunId });
 }
 
-/** The run pane, which is the whole of what the run view paints outside the picker. */
+/**
+ * The run pane, which is the whole of what the run view paints outside the
+ * picker.
+ *
+ * A run being worked rewrites this pane on every write, and a rewrite that
+ * closed the panel a reader was reading would make the pane unusable exactly
+ * while the run is interesting. So which panels were open is read off the old
+ * markup by the `data-panel` key `run.js` gives each one, and put back on the
+ * new. The flag is restored in both directions — a panel the reader closed
+ * stays closed — and a key that was not there before keeps whatever default it
+ * rendered with, which is how a newly dispatched step arrives with its prompt
+ * already open.
+ */
 function renderRunView() {
   const container = document.getElementById('run-detail');
   if (!container) return;
+  const remembered = new Map(
+    [...container.querySelectorAll('details[data-panel]')].map((node) => [node.dataset.panel, node.open]),
+  );
   container.innerHTML = renderRun(state.run);
+  if (!remembered.size) return;
+  for (const node of container.querySelectorAll('details[data-panel]')) {
+    const was = remembered.get(node.dataset.panel);
+    if (was !== undefined) node.open = was;
+  }
+}
+
+/**
+ * The ages in the run pane, brought current without repainting it.
+ *
+ * A run writes its state once per step, and a step runs for minutes: between
+ * two writes the only thing in the pane that has moved is how long the step in
+ * flight has been running. Repainting the pane to show that would collapse
+ * every `<details>` the reader had opened, so this rewrites the text of the
+ * elements that carry an instant in `data-at` and touches nothing else. It
+ * fetches nothing — the state it is showing has not changed, only the clock.
+ */
+function retimeRunView() {
+  const container = document.getElementById('run-detail');
+  if (!container) return;
+  for (const node of container.querySelectorAll('[data-at]')) {
+    const at = Date.parse(node.dataset.at ?? '');
+    node.textContent = fmtAgo(Number.isFinite(at) ? at : 0);
+  }
 }
 
 /**
@@ -862,8 +901,11 @@ async function boot() {
   // said what to do about it; retrying adds noise, not a recovery.
   if (!state.authError) connectStream();
   // Sessions age out of "live" and relative timestamps drift; repaint slowly.
+  // The run pane is retimed rather than repainted, so a reader's open panels
+  // survive the tick — and neither half asks the collector for anything.
   setInterval(() => {
     renderSessionList();
+    retimeRunView();
   }, 15_000);
 }
 

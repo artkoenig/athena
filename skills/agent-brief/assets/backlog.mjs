@@ -20,6 +20,14 @@
 // entry's `history`, so the file is the whole record of the run for whoever
 // analyses it afterwards.
 //
+// `running` is the one field that is not a record of something finished. A step
+// takes minutes to hours, and between its dispatch and its return the file said
+// nothing at all — so a human watching a run saw a state that changed once an
+// hour and looked stuck in between. `start` writes the step now in flight and
+// the prompt it was dispatched with into that field, and `record` clears it as
+// the same step returns. It carries no result and nothing reads it to steer:
+// the run's memory is `steps`, and a resumed run asks that and never this.
+//
 // Reads are addressed, never wholesale — that is what keeps the file free to
 // grow. `index` is the run's skeleton with no step content in it, `steps` is
 // the returns of the steps you name, and `codemap` is the map alone. `read`
@@ -55,6 +63,7 @@ const SEND_TIMEOUT_MS = 2000
 const USAGE = [
   'usage:',
   '  backlog.mjs init    <backlogPath> <payloadFile>',
+  '  backlog.mjs start   <backlogPath> <incrementId|-> <label> [promptFile]',
   '  backlog.mjs record  <backlogPath> <incrementId|-> <label> <payloadFile> [promptFile]',
   '  backlog.mjs branch  <backlogPath> <incrementId> <branchName>',
   '  backlog.mjs close   <backlogPath> <incrementId> <status> [note]',
@@ -157,6 +166,10 @@ function init(backlogPath, payloadFile) {
   let runSteps = []
   let runAttempts = []
   let priorCodemap = ''
+  // The step in flight survives a re-cut, and has to: `init` is called from
+  // inside a planner step, so rebuilding the document without this field would
+  // make the planner erase its own marker halfway through its own work.
+  let priorRunning = null
   if (fs.existsSync(backlogPath)) {
     const existing = loadBacklog(backlogPath)
     for (const increment of existing.increments || []) {
@@ -167,6 +180,7 @@ function init(backlogPath, payloadFile) {
     runSteps = (existing.run && Array.isArray(existing.run.steps) && existing.run.steps) || []
     runAttempts = (existing.run && Array.isArray(existing.run.attempts) && existing.run.attempts) || []
     priorCodemap = typeof existing.codemap === 'string' ? existing.codemap : ''
+    priorRunning = existing.running && typeof existing.running === 'object' ? existing.running : null
   }
 
   const backlog = {
@@ -184,11 +198,53 @@ function init(backlogPath, payloadFile) {
     ),
     run: { steps: runSteps, attempts: runAttempts },
   }
+  if (priorRunning) backlog.running = priorRunning
 
   writeBacklog(backlogPath, backlog)
   process.stdout.write(
     `wrote ${backlogPath} with ${backlog.increments.length} increment(s)\n`,
   )
+  return backlog
+}
+
+// `start` is every agent's first call, the counterpart of `record`. It writes
+// the step now in flight — which increment, which label, since when, and the
+// prompt it was dispatched with — into `running`, so the state says what is
+// being worked while it is being worked instead of only once it is done. One
+// slot, overwritten: a run works one step at a time, and a start that finds an
+// older one there is the ordinary case, not a collision.
+//
+// It carries no result and no history. Nothing steers on it, `record` clears
+// it, and a run that died mid-step leaves a stale marker that the next start
+// overwrites — a `running` that stopped moving is exactly the reading a human
+// wants from a run that stopped.
+//
+// A backlog that is not there yet is not an error here. The opening cut runs
+// before `init` has created the file, and there is nothing for it to attach to;
+// a step whose whole purpose is to be seen must never be the thing that stops
+// an agent, so this says so and exits 0.
+function start(backlogPath, incrementId, label, promptFile) {
+  const prompt = promptFile === undefined ? null : readText(promptFile, 'the dispatch prompt')
+  if (!fs.existsSync(backlogPath)) {
+    process.stdout.write(`no backlog at ${backlogPath} yet, nothing announced\n`)
+    return null
+  }
+  const backlog = loadBacklog(backlogPath)
+
+  if (incrementId !== '-') {
+    const increment = (backlog.increments || []).find((i) => i.id === incrementId)
+    if (!increment) fail(`no increment "${incrementId}" in ${backlogPath}`, 1)
+  }
+
+  backlog.running = {
+    increment: incrementId === '-' ? '' : incrementId,
+    label,
+    at: new Date().toISOString(),
+  }
+  if (prompt !== null) backlog.running.prompt = prompt
+
+  writeBacklog(backlogPath, backlog)
+  process.stdout.write(`started ${label}\n`)
   return backlog
 }
 
@@ -237,6 +293,11 @@ function record(backlogPath, incrementId, label, payloadFile, promptFile) {
   } else {
     steps.push(entry)
   }
+
+  // The step that was in flight has landed, so the marker goes. Only its own:
+  // a record for some other label leaves a running step alone, because that is
+  // a marker the step in flight still owns.
+  if (backlog.running && backlog.running.label === label) delete backlog.running
 
   writeBacklog(backlogPath, backlog)
   process.stdout.write(`recorded ${label}\n`)
@@ -525,6 +586,10 @@ switch (command) {
     need(2)
     state = init(rest[0], rest[1])
     break
+  case 'start':
+    need(3)
+    state = start(rest[0], rest[1], rest[2], rest[3])
+    break
   case 'record':
     need(4)
     state = record(rest[0], rest[1], rest[2], rest[3], rest[4])
@@ -567,5 +632,6 @@ switch (command) {
 // the confirmation line is already out, so the send's latency is never in
 // front of the caller's answer, and after every failure path — those all go
 // through fail(), which exits — so a call that wrote nothing sends nothing.
-// `rest[0]` is the backlog path for all four writing subcommands.
+// `rest[0]` is the backlog path for every writing subcommand, and a `start`
+// that found no file to write returns nothing and so sends nothing either.
 if (state) await announce(state, rest[0])

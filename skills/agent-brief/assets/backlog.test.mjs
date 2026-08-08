@@ -247,6 +247,125 @@ test('close ends the attempt without losing it, and leaves the codemap standing'
   assert.equal(backlog.increments[0].branch, 'issue-branch--i1', "the increment's branch survives its close — a blocked increment's unmerged branch stays findable");
 });
 
+// `start` — the step in flight. Its whole job is to be visible while a step is
+// being worked, so these cases pin what it writes, that a record clears it, and
+// that it can never be the thing that stops an agent.
+
+test('start writes the step in flight with its increment, its label and an ISO instant, and prints only the confirmation', () => {
+  const dir = tmpDir();
+  const backlogPath = path.join(dir, 'backlog.json');
+  run(['init', backlogPath, writeJson(dir, 'init.json', backlogTemplate([
+    incrementPayload('i1', 'First'),
+    incrementPayload('i2', 'MARKER-IN-FILE-NOT-PAYLOAD'),
+  ]))]);
+
+  const stdout = run(['start', backlogPath, 'i1', 'research:i1.0']);
+
+  assert.equal(stdout.trim().split('\n').length, 1, 'start prints exactly one line');
+  assert.match(stdout, /research:i1\.0/, 'the confirmation names the label it announced');
+  assert.equal(stdout.includes('MARKER-IN-FILE-NOT-PAYLOAD'), false, 'start must print nothing from the file it wrote to');
+
+  const backlog = JSON.parse(fs.readFileSync(backlogPath, 'utf8'));
+  assert.equal(backlog.running.label, 'research:i1.0');
+  assert.equal(backlog.running.increment, 'i1');
+  assert.match(backlog.running.at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/, 'at is an ISO timestamp');
+  assert.equal(Object.prototype.hasOwnProperty.call(backlog.running, 'prompt'), false, 'no prompt file means no prompt key');
+  assert.deepEqual(backlog.increments.find((i) => i.id === 'i1').steps, [], 'a start records no step: it announces one, and the step is recorded when it returns');
+});
+
+test('start stores the dispatch prompt verbatim, which is where a watching human reads the goal and the criteria', () => {
+  const dir = tmpDir();
+  const backlogPath = path.join(dir, 'backlog.json');
+  run(['init', backlogPath, writeJson(dir, 'init.json', backlogTemplate([incrementPayload('i1', 'First')]))]);
+
+  const prompt = 'Goal: build the thing.\n\nCriteria:\n  - it works\n  - "quoted" & <angled>\n';
+  const promptPath = path.join(dir, 'prompt.txt');
+  fs.writeFileSync(promptPath, prompt);
+  run(['start', backlogPath, 'i1', 'build:i1.0', promptPath]);
+
+  const backlog = JSON.parse(fs.readFileSync(backlogPath, 'utf8'));
+  assert.equal(backlog.running.prompt, prompt, 'the prompt is stored byte for byte, newlines and punctuation included');
+});
+
+test('start with an increment id of "-" announces a run-level step and names no increment', () => {
+  const dir = tmpDir();
+  const backlogPath = path.join(dir, 'backlog.json');
+  run(['init', backlogPath, writeJson(dir, 'init.json', backlogTemplate([incrementPayload('i1', 'First')]))]);
+
+  run(['start', backlogPath, '-', 'replan:i1']);
+
+  const backlog = JSON.parse(fs.readFileSync(backlogPath, 'utf8'));
+  assert.equal(backlog.running.increment, '', 'the run-level scope is an empty increment, never the literal dash');
+  assert.equal(backlog.running.label, 'replan:i1');
+});
+
+test('a start replaces the one before it: a run works one step at a time, so the marker is one slot', () => {
+  const dir = tmpDir();
+  const backlogPath = path.join(dir, 'backlog.json');
+  run(['init', backlogPath, writeJson(dir, 'init.json', backlogTemplate([incrementPayload('i1', 'First')]))]);
+
+  run(['start', backlogPath, 'i1', 'research:i1.0']);
+  run(['start', backlogPath, 'i1', 'tests:i1.0']);
+
+  const backlog = JSON.parse(fs.readFileSync(backlogPath, 'utf8'));
+  assert.equal(backlog.running.label, 'tests:i1.0', 'the later start is the one that stands');
+});
+
+test('recording a step clears its own running marker, and leaves another step\'s alone', () => {
+  const dir = tmpDir();
+  const backlogPath = path.join(dir, 'backlog.json');
+  run(['init', backlogPath, writeJson(dir, 'init.json', backlogTemplate([incrementPayload('i1', 'First')]))]);
+
+  run(['start', backlogPath, 'i1', 'research:i1.0']);
+  run(['record', backlogPath, 'i1', 'research:i1.0', writeJson(dir, 'p.json', { plan: 'x' })]);
+
+  let backlog = JSON.parse(fs.readFileSync(backlogPath, 'utf8'));
+  assert.equal(Object.prototype.hasOwnProperty.call(backlog, 'running'), false, 'the step landed, so the state stops saying it is running');
+
+  run(['start', backlogPath, 'i1', 'tests:i1.0']);
+  run(['record', backlogPath, 'i1', 'research:i1.0', writeJson(dir, 'q.json', { plan: 'y' })]);
+
+  backlog = JSON.parse(fs.readFileSync(backlogPath, 'utf8'));
+  assert.equal(backlog.running.label, 'tests:i1.0', 'a record for some other label must not clear the marker of the step still in flight');
+});
+
+test('a re-cut keeps the step in flight — init runs inside a planner step, and would otherwise erase its own marker', () => {
+  const dir = tmpDir();
+  const backlogPath = path.join(dir, 'backlog.json');
+  run(['init', backlogPath, writeJson(dir, 'init.json', backlogTemplate([incrementPayload('i1', 'First')]))]);
+  run(['start', backlogPath, '-', 'replan:i1']);
+
+  run(['init', backlogPath, writeJson(dir, 'recut.json', backlogTemplate([
+    incrementPayload('i1', 'First'),
+    incrementPayload('i2', 'Second'),
+  ]))]);
+
+  const backlog = JSON.parse(fs.readFileSync(backlogPath, 'utf8'));
+  assert.equal(backlog.running.label, 'replan:i1', 'the planner is still working, and the state still says so');
+});
+
+test('start against an increment id no increment has exits 1 and leaves the file untouched', () => {
+  const dir = tmpDir();
+  const backlogPath = path.join(dir, 'backlog.json');
+  run(['init', backlogPath, writeJson(dir, 'init.json', backlogTemplate([incrementPayload('i1', 'First')]))]);
+  const before = fs.readFileSync(backlogPath, 'utf8');
+
+  const err = runFails(['start', backlogPath, 'nope', 'research:nope.0']);
+  assert.equal(err.status, 1);
+  assert.match(err.stderr, /no increment "nope"/);
+  assert.equal(fs.readFileSync(backlogPath, 'utf8'), before, 'a start that names nothing real changes nothing');
+});
+
+test('start before the state exists exits 0 and creates nothing: the opening cut has nothing to attach to', () => {
+  const dir = tmpDir();
+  const backlogPath = path.join(dir, 'backlog.json');
+
+  const stdout = run(['start', backlogPath, '-', 'decompose']);
+
+  assert.match(stdout, /no backlog/, 'it says why it announced nothing');
+  assert.equal(fs.existsSync(backlogPath), false, '`init` is the only opener — a start must never create the file');
+});
+
 test('record appends a step to the named increment and prints only the confirmation, nothing from the file', () => {
   const dir = tmpDir();
   const backlogPath = path.join(dir, 'backlog.json');
@@ -817,6 +936,9 @@ test('every write sends the document it just wrote to the collector, and read se
     await runAsync(['init', backlogPath, writeJson(dir, 'init.json', backlogTemplate([incrementPayload('i1', 'First')]))], env);
     const afterInit = fs.readFileSync(backlogPath, 'utf8');
 
+    await runAsync(['start', backlogPath, 'i1', 'research:i1.0'], env);
+    const afterStart = fs.readFileSync(backlogPath, 'utf8');
+
     await runAsync(['record', backlogPath, 'i1', 'research:i1.0', writeJson(dir, 'step.json', { plan: 'x' })], env);
     const afterRecord = fs.readFileSync(backlogPath, 'utf8');
 
@@ -828,9 +950,9 @@ test('every write sends the document it just wrote to the collector, and read se
 
     await runAsync(['read', backlogPath], env);
 
-    assert.equal(stub.requests.length, 4, 'read must add no fifth request — it never writes, so it never sends');
+    assert.equal(stub.requests.length, 5, 'read must add no sixth request — it never writes, so it never sends');
 
-    const expectedAfter = [afterInit, afterRecord, afterBranch, afterClose];
+    const expectedAfter = [afterInit, afterStart, afterRecord, afterBranch, afterClose];
     for (const [i, req] of stub.requests.entries()) {
       assert.equal(req.method, 'POST', `request ${i} is a POST`);
       assert.equal(req.url, '/api/runs', `request ${i} lands on the collector's run-state endpoint`);
@@ -840,8 +962,13 @@ test('every write sends the document it just wrote to the collector, and read se
       assert.deepEqual(sent.state, JSON.parse(expectedAfter[i]), `request ${i}'s state is exactly the file as it stood right after that write`);
     }
 
-    const closedState = JSON.parse(stub.requests[3].body).state;
-    assert.equal(closedState.increments[0].status, 'done', "the fourth request's state carries close's own effect");
+    // The whole point of the start: the collector learns a step is being worked
+    // at the moment it is dispatched, not an hour later when it comes back.
+    const startedState = JSON.parse(stub.requests[1].body).state;
+    assert.equal(startedState.running.label, 'research:i1.0', "the second request's state names the step now in flight");
+
+    const closedState = JSON.parse(stub.requests[4].body).state;
+    assert.equal(closedState.increments[0].status, 'done', "the fifth request's state carries close's own effect");
     assert.deepEqual(closedState.increments[0].steps, [], 'the shed is in what the collector gets, not just in the file');
   } finally {
     await stub.close();

@@ -1196,6 +1196,239 @@ body[data-view="runs"] #detail {
   margin-bottom: 6px;
 }
 
+/* --------------------------- the step in flight -------------------------- */
+
+/* The one panel that opens by default, and the only thing in the pane that
+   moves while a step is being worked. It sits above the increments because
+   "what is happening right now" is the question a reader has while a run is
+   going; it is written by the recorder and deleted again the moment the step
+   returns, so it cannot pile up. */
+.run-running {
+  padding: 10px 12px;
+  margin-bottom: 14px;
+  border-left: 2px solid var(--accent);
+  background: var(--panel);
+}
+
+.run-running-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.run-running-label {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--accent);
+}
+
+.run-running-since {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+/* The pulse is the whole of the liveness signal: a state that stopped arriving
+   leaves the dot beating, and the age beside it is what says so. */
+.run-running-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: run-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes run-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .run-running-dot { animation: none; }
+}
+
+.chip.run-chip-live {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.run-increment[data-running="true"] {
+  opacity: 1;
+  border-left-color: var(--accent);
+}
+
+/* ------------------------ what a step actually holds --------------------- */
+
+/* The prompt, the raw JSON and the superseded attempts, each behind its own
+   closed disclosure. A step body that opened with a page of prompt in it would
+   bury the return, and the return is what a step is opened for. */
+.run-panel {
+  margin: 6px 0 8px;
+}
+
+.run-panel > summary {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0;
+  cursor: pointer;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+  list-style: none;
+}
+
+.run-panel > summary::-webkit-details-marker {
+  display: none;
+}
+
+.run-panel > summary:hover {
+  color: var(--text-dim);
+}
+
+.run-panel-hint {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 11px;
+}
+
+.run-prompt {
+  margin: 0 0 8px;
+  padding: 8px;
+  max-height: 50vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  background: var(--bg-sunken);
+  border-radius: var(--radius);
+}
+
+/* An increment's goal and its criteria: the brief every step under the card
+   was working to, which the card used to leave in the file. */
+.run-goal {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.run-criteria {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+
+.run-criteria li {
+  margin-bottom: 2px;
+}
+
+.run-attempt {
+  padding: 6px 0 2px;
+  border-top: 1px solid var(--border);
+}
+
+.run-attempt-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+/* ------------------------- a return, laid out ---------------------------- */
+
+/* A recorded return is any JSON at all, and serialised whole it was technically
+   complete and practically unreadable: braces and escaped newlines around the
+   one sentence the reader came for. Each shape gets the markup it is instead —
+   fields under their own names, lists as lists, prose as prose. */
+.run-return {
+  margin: 4px 0 8px;
+  font-size: 12px;
+}
+
+.run-fields {
+  margin: 0;
+  display: grid;
+  grid-template-columns: minmax(90px, 160px) 1fr;
+  gap: 2px 10px;
+}
+
+.run-fields > dt {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+  padding-top: 3px;
+}
+
+.run-fields > dd {
+  margin: 0;
+  min-width: 0;
+}
+
+/* Nesting reads as nesting: a field whose value is itself a record steps in
+   rather than restarting the two-column grid at the left margin. */
+.run-fields .run-fields {
+  grid-template-columns: minmax(80px, 140px) 1fr;
+}
+
+.run-value-text {
+  margin: 2px 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-dim);
+}
+
+pre.run-value-text,
+.run-value-raw {
+  padding: 6px 8px;
+  max-height: 40vh;
+  overflow: auto;
+  font-family: var(--mono);
+  font-size: 11px;
+  background: var(--bg-sunken);
+  border-radius: var(--radius);
+}
+
+.run-value-scalar {
+  margin: 2px 0;
+}
+
+.run-value-scalar code {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--accent);
+}
+
+.run-value-empty {
+  margin: 2px 0;
+  color: var(--text-faint);
+}
+
+.run-value-list {
+  margin: 2px 0;
+  padding-left: 18px;
+  color: var(--text-dim);
+}
+
+.run-value-list > li {
+  margin-bottom: 3px;
+}
+
+/* A list of records is a stack of cards, not eight bullets of braces. */
+.run-value-list > li > .run-fields {
+  padding: 4px 0;
+  border-top: 1px solid var(--border);
+}
+
 /* -------------------------------- misc --------------------------------- */
 
 .empty {
