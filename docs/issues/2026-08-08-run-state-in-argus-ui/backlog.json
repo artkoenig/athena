@@ -258,6 +258,16 @@
               "openNotes": "The test-author's open note that case 16 ('README.md says the run view shows each step, collapsed and expandable') was already vacuously green stands: the README wording written here genuinely describes run steps and their expansion, but that case cannot prove it. No test was edited or added."
             }
           }
+        },
+        {
+          "label": "review:ui-steps.0",
+          "at": "2026-08-08T13:07:48.990Z",
+          "return": {
+            "findings": [],
+            "reason": "",
+            "questions": [],
+            "summary": "Round 0 of increment ui-steps: accepted, no findings. Both listed commands were run: `npm --prefix tools/argus-ui test` (307 cases, exit 0) and `./test.sh` (all 6 suites, exit 0, confirmed over four consecutive runs; one earlier FAIL of that script happened while I ran a concurrent `git diff` against the same checkout, which collides with test-worktree.sh over the git index lock, and is an artifact of my own parallel call, not of this change). Every criterion is met: renderSteps/renderStep in tools/argus-ui/public/run.js render each increment's steps in backlog order inside the increment card and the run's own steps in a run-steps-panel after the cards, both through the same renderer, each row a native <details> with label, preview and the ISO instant in data-at, opening onto the whole return; stepView guards every field, keys presence rather than truthiness for `return`, falls back from `summary` to the serialised text, and maps an unparseable instant to 0 so fmtAgo prints 'never' rather than NaN; an increment with no steps (empty array or missing field) emits no list at all; renderRunView still replaces #run-detail wholesale from state.run, so a switch or a live write leaves no step of the previous state. Blast radius traced: the run view renders into #run-detail, not #detail, so the delegated click listeners on #detail and #run-list cannot swallow a <summary> click; the .run-step* class names exist nowhere in the base stylesheet; app.js imports no changed signature; independence.test.mjs already names public/run.js and this increment adds no new module. Two observations, neither requiring a correction: (1) the criterion names 'nested objects and arrays' but no test fixture puts an array in a step return - behaviour is unaffected, arrays travel the same JSON.stringify branch the tested nested object does, and the isPlainObject array exclusion is unobservable; (2) because the pane repaints wholesale, an expanded step return collapses on every live write to the shown run, which no criterion asked to preserve."
+          }
         }
       ]
     }
