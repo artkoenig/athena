@@ -1013,3 +1013,307 @@ test('a live refresh still repaints the timeline and the lane panel, dropdown le
     'renderLanePanel must still pass the remembered open state, or a live refresh would snap the dropdown shut',
   );
 });
+
+// Increment ui — the run view beside the session view.
+
+// Criterion 1 and 5 — the shell exists beside the session view's, which is untouched.
+
+test('index.html carries the run view\'s shell, beside the session view\'s, which stays', () => {
+  const indexHtml = fs.readFileSync(path.join(PUBLIC, 'index.html'), 'utf8');
+  for (const needle of [
+    'id="run-sidebar"',
+    'id="run-list"',
+    'id="run-count"',
+    'id="run-detail"',
+    'data-view="sessions"',
+    'data-view="runs"',
+  ]) {
+    assert.ok(indexHtml.includes(needle), `index.html must carry ${needle}`);
+  }
+  assert.match(indexHtml, /<body[^>]*data-view=/, 'the body must carry the data-view flag the stylesheet switches on');
+
+  for (const needle of ['id="session-list"', 'id="session-count"', 'id="detail"', 'id="session-search"', 'id="setup-modal"']) {
+    assert.ok(indexHtml.includes(needle), `the new shell must not arrive by displacing the existing one: ${needle}`);
+  }
+});
+
+test('app.js imports the run module, and index.html still loads app.js as a module', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  assert.match(
+    appJs,
+    /from\s+['"]\.\/run\.js['"]/,
+    'app.js must import run.js so the run view is reached by the page, not tested as an island',
+  );
+
+  const indexHtml = fs.readFileSync(path.join(PUBLIC, 'index.html'), 'utf8');
+  const scriptTags = indexHtml.match(/<script\b[^>]*>/gi) ?? [];
+  const loadsAppAsModule = scriptTags.some(
+    (tag) => /src=["']\/app\.js["']/.test(tag) && /type=["']module["']/.test(tag),
+  );
+  assert.ok(loadsAppAsModule, 'index.html must still load /app.js as a module');
+});
+
+// Criterion 3 — the data comes from the run endpoints and nowhere else.
+
+test('the run loaders ask the collector\'s run endpoints, and nowhere else', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const loadRuns = functionSource(appJs, 'loadRuns');
+  assert.match(loadRuns, /\/api\/runs\b/, 'loadRuns must ask the collector\'s run-list endpoint');
+
+  const loadRun = functionSource(appJs, 'loadRun');
+  assert.match(loadRun, /\/api\/runs\//, 'loadRun must ask the one-run endpoint');
+  assert.match(loadRun, /encodeURIComponent\(/, 'the selected run\'s id must be encoded into the path');
+
+  for (const [name, source] of [['loadRuns', loadRuns], ['loadRun', loadRun]]) {
+    assert.doesNotMatch(source, /\bfetch\(/, `${name} must go through the page's own api() helper, never a bare fetch — this is how "from no other source" is provable as text`);
+    assert.match(source, /\bapi\(/, `${name} must call the page's own api() helper`);
+  }
+});
+
+test('the state literal carries the run view\'s own fields', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const start = appJs.indexOf('const state = {');
+  assert.ok(start >= 0, 'app.js must still declare the state literal');
+  const end = appJs.indexOf('\n};', start);
+  assert.ok(end >= 0, 'the state literal must still close with `\\n};`');
+  const stateSlice = appJs.slice(start, end);
+
+  assert.match(stateSlice, /\bruns:\s*\[\]/, 'the page must hold the runs list it fetched');
+  assert.match(stateSlice, /\bselectedRunId:\s*null\b/, 'no run is selected until one is picked or the collector answers');
+  assert.match(stateSlice, /\brun:\s*null\b/, 'no run state is held until it is fetched');
+  assert.match(stateSlice, /\bview:\s*['"]sessions['"]/, 'the page must open on the session view');
+});
+
+test('pickRunId decides what is shown, from the page\'s own runs and selection', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const loadRuns = functionSource(appJs, 'loadRuns');
+  const slice = callArguments(loadRuns, 'pickRunId');
+  assert.match(slice, /state\.runs\b/, 'pickRunId must be handed the page\'s own list of runs');
+  assert.match(slice, /state\.selectedRunId\b/, 'pickRunId must be handed the page\'s own current selection');
+});
+
+test('clicking a run in the picker switches to it', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const anchor = "document.getElementById('run-list').addEventListener('click'";
+  const start = appJs.indexOf(anchor);
+  assert.ok(start >= 0, 'app.js must delegate a click listener on #run-list');
+  const rest = appJs.slice(start + anchor.length);
+  const next = rest.indexOf('.addEventListener(');
+  const slice = next === -1 ? rest : rest.slice(0, next);
+  assert.match(slice, /\[data-run\]/, 'the run-list click handler must recognise a run row by its data-run attribute');
+  assert.match(slice, /selectRun\(/, 'clicking a run row must select it');
+});
+
+test('the page fetches and paints run state as it opens', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const start = functionSource(appJs, 'start');
+  assert.match(start, /refreshRuns\(/, 'start() must fetch and paint the run view as the page opens, or it would not open on the latest run');
+  assert.match(
+    appJs,
+    /^start\(\);\s*$/m,
+    'start() must actually be invoked at load, not merely declared, or nothing runs it',
+  );
+});
+
+test('switching to a run fetches that run\'s state and repaints the picker and the pane', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const selectRun = functionSource(appJs, 'selectRun');
+  assert.match(selectRun, /state\.selectedRunId\s*=/, 'selectRun must record which run is now selected');
+  assert.match(selectRun, /loadRun\(/, 'selectRun must fetch the newly chosen run\'s state');
+  assert.match(selectRun, /renderRunPicker\(/, 'selectRun must repaint the picker so it marks the new current row');
+  assert.match(selectRun, /renderRunView\(/, 'selectRun must repaint the pane with the newly chosen run\'s state');
+});
+
+test('the view switch is wired to setView, which writes both the state and the body flag', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const wireEvents = functionSource(appJs, 'wireEvents');
+  const viewIdx = wireEvents.indexOf('data-view');
+  assert.ok(viewIdx >= 0, 'wireEvents must wire a listener on [data-view]');
+  const setViewIdx = wireEvents.indexOf('setView(', viewIdx);
+  assert.ok(setViewIdx > viewIdx, 'the [data-view] branch must call setView(...)');
+
+  const setView = functionSource(appJs, 'setView');
+  assert.match(setView, /state\.view\s*=/, 'setView must write the page\'s own view state');
+  assert.match(
+    setView,
+    /document\.body\.dataset\.view\s*=/,
+    'setView must write the body\'s data-view flag the stylesheet switches on',
+  );
+});
+
+// Criterion 4 — live, and not by polling.
+
+test('connectStream reacts to the run frame, and the existing listeners stay', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const connectStream = functionSource(appJs, 'connectStream');
+  assert.match(connectStream, /addEventListener\(\s*['"]hello['"]/, 'the hello listener must still be there');
+  assert.match(connectStream, /addEventListener\(\s*['"]ingest['"]/, 'the ingest listener must still be there');
+
+  const runIdx = connectStream.search(/addEventListener\(\s*['"]run['"]/);
+  assert.ok(runIdx >= 0, 'connectStream must register a run listener');
+  const runListenerTail = connectStream.slice(runIdx);
+  const endIdx = runListenerTail.indexOf(');\n');
+  const runListener = endIdx === -1 ? runListenerTail : runListenerTail.slice(0, endIdx);
+  assert.match(runListener, /runFrame\(/, 'the run listener must parse the frame with runFrame');
+  assert.match(runListener, /refreshRuns\(/, 'the run listener must refresh the run view');
+});
+
+test('refreshRuns loads the runs, the shown run\'s state, and repaints both halves of the view', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const refreshRuns = functionSource(appJs, 'refreshRuns');
+  assert.match(refreshRuns, /loadRuns\(/, 'without loadRuns the picker never learns which runs exist');
+  assert.match(refreshRuns, /loadRun\(/, 'without loadRun the pane never gets the shown run\'s state');
+  assert.match(refreshRuns, /renderRunPicker\(/, 'without renderRunPicker a run frame changes nothing in the picker');
+  assert.match(refreshRuns, /renderRunView\(/, 'without renderRunView a run frame changes nothing in the pane');
+});
+
+test('no timer fetches run state', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const refresh = functionSource(appJs, 'refresh');
+  assert.doesNotMatch(refresh, /loadRuns\(/, 'the ingest-driven refresh must never touch loadRuns');
+  assert.doesNotMatch(refresh, /loadRun\(/, 'the ingest-driven refresh must never touch loadRun');
+  assert.doesNotMatch(refresh, /refreshRuns\(/, 'the ingest-driven refresh must never touch refreshRuns');
+
+  const boot = functionSource(appJs, 'boot');
+  assert.match(boot, /setInterval\(/, 'boot must still schedule the slow repaint');
+  assert.match(boot, /renderSessionList\(\)/, 'the slow repaint must still refresh the session list');
+  for (const name of ['loadRuns', 'loadRun', 'refreshRuns']) {
+    assert.doesNotMatch(boot, new RegExp(`${name}\\(`), `boot's own setInterval body must name no run function: ${name}`);
+  }
+
+  for (const match of appJs.matchAll(/setInterval\(([\s\S]*?)\n\s*\},/g)) {
+    const body = match[1];
+    for (const name of ['loadRuns', 'loadRun', 'refreshRuns']) {
+      assert.doesNotMatch(body, new RegExp(`${name}\\(`), `no setInterval anywhere in app.js may name a run loader: ${name}`);
+    }
+  }
+});
+
+// Criterion 5 — the session view keeps working: the run view paints only in
+// its own containers.
+
+test('the run view paints only in its own containers, and renderDetail is untouched by it', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const renderRunPicker = functionSource(appJs, 'renderRunPicker');
+  assert.match(renderRunPicker, /run-list/, 'renderRunPicker must paint the run list container');
+  assert.match(renderRunPicker, /run-count/, 'renderRunPicker must paint the run count');
+
+  const renderRunView = functionSource(appJs, 'renderRunView');
+  assert.match(renderRunView, /run-detail/, 'renderRunView must paint the run detail container');
+
+  const renderDetail = functionSource(appJs, 'renderDetail');
+  for (const needle of ['run-list', 'run-count', 'run-detail']) {
+    assert.doesNotMatch(
+      renderDetail,
+      new RegExp(needle),
+      `renderDetail must name none of the run view's own containers: ${needle} — the session view stays untouched`,
+    );
+  }
+});
+
+// Criterion 7 — the documentation.
+
+test('README.md describes the run view: the runs list, the increments with status, and the codemap', () => {
+  const readme = fs.readFileSync(path.join(PROJECT, 'README.md'), 'utf8');
+  assert.match(readme, /\brun/i, 'README must describe the run view at all');
+  assert.match(readme, /increment/i, 'README must name the increments the run view shows');
+  assert.match(readme, /status/i, 'README must say the increments show their status');
+  assert.match(readme, /codemap/i, 'README must name the codemap the run view shows');
+});
+
+// Correction round 2 — refreshRuns delegates the re-fetch decision, and reads the shown run before the picker moves it.
+
+test('refreshRuns delegates the re-fetch decision to shouldLoadRun, and reads the shown run before the picker moves it', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  assert.match(
+    appJs,
+    /import\s*\{[^}]*\bshouldLoadRun\b[^}]*\}\s*from\s*['"]\.\/run\.js['"]/,
+    'app.js must import shouldLoadRun from run.js, or the name in refreshRuns resolves to nothing',
+  );
+
+  const refreshRuns = functionSource(appJs, 'refreshRuns');
+  const slice = callArguments(refreshRuns, 'shouldLoadRun');
+  assert.match(slice, /\bchangedId\b/, 'shouldLoadRun must be handed the frame\'s changedId');
+  assert.match(slice, /\bshown\b/, 'shouldLoadRun must be handed the selection as it stood before the picker moved it');
+  assert.match(slice, /state\.selectedRunId\b/, 'shouldLoadRun must be handed the selection the picker settled on');
+
+  assert.match(
+    refreshRuns,
+    /shouldLoadRun\([\s\S]*?\)\)\s*await loadRun\(/,
+    'the one call to loadRun must be the one shouldLoadRun guards',
+  );
+  assert.doesNotMatch(
+    refreshRuns,
+    /changedId\s*===\s*state\.selectedRunId/,
+    'the decision must not be spelled a second time inside app.js — this is the mutation the review reproduced',
+  );
+
+  const shownIdx = refreshRuns.indexOf('const shown');
+  const loadRunsIdx = refreshRuns.indexOf('loadRuns(');
+  assert.ok(shownIdx > -1, 'refreshRuns must read the shown run into a variable of its own');
+  assert.ok(
+    shownIdx < loadRunsIdx,
+    'shown must be read before loadRuns() moves the picker\'s selection, or a shown read afterward is always equal to state.selectedRunId and collapses the rule',
+  );
+});
+
+// Increment ui-steps — the pane repaints wholesale, the stylesheet carries the
+// step rules, the README says what is shown.
+
+test('the run pane is repainted wholesale from the state the page holds', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const renderRunView = functionSource(appJs, 'renderRunView');
+  assert.match(
+    renderRunView,
+    /container\.innerHTML\s*=\s*renderRun\(state\.run\)/,
+    'renderRunView must replace the pane\'s whole markup from state.run — a replacement rather than an append is what leaves no step of the previous state on the page after a switch or a live write',
+  );
+
+  const selectRun = functionSource(appJs, 'selectRun');
+  assert.match(selectRun, /renderRunView\(/, 'selectRun must still call renderRunView( — this is a guard, already green');
+  const refreshRuns = functionSource(appJs, 'refreshRuns');
+  assert.match(refreshRuns, /renderRunView\(/, 'refreshRuns must still call renderRunView( — this is a guard, already green');
+});
+
+test('the stylesheet styles a step collapsed to a line and expanded to its whole return', () => {
+  const css = fs.readFileSync(path.join(PUBLIC, 'styles.css'), 'utf8');
+  for (const cls of ['.run-steps', '.run-step-label', '.run-step-preview', '.run-step-time', '.run-step-return']) {
+    assert.ok(css.includes(cls), `styles.css must style ${cls}`);
+  }
+
+  const returnRuleMatch = css.match(/\.run-step-return\s*\{([^}]*)\}/);
+  assert.ok(returnRuleMatch, '.run-step-return must have a rule of its own');
+  const returnRule = returnRuleMatch[1];
+  assert.match(
+    returnRule,
+    /max-height/,
+    'the return\'s own rule must cap its height, or one enormous return can bury the increments',
+  );
+  assert.match(returnRule, /overflow/, 'the return\'s own rule must scroll rather than overflow the page');
+
+  const runJs = fs.readFileSync(path.join(PUBLIC, 'run.js'), 'utf8');
+  for (const cls of ['run-steps', 'run-step-label', 'run-step-preview', 'run-step-time', 'run-step-return']) {
+    const re = new RegExp(`class="[^"]*\\b${cls}\\b[^"]*"`);
+    assert.match(runJs, re, `public/run.js must emit ${cls} in a class="…" attribute, or the stylesheet rule styles nothing`);
+  }
+});
+
+test('README.md\'s opening description names the runs the interface shows', () => {
+  const readme = fs.readFileSync(path.join(PROJECT, 'README.md'), 'utf8');
+  const start = readme.indexOf('# argus-ui');
+  assert.ok(start >= 0, 'README.md must open with the # argus-ui heading');
+  const nextHeading = readme.indexOf('\n## ', start);
+  assert.ok(nextHeading >= 0, 'README.md must carry a first ## heading after the opening description');
+  const opening = readme.slice(start, nextHeading);
+  assert.match(
+    opening,
+    /\bruns\b/i,
+    'the opening description must name the runs the interface shows, in the plural, not only the sessions',
+  );
+});
+
+test('README.md says the run view shows each step, collapsed and expandable', () => {
+  const readme = fs.readFileSync(path.join(PROJECT, 'README.md'), 'utf8');
+  assert.match(readme, /\bsteps?\b/i, 'README must say the run view shows steps');
+  assert.match(readme, /expand/i, 'README must say a step expands to its whole return');
+});

@@ -1,0 +1,181 @@
+{
+  "version": 1,
+  "issue": "",
+  "workflow": "",
+  "codemap": "The issue is delivered; this map is the record of every file it changed, verified against the diff of the issue branch since main.\n\nThe recorder half:\nskills/agent-brief/assets/backlog.mjs — the only writer of backlog.json; it now also sends the state it just wrote to the configured collector after init, record, branch and close, best-effort and silent.\nskills/agent-brief/assets/backlog.test.mjs — the recorder suite, covering the send, its environment, its silence and its timeout.\nskills/agent-brief/assets/CLAUDE.md — the recorder conventions page, current for the send and its cases.\n\nThe collector half:\ntools/argus/src/server.mjs — the HTTP surface: POST /api/runs, GET /api/runs and GET /api/runs/:id behind the existing token gate, and the SSE frame that names the run that changed.\ntools/argus/src/store.mjs — the in-memory hold of the latest state per run, keyed by run id, with the listing fields a reader picks by.\ntools/argus/src/persist.mjs — the runs.jsonl persistence that carries the held states across a collector restart.\ntools/argus/test/server.test.mjs — the endpoint, authentication and SSE cases.\ntools/argus/test/store.test.mjs — the hold-and-replace cases.\ntools/argus/test/persist.test.mjs — the restart cases.\ntools/argus/README.md — what the collector now accepts and serves.\ntools/argus/CLAUDE.md, tools/argus/test/CLAUDE.md — the collector conventions and its suite conventions.\n\nThe interface half:\ntools/argus-ui/public/run.js — the run view module: the head with issue, workflow and write time, the increment cards with id, title, status, branch and note, the closed and open counts, the codemap, and every recorded step as a collapsed row that expands to the whole return.\ntools/argus-ui/public/app.js — the boot, the run and session view switch, the fetches of GET /api/runs and GET /api/runs/:id through the proxy, and the SSE run frame that re-fetches only the shown run.\ntools/argus-ui/public/index.html — the run pane markup, the run sidebar and the view switch.\ntools/argus-ui/public/styles.css — the run view styling, including a step collapsed to one line and its expanded return bounded in height.\ntools/argus-ui/test/run.test.mjs — the run view suite, required by the one-suite-per-module rule.\ntools/argus-ui/test/page.test.mjs — the page suite that scans public/ for structure, class and import guards and banned strings.\ntools/argus-ui/test/independence.test.mjs — the independence guard, extended to name the run view module in each of its scans.\ntools/argus-ui/README.md — what the interface now shows, opening description included.\ntools/argus-ui/CLAUDE.md, tools/argus-ui/test/CLAUDE.md — the interface conventions and its suite conventions.\n\nProved untouched and dropped from the map: tools/argus-ui/public/format.js — the run view and the step rows reused its existing formatters, so no half of this issue needed a new one.",
+  "increments": [
+    {
+      "id": "collector",
+      "title": "The collector accepts, keeps, persists, serves and announces a run's state",
+      "goal": "Give the collector an endpoint of its own that accepts a run's backlog state, keep the latest state per run, serve the runs it holds and the full state of one over its JSON API behind the existing authentication, persist it across a restart, and announce every write on the existing SSE stream.",
+      "criteria": [
+        "A POST of a run's state to an endpoint of the collector's own is accepted and identified by the issue the state belongs to; a second POST for the same run replaces what was held for it, so the collector keeps the latest state per run and no history.",
+        "The JSON API answers both questions: the runs the collector holds, with what a reader needs to pick one including when each was last written, and the full state of one named run; asking for a run it does not hold answers 404.",
+        "The new ingest endpoint and the new read endpoints sit behind the collector's existing authentication and reject an unauthenticated caller exactly as its other endpoints do.",
+        "A collector restarted against the same measurement directory still serves the run state it held, persisted the way the sessions it already holds are persisted.",
+        "A write to a run's state puts a frame on the existing /api/stream SSE stream that tells an already-connected client which run changed.",
+        "tools/argus/README.md documents what the collector now accepts and serves, and tools/argus/test/CLAUDE.md and tools/argus/CLAUDE.md are current for the cases and modules this increment adds, in the same commit as the change.",
+        "npm --prefix tools/argus test exits 0 and ./test.sh exits 0."
+      ],
+      "status": "done",
+      "note": "Accepted at review round 0 with no findings: npm --prefix tools/argus test (179 cases, exit 0) and ./test.sh (6 suites, exit 0). It fixed the wire contract the two open increments build against: POST /api/runs with the run id and the whole backlog document, GET /api/runs listing id, issue, workflow, increment count and updatedAtMs latest-write-first, GET /api/runs/:id serving one state whole with 404 for a run not held, all behind the existing token gate, persisted as runs.jsonl and announced as an uncoalesced SSE frame naming the run and its update time. Merged into claude/argus-workflow-backlog-status-nvqmvr.",
+      "branch": "claude/argus-workflow-backlog-status-nvqmvr--collector",
+      "steps": []
+    },
+    {
+      "id": "recorder",
+      "title": "The recorder pushes the state it just wrote, best-effort and invisible",
+      "goal": "Make the recorder send the run's state to the configured collector after every write it makes, without changing anything an agent or a workflow sees and without ever costing a run a failure, a wait or a line of output.",
+      "criteria": [
+        "init, record, branch and close each send the state they just wrote to the collector's run-state endpoint, identified by the issue the state belongs to, so a collector that receives it then serves that exact document under that issue.",
+        "The recorder stays the only writer of backlog.json and keeps its zero dependencies; no agent page and no workflow prompt changes, so how an agent calls the recorder is exactly what it is today.",
+        "The collector's address and its credential are read from the same OTLP collector environment the rest of uroboros already exports for argus, and from nowhere else.",
+        "With no collector configured in the environment, the recorder does nothing extra.",
+        "A collector that is unreachable, slow or refusing costs the recorder neither a non-zero exit nor a wait beyond a short timeout, and produces no output: the exit codes and the one confirmation line of every subcommand stay byte-identical to today's.",
+        "skills/agent-brief/assets/CLAUDE.md is current for the cases and helpers this increment adds, in the same commit as the change.",
+        "node --test skills/agent-brief/assets/backlog.test.mjs exits 0 and ./test.sh exits 0."
+      ],
+      "status": "done",
+      "note": "Accepted at review round 0 with no findings: node --test skills/agent-brief/assets/backlog.test.mjs (30 cases, exit 0) and ./test.sh (6 suites, exit 0). One send site after the dispatch switch POSTs { id, state } to <base>/api/runs after init, record, branch and close, read sending nothing; the address and credential come from OTEL_EXPORTER_OTLP_ENDPOINT/OTEL_EXPORTER_OTLP_HEADERS with UROBOROS_OBS_URL/UROBOROS_OBS_TOKEN as the second name pair, and from nowhere else; the send is bounded by a 2s AbortSignal timeout inside an empty catch, so an unreachable, stalling or refusing collector costs no exit code, no wait and no output. Verified on Node 20, 21 and 22. No agent page, workflow prompt or argus file changed. Merged into claude/argus-workflow-backlog-status-nvqmvr.",
+      "branch": "claude/argus-workflow-backlog-status-nvqmvr--recorder",
+      "steps": []
+    },
+    {
+      "id": "ui",
+      "title": "argus-ui gains a run view: one run's backlog, switchable and live",
+      "goal": "Give the interface a run view beside its session view that shows a run's backlog as the collector serves it, opens on the most recently written run, lets the reader switch runs, and updates itself over the collector's SSE stream.",
+      "criteria": [
+        "The interface shows a run view beside its existing session view, holding for the run it shows: the issue and the workflow it belongs to and when it was last written; the increments in the backlog's order, each with its id, title, status, branch and note; a count of how many increments are closed and how many are open; and the codemap.",
+        "A closed increment reads as closed, with its status and its note.",
+        "The view opens on the run written to most recently and the reader can switch to any other run the collector holds, taking both the list of runs and the one run's whole state from the collector's run endpoints and from no other source.",
+        "A write to the shown run's state reaches an already-open page live over the collector's Server-Sent-Events stream, whose frame names only which run changed and when: no polling, no reload, no manual refresh.",
+        "The existing session view, its timeline and its stream handling keep working unchanged beside the new view.",
+        "argus-ui still imports nothing outside itself and reads no uroboros file; test/independence.test.mjs still guards exactly that rule, covers every module this increment adds, and passes.",
+        "tools/argus-ui/README.md says what the interface now shows, and tools/argus-ui/test/CLAUDE.md and tools/argus-ui/CLAUDE.md are current for the cases and modules this increment adds, in the same commit as the change.",
+        "npm --prefix tools/argus-ui test exits 0 and ./test.sh exits 0."
+      ],
+      "status": "done",
+      "note": "Accepted at review round 2 with no findings: npm --prefix tools/argus-ui test (291 cases, exit 0) and ./test.sh (all 6 suites, exit 0). The run view landed as public/run.js with test/run.test.mjs beside it: a Runs/Sessions switch on body[data-view], a second sidebar and detail pane, the head with issue, workflow and write time, the increments in the document's own order with id, title, status, branch and note, closed/open counts, the codemap, and a closed card marked from the recorder's exact done|blocked|dropped set. Data comes only from GET /api/runs and GET /api/runs/:id through the existing proxy, the run opens on the collector's latest-write-first first item, and the SSE run frame re-fetches only when it names the shown run, with no timer touching run state. The session view was only added to. Two review observations left standing and folded into ui-steps: the README's opening sentence still enumerates only sessions, timeline and context, and one CLAUDE.md line runs past the wrap width. Merged into claude/argus-workflow-backlog-status-nvqmvr.",
+      "branch": "claude/argus-workflow-backlog-status-nvqmvr--ui",
+      "steps": []
+    },
+    {
+      "id": "ui-steps",
+      "title": "The run view shows every step recorded, collapsed and expandable",
+      "goal": "Show, inside the run view the previous increment landed, every step the backlog holds: the steps recorded against each increment and the run's own steps, each collapsed to a summary line and expandable to the full return.",
+      "criteria": [
+        "Each increment in the run view shows the steps recorded against it, in the order the backlog holds them, each with its label, its time and its return, collapsed to a summary line and expandable to the full return.",
+        "The run's own steps — the opening cut, each close, the publish — appear in the same view and read the same way.",
+        "An increment the backlog holds with no steps renders as the normal state it is, which is what a closed increment looks like once the recorder has shed its step returns, rather than an empty panel that looks broken.",
+        "A step return of any shape renders: a return missing a field, one carrying nested objects and arrays, and one carrying a very long string each collapse to a line and open to the whole, and none of them crashes the pane or prints undefined or NaN.",
+        "Switching to another run, and a live write to the shown run, both leave the steps on the page matching the state now shown and no step of the state before it.",
+        "The run view's head, its increment cards, its closed and open counts, its codemap and its run picker, and the whole session view beside them, keep working unchanged.",
+        "argus-ui still imports nothing outside itself and reads no uroboros file; test/independence.test.mjs covers every module this increment adds and passes.",
+        "tools/argus-ui/README.md says what the view now shows and its opening description of the interface agrees with it, and tools/argus-ui/CLAUDE.md and tools/argus-ui/test/CLAUDE.md are current for the cases and modules this increment adds, in the same commit as the change.",
+        "npm --prefix tools/argus-ui test exits 0 and ./test.sh exits 0."
+      ],
+      "status": "done",
+      "note": "Accepted at review round 0 with no findings: npm --prefix tools/argus-ui test (307 cases, exit 0) and ./test.sh (all 6 suites, exit 0). The steps render entirely inside public/run.js and styles.css: each increment's steps in backlog order inside its card and the run's own steps in a panel after the cards, both through one renderer, each row a native <details> whose summary carries the label, a preview preferring the return's own summary field, and the instant, opening onto the whole return pretty-printed; an increment with no steps emits no list, and every field is guarded so a missing, null or unparseable value prints neither undefined nor NaN. The pane repaints wholesale, so a switch or a live write leaves no step of the previous state, at the knowingly accepted cost that an expanded step collapses on a live write. app.js, index.html, format.js and independence.test.mjs were not touched. Merged into claude/argus-workflow-backlog-status-nvqmvr.",
+      "branch": "claude/argus-workflow-backlog-status-nvqmvr--ui-steps",
+      "steps": []
+    }
+  ],
+  "run": {
+    "steps": [
+      {
+        "label": "decompose",
+        "at": "2026-08-08T10:04:05.196Z"
+      },
+      {
+        "label": "replan:collector",
+        "at": "2026-08-08T10:37:38.374Z"
+      },
+      {
+        "label": "replan:recorder",
+        "at": "2026-08-08T11:08:22.616Z"
+      },
+      {
+        "label": "replan:ui",
+        "at": "2026-08-08T12:32:19.411Z"
+      },
+      {
+        "label": "replan:ui-steps",
+        "at": "2026-08-08T13:11:15.287Z",
+        "return": {
+          "increments": [
+            {
+              "id": "collector",
+              "title": "The collector accepts, keeps, persists, serves and announces a run's state",
+              "goal": "Give the collector an endpoint of its own that accepts a run's backlog state, keep the latest state per run, serve the runs it holds and the full state of one over its JSON API behind the existing authentication, persist it across a restart, and announce every write on the existing SSE stream.",
+              "criteria": [
+                "A POST of a run's state to an endpoint of the collector's own is accepted and identified by the issue the state belongs to; a second POST for the same run replaces what was held for it, so the collector keeps the latest state per run and no history.",
+                "The JSON API answers both questions: the runs the collector holds, with what a reader needs to pick one including when each was last written, and the full state of one named run; asking for a run it does not hold answers 404.",
+                "The new ingest endpoint and the new read endpoints sit behind the collector's existing authentication and reject an unauthenticated caller exactly as its other endpoints do.",
+                "A collector restarted against the same measurement directory still serves the run state it held, persisted the way the sessions it already holds are persisted.",
+                "A write to a run's state puts a frame on the existing /api/stream SSE stream that tells an already-connected client which run changed.",
+                "tools/argus/README.md documents what the collector now accepts and serves, and tools/argus/test/CLAUDE.md and tools/argus/CLAUDE.md are current for the cases and modules this increment adds, in the same commit as the change.",
+                "npm --prefix tools/argus test exits 0 and ./test.sh exits 0."
+              ],
+              "status": "done",
+              "note": "Accepted at review round 0 with no findings: npm --prefix tools/argus test (179 cases, exit 0) and ./test.sh (6 suites, exit 0). It fixed the wire contract the two open increments build against: POST /api/runs with the run id and the whole backlog document, GET /api/runs listing id, issue, workflow, increment count and updatedAtMs latest-write-first, GET /api/runs/:id serving one state whole with 404 for a run not held, all behind the existing token gate, persisted as runs.jsonl and announced as an uncoalesced SSE frame naming the run and its update time. Merged into claude/argus-workflow-backlog-status-nvqmvr."
+            },
+            {
+              "id": "recorder",
+              "title": "The recorder pushes the state it just wrote, best-effort and invisible",
+              "goal": "Make the recorder send the run's state to the configured collector after every write it makes, without changing anything an agent or a workflow sees and without ever costing a run a failure, a wait or a line of output.",
+              "criteria": [
+                "init, record, branch and close each send the state they just wrote to the collector's run-state endpoint, identified by the issue the state belongs to, so a collector that receives it then serves that exact document under that issue.",
+                "The recorder stays the only writer of backlog.json and keeps its zero dependencies; no agent page and no workflow prompt changes, so how an agent calls the recorder is exactly what it is today.",
+                "The collector's address and its credential are read from the same OTLP collector environment the rest of uroboros already exports for argus, and from nowhere else.",
+                "With no collector configured in the environment, the recorder does nothing extra.",
+                "A collector that is unreachable, slow or refusing costs the recorder neither a non-zero exit nor a wait beyond a short timeout, and produces no output: the exit codes and the one confirmation line of every subcommand stay byte-identical to today's.",
+                "skills/agent-brief/assets/CLAUDE.md is current for the cases and helpers this increment adds, in the same commit as the change.",
+                "node --test skills/agent-brief/assets/backlog.test.mjs exits 0 and ./test.sh exits 0."
+              ],
+              "status": "done",
+              "note": "Accepted at review round 0 with no findings: node --test skills/agent-brief/assets/backlog.test.mjs (30 cases, exit 0) and ./test.sh (6 suites, exit 0). One send site after the dispatch switch POSTs { id, state } to <base>/api/runs after init, record, branch and close, read sending nothing; the address and credential come from OTEL_EXPORTER_OTLP_ENDPOINT/OTEL_EXPORTER_OTLP_HEADERS with UROBOROS_OBS_URL/UROBOROS_OBS_TOKEN as the second name pair, and from nowhere else; the send is bounded by a 2s AbortSignal timeout inside an empty catch, so an unreachable, stalling or refusing collector costs no exit code, no wait and no output. Verified on Node 20, 21 and 22. No agent page, workflow prompt or argus file changed. Merged into claude/argus-workflow-backlog-status-nvqmvr."
+            },
+            {
+              "id": "ui",
+              "title": "argus-ui gains a run view: one run's backlog, switchable and live",
+              "goal": "Give the interface a run view beside its session view that shows a run's backlog as the collector serves it, opens on the most recently written run, lets the reader switch runs, and updates itself over the collector's SSE stream.",
+              "criteria": [
+                "The interface shows a run view beside its existing session view, holding for the run it shows: the issue and the workflow it belongs to and when it was last written; the increments in the backlog's order, each with its id, title, status, branch and note; a count of how many increments are closed and how many are open; and the codemap.",
+                "A closed increment reads as closed, with its status and its note.",
+                "The view opens on the run written to most recently and the reader can switch to any other run the collector holds, taking both the list of runs and the one run's whole state from the collector's run endpoints and from no other source.",
+                "A write to the shown run's state reaches an already-open page live over the collector's Server-Sent-Events stream, whose frame names only which run changed and when: no polling, no reload, no manual refresh.",
+                "The existing session view, its timeline and its stream handling keep working unchanged beside the new view.",
+                "argus-ui still imports nothing outside itself and reads no uroboros file; test/independence.test.mjs still guards exactly that rule, covers every module this increment adds, and passes.",
+                "tools/argus-ui/README.md says what the interface now shows, and tools/argus-ui/test/CLAUDE.md and tools/argus-ui/CLAUDE.md are current for the cases and modules this increment adds, in the same commit as the change.",
+                "npm --prefix tools/argus-ui test exits 0 and ./test.sh exits 0."
+              ],
+              "status": "done",
+              "note": "Accepted at review round 2 with no findings: npm --prefix tools/argus-ui test (291 cases, exit 0) and ./test.sh (all 6 suites, exit 0). The run view landed as public/run.js with test/run.test.mjs beside it: a Runs/Sessions switch on body[data-view], a second sidebar and detail pane, the head with issue, workflow and write time, the increments in the document's own order with id, title, status, branch and note, closed/open counts, the codemap, and a closed card marked from the recorder's exact done|blocked|dropped set. Data comes only from GET /api/runs and GET /api/runs/:id through the existing proxy, the run opens on the collector's latest-write-first first item, and the SSE run frame re-fetches only when it names the shown run, with no timer touching run state. The session view was only added to. Two review observations left standing and folded into ui-steps: the README's opening sentence still enumerates only sessions, timeline and context, and one CLAUDE.md line runs past the wrap width. Merged into claude/argus-workflow-backlog-status-nvqmvr."
+            },
+            {
+              "id": "ui-steps",
+              "title": "The run view shows every step recorded, collapsed and expandable",
+              "goal": "Show, inside the run view the previous increment landed, every step the backlog holds: the steps recorded against each increment and the run's own steps, each collapsed to a summary line and expandable to the full return.",
+              "criteria": [
+                "Each increment in the run view shows the steps recorded against it, in the order the backlog holds them, each with its label, its time and its return, collapsed to a summary line and expandable to the full return.",
+                "The run's own steps — the opening cut, each close, the publish — appear in the same view and read the same way.",
+                "An increment the backlog holds with no steps renders as the normal state it is, which is what a closed increment looks like once the recorder has shed its step returns, rather than an empty panel that looks broken.",
+                "A step return of any shape renders: a return missing a field, one carrying nested objects and arrays, and one carrying a very long string each collapse to a line and open to the whole, and none of them crashes the pane or prints undefined or NaN.",
+                "Switching to another run, and a live write to the shown run, both leave the steps on the page matching the state now shown and no step of the state before it.",
+                "The run view's head, its increment cards, its closed and open counts, its codemap and its run picker, and the whole session view beside them, keep working unchanged.",
+                "argus-ui still imports nothing outside itself and reads no uroboros file; test/independence.test.mjs covers every module this increment adds and passes.",
+                "tools/argus-ui/README.md says what the view now shows and its opening description of the interface agrees with it, and tools/argus-ui/CLAUDE.md and tools/argus-ui/test/CLAUDE.md are current for the cases and modules this increment adds, in the same commit as the change.",
+                "npm --prefix tools/argus-ui test exits 0 and ./test.sh exits 0."
+              ],
+              "status": "done",
+              "note": "Accepted at review round 0 with no findings: npm --prefix tools/argus-ui test (307 cases, exit 0) and ./test.sh (all 6 suites, exit 0). The steps render entirely inside public/run.js and styles.css: each increment's steps in backlog order inside its card and the run's own steps in a panel after the cards, both through one renderer, each row a native <details> whose summary carries the label, a preview preferring the return's own summary field, and the instant, opening onto the whole return pretty-printed; an increment with no steps emits no list, and every field is guarded so a missing, null or unparseable value prints neither undefined nor NaN. The pane repaints wholesale, so a switch or a live write leaves no step of the previous state, at the knowingly accepted cost that an expanded step collapses on a live write. app.js, index.html, format.js and independence.test.mjs were not touched. Merged into claude/argus-workflow-backlog-status-nvqmvr."
+            }
+          ],
+          "codemap": "The issue is delivered; this map is the record of every file it changed, verified against the diff of the issue branch since main.\n\nThe recorder half:\nskills/agent-brief/assets/backlog.mjs — the only writer of backlog.json; it now also sends the state it just wrote to the configured collector after init, record, branch and close, best-effort and silent.\nskills/agent-brief/assets/backlog.test.mjs — the recorder suite, covering the send, its environment, its silence and its timeout.\nskills/agent-brief/assets/CLAUDE.md — the recorder conventions page, current for the send and its cases.\n\nThe collector half:\ntools/argus/src/server.mjs — the HTTP surface: POST /api/runs, GET /api/runs and GET /api/runs/:id behind the existing token gate, and the SSE frame that names the run that changed.\ntools/argus/src/store.mjs — the in-memory hold of the latest state per run, keyed by run id, with the listing fields a reader picks by.\ntools/argus/src/persist.mjs — the runs.jsonl persistence that carries the held states across a collector restart.\ntools/argus/test/server.test.mjs — the endpoint, authentication and SSE cases.\ntools/argus/test/store.test.mjs — the hold-and-replace cases.\ntools/argus/test/persist.test.mjs — the restart cases.\ntools/argus/README.md — what the collector now accepts and serves.\ntools/argus/CLAUDE.md, tools/argus/test/CLAUDE.md — the collector conventions and its suite conventions.\n\nThe interface half:\ntools/argus-ui/public/run.js — the run view module: the head with issue, workflow and write time, the increment cards with id, title, status, branch and note, the closed and open counts, the codemap, and every recorded step as a collapsed row that expands to the whole return.\ntools/argus-ui/public/app.js — the boot, the run and session view switch, the fetches of GET /api/runs and GET /api/runs/:id through the proxy, and the SSE run frame that re-fetches only the shown run.\ntools/argus-ui/public/index.html — the run pane markup, the run sidebar and the view switch.\ntools/argus-ui/public/styles.css — the run view styling, including a step collapsed to one line and its expanded return bounded in height.\ntools/argus-ui/test/run.test.mjs — the run view suite, required by the one-suite-per-module rule.\ntools/argus-ui/test/page.test.mjs — the page suite that scans public/ for structure, class and import guards and banned strings.\ntools/argus-ui/test/independence.test.mjs — the independence guard, extended to name the run view module in each of its scans.\ntools/argus-ui/README.md — what the interface now shows, opening description included.\ntools/argus-ui/CLAUDE.md, tools/argus-ui/test/CLAUDE.md — the interface conventions and its suite conventions.\n\nProved untouched and dropped from the map: tools/argus-ui/public/format.js — the run view and the step rows reused its existing formatters, so no half of this issue needed a new one.",
+          "questions": [],
+          "summary": "Landed and closed ui-steps, and the backlog is now complete: all four increments are done and nothing is open. Merge first: claude/argus-workflow-backlog-status-nvqmvr--ui-steps fast-forwarded into claude/argus-workflow-backlog-status-nvqmvr with no conflict, and the issue branch is pushed at 504c7bb. ui-steps closed as done on the review's round-0 acceptance with no findings (npm --prefix tools/argus-ui test, 307 cases, exit 0; ./test.sh, all 6 suites, exit 0). Re-cut: nothing to re-cut. Every acceptance criterion of the issue now sits in a closed increment - the recorder's send, its invisibility and its environment in recorder; the collector's ingest, its latest-state-per-run, its authenticated read endpoints, its restart persistence and its SSE frame in collector; the run view's head, increments, counts, codemap, closed-increment rendering, most-recent-first opening and run switching, and the live re-fetch on the client side, in ui; the per-increment and run-level step rows, collapsed and expandable, and the arbitrary-return and switch-and-live-write cases, in ui-steps; and the independence guard, the per-half documentation and a green ./test.sh in each of the four. So I added no increment and dropped none: four of at most eight are spent and the issue is delivered, which leaves the publish to the caller. The two observations the ui-steps review left standing are knowingly accepted, not deferred work: no test fixture puts an array in a step return (arrays travel the same serialisation branch a tested nested object does, so behaviour is unobserved rather than unhandled), and an expanded step collapses on a live write because the pane repaints wholesale, which no criterion asked to preserve. Codemap updated against what this increment showed: run.js and styles.css carried the whole step rendering with only README.md, CLAUDE.md, test/CLAUDE.md, page.test.mjs and run.test.mjs beside them, so app.js, index.html and independence.test.mjs keep only the reasons the earlier increments proved, and public/format.js is dropped as proved untouched by both interface increments. One thing a later run may want to settle, recorded rather than asked: this backlog's own issue and workflow fields are empty strings, so the recorder files this run under its directory path and the run view shows an empty issue for it; I left them empty because changing issue changes the run id the recorder sends and would file a second run in any collector holding this one."
+        }
+      }
+    ]
+  }
+}

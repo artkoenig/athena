@@ -7,7 +7,7 @@
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='6' fill='none' stroke='%237c9cff' stroke-width='2'/%3E%3Ccircle cx='8' cy='8' r='2' fill='%237c9cff'/%3E%3C/svg%3E" />
     <link rel="stylesheet" href="/styles.css" />
   </head>
-  <body>
+  <body data-view="sessions">
     <header class="topbar">
       <div class="brand">
         <span class="brand-mark" aria-hidden="true"></span>
@@ -22,6 +22,10 @@
           <span class="visually-hidden">Filter sessions</span>
           <input id="session-search" type="search" placeholder="Filter sessions…" autocomplete="off" />
         </label>
+        <nav class="view-switch" aria-label="View">
+          <button type="button" class="view-button" data-view="sessions" aria-current="true">Sessions</button>
+          <button type="button" class="view-button" data-view="runs" aria-current="false">Runs</button>
+        </nav>
         <button type="button" class="ghost-button" id="setup-button">Setup</button>
         <span class="live" id="live-indicator" data-state="connecting">
           <span class="live-dot" aria-hidden="true"></span>
@@ -31,7 +35,7 @@
     </header>
 
     <main class="layout">
-      <aside class="sidebar" aria-label="Sessions">
+      <aside class="sidebar" id="session-sidebar" aria-label="Sessions">
         <div class="sidebar-head">
           <h2>Sessions</h2>
           <span class="counter" id="session-count">0</span>
@@ -59,6 +63,16 @@
           </p>
         </div>
       </section>
+
+      <aside class="sidebar" id="run-sidebar" aria-label="Runs">
+        <div class="sidebar-head">
+          <h2>Runs</h2>
+          <span class="counter" id="run-count">0</span>
+        </div>
+        <ol class="run-list" id="run-list"></ol>
+      </aside>
+
+      <section class="detail" id="run-detail" aria-label="Run"></section>
     </main>
 
     <dialog class="modal" id="setup-modal">

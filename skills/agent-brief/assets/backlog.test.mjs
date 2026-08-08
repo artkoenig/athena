@@ -1,10 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
+import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
+
+const execFileAsync = promisify(execFile);
 
 // The CLI under test. Resolved relative to this file so the suite runs the
 // same way from a checkout, a plugin cache or an installing project.
@@ -20,8 +24,24 @@ function writeJson(dir, name, value) {
   return file;
 }
 
+// The four names the recorder's best-effort send reads. Stripped from every
+// pre-existing case's environment so a developer with argus env evaluated in
+// their shell never has this suite talking to a real collector.
+const OTLP_ENV_NAMES = [
+  'OTEL_EXPORTER_OTLP_ENDPOINT',
+  'OTEL_EXPORTER_OTLP_HEADERS',
+  'UROBOROS_OBS_URL',
+  'UROBOROS_OBS_TOKEN',
+];
+
+function cleanEnv(extra = {}) {
+  const env = { ...process.env };
+  for (const name of OTLP_ENV_NAMES) delete env[name];
+  return { ...env, ...extra };
+}
+
 function run(args) {
-  return execFileSync(process.execPath, [cli, ...args], { encoding: 'utf8' });
+  return execFileSync(process.execPath, [cli, ...args], { encoding: 'utf8', env: cleanEnv() });
 }
 
 // Runs the CLI expecting it to exit non-zero, and returns the error object
@@ -29,12 +49,67 @@ function run(args) {
 // call unexpectedly succeeds, that is itself the test failure.
 function runFails(args) {
   try {
-    run(args);
+    execFileSync(process.execPath, [cli, ...args], { encoding: 'utf8', env: cleanEnv() });
   } catch (err) {
     if (err.status !== undefined) return err;
     throw err;
   }
   throw new Error('expected `' + args.join(' ') + '` to exit non-zero, it exited 0');
+}
+
+// Spawned asynchronously so the event loop stays free to answer a
+// collectorStub in this same process — execFileSync would block that loop
+// and every send would hit its own timeout. Resolves to { stdout, stderr };
+// rejects on a non-zero exit or on the 10s child timeout expiring.
+function runAsync(args, env, options = {}) {
+  return execFileAsync(process.execPath, [cli, ...args], {
+    encoding: 'utf8',
+    env,
+    timeout: 10000,
+    ...options,
+  });
+}
+
+// A real node:http server on 127.0.0.1:0, nothing mocked. Records every
+// request it receives as { method, url, headers, body } (body as the raw
+// string) and by default answers 200 {"ok":true}; `options.status` and
+// `options.body` answer something else, `options.headers` adds response
+// headers, and `options.hang: true` never answers at all — the socket is
+// left open for the recorder's own abort to give up on.
+function collectorStub(options = {}) {
+  const { status = 200, body = { ok: true }, headers = {}, hang = false } = options;
+  const requests = [];
+  const server = http.createServer((req, res) => {
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => {
+      requests.push({
+        method: req.method,
+        url: req.url,
+        headers: req.headers,
+        body: Buffer.concat(chunks).toString('utf8'),
+      });
+      if (hang) return;
+      res.writeHead(status, { 'content-type': 'application/json', ...headers });
+      res.end(JSON.stringify(body));
+    });
+  });
+  return new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => {
+      const { port } = server.address();
+      resolve({
+        url: `http://127.0.0.1:${port}`,
+        requests,
+        // closeAllConnections() first: the never-answering case leaves a
+        // socket open that a plain close() would wait on forever, hanging
+        // the suite at exit instead of just this one server.
+        close: () => new Promise((done) => {
+          server.closeAllConnections();
+          server.close(() => done());
+        }),
+      });
+    });
+  });
 }
 
 const backlogTemplate = (increments) => ({
@@ -726,4 +801,213 @@ test('a successful record leaves no .tmp file behind', () => {
   run(['record', backlogPath, 'i1', 'research:i1.0', writeJson(dir, 'payload.json', { plan: 'x' })]);
 
   assert.equal(fs.existsSync(backlogPath + '.tmp'), false, 'the atomic write via rename leaves nothing behind after a successful call');
+});
+
+// The best-effort push to a collector. Shared mechanics across every
+// subcommand that writes, not one command's own rules, so it sits here at
+// the end rather than inside any one command's block.
+
+test('every write sends the document it just wrote to the collector, and read sends nothing', async () => {
+  const dir = tmpDir();
+  const backlogPath = path.join(dir, 'backlog.json');
+  const stub = await collectorStub();
+  try {
+    const env = cleanEnv({ OTEL_EXPORTER_OTLP_ENDPOINT: stub.url });
+
+    await runAsync(['init', backlogPath, writeJson(dir, 'init.json', backlogTemplate([incrementPayload('i1', 'First')]))], env);
+    const afterInit = fs.readFileSync(backlogPath, 'utf8');
+
+    await runAsync(['record', backlogPath, 'i1', 'research:i1.0', writeJson(dir, 'step.json', { plan: 'x' })], env);
+    const afterRecord = fs.readFileSync(backlogPath, 'utf8');
+
+    await runAsync(['branch', backlogPath, 'i1', 'some-branch'], env);
+    const afterBranch = fs.readFileSync(backlogPath, 'utf8');
+
+    await runAsync(['close', backlogPath, 'i1', 'done', 'accepted'], env);
+    const afterClose = fs.readFileSync(backlogPath, 'utf8');
+
+    await runAsync(['read', backlogPath], env);
+
+    assert.equal(stub.requests.length, 4, 'read must add no fifth request — it never writes, so it never sends');
+
+    const expectedAfter = [afterInit, afterRecord, afterBranch, afterClose];
+    for (const [i, req] of stub.requests.entries()) {
+      assert.equal(req.method, 'POST', `request ${i} is a POST`);
+      assert.equal(req.url, '/api/runs', `request ${i} lands on the collector's run-state endpoint`);
+      assert.match(req.headers['content-type'] || '', /application\/json/, `request ${i} carries a JSON content-type`);
+      const sent = JSON.parse(req.body);
+      assert.equal(sent.id, 'docs/issues/x', `request ${i} identifies the run by the issue the state names`);
+      assert.deepEqual(sent.state, JSON.parse(expectedAfter[i]), `request ${i}'s state is exactly the file as it stood right after that write`);
+    }
+
+    const closedState = JSON.parse(stub.requests[3].body).state;
+    assert.equal(closedState.increments[0].status, 'done', "the fourth request's state carries close's own effect");
+    assert.deepEqual(closedState.increments[0].steps, [], 'the shed is in what the collector gets, not just in the file');
+  } finally {
+    await stub.close();
+  }
+});
+
+test('the confirmation lines and the exit codes are unchanged with a collector configured', async () => {
+  const dir = tmpDir();
+  const backlogPath = path.join(dir, 'backlog.json');
+  const stub = await collectorStub();
+  try {
+    const env = cleanEnv({ OTEL_EXPORTER_OTLP_ENDPOINT: stub.url });
+
+    const init = await runAsync(['init', backlogPath, writeJson(dir, 'init.json', backlogTemplate([incrementPayload('i1', 'First')]))], env);
+    assert.equal(init.stdout, `wrote ${backlogPath} with 1 increment(s)\n`);
+    assert.equal(init.stderr, '');
+
+    const record = await runAsync(['record', backlogPath, 'i1', 'research:i1.0', writeJson(dir, 'step.json', { plan: 'x' })], env);
+    assert.equal(record.stdout, 'recorded research:i1.0\n');
+    assert.equal(record.stderr, '');
+
+    const branch = await runAsync(['branch', backlogPath, 'i1', 'some-branch'], env);
+    assert.equal(branch.stdout, 'recorded branch some-branch on i1\n');
+    assert.equal(branch.stderr, '');
+
+    const close = await runAsync(['close', backlogPath, 'i1', 'done'], env);
+    assert.equal(close.stdout, 'closed i1 as done\n');
+    assert.equal(close.stderr, '');
+  } finally {
+    await stub.close();
+  }
+});
+
+test('the token in the OTLP headers variable rides as the bearer header', async () => {
+  const dir = tmpDir();
+  const backlogPath = path.join(dir, 'backlog.json');
+  const stub = await collectorStub();
+  try {
+    const env = cleanEnv({
+      OTEL_EXPORTER_OTLP_ENDPOINT: stub.url,
+      OTEL_EXPORTER_OTLP_HEADERS: 'Authorization=Bearer s3cret',
+    });
+
+    await runAsync(['init', backlogPath, writeJson(dir, 'init.json', backlogTemplate([incrementPayload('i1', 'First')]))], env);
+
+    assert.equal(stub.requests.length, 1);
+    assert.equal(stub.requests[0].headers.authorization, 'Bearer s3cret', 'the OTLP headers variable configures the send, exactly as it configures every other exporter uroboros already has');
+  } finally {
+    await stub.close();
+  }
+});
+
+test('UROBOROS_OBS_URL and UROBOROS_OBS_TOKEN configure the send when the OTLP names are absent', async () => {
+  const dir = tmpDir();
+  const backlogPath = path.join(dir, 'backlog.json');
+  const stub = await collectorStub();
+  try {
+    const env = cleanEnv({ UROBOROS_OBS_URL: stub.url, UROBOROS_OBS_TOKEN: 'env-secret' });
+
+    await runAsync(['init', backlogPath, writeJson(dir, 'init.json', backlogTemplate([incrementPayload('i1', 'First')]))], env);
+
+    assert.equal(stub.requests.length, 1);
+    assert.equal(stub.requests[0].url, '/api/runs');
+    assert.equal(stub.requests[0].headers.authorization, 'Bearer env-secret');
+  } finally {
+    await stub.close();
+  }
+});
+
+test('with no collector in the environment nothing is sent', async () => {
+  const dir = tmpDir();
+  const backlogPath = path.join(dir, 'backlog.json');
+  const stub = await collectorStub();
+  try {
+    const env = cleanEnv();
+
+    const init = await runAsync(['init', backlogPath, writeJson(dir, 'init.json', backlogTemplate([incrementPayload('i1', 'First')]))], env);
+    assert.equal(init.stdout, `wrote ${backlogPath} with 1 increment(s)\n`);
+    assert.equal(init.stderr, '');
+
+    const record = await runAsync(['record', backlogPath, 'i1', 'research:i1.0', writeJson(dir, 'step.json', { plan: 'x' })], env);
+    assert.equal(record.stdout, 'recorded research:i1.0\n');
+    assert.equal(record.stderr, '');
+
+    assert.equal(stub.requests.length, 0, 'a reachable but unconfigured collector receives nothing at all');
+    const backlog = JSON.parse(fs.readFileSync(backlogPath, 'utf8'));
+    assert.equal(backlog.increments[0].steps[0].label, 'research:i1.0', 'the write itself still happens with no collector configured');
+  } finally {
+    await stub.close();
+  }
+});
+
+test('a collector that refuses the connection costs neither the exit code nor a word of output', async () => {
+  const dir = tmpDir();
+  const backlogPath = path.join(dir, 'backlog.json');
+  // Start a stub to claim a free port, then close it: the port now refuses
+  // the connection outright. Using a just-closed port rather than a fixed
+  // one keeps this case from colliding with whatever else is listening on
+  // this machine.
+  const stub = await collectorStub();
+  const url = stub.url;
+  await stub.close();
+
+  const env = cleanEnv({ OTEL_EXPORTER_OTLP_ENDPOINT: url });
+
+  const init = await runAsync(['init', backlogPath, writeJson(dir, 'init.json', backlogTemplate([incrementPayload('i1', 'First')]))], env);
+  assert.equal(init.stdout, `wrote ${backlogPath} with 1 increment(s)\n`);
+  assert.equal(init.stderr, '');
+
+  const record = await runAsync(['record', backlogPath, 'i1', 'research:i1.0', writeJson(dir, 'step.json', { plan: 'x' })], env);
+  assert.equal(record.stdout, 'recorded research:i1.0\n');
+  assert.equal(record.stderr, '');
+
+  const backlog = JSON.parse(fs.readFileSync(backlogPath, 'utf8'));
+  assert.equal(backlog.increments[0].steps[0].label, 'research:i1.0');
+});
+
+test('a collector that never answers costs at most a short wait, and nothing else', async () => {
+  const dir = tmpDir();
+  const backlogPath = path.join(dir, 'backlog.json');
+  // init happens with no collector configured — only the record under test
+  // is sent to the hanging stub, so a stray init request cannot mask what
+  // the assertion below is checking.
+  run(['init', backlogPath, writeJson(dir, 'init.json', backlogTemplate([incrementPayload('i1', 'First')]))]);
+
+  const stub = await collectorStub({ hang: true });
+  try {
+    const env = cleanEnv({ OTEL_EXPORTER_OTLP_ENDPOINT: stub.url });
+    const record = await runAsync(['record', backlogPath, 'i1', 'research:i1.0', writeJson(dir, 'step.json', { plan: 'x' })], env);
+    // No wall-clock assertion: a spawn's duration measures process start and
+    // the machine's load, not the recorder. What matters is that the call
+    // resolves at all — the 10s child timeout given to runAsync is the only
+    // clock here, and it is far looser than the recorder's own bound (a ~2s
+    // abort on the send). A recorder that waited on the collector forever
+    // would show up here as a killed child and a thrown promise, not as a
+    // hang of the suite.
+    assert.equal(record.stdout, 'recorded research:i1.0\n', 'the call resolves well inside the 10s child timeout');
+    assert.equal(record.stderr, '');
+    assert.equal(stub.requests.length, 1, 'the send did reach the collector — this is a stall on the response, not a recorder that skipped sending');
+  } finally {
+    await stub.close();
+  }
+});
+
+test('a collector that refuses the state leaves the exit code and the confirmation line alone', async () => {
+  const refusals = [
+    { status: 500, body: { error: 'internal' }, headers: {} },
+    { status: 401, body: { error: 'unauthorized' }, headers: { 'www-authenticate': 'Bearer' } },
+  ];
+  for (const { status, body, headers } of refusals) {
+    const dir = tmpDir();
+    const backlogPath = path.join(dir, 'backlog.json');
+    run(['init', backlogPath, writeJson(dir, 'init.json', backlogTemplate([incrementPayload('i1', 'First')]))]);
+
+    const stub = await collectorStub({ status, body, headers });
+    try {
+      const env = cleanEnv({ OTEL_EXPORTER_OTLP_ENDPOINT: stub.url });
+      const record = await runAsync(['record', backlogPath, 'i1', 'research:i1.0', writeJson(dir, 'step.json', { plan: 'x' })], env);
+
+      assert.equal(record.stdout, 'recorded research:i1.0\n', `a collector answering ${status} still leaves the confirmation line untouched`);
+      assert.equal(record.stderr, '');
+      assert.equal(stub.requests.length, 1, `the send did reach the collector — it is the ${status} response that is being tolerated, not a skipped send`);
+      const backlog = JSON.parse(fs.readFileSync(backlogPath, 'utf8'));
+      assert.equal(backlog.increments[0].steps[0].label, 'research:i1.0', `the write to disk stands regardless of the collector's ${status}`);
+    } finally {
+      await stub.close();
+    }
+  }
 });

@@ -428,9 +428,34 @@ Two things hold for all of these variants:
 
 The JSON API below is the whole surface: sessions with their aggregates, traces, events,
 metric points, totals and facets, plus a Server-Sent Events stream that fires on ingest
-(bursts coalesced into 250 ms). What that looks like as a page — the session list, the
-timeline and the context panel — is [`argus-ui`](../argus-ui/), which reads a subset of
-these routes and nothing else.
+(bursts coalesced into 250 ms). Alongside the telemetry it also holds **run state**: the
+progress document a workflow pushes to it, kept whole under the run's id and served back
+whole. What that looks like as a page — the session list, the timeline and the context
+panel — is [`argus-ui`](../argus-ui/), which reads a subset of these routes and nothing
+else.
+
+### Run state
+
+A workflow that wants its progress visible pushes the whole document it keeps:
+
+```bash
+curl -X POST http://127.0.0.1:4318/api/runs \
+  -H 'content-type: application/json' \
+  -d '{"id":"docs/issues/2026-08-08-x","state":{ … }}'
+```
+
+- `id` identifies the run. When it is missing or blank, the `issue` the state names
+  stands in, so a caller never has to invent a second name for what the state already
+  carries. With neither, the answer is 400.
+- `state` must be a JSON object; beyond that the collector does not look inside it. It is
+  held and served back byte for byte, and the only things read out of it are `issue`,
+  `workflow` and how many entries `increments` has — enough for `GET /api/runs` to let a
+  reader pick a run.
+- Only the latest state per run is kept: a second push replaces the first and no history
+  is retained. At most 100 runs are held; past that the least recently written one is
+  dropped.
+- Every push puts a `run` frame on `/api/stream` immediately, uncoalesced, naming the run
+  that changed.
 
 ## Options
 
@@ -492,12 +517,16 @@ compared instead of one overwriting the other. Creating that root also writes a
 no file outside the directory is touched. The files rotate at 64 MB (`<signal>.jsonl` →
 `<signal>.1.jsonl`).
 
-`--persist <dir>` puts the measurement in exactly that directory, with no timestamp
-nesting, and `--no-persist` keeps nothing at all. Both only ever write.
+Run state is kept the same way, in `runs.jsonl` beside the signal files and rotating like
+them: one line per push, so the last line for an id is that run's current state.
 
-**Reading one back is `--open <dir>`.** It replays that directory into a collector, turns
-retention off so a measurement from last week survives its own replay, and opens nothing
-for writing — a reopened measurement cannot be changed by what happens while you look at
+`--persist <dir>` puts the measurement in exactly that directory, with no timestamp
+nesting, and `--no-persist` keeps nothing at all. Both only ever write — `--persist` never
+replays what is already in the directory, so a run state comes back only under `--open`.
+
+**Reading one back is `--open <dir>`.** It replays that directory into a collector — run
+state included, latest line per run winning — turns retention off so a measurement from
+last week survives its own replay, and opens nothing for writing — a reopened measurement cannot be changed by what happens while you look at
 it. `--persist` and `--open` together are refused.
 
 ```bash
@@ -559,10 +588,13 @@ and new Claude Code attributes.
 | `GET /api/content`       | Content records, metadata only (`session`, `agent`, `main`, `span`, `event`, `limit`) |
 | `GET /api/content/at`    | The body in force at a moment (`session` required, `at`, `agent`, `main`, `span`, `event`) |
 | `GET /api/metrics`       | Metric points (`session`, `name`)                          |
+| `POST /api/runs`         | Take a run's whole state: `{ id?, state }` as JSON         |
+| `GET /api/runs`          | Runs held, latest write first, without their state         |
+| `GET /api/runs/:id`      | One run's whole state (id percent-encoded)                 |
 | `GET /api/stats`         | Totals, top models, top tools, buffer sizes                |
 | `GET /api/facets`        | Event and metric names that occur, with frequency          |
 | `GET /api/config`        | Endpoint, limits, measurement directory, `OTEL_*` block     |
-| `GET /api/stream`        | Server-Sent Events on ingest                               |
+| `GET /api/stream`        | Server-Sent Events: an `ingest` frame, and a `run` frame on every run-state write |
 | `DELETE /api/data`       | Empty the store                                            |
 
 ## Tests

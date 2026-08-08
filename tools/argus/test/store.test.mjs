@@ -483,6 +483,99 @@ test('clear() empties the store but keeps subscribers attached', () => {
   assert.equal(notified, 2);
 });
 
+// A backlog-shaped state literal, as `skills/agent-brief/assets/backlog.mjs`
+// writes it — never read from that file, just shaped like its output.
+const backlogState = (overrides = {}) => ({
+  version: 1,
+  issue: 'docs/issues/2026-08-08-x',
+  workflow: 'agile-loop',
+  codemap: '',
+  increments: [{ id: 'one', title: 'First', status: 'todo', note: '', branch: '', steps: [] }],
+  run: { steps: [] },
+  ...overrides,
+});
+
+test("a run's state is held under its id and served whole", () => {
+  const store = new TelemetryStore();
+  const state = backlogState();
+  store.putRunState('run-a', state);
+  const run = store.getRun('run-a');
+  assert.deepEqual(run.state, state);
+  assert.equal(run.issue, state.issue);
+  assert.equal(run.workflow, state.workflow);
+  assert.equal(run.increments, state.increments.length);
+  assert.equal(typeof run.updatedAtMs, 'number');
+});
+
+test('a second write for the same run replaces the first, keeping no history', () => {
+  const store = new TelemetryStore();
+  store.putRunState('run-a', backlogState({ issue: 'docs/issues/2026-08-08-a' }));
+  const second = backlogState({ issue: 'docs/issues/2026-08-08-b' });
+  store.putRunState('run-a', second);
+  assert.deepEqual(store.getRun('run-a').state, second);
+  assert.equal(store.listRuns().total, 1);
+});
+
+test('listRuns names each run with what a reader picks by, latest write first, and never the state', () => {
+  const store = new TelemetryStore();
+  store.putRunState('run-old', backlogState(), { updatedAtMs: 1_000 });
+  store.putRunState('run-new', backlogState(), { updatedAtMs: 2_000 });
+  const { items } = store.listRuns();
+  assert.deepEqual(items.map((item) => item.id), ['run-new', 'run-old']);
+  for (const item of items) {
+    assert.equal(typeof item.id, 'string');
+    assert.equal(typeof item.issue, 'string');
+    assert.equal(typeof item.workflow, 'string');
+    assert.equal(typeof item.increments, 'number');
+    assert.equal(typeof item.updatedAtMs, 'number');
+    assert.ok(!('state' in item), 'listRuns must never carry the state');
+  }
+});
+
+test('getRun for a run nobody wrote is null', () => {
+  const store = new TelemetryStore();
+  assert.equal(store.getRun('nope'), null);
+  assert.equal(store.listRuns().total, 0);
+});
+
+test('past maxRuns the least recently written run is dropped', () => {
+  const store = new TelemetryStore({ maxRuns: 2 });
+  store.putRunState('a', backlogState());
+  store.putRunState('b', backlogState());
+  store.putRunState('a', backlogState());
+  store.putRunState('c', backlogState());
+  assert.ok(store.getRun('a'), 're-writing "a" must count it as the most recent, not the oldest');
+  assert.ok(store.getRun('c'));
+  assert.equal(store.getRun('b'), null);
+  assert.equal(store.listRuns().total, 2);
+});
+
+test('clear() drops the run states along with everything else, keeping subscribers attached', () => {
+  const store = new TelemetryStore();
+  let notified = 0;
+  store.subscribe(() => notified++);
+  store.putRunState('run-a', backlogState());
+  store.clear();
+  assert.equal(store.listRuns().total, 0);
+  assert.equal(store.getRun('run-a'), null);
+  store.putRunState('run-b', backlogState());
+  assert.equal(notified, 2, 'a subscriber attached before clear() must still receive a later run change');
+});
+
+test('a run-state change is announced to subscribers, and a replayed one is marked as replayed', () => {
+  const store = new TelemetryStore();
+  const changes = [];
+  store.subscribe((change) => changes.push(change));
+  store.putRunState('run-a', backlogState());
+  store.putRunState('run-a', backlogState(), { replay: true });
+  assert.equal(changes.length, 2);
+  assert.equal(changes[0].kind, 'runState');
+  assert.equal(changes[0].runId, 'run-a');
+  assert.ok(changes[0].run.state, 'the change must carry the run state, not just its id');
+  assert.equal(changes[0].replay, false);
+  assert.equal(changes[1].replay, true);
+});
+
 test('an ingested api_request_body event is listed with parsed metadata and never with its body', () => {
   const store = new TelemetryStore();
   store.ingest('logs', [bodyLog()]);

@@ -45,6 +45,10 @@ const DEFAULTS = {
   maxLogs: 50_000,
   maxMetricPoints: 50_000,
   maxSessions: 500,
+  // Run states are bounded by count, never by age: the run being watched is
+  // often the oldest thing in the collector by wall-clock time, so an age
+  // bound would evict precisely the one a reader is looking at.
+  maxRuns: 100,
   retentionMs: 24 * 60 * 60 * 1000,
   // Chars, not bytes: a body's size is `attrs.body.length`, which is the only
   // measure available in O(1). With the content flags on by default a full log
@@ -219,6 +223,9 @@ export class TelemetryStore {
     this.contentChars = 0;
     this.sessions = new Map();
     this.traces = new Map();
+    // id -> { id, issue, workflow, increments, updatedAtMs, state }, in write
+    // order. Nothing here is telemetry: see putRunState.
+    this.runs = new Map();
     this.listeners = new Set();
     this.seq = 0;
     this.startedAt = Date.now();
@@ -235,6 +242,9 @@ export class TelemetryStore {
     this.contentChars = 0;
     this.sessions.clear();
     this.traces.clear();
+    // DELETE /api/data is documented as emptying the store; leaving run state
+    // behind would contradict that.
+    this.runs.clear();
     this.received = { traces: 0, metrics: 0, logs: 0 };
   }
 
@@ -278,6 +288,9 @@ export class TelemetryStore {
     this.received[signal] += records.length;
     this.#evict();
     const change = {
+      // The discriminator on the one change stream this store publishes; a
+      // subscriber has to say which kind it handles (see putRunState).
+      kind: 'ingest',
       signal,
       records,
       sessionIds: [...touched],
@@ -286,6 +299,56 @@ export class TelemetryStore {
     };
     this.#emit(change);
     return { count: records.length, sessionIds: change.sessionIds };
+  }
+
+  /* ------------------------------ run state ---------------------------- */
+
+  /**
+   * File one run's whole state under `id`, replacing whatever was there.
+   *
+   * The state is opaque: it is held and served exactly as it arrived, and the
+   * only things read out of it are `issue`, `workflow` and how many increments
+   * it lists — enough for a reader to pick a run without the collector knowing
+   * the backlog format. No history is kept, and `this.seq` is deliberately not
+   * advanced, so the event tail's cursor keeps meaning what it means.
+   *
+   * @param {string} id
+   * @param {object} state
+   * @param {{updatedAtMs?: number, replay?: boolean}} opts
+   */
+  putRunState(id, state, { updatedAtMs = Date.now(), replay = false } = {}) {
+    const entry = {
+      id,
+      issue: typeof state?.issue === 'string' ? state.issue : '',
+      workflow: typeof state?.workflow === 'string' ? state.workflow : '',
+      increments: Array.isArray(state?.increments) ? state.increments.length : 0,
+      updatedAtMs,
+      state,
+    };
+    // Delete before set so the Map's insertion order stays write order, which
+    // is what makes eviction drop the least recently written run.
+    this.runs.delete(id);
+    this.runs.set(id, entry);
+    while (this.runs.size > this.options.maxRuns) {
+      this.runs.delete(this.runs.keys().next().value);
+    }
+    this.#emit({ kind: 'runState', runId: id, run: entry, replay: Boolean(replay) });
+    return entry;
+  }
+
+  /** What a reader picks a run by, latest write first, never the state. */
+  listRuns() {
+    // reverse() before sorting: Array#sort is stable, so two runs written in
+    // the same millisecond still list the later write first.
+    const items = [...this.runs.values()]
+      .reverse()
+      .sort((a, b) => b.updatedAtMs - a.updatedAtMs)
+      .map(({ state, ...item }) => item);
+    return { total: items.length, items };
+  }
+
+  getRun(id) {
+    return this.runs.get(id) ?? null;
   }
 
   #session(id, record) {

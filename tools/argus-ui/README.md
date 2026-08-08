@@ -1,8 +1,9 @@
 # argus-ui
 
 The web interface for an [argus](../argus/) collector: the sessions it holds,
-a timeline of each one, and the context an agent was carrying behind any lane
-of it, updating live over Server-Sent Events.
+a timeline of each one, the context an agent was carrying behind any lane of
+it, and the uroboros runs it holds with every step they recorded, updating live
+over Server-Sent Events.
 
 Two processes, deliberately. The collector receives OpenTelemetry, aggregates
 and persists it, and serves JSON — that is the half that gets deployed and
@@ -70,6 +71,20 @@ for an `HttpOnly; SameSite=Strict` cookie and drops it from the address bar.
   system prompt, messages, thinking, tool calls and results, and every other
   field the request carried — each showing its size and expanding to its full
   text.
+- **Runs** — the uroboros runs the collector holds, listed by when each was last
+  written and opening on the most recent one. A run shows its issue, its
+  workflow, when its state last changed, and its increments in backlog order —
+  each with its id, title, status, the branch it is worked on, the note its
+  close left and the steps recorded against it — over how many of them are
+  closed and how many still open, the run's own steps in a panel of their own,
+  and the codemap the run was planned against. Every step is one line carrying
+  its label, a preview of what the agent returned and when it was recorded,
+  expanding to that whole return. A closed increment shows no step at all,
+  because the recorder sheds them as it closes it; a run step whose return was
+  shed keeps its label and its time and says on its line that the return is
+  gone. It follows the same Server-Sent Events
+  stream, so a run being worked on updates itself while it is on screen. The
+  switch beside **Setup** moves between this and the sessions.
 
 ## How it reaches the collector
 

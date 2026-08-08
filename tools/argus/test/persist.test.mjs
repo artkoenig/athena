@@ -29,6 +29,18 @@ const logRecord = (sessionId, tokens) => ({
 /** Wait for the append stream to reach disk. */
 const settle = () => new Promise((resolve) => setTimeout(resolve, 50));
 
+// A backlog-shaped state literal, as `skills/agent-brief/assets/backlog.mjs`
+// writes it — never read from that file, just shaped like its output.
+const backlogState = (overrides = {}) => ({
+  version: 1,
+  issue: 'docs/issues/2026-08-08-x',
+  workflow: 'agile-loop',
+  codemap: '',
+  increments: [{ id: 'one', title: 'First', status: 'todo', note: '', branch: '', steps: [] }],
+  run: { steps: [] },
+  ...overrides,
+});
+
 test('records survive a restart', async () => {
   const dir = tmpdir();
   const first = new TelemetryStore();
@@ -72,6 +84,62 @@ test('a torn trailing line is skipped instead of failing the load', async () => 
   assert.equal(await persistence.load(store), 1);
   persistence.close();
   assert.equal(store.getSession('s1').tokens.input, 7);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("a run's state survives a restart", async () => {
+  const dir = tmpdir();
+  const first = new TelemetryStore();
+  const writer = new JsonlPersistence(dir);
+  writer.attach(first);
+  const state = backlogState();
+  first.putRunState('run-a', state);
+  const writtenAtMs = first.getRun('run-a').updatedAtMs;
+  await settle();
+  writer.close();
+
+  const second = new TelemetryStore();
+  const reader = new JsonlPersistence(dir);
+  const restored = await reader.load(second);
+  reader.close();
+
+  assert.ok(restored >= 1, 'load must count the run line');
+  const run = second.getRun('run-a');
+  assert.deepEqual(run.state, state);
+  assert.equal(run.updatedAtMs, writtenAtMs, 'the restored timestamp is the one written, not a fresh clock reading');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('two writes of one run replay as one run holding the latest state', async () => {
+  const dir = tmpdir();
+  const store = new TelemetryStore();
+  const writer = new JsonlPersistence(dir);
+  writer.attach(store);
+  store.putRunState('run-a', backlogState({ issue: 'docs/issues/2026-08-08-a' }));
+  const second = backlogState({ issue: 'docs/issues/2026-08-08-b' });
+  store.putRunState('run-a', second);
+  await settle();
+  writer.close();
+
+  const restored = new TelemetryStore();
+  const reader = new JsonlPersistence(dir);
+  await reader.load(restored);
+  reader.close();
+
+  assert.equal(restored.listRuns().total, 1);
+  assert.deepEqual(restored.getRun('run-a').state, second);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('a replayed run state is not written back to disk', async () => {
+  const dir = tmpdir();
+  const store = new TelemetryStore();
+  const persistence = new JsonlPersistence(dir);
+  persistence.attach(store);
+  store.putRunState('run-a', backlogState(), { replay: true });
+  await settle();
+  persistence.close();
+  assert.equal(fs.existsSync(path.join(dir, 'runs.jsonl')), false);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -319,6 +387,37 @@ test('--open <dir> replays it however old it is, and writes nothing into it', as
 
   assert.deepEqual(snapshot(dir), before, '--open must not write into what it opens');
   assert.equal(fs.existsSync(path.join(cwd, '.uroboros-telemetry')), false, '--open opens nothing for writing');
+  fs.rmSync(cwd, { recursive: true, force: true });
+});
+
+test('a run state written into a measurement is served again by a collector opened on it', async () => {
+  const cwd = projectDir();
+  const dir = path.join(cwd, 'store');
+  const state = backlogState();
+
+  const first = await startCollector({ cwd, args: ['--persist', dir] });
+  let posted;
+  try {
+    const response = await fetch(`${first.base}/api/runs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: 'run-a', state }),
+    });
+    assert.equal(response.status, 200);
+    posted = await response.json();
+  } finally {
+    await first.stop();
+  }
+
+  const second = await startCollector({ cwd, args: ['--open', dir] });
+  try {
+    const list = await getJson(`${second.base}/api/runs`);
+    assert.equal(list.total, 1);
+    const run = await getJson(`${second.base}/api/runs/${posted.id}`);
+    assert.deepEqual(run.state, state);
+  } finally {
+    await second.stop();
+  }
   fs.rmSync(cwd, { recursive: true, force: true });
 });
 

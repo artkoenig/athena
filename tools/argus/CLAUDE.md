@@ -20,6 +20,11 @@ file is for changing the code.
   `node:http`, `AbortController` — rather than a helper.
 - **No build step and no framework**; a bundler would break the "clone and run"
   promise the same way a dependency would.
+- **A run's state is held opaquely**: `POST /api/runs` files one JSON document per
+  run id, latest only and with no history, and the only fields the collector reads
+  out of it are `issue`, `workflow` and the number of `increments`. Everything else
+  is stored and served exactly as it arrived — the document's format belongs to
+  whoever writes it, not here.
 - **The protobuf decoder is hand-rolled** in `src/otlp/`. It decodes the OTLP
   fields this tool reports and no more; an unknown field is skipped, never a
   parse error.

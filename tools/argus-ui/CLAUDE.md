@@ -17,6 +17,12 @@ here is the user-facing page; this file is for changing the code.
 - **ESM only, `.mjs`, Node ≥ 20.11.** Use what the platform ships — `node:http`,
   `node:test` — rather than a helper.
 - **No build step and no framework.** `public/` is served as it is written.
+  `app.js` boots the page and owns every browser global; `format.js`,
+  `timeline.js`, `context.js` and `run.js` beside it are pure modules returning
+  strings, which is what makes them testable without a DOM. `run.js` is the run
+  view — the workflow state the collector serves over `/api/runs`, down to each
+  increment's recorded steps and the run's own, every one collapsed to a line
+  that opens onto the whole return the agent made.
 - **Local only.** No entry on the `PATH`, no skill, no mention in the plugin
   manifest, never deployed. The collector is the half that travels.
 
@@ -33,9 +39,13 @@ node bin/argus-ui.mjs --collector https://obs.example.com --collector-token …
 npm --prefix tools/argus-ui test
 ```
 
-`node --test` over `test/*.test.mjs`. One test file per `src/` module, plus
+`node --test` over `test/*.test.mjs`. One test file per module that carries a
+suite — `src/config.mjs`, `src/server.mjs`, `public/timeline.js`,
+`public/context.js` and `public/run.js`, that last one covered by
+`test/run.test.mjs` — plus `page.test.mjs` reading `app.js` as source text and
 `independence.test.mjs` for the project-wide rule that nothing here imports
-outside itself. Every server binds port 0 and asks the OS which port it got — a
+outside itself. `public/format.js` carries no file of its own: the suites import
+its formatters to build their expectations. Every server binds port 0 and asks the OS which port it got — a
 hard-coded port makes the suite fail against whatever else is running. The
 collector is faked with `node:http` in the test file, never imported from its
 project.
