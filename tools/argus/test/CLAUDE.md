@@ -7,12 +7,12 @@ helpers module, no mocking library, no fixtures directory.
 
 - `protobuf.test.mjs` — encode/decode round-trips of `src/otlp/protobuf.mjs` against `schema.mjs`: varints, BigInt timestamps, hex ids, unknown fields skipped.
 - `decode.test.mjs` — `decodeExportRequest` normalizing protobuf and OTLP/JSON traces/logs/metrics into flat records; nanosecond-to-ms exactness.
-- `store.test.mjs` — `TelemetryStore` in memory: token/cost rollups, temporality, spans, tool results, todos/tasks, content index and its eviction.
+- `store.test.mjs` — `TelemetryStore` in memory: token/cost rollups, temporality, spans, tool results, todos/tasks, and the ring-buffer eviction that bounds every index.
 - `persist.test.mjs` — `JsonlPersistence` round-trip and rotation; then bin-level runs asserting what a start writes into the measured project (`.uroboros-telemetry`, `--persist`, `--open`, `--no-persist`).
-- `server.test.mjs` — the HTTP surface of `createServer`: OTLP ingest (protobuf/JSON/gzip), read API, token gating, content routes, SSE, JSON 404s.
+- `server.test.mjs` — the HTTP surface of `createServer`: OTLP ingest (protobuf/JSON/gzip), read API, token gating, SSE, JSON 404s.
 - `probe.test.mjs` — `probeCollector` against a real collector and against stub servers playing strangers, login gates and load balancers.
 - `config.test.mjs` — `endpointFor`, `resolveConfig` layering (flags > namespaced env > PaaS env), `runDirName`, `parseDuration`; `argus env` output via the binary.
-- `claude.test.mjs` — pure functions of `claude.mjs`: `sessionNameOf`, `otelEnvFor`, `describeEvent` never leaking a body into a summary.
+- `claude.test.mjs` — pure functions of `claude.mjs`: `sessionNameOf` (decoding, capping, the missing name) and what the `otelEnvFor` block does and does not carry.
 - `background.test.mjs` — `spawnBackground`/`exitWhenGone`, then `start --background` end to end: the banner, shutdown with the session, and how a second start classifies whatever holds the port.
 - `tunnel.test.mjs` — `startTunnel` driven by shell scripts standing in for cloudflared: verify-before-resolve, QUIC-to-HTTP/2 fallback, failure messages.
 - `version.test.mjs` — `argus --version`/`-V` via `execFile` of the binary: manifest-sourced, answered before configuration, no port taken, nothing written.
@@ -25,7 +25,7 @@ helpers module, no mocking library, no fixtures directory.
 - `runBackground` / `runArgus` / `startCollector` — run `bin/argus.mjs` as a child process; the per-command timeout is the only clock allowed.
 - `sacrificialProcess()` (background) — an idle node process for `--exit-with` to watch.
 - `frontedCollector()` (background) — real backgrounded collector behind a proxy that overrides only `/api/config`, for deterministic abnormal answers.
-- payload builders — `tracePayload`/`logsPayloadJson`/`contentLogsPayloadJson` (server), `attrs` (decode), `metric`/`log`/`span`/`bodyLog`/`responseBodyLog` (store, persist): literals shaped like the wire or like decoder output.
+- payload builders — `tracePayload`/`logsPayloadJson` (server), `attrs` (decode), `metric`/`log`/`span` (store, persist): literals shaped like the wire or like decoder output.
 - `fakeBinary(name, script)` (tunnel) — executable shell script; final command is `exec sleep` so SIGTERM reaches it.
 
 ## Where a new case goes

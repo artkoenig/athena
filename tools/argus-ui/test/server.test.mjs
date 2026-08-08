@@ -1,8 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import fs from 'node:fs';
-import { fileURLToPath } from 'node:url';
 
 import { createServer } from '../src/server.mjs';
 
@@ -204,21 +202,4 @@ test('with --token the interface trades the token in the query for a cookie', as
       assert.equal((await fetch(`${base}${asset}`)).status, 200, `${asset} must load unauthenticated`);
     }
   });
-});
-
-// Increment 4 — the six technical tabs go out of the code; src/server.mjs is
-// unchanged, so it knows no collector route by name.
-
-test('the proxy knows no collector route by name', () => {
-  const source = fs.readFileSync(fileURLToPath(new URL('../src/server.mjs', import.meta.url)), 'utf8');
-  assert.match(
-    source,
-    /pathname\.startsWith\('\/api\/'\)/,
-    'the proxy must still forward everything under /api/ blindly, by prefix and nothing more specific',
-  );
-  assert.doesNotMatch(
-    source,
-    /\/api\/\w/,
-    'the proxy may name the /api/ prefix and nothing under it — a named route is one the deletion taught it',
-  );
 });

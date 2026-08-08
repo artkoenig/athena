@@ -107,28 +107,6 @@ test('the settings format nests the env block the way Claude Code expects', asyn
   assert.equal(parsed.env.OTEL_EXPORTER_OTLP_ENDPOINT, 'http://127.0.0.1:4318');
 });
 
-test('argus env (default shell format) prints a line for each content flag', async () => {
-  const { execFile } = await import('node:child_process');
-  const { promisify } = await import('node:util');
-  const bin = new URL('../bin/argus.mjs', import.meta.url).pathname;
-  const { stdout } = await promisify(execFile)(process.execPath, [bin, 'env']);
-  for (const name of ['OTEL_LOG_USER_PROMPTS', 'OTEL_LOG_TOOL_DETAILS', 'OTEL_LOG_TOOL_CONTENT', 'OTEL_LOG_RAW_API_BODIES']) {
-    assert.match(stdout, new RegExp(`export ${name}="1"`), `${name} missing from the shell format`);
-  }
-});
-
-test('argus env --format settings nests the same four content flags under env', async () => {
-  const { execFile } = await import('node:child_process');
-  const { promisify } = await import('node:util');
-  const bin = new URL('../bin/argus.mjs', import.meta.url).pathname;
-  const { stdout } = await promisify(execFile)(process.execPath, [bin, 'env', '--format', 'settings']);
-  const parsed = JSON.parse(stdout);
-  assert.equal(parsed.env.OTEL_LOG_USER_PROMPTS, '1');
-  assert.equal(parsed.env.OTEL_LOG_TOOL_DETAILS, '1');
-  assert.equal(parsed.env.OTEL_LOG_TOOL_CONTENT, '1');
-  assert.equal(parsed.env.OTEL_LOG_RAW_API_BODIES, '1');
-});
-
 test('a measurement is named by its local wall clock, zero padded', async () => {
   // Imported dynamically so a missing export fails this case alone instead of
   // taking the whole file down with it.

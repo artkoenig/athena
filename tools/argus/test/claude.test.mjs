@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { otelEnvFor, sessionNameOf, describeEvent } from '../src/claude.mjs';
+import { otelEnvFor, sessionNameOf } from '../src/claude.mjs';
 
 test('a session name is read from the resource, and from metric attributes', () => {
   assert.equal(sessionNameOf({ resource: { 'session.name': 'uroboros-refactor' } }), 'uroboros-refactor');
@@ -46,59 +46,4 @@ test('the env block carries the collector address under its own stable name', ()
   assert.equal(gated.UROBOROS_OBS_URL, 'https://collector.example');
   assert.equal(gated.UROBOROS_OBS_TOKEN, 'secret');
   assert.equal(gated.OTEL_EXPORTER_OTLP_HEADERS, 'Authorization=Bearer secret');
-});
-
-test('the env block includes the content flags by default: user prompts, tool details, tool content and raw api bodies', () => {
-  const env = otelEnvFor('http://localhost:4318');
-  assert.equal(env.OTEL_LOG_USER_PROMPTS, '1');
-  assert.equal(env.OTEL_LOG_TOOL_DETAILS, '1');
-  assert.equal(env.OTEL_LOG_TOOL_CONTENT, '1');
-  assert.equal(env.OTEL_LOG_RAW_API_BODIES, '1');
-  // The CLI's own default already truncates a first real request at 61,440 chars;
-  // the raised ceiling has to clear that bar or "exact full text" is a broken promise.
-  assert.ok(Number(env.CLAUDE_CODE_OTEL_CONTENT_MAX_LENGTH) > 61440);
-});
-
-test('the content flags are not gated behind traces: content is not a tracing feature', () => {
-  const env = otelEnvFor('http://localhost:4318', { traces: false });
-  assert.equal(env.OTEL_LOG_USER_PROMPTS, '1');
-  assert.equal(env.OTEL_LOG_TOOL_DETAILS, '1');
-  assert.equal(env.OTEL_LOG_TOOL_CONTENT, '1');
-  assert.equal(env.OTEL_LOG_RAW_API_BODIES, '1');
-  assert.ok(Number(env.CLAUDE_CODE_OTEL_CONTENT_MAX_LENGTH) > 61440);
-});
-
-test('describeEvent on an api_request_body record never lets the body text leak into the summary', () => {
-  const secret = 'BEGIN-SECRET-DO-NOT-LEAK-42';
-  const body = `{"messages":[{"role":"user","content":"${secret}"}]}`;
-  const summary = describeEvent({
-    eventName: 'claude_code.api_request_body',
-    attrs: {
-      model: 'claude-sonnet-5',
-      query_source: 'sdk',
-      body,
-      body_length: String(body.length),
-      body_truncated: 'false',
-    },
-  });
-  assert.ok(!summary.includes(secret), 'the summary must never include the body text');
-  assert.match(summary, new RegExp(String(body.length)), 'the summary has to name the size instead of the text');
-});
-
-test('describeEvent on an api_response_body record never lets the body text leak into the summary either', () => {
-  const secret = 'BEGIN-RESPONSE-SECRET-DO-NOT-LEAK-73';
-  const body = `{"content":[{"type":"text","text":"${secret}"}]}`;
-  const summary = describeEvent({
-    eventName: 'claude_code.api_response_body',
-    attrs: {
-      model: 'claude-sonnet-5',
-      query_source: 'sdk',
-      request_id: 'req_011Cdm',
-      body,
-      body_length: String(body.length),
-      body_truncated: 'false',
-    },
-  });
-  assert.ok(!summary.includes(secret), 'the summary must never include the body text');
-  assert.match(summary, new RegExp(String(body.length)), 'the summary has to name the size instead of the text');
 });
