@@ -1414,3 +1414,48 @@ test('a paint that would change nothing is not made, so a reader\'s selection su
     'the retimer edits the DOM in place, so it must not touch the record of what was last painted — that is why the comparison is against the markup and not against the DOM',
   );
 });
+
+// A live session refreshes the whole detail pane on every ingest, so where the
+// reader is inside an open block has to survive the repaint the same way the
+// open state itself does.
+
+test('a repaint puts the reader back inside the block they were reading', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+
+  const read = functionSource(appJs, 'readBlockScroll');
+  assert.match(read, /ctx-block/, 'the offsets must be read off the rendered blocks');
+  assert.match(read, /data-block/, 'and keyed by the same key the expansion state uses, or they land on the wrong block');
+  assert.match(read, /scrollTop/, 'what is remembered is how far into the text the reader has scrolled');
+
+  const apply = functionSource(appJs, 'applyBlockScroll');
+  assert.match(apply, /scrollTop\s*=/, 'and it must be written back after the repaint');
+
+  const renderLanePanel = functionSource(appJs, 'renderLanePanel');
+  const panelRead = renderLanePanel.indexOf('readBlockScroll(');
+  const panelWrite = renderLanePanel.indexOf('innerHTML');
+  const panelApply = renderLanePanel.indexOf('applyBlockScroll(');
+  assert.ok(panelRead >= 0 && panelRead < panelWrite, 'renderLanePanel must read the offsets before it replaces the markup');
+  assert.ok(panelApply > panelWrite, 'and write them back after');
+
+  const renderDetail = functionSource(appJs, 'renderDetail');
+  const detailRead = renderDetail.indexOf('readBlockScroll(');
+  const detailWrite = renderDetail.indexOf('innerHTML');
+  const detailApply = renderDetail.indexOf('applyBlockScroll(');
+  const panelPaint = renderDetail.indexOf('renderLanePanel(');
+  assert.ok(
+    detailRead >= 0 && detailRead < detailWrite,
+    'renderDetail replaces the whole pane, so it must take its own copy before it does — by the time renderLanePanel runs the blocks are already gone',
+  );
+  assert.ok(detailApply > panelPaint, 'and write them back only once the panel has been painted again');
+});
+
+test('the expansion key names the block and not the record, so a new request leaves open blocks open', () => {
+  const contextJs = fs.readFileSync(path.join(PUBLIC, 'context.js'), 'utf8');
+  const rows = contextJs.slice(contextJs.indexOf('const shownBlocks'));
+  assert.match(rows, /const key = block\.key;/, 'the rendered rows must key off the block itself');
+  assert.doesNotMatch(
+    rows,
+    /item\.seq/,
+    'a key built from the record would stop matching on the next API call and shut every block the reader had open',
+  );
+});

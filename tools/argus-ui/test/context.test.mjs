@@ -300,7 +300,8 @@ test('a selected lane at a moment renders one expandable block per block, each w
   });
 
   for (let i = 0; i < blocks.length; i++) {
-    assert.match(html, new RegExp(`data-block="12:${i}"`), `block ${i} must carry the record's seq and its own index`);
+    assert.ok(blocks[i].key, `block ${i} must have been given a key to render with`);
+    assert.match(html, new RegExp(`data-block="${esc(blocks[i].key)}"`), `block ${i} must carry its own key`);
   }
 
   const sizeTags = [...html.matchAll(/<span class="ctx-size" data-chars="\d+">/g)];
@@ -334,16 +335,16 @@ test('every block is collapsed until it is asked for', () => {
 });
 
 test('an expanded block stays expanded, and only that one', () => {
-  const htmlFromArray = renderContextPanel({ lane: lane(), item: item(), expanded: ['12:2'] });
+  const htmlFromArray = renderContextPanel({ lane: lane(), item: item(), expanded: ['kind:user#0'] });
   const openTags = [...htmlFromArray.matchAll(/<details class="ctx-block"[^>]*\bopen\b[^>]*>/g)];
   assert.equal(openTags.length, 1, 'exactly one block must be expanded');
 
   const detailsBlocks = [...htmlFromArray.matchAll(/<details class="ctx-block"[\s\S]*?<\/details>/g)];
   const openBlock = detailsBlocks.find((m) => m[0].includes(' open'));
   assert.ok(openBlock, 'the open block must be findable in the markup');
-  assert.ok(openBlock[0].includes('data-block="12:2"'), 'the block asked to expand is the one that expands');
+  assert.ok(openBlock[0].includes('data-block="kind:user#0"'), 'the block asked to expand is the one that expands');
 
-  const htmlFromSet = renderContextPanel({ lane: lane(), item: item(), expanded: new Set(['12:2']) });
+  const htmlFromSet = renderContextPanel({ lane: lane(), item: item(), expanded: new Set(['kind:user#0']) });
   assert.equal(htmlFromSet, htmlFromArray, 'a caller may pass an array or a Set and get byte-identical markup');
 });
 
@@ -677,13 +678,13 @@ test('the panel input is built from the lane whose key the reader selected', () 
     view: v,
     key: 'agent:sp-b:probe',
     held: { key: 'agent:sp-b:probe', item: rec },
-    expanded: ['12:0'],
+    expanded: ['kind:system#0'],
   });
   assert.deepEqual(out, {
     lane: v.lanes[1],
     item: rec,
     pending: false,
-    expanded: ['12:0'],
+    expanded: ['kind:system#0'],
     hidden: [],
     filterOpen: false,
     search: '',
@@ -698,7 +699,7 @@ test('the panel input is built from the lane whose key the reader selected', () 
     view: v,
     key: 'main',
     held: { key: 'main', item: rec },
-    expanded: ['12:0'],
+    expanded: ['kind:system#0'],
   });
   assert.equal(mainOut.lane, v.lanes[0]);
 });
@@ -1552,4 +1553,58 @@ test('the query reaches the panel through the one builder', () => {
 
   const html = renderContextPanel(withSearch);
   assert.equal(blockChunks(html).length, 1, 'the query the builder carried must be the one the panel applied');
+});
+
+// A live session writes a new record on every API call, and under a live cursor
+// the panel follows the head. A block's key therefore names what the block is
+// and never which record carried it, or the reader's open blocks shut under
+// them each time the agent calls the API again.
+
+test('a block is keyed by what it is, and carries nothing of the record it came from', () => {
+  const { blocks } = contextBlocks(requestBody());
+  const keys = blocks.map((block) => block.key);
+
+  assert.equal(new Set(keys).size, keys.length, 'two blocks of one body must never share a key');
+  for (const key of keys) {
+    assert.match(key, /^(kind|field):.+#\d+$/, `${key} must name an entry and its ordinal`);
+    assert.doesNotMatch(key, /\b12\b/, `${key} must not carry the record's seq — that is what used to shut open blocks`);
+  }
+  assert.deepEqual(
+    keys.slice(0, 3),
+    ['kind:system#0', 'kind:system#1', 'kind:user#0'],
+    'the ordinal counts blocks of the same entry, in the order the body holds them',
+  );
+  assert.ok(keys.includes('field:tools#0'), 'a body field is keyed by its own name, so it survives the messages growing');
+});
+
+test('a block the reader opened stays open as the conversation grows', () => {
+  const first = item();
+  const grown = item({
+    seq: 13,
+    body: requestBody({
+      messages: [
+        ...JSON.parse(requestBody()).messages,
+        { role: 'assistant', content: [{ type: 'text', text: 'and one more turn' }] },
+      ],
+    }),
+  });
+
+  const openKey = contextBlocks(first.body).blocks.find((block) => block.label === 'tools').key;
+  const before = renderContextPanel({ lane: lane(), item: first, expanded: [openKey] });
+  const after = renderContextPanel({ lane: lane(), item: grown, expanded: [openKey] });
+
+  assert.equal(
+    [...before.matchAll(/<details class="ctx-block"[^>]*\bopen\b/g)].length,
+    1,
+    'the fixture must open exactly one block before the conversation grows',
+  );
+  const openAfter = blockChunks(after).filter((chunk) => /<details class="ctx-block"[^>]*\bopen\b/.test(chunk));
+  assert.equal(openAfter.length, 1, 'the next record must leave exactly that one block open, not zero and not two');
+  assert.ok(openAfter[0].includes('>tools<'), 'and it must be the same block — the tools field, not whatever landed at its index');
+});
+
+test('a body that never parsed keys its one raw block too', () => {
+  const { blocks } = contextBlocks('{"messages":[{"role":"user"');
+  assert.equal(blocks.length, 1, 'a cut body is one raw block');
+  assert.equal(blocks[0].key, 'kind:raw#0', 'a raw block is remembered like any other, so a repaint leaves it open');
 });

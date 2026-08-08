@@ -31,16 +31,23 @@ here is the user-facing page; this file is for changing the code.
   no way to fold a part of it away. What the pane decides is only what is open
   when it arrives: the top level, the increment being worked, and the running
   step's prompt, because that is the question a reader has while a run is going.
+- **A repaint must leave the reader where they were.** The session pane is
+  rebuilt whole on every ingest, and a live session ingests constantly. So an
+  open context block is remembered by a key naming what the block is —
+  `kind:tool_result#2`, `field:tools#0`, built in `contextBlocks` — and never by
+  the seq of the record it came from, which changes on every API call the agent
+  makes. `readBlockScroll`/`applyBlockScroll` in `app.js` carry the scroll
+  offset inside each open block across the same repaint.
 - **A repaint is not how the ages stay current.** A run writes its state once
   per step and a step runs for minutes, so between two writes the only thing
   that moved is the clock. `retimeRunView` in `app.js` rewrites the text of the
   elements carrying a `data-at` instant and touches nothing else — repainting
   the pane would collapse every `<details>` the reader had opened, and fetching
   would ask the collector for a state that has not changed.
-- **A repaint puts the reader back where they were.** `renderRunView` restores
-  every disclosure by its `data-panel` key, then the scroll position — in that
-  order, because the pane's height depends on what is open — then focus, without
-  scrolling to it. Markup identical to what is on screen is not written at all;
+- **The run pane's repaint leaves the reader where they were too, by path.**
+  `renderRunView` restores every disclosure by its `data-panel` key, then the
+  scroll position — in that order, because the pane's height depends on what is
+  open — then focus, without scrolling to it. Markup identical to what is on screen is not written at all;
   `innerHTML` would drop the reader's text selection for no change. A key is a
   value's path in the document, and a list of records is keyed by each record's
   own `id` or `label` rather than by its index: the planner re-cuts the backlog
