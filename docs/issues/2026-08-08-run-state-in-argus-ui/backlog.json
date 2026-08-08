@@ -148,6 +148,16 @@
             "questions": [],
             "summary": "skills/agent-brief/assets/backlog.mjs now pushes every document it writes to the collector named by the OTLP environment, best-effort and silent; no other file changed."
           }
+        },
+        {
+          "label": "review:recorder.0",
+          "at": "2026-08-08T11:04:38.446Z",
+          "return": {
+            "findings": [],
+            "reason": "",
+            "questions": [],
+            "summary": "Round 0 of increment 2 (the recorder's best-effort push) is accepted with no findings. Ran exactly the two listed commands in one call: `node --test skills/agent-brief/assets/backlog.test.mjs` — 30 cases, exit 0 — and `./test.sh` — all 6 suites, exit 0. The diff (backlog.mjs, backlog.test.mjs, skills/agent-brief/assets/CLAUDE.md, plus backlog.json which is not judged) touches no agent page, no workflow prompt and no argus file, keeps the recorder the sole writer of backlog.json and its zero external dependencies, and adds one send site after the switch so init/record/branch/close each push {id, state} to <base>/api/runs while read pushes nothing. I checked the wire contract against the collector that increment 1 landed by reading tools/argus/src/server.mjs: handleRunState reads payload.state and payload.id from POST /api/runs and the auth gate compares `Authorization: Bearer <token>` — both match what the recorder sends from OTEL_EXPORTER_OTLP_ENDPOINT/OTEL_EXPORTER_OTLP_HEADERS and UROBOROS_OBS_URL/UROBOROS_OBS_TOKEN, the same names otelEnvFor exports, and from nowhere else. Blast radius traced: no doc goes stale (agents/reviewer.md's \"one confirmation line and nothing of the file\" and skills/agent-brief/SKILL.md's \"only writer\" both still hold), test-repo.sh's `node --check` of backlog.mjs still passes with the new top-level await, and I ran the recorder against an unreachable collector under Node 20.20, 21.7 and 22.22 outside the checkout — exit 0, stdout the confirmation line, stderr empty on all three, so no fetch ExperimentalWarning leaks on the supported minimum. Observations, none needing action: (1) when state.issue is empty the id falls back to path.dirname(backlogPath), behaviour no criterion names and no case covers, harmless because agents pass a relative path that yields the issue directory anyway; (2) the never-answers case bounds the wait only by runAsync's 10s child timeout, so it would still pass if SEND_TIMEOUT_MS were raised well above 2s — the criterion fixes no number, and the bound does catch an unbounded wait; (3) CLAUDE.md's \"no dependencies beyond node:test, node:assert/strict and node:http\" omits node:util, newly imported for promisify, the same looseness the pre-existing sentence had with node:fs/os/path."
+          }
         }
       ]
     },
