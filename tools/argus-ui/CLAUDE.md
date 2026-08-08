@@ -17,6 +17,10 @@ here is the user-facing page; this file is for changing the code.
 - **ESM only, `.mjs`, Node ≥ 20.11.** Use what the platform ships — `node:http`,
   `node:test` — rather than a helper.
 - **No build step and no framework.** `public/` is served as it is written.
+  `app.js` boots the page and owns every browser global; `format.js`,
+  `timeline.js`, `context.js` and `run.js` beside it are pure modules returning
+  strings, which is what makes them testable without a DOM. `run.js` is the run
+  view — the workflow state the collector serves over `/api/runs`.
 - **Local only.** No entry on the `PATH`, no skill, no mention in the plugin
   manifest, never deployed. The collector is the half that travels.
 
@@ -33,9 +37,10 @@ node bin/argus-ui.mjs --collector https://obs.example.com --collector-token …
 npm --prefix tools/argus-ui test
 ```
 
-`node --test` over `test/*.test.mjs`. One test file per `src/` module, plus
-`independence.test.mjs` for the project-wide rule that nothing here imports
-outside itself. Every server binds port 0 and asks the OS which port it got — a
+`node --test` over `test/*.test.mjs`. One test file per module — each `src/`
+module and each pure `public/` one, `public/run.js` covered by
+`test/run.test.mjs` — plus `independence.test.mjs` for the project-wide rule
+that nothing here imports outside itself. Every server binds port 0 and asks the OS which port it got — a
 hard-coded port makes the suite fail against whatever else is running. The
 collector is faked with `node:http` in the test file, never imported from its
 project.

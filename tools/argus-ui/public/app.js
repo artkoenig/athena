@@ -25,6 +25,7 @@ import {
   liveCursor,
   TOOL_EVENT,
 } from './timeline.js';
+import { pickRunId, renderRun, renderRunList, runFrame } from './run.js';
 
 const TOKEN = new URLSearchParams(location.search).get('token');
 
@@ -60,6 +61,12 @@ const state = {
   contextSearch: '',
   search: '',
   authError: false,
+  // The run view, beside the session view: the runs the collector holds, which
+  // one is shown, and the entry fetched for it. The page opens on the sessions.
+  runs: [],
+  selectedRunId: null,
+  run: null,
+  view: 'sessions',
 };
 
 /* --------------------------------- api ---------------------------------- */
@@ -513,6 +520,89 @@ function selectSession(id, { render = true } = {}) {
   if (render) refresh({ sessions: false }).then(renderSessionList);
 }
 
+/* -------------------------------- run view ------------------------------- */
+
+/** The picker beside the session list: one row per run the collector holds. */
+function renderRunPicker() {
+  const list = document.getElementById('run-list');
+  if (!list) return;
+  document.getElementById('run-count').textContent = state.runs.length;
+  list.innerHTML = renderRunList({ items: state.runs, selectedId: state.selectedRunId });
+}
+
+/** The run pane, which is the whole of what the run view paints outside the picker. */
+function renderRunView() {
+  const container = document.getElementById('run-detail');
+  if (!container) return;
+  container.innerHTML = renderRun(state.run);
+}
+
+/**
+ * The runs the collector holds. The list arrives latest-write-first, so which
+ * run to show is a pick over it and never a sort.
+ */
+async function loadRuns() {
+  const data = await api('/api/runs');
+  state.runs = Array.isArray(data?.items) ? data.items : [];
+  state.selectedRunId = pickRunId(state.runs, state.selectedRunId);
+}
+
+/**
+ * The selected run, state included. A failure costs the pane and not the page,
+ * and an answer for a run the reader has left is dropped whole.
+ */
+async function loadRun() {
+  const id = state.selectedRunId;
+  if (!id) {
+    state.run = null;
+    return;
+  }
+  try {
+    const held = await api(`/api/runs/${encodeURIComponent(id)}`);
+    if (state.selectedRunId !== id) return;
+    state.run = held;
+  } catch {
+    if (state.selectedRunId !== id) return;
+    state.run = null;
+  }
+}
+
+/**
+ * The run view, brought up to date. `changedId` is the run an SSE frame named;
+ * without one this is a boot or an explicit switch and the shown run is fetched
+ * regardless. A collector that serves no run endpoints costs the page nothing.
+ */
+async function refreshRuns(changedId = null) {
+  try {
+    const shown = state.selectedRunId;
+    await loadRuns();
+    if (changedId === null || !shown || changedId === state.selectedRunId) await loadRun();
+    renderRunPicker();
+    renderRunView();
+  } catch {
+    // Nothing to show and nothing to say: the session view is unaffected.
+  }
+}
+
+/** Switching runs: the address bar follows, so the view survives a reload. */
+async function selectRun(id) {
+  if (state.selectedRunId === id) return;
+  state.selectedRunId = id;
+  location.hash = `#/run/${encodeURIComponent(id)}`;
+  renderRunPicker();
+  await loadRun();
+  renderRunView();
+}
+
+/** Which of the two views is on screen. The stylesheet switches on the body flag. */
+function setView(name) {
+  state.view = name;
+  document.body.dataset.view = name;
+  for (const button of document.querySelectorAll('.view-switch [data-view]')) {
+    button.setAttribute('aria-current', String(button.dataset.view === name));
+  }
+}
+
 /* --------------------------------- wiring -------------------------------- */
 
 function copyFrom(id) {
@@ -586,6 +676,14 @@ function connectStream() {
     setLive('live', 'live');
     scheduleRefresh();
   });
+  // The frame names which run changed and when, never its state, so the view
+  // has to ask for it. The stream is proof of life either way, which is why the
+  // indicator is set whether or not the frame parsed.
+  source.addEventListener('run', (event) => {
+    const changed = runFrame(event.data)?.id;
+    if (changed) refreshRuns(changed);
+    setLive('live', 'live');
+  });
   source.onerror = () => {
     setLive('offline', 'reconnecting');
     // EventSource reconnects on its own; nothing to do but reflect the state.
@@ -596,6 +694,16 @@ function wireEvents() {
   document.getElementById('session-list').addEventListener('click', (event) => {
     const button = event.target.closest('[data-session]');
     if (button) selectSession(button.dataset.session);
+  });
+
+  document.getElementById('run-list').addEventListener('click', (event) => {
+    const button = event.target.closest('[data-run]');
+    if (button) selectRun(button.dataset.run);
+  });
+
+  document.querySelector('.view-switch').addEventListener('click', (event) => {
+    const button = event.target.closest('[data-view]');
+    if (button) setView(button.dataset.view);
   });
 
   document.getElementById('detail').addEventListener('click', (event) => {
@@ -724,6 +832,11 @@ function wireEvents() {
   window.addEventListener('hashchange', () => {
     const match = location.hash.match(/^#\/session\/(.+)$/);
     if (match) selectSession(decodeURIComponent(match[1]));
+    const runMatch = location.hash.match(/^#\/run\/(.+)$/);
+    if (runMatch) {
+      selectRun(decodeURIComponent(runMatch[1]));
+      setView('runs');
+    }
   });
 }
 
@@ -737,6 +850,11 @@ async function boot() {
   }
   const match = location.hash.match(/^#\/session\/(.+)$/);
   if (match) state.selectedSessionId = decodeURIComponent(match[1]);
+  const runMatch = location.hash.match(/^#\/run\/(.+)$/);
+  if (runMatch) {
+    state.selectedRunId = decodeURIComponent(runMatch[1]);
+    setView('runs');
+  }
   await refresh();
   // EventSource reconnects on its own forever, which for a rejected token means
   // a request every few seconds that can never succeed. The page has already
@@ -748,4 +866,14 @@ async function boot() {
   }, 15_000);
 }
 
-boot();
+/**
+ * The page. The session view boots first, then the run view fills itself once
+ * — it lives outside boot() so that no timer inside boot can ever be read as
+ * the thing that fetches run state, which a source-text guard pins.
+ */
+async function start() {
+  await boot();
+  await refreshRuns();
+}
+
+start();

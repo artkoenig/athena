@@ -934,6 +934,185 @@ button {
   border-radius: var(--radius);
 }
 
+/* ------------------------------- run view ------------------------------- */
+
+/* One flag on the body decides which sidebar and which pane are on screen, so
+   the two views never compete for one container. */
+.view-switch {
+  display: flex;
+  gap: 4px;
+}
+
+.view-button {
+  padding: 5px 10px;
+  font-size: 12px;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.view-button:hover {
+  color: var(--text);
+  background: var(--panel-hover);
+}
+
+.view-button[aria-current="true"] {
+  color: var(--text);
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+body[data-view="sessions"] #run-sidebar,
+body[data-view="sessions"] #run-detail {
+  display: none;
+}
+
+body[data-view="runs"] #session-sidebar,
+body[data-view="runs"] #detail {
+  display: none;
+}
+
+.run-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 8px 16px;
+  overflow-y: auto;
+  flex: 1 1 auto;
+}
+
+.run-card {
+  width: 100%;
+  text-align: left;
+  display: block;
+  padding: 10px;
+  margin-bottom: 4px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  color: inherit;
+}
+
+.run-card:hover {
+  background: var(--panel-hover);
+}
+
+.run-card[aria-current="true"] {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.run-card-top {
+  display: block;
+  font-family: var(--mono);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-bottom: 4px;
+}
+
+.run-card-meta {
+  display: flex;
+  gap: 10px;
+  font-size: 11px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.run-head {
+  margin-bottom: 6px;
+}
+
+.run-title {
+  font-family: var(--mono);
+  font-size: 17px;
+  word-break: break-all;
+}
+
+.run-subtitle {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-dim);
+  word-break: break-all;
+  margin-top: 3px;
+}
+
+.run-increments {
+  list-style: none;
+  margin: 0 0 18px;
+  padding: 0;
+}
+
+.run-increment {
+  padding: 10px 12px;
+  margin-bottom: 6px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--accent);
+  border-radius: var(--radius);
+}
+
+/* A closed increment recedes: what is still open is what a reader is looking for. */
+.run-increment[data-closed="true"] {
+  border-left-color: var(--ok);
+  opacity: 0.75;
+}
+
+.run-increment-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.run-increment-id {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--accent);
+}
+
+.run-increment-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.run-increment-ref {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-faint);
+  word-break: break-all;
+}
+
+.run-note {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.run-codemap {
+  padding: 10px 12px;
+}
+
+.run-codemap-head {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+  margin-bottom: 6px;
+}
+
+.run-codemap pre {
+  margin: 0;
+  max-height: 50vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 11px;
+}
+
 /* -------------------------------- misc --------------------------------- */
 
 .empty {

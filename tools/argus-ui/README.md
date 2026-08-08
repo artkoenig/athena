@@ -70,6 +70,14 @@ for an `HttpOnly; SameSite=Strict` cookie and drops it from the address bar.
   system prompt, messages, thinking, tool calls and results, and every other
   field the request carried — each showing its size and expanding to its full
   text.
+- **Runs** — the uroboros runs the collector holds, listed by when each was last
+  written and opening on the most recent one. A run shows its issue, its
+  workflow, when its state last changed, and its increments in backlog order —
+  each with its id, title, status, the branch it is worked on and the note its
+  close left — over how many of them are closed and how many still open, and the
+  codemap the run was planned against. It follows the same Server-Sent Events
+  stream, so a run being worked on updates itself while it is on screen. The
+  switch beside **Setup** moves between this and the sessions.
 
 ## How it reaches the collector
 
