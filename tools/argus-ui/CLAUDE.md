@@ -36,10 +36,18 @@ here is the user-facing page; this file is for changing the code.
   that moved is the clock. `retimeRunView` in `app.js` rewrites the text of the
   elements carrying a `data-at` instant and touches nothing else — repainting
   the pane would collapse every `<details>` the reader had opened, and fetching
-  would ask the collector for a state that has not changed. A write that does
-  repaint the pane restores each disclosure by its `data-panel` key, which is
-  its path in the document — so a key must name where a value sits, never where
-  it landed on the page.
+  would ask the collector for a state that has not changed.
+- **A repaint puts the reader back where they were.** `renderRunView` restores
+  every disclosure by its `data-panel` key, then the scroll position — in that
+  order, because the pane's height depends on what is open — then focus, without
+  scrolling to it. Markup identical to what is on screen is not written at all;
+  `innerHTML` would drop the reader's text selection for no change. A key is a
+  value's path in the document, and a list of records is keyed by each record's
+  own `id` or `label` rather than by its index: the planner re-cuts the backlog
+  between increments, and a position key would hand the reader's open row to
+  whatever landed in that slot. Where a list has no distinct identity to key by,
+  `listRefs` falls back to the index — two rows sharing a key would restore each
+  other's state.
 - **Local only.** No entry on the `PATH`, no skill, no mention in the plugin
   manifest, never deployed. The collector is the half that travels.
 

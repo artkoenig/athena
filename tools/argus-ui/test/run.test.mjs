@@ -12,6 +12,7 @@ import {
   renderNode,
   renderTree,
   childEntries,
+  listRefs,
   badgeOf,
   hintOf,
   openPathsFor,
@@ -295,15 +296,51 @@ test('a frame that arrives before anything was shown still paints, whichever run
 // every record and every list folding away on its own.
 
 test('childEntries reads a record by its keys and a list by its indices, and anything else as no children at all', () => {
-  assert.deepEqual(childEntries({ a: 1, b: 2 }), [['a', 1], ['b', 2]], 'a record is its own entries');
+  assert.deepEqual(childEntries({ a: 1, b: 2 }), [['a', 1, 'a'], ['b', 2, 'b']], 'a record is its own entries, keyed by its own names');
   assert.deepEqual(
     childEntries(['x', 'y']),
-    [['0', 'x'], ['1', 'y']],
+    [['0', 'x', '0'], ['1', 'y', '1']],
     'an index spelled out as a key is what makes a path through a list read like a path through a record',
   );
   for (const leaf of ['text', 7, true, null, undefined]) {
     assert.deepEqual(childEntries(leaf), [], `${JSON.stringify(leaf)} has nothing to open onto`);
   }
+});
+
+test('a list of records is keyed by what each record is, and by position only where it has to be', () => {
+  assert.deepEqual(
+    listRefs([{ id: 'a' }, { id: 'b' }]),
+    ['#a', '#b'],
+    'an increment carries an id, and that is what it stays across a write',
+  );
+  assert.deepEqual(listRefs([{ label: 'cut' }, { label: 'publish' }]), ['#cut', '#publish'], 'a step carries a label');
+  assert.deepEqual(
+    listRefs([{ id: 'a' }, { id: 'a' }]),
+    ['0', '1'],
+    'two records sharing an id fall back to position — two panels sharing a key would restore each other\'s open state',
+  );
+  assert.deepEqual(listRefs([{ id: 'a' }, { title: 'no id here' }]), ['0', '1'], 'one record without an id is enough to fall back');
+  assert.deepEqual(listRefs(['x', 'y']), ['0', '1'], 'a list of strings has no identity to be keyed by');
+  assert.deepEqual(listRefs([]), []);
+});
+
+test('an increment keeps its panel key when the planner re-cuts the backlog around it', () => {
+  const a = increment({ id: 'a', title: 'Alpha' });
+  const b = increment({ id: 'b', title: 'Bravo' });
+  const before = renderTree(doc({ increments: [a, b] }));
+  const after = renderTree(doc({ increments: [increment({ id: 'new', title: 'Inserted' }), a, b] }));
+
+  for (const html of [before, after]) {
+    assert.ok(
+      html.includes('data-panel="tree/increments/#b"'),
+      'the increment must be keyed by what it is, not by the slot it happens to sit in — a reader with it open must still have it open after the re-cut',
+    );
+  }
+  assert.ok(
+    !after.includes('data-panel="tree/increments/1"'),
+    'a position key must not survive alongside the identity one, or the two spellings would drift apart',
+  );
+  assert.ok(after.indexOf('Inserted') < after.indexOf('Alpha'), 'the new increment still renders in the document\'s own order');
 });
 
 test('badgeOf counts what is inside a container and says nothing about a leaf', () => {
@@ -347,14 +384,14 @@ test('the tree mirrors the document: every key under the key that holds it, spel
   assert.ok(!html.includes('code map'), 'a camel- or lower-cased key must reach the page unchanged');
 
   const incrementsAt = html.indexOf('data-panel="tree/increments"');
-  const firstAt = html.indexOf('data-panel="tree/increments/0"');
-  const titleAt = html.indexOf('data-panel="tree/increments/0/criteria"');
+  const firstAt = html.indexOf('data-panel="tree/increments/#a"');
+  const criteriaAt = html.indexOf('data-panel="tree/increments/#a/criteria"');
   assert.ok(incrementsAt >= 0, 'the increments list is a node of its own');
-  assert.ok(firstAt > incrementsAt, 'the first increment sits inside it, keyed by its index');
-  assert.ok(titleAt > firstAt || html.includes('json-key">criteria'), 'and the increment\'s own fields sit inside that');
+  assert.ok(firstAt > incrementsAt, 'the first increment sits inside it');
+  assert.ok(criteriaAt > firstAt || html.includes('json-key">criteria'), 'and the increment\'s own fields sit inside that');
 });
 
-test('a list keeps the document\'s own order, and each entry is keyed by its index', () => {
+test('a list keeps the document\'s own order, and shows each entry under its own index', () => {
   const incs = [
     increment({ id: 'a', title: 'Card Alpha' }),
     increment({ id: 'b', title: 'Card Bravo' }),
@@ -367,7 +404,7 @@ test('a list keeps the document\'s own order, and each entry is keyed by its ind
     'the three entries must render in the document\'s own order, proved rather than assumed',
   );
   for (const index of [0, 1, 2]) {
-    assert.ok(html.includes(`data-panel="tree/increments/${index}"`), `entry ${index} must be keyed by its index`);
+    assert.ok(html.includes(`<span class="json-key">${index}</span>`), `entry ${index} must be shown under its own index`);
   }
 });
 
@@ -382,8 +419,8 @@ test('the top level opens and everything under it is folded, so a run of any siz
   };
   assert.equal(openAt('tree/increments'), true, 'the top level of the document is open when the pane arrives');
   assert.equal(openAt('tree/run'), true, 'every top-level container, not only the first');
-  assert.equal(openAt('tree/increments/0'), false, 'one level down is folded — this is what replaced the wall of text');
-  assert.equal(openAt('tree/increments/0/steps'), false, 'and so is everything under that');
+  assert.equal(openAt('tree/increments/#a'), false, 'one level down is folded — this is what replaced the wall of text');
+  assert.equal(openAt('tree/increments/#a/steps'), false, 'and so is everything under that');
 });
 
 test('the increment being worked opens with its steps, so the tree lands where the run is', () => {
@@ -394,13 +431,13 @@ test('the increment being worked opens with its steps, so the tree lands where t
 
   assert.deepEqual(
     [...openPathsFor(state)].sort(),
-    ['tree/increments/1', 'tree/increments/1/steps'],
-    'the running increment is found by its id and named by its index, which is what the tree keys it under',
+    ['tree/increments/#b', 'tree/increments/#b/steps'],
+    'the running increment must be named the way the tree keys it, or it opens some other row',
   );
 
   const html = renderTree(state, { openPaths: openPathsFor(state) });
-  assert.match(html, /data-panel="tree\/increments\/1" open>/, 'the increment being worked opens');
-  assert.doesNotMatch(html, /data-panel="tree\/increments\/0" open>/, 'and the ones that are not stay folded');
+  assert.match(html, /data-panel="tree\/increments\/#b" open>/, 'the increment being worked opens');
+  assert.doesNotMatch(html, /data-panel="tree\/increments\/#a" open>/, 'and the ones that are not stay folded');
 
   assert.deepEqual([...openPathsFor(doc())], [], 'a run with no step in flight opens nothing beyond its top level');
   assert.deepEqual(
@@ -484,7 +521,7 @@ test('nothing recorded is dropped, however deep it sits or whatever shape it tak
     assert.ok(html.includes(marker), `${marker} must reach the markup — a depth bound would drop it`);
   }
   assert.ok(
-    html.includes('data-panel="tree/increments/0/steps/0/return/deep/a/b/c/d"'),
+    html.includes('data-panel="tree/increments/#x/steps/#review:x.0/return/deep/a/b/c/d"'),
     'a node five levels down is still a node with a path of its own, not a JSON dump',
   );
 });
@@ -522,7 +559,7 @@ test('every disclosure is keyed by its path in the document, and no two share a 
   const keys = panelKeys(html);
   assert.equal(new Set(keys).size, keys.length, 'two panels sharing a key would restore each other\'s open state');
   assert.ok(
-    keys.includes('tree/increments/0/steps/0') && keys.includes('tree/increments/1/steps/0'),
+    keys.includes('tree/increments/#a/steps/#research:0') && keys.includes('tree/increments/#b/steps/#research:0'),
     'the same label under two increments must be two keys, named by where each one sits',
   );
 });

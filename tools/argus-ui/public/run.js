@@ -141,13 +141,44 @@ const isRecord = (value) => !!value && typeof value === 'object' && !Array.isArr
 const isContainer = (value) => Array.isArray(value) || isRecord(value);
 
 /**
- * The children of a container as `[key, value]`, an array's index spelled out
- * as its key. That is what makes a path through a list read the same way as a
- * path through a record, and what makes both stable across a repaint.
+ * The fields a record can be recognised by across two writes. A run rewrites
+ * this pane whenever the recorder writes, and the planner re-cuts the backlog
+ * between increments: keyed by position, the increment a reader had opened
+ * would become whichever increment landed in that slot afterwards. So a list
+ * whose entries carry a distinct one of these is keyed by it instead.
+ */
+const REF_KEYS = ['id', 'label'];
+
+/**
+ * What each entry of a list is keyed by: its own identity where every entry has
+ * a distinct one, its index otherwise. An identity is prefixed with `#` so it
+ * can never be read as the index of a neighbouring entry, and the fallback
+ * keeps the keys of one list unique whatever the recorder wrote — two panels
+ * sharing a key would restore each other's open state.
+ */
+export function listRefs(list) {
+  for (const key of REF_KEYS) {
+    const refs = list.map((item) =>
+      isRecord(item) && typeof item[key] === 'string' && item[key].trim() ? `#${item[key]}` : null,
+    );
+    if (refs.every(Boolean) && new Set(refs).size === refs.length) return refs;
+  }
+  return list.map((_, index) => String(index));
+}
+
+/**
+ * The children of a container as `[key, value, ref]`: the name the row is shown
+ * under, what is inside it, and what its panel is keyed by. An array's key is
+ * its index, so a path through a list reads the same way as a path through a
+ * record; its ref is `listRefs`' answer, so the reader's open row survives a
+ * re-cut that moved it.
  */
 export function childEntries(value) {
-  if (Array.isArray(value)) return value.map((item, index) => [String(index), item]);
-  if (isRecord(value)) return Object.entries(value);
+  if (Array.isArray(value)) {
+    const refs = listRefs(value);
+    return value.map((item, index) => [String(index), item, refs[index]]);
+  }
+  if (isRecord(value)) return Object.entries(value).map(([key, item]) => [key, item, key]);
   return [];
 }
 
@@ -244,8 +275,8 @@ export const OPEN_DEPTH = 1;
  * the value changes what is rendered — a key is printed as the recorder wrote
  * it, a list keeps its order, and an unexpected shape is a node like any other.
  */
-export function renderNode(key, value, { path = 'tree', depth = 0, openPaths = new Set() } = {}) {
-  const here = `${path}/${key}`;
+export function renderNode(key, value, { path = 'tree', depth = 0, openPaths = new Set(), ref = null } = {}) {
+  const here = `${path}/${ref ?? key}`;
   const name = `<span class="json-key">${esc(key)}</span>`;
 
   if (typeof value === 'string' && isFolded(value)) {
@@ -276,8 +307,8 @@ export function renderNode(key, value, { path = 'tree', depth = 0, openPaths = n
   }><summary>${name}<span class="json-badge">${esc(badgeOf(value))}</span><span class="json-hint">${esc(
     previewOf(hintOf(value)),
   )}</span></summary><ul class="json-tree">${entries
-    .map(([childKey, childValue]) =>
-      renderNode(childKey, childValue, { path: here, depth: depth + 1, openPaths }),
+    .map(([childKey, childValue, childRef]) =>
+      renderNode(childKey, childValue, { path: here, depth: depth + 1, openPaths, ref: childRef }),
     )
     .join('')}</ul></details></li>`;
 }
@@ -287,7 +318,7 @@ export function renderTree(value, { path = 'tree', openPaths = new Set() } = {})
   const entries = childEntries(value);
   if (!entries.length) return '<div class="placeholder">This run holds no state yet</div>';
   return `<ul class="json-tree json-root">${entries
-    .map(([key, child]) => renderNode(key, child, { path, depth: 0, openPaths }))
+    .map(([key, child, ref]) => renderNode(key, child, { path, depth: 0, openPaths, ref }))
     .join('')}</ul>`;
 }
 
@@ -304,8 +335,11 @@ export function openPathsFor(state, path = 'tree') {
   const increments = Array.isArray(state?.increments) ? state.increments : [];
   const index = increments.findIndex((increment) => increment?.id === running.increment);
   if (index < 0) return open;
-  open.add(`${path}/increments/${index}`);
-  open.add(`${path}/increments/${index}/steps`);
+  // Through the same refs the tree keys its rows by, or this would open the row
+  // that happens to sit at that index rather than the increment being worked.
+  const here = `${path}/increments/${listRefs(increments)[index]}`;
+  open.add(here);
+  open.add(`${here}/steps`);
   return open;
 }
 

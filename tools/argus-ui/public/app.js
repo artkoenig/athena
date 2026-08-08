@@ -531,30 +531,70 @@ function renderRunPicker() {
 }
 
 /**
+ * What the reader's place in the run pane is, so a repaint can put them back:
+ * which node they had focused, and — for a `<summary>` — which panel it belongs
+ * to. Keyboard readers move through this pane by its disclosures, and a repaint
+ * that dropped focus to the document body would end that walk mid-run.
+ */
+function runFocus(container) {
+  const active = document.activeElement;
+  if (!active || !container.contains(active)) return null;
+  const control = active.closest('[data-tree]');
+  if (control) return { tree: control.dataset.tree };
+  const panel = active.closest('details[data-panel]');
+  return panel ? { panel: panel.dataset.panel } : null;
+}
+
+// The markup this pane was last painted with. Compared rather than the DOM,
+// which `retimeRunView` edits in place between two paints.
+let paintedRun = null;
+
+/**
  * The run pane, which is the whole of what the run view paints outside the
  * picker.
  *
  * A run being worked rewrites this pane on every write, and a rewrite that
- * closed the panel a reader was reading would make the pane unusable exactly
- * while the run is interesting. So which panels were open is read off the old
- * markup by the `data-panel` key `run.js` gives each one, and put back on the
- * new. The flag is restored in both directions — a panel the reader closed
- * stays closed — and a key that was not there before keeps whatever default it
- * rendered with, which is how a newly dispatched step arrives with its prompt
- * already open.
+ * disturbed a reader mid-page would make the pane unusable exactly while the
+ * run is interesting. So a repaint puts back everything about where they were:
+ *
+ * - **Which nodes were open**, read off the old markup by the `data-panel` key
+ *   `run.js` gives each one. The flag is restored in both directions — a node
+ *   the reader folded stays folded — and a key that was not there before keeps
+ *   whatever default it rendered with, which is how a newly dispatched step
+ *   arrives with its prompt already open.
+ * - **Where they were on the page**, after the flags and not before: the pane's
+ *   height depends on what is open, and a scroll position written against the
+ *   folded page would land somewhere else entirely.
+ * - **What they had focused**, without scrolling to it, which would undo the
+ *   line above.
+ *
+ * And a paint that would change nothing is not made at all: writing markup
+ * identical to what is already there would throw away the reader's text
+ * selection for no change on screen.
  */
 function renderRunView() {
   const container = document.getElementById('run-detail');
   if (!container) return;
+  const markup = renderRun(state.run);
+  if (markup === paintedRun) return;
+
   const remembered = new Map(
     [...container.querySelectorAll('details[data-panel]')].map((node) => [node.dataset.panel, node.open]),
   );
-  container.innerHTML = renderRun(state.run);
-  if (!remembered.size) return;
+  const scrollTop = container.scrollTop;
+  const focus = runFocus(container);
+
+  container.innerHTML = markup;
+  paintedRun = markup;
+
+  let refocus = focus?.tree ? container.querySelector(`[data-tree="${focus.tree}"]`) : null;
   for (const node of container.querySelectorAll('details[data-panel]')) {
     const was = remembered.get(node.dataset.panel);
     if (was !== undefined) node.open = was;
+    if (focus?.panel === node.dataset.panel) refocus = node.querySelector('summary');
   }
+  refocus?.focus({ preventScroll: true });
+  container.scrollTop = scrollTop;
 }
 
 /**

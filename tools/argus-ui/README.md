@@ -90,10 +90,12 @@ for an `HttpOnly; SameSite=Strict` cookie and drops it from the address bar.
   or the codemap expands to its full text, a value five levels down is a row
   like any other, and an instant is printed as recorded with its age beside it.
   It follows the same Server-Sent Events stream, so a run being worked on
-  updates itself while it is on screen — the rows you opened stay open across a
-  write — and the ages on it stay current between two writes without the pane
-  repainting under them. The switch beside **Setup** moves between this and the
-  sessions.
+  updates itself while it is on screen without moving you: the rows you opened
+  stay open, you keep your place on the page, and an increment stays the row you
+  opened even when the planner re-cuts the backlog around it. A write that would
+  change nothing on screen is not made at all, and between two writes the ages
+  are brought current without the pane repainting under them. The switch beside
+  **Setup** moves between this and the sessions.
 
 ## How it reaches the collector
 

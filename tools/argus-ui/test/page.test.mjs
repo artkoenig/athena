@@ -1266,8 +1266,13 @@ test('the run pane is repainted wholesale from the state the page holds', () => 
   const renderRunView = functionSource(appJs, 'renderRunView');
   assert.match(
     renderRunView,
-    /container\.innerHTML\s*=\s*renderRun\(state\.run\)/,
-    'renderRunView must replace the pane\'s whole markup from state.run — a replacement rather than an append is what leaves no step of the previous state on the page after a switch or a live write',
+    /renderRun\(state\.run\)/,
+    'renderRunView must build the pane\'s markup from state.run and nothing else',
+  );
+  assert.match(
+    renderRunView,
+    /container\.innerHTML\s*=\s*markup/,
+    'and replace the pane\'s whole markup with it — a replacement rather than an append is what leaves no step of the previous state on the page after a switch or a live write',
   );
 
   const selectRun = functionSource(appJs, 'selectRun');
@@ -1364,4 +1369,48 @@ test('the run module exports the reader for the step in flight, and app.js paint
   assert.match(runJs, /export function renderRunning\(/, 'and the banner that paints it');
   assert.match(runJs, /export function renderTree\(/, 'and the tree the recorded document is shown as');
   assert.match(runJs, /export function renderNode\(/, 'and the one node renderer the whole tree is built from');
+});
+
+// Increment reading-undisturbed — a live write must not move a reader who is in
+// the middle of the document.
+
+test('a repaint puts the reader back where they were: the nodes they opened, their place on the page, and what they had focused', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const source = functionSource(appJs, 'renderRunView');
+
+  assert.match(source, /data-panel/, 'the open nodes must be read back by the key run.js gives each one');
+  assert.match(source, /scrollTop/, 'and the reader\'s place on the page must survive the write');
+
+  const writeAt = source.indexOf('container.innerHTML');
+  const restoreOpenAt = source.indexOf('node.open = was');
+  const restoreScrollAt = source.lastIndexOf('container.scrollTop = scrollTop');
+  const readScrollAt = source.indexOf('= container.scrollTop');
+  assert.ok(readScrollAt >= 0 && readScrollAt < writeAt, 'the scroll position must be read before the markup is replaced');
+  assert.ok(restoreOpenAt > writeAt, 'the open flags are restored onto the new markup');
+  assert.ok(
+    restoreScrollAt > restoreOpenAt,
+    'the scroll position must be put back after the flags: the page\'s height depends on what is open, so a position written against the folded page lands somewhere else',
+  );
+
+  assert.match(source, /preventScroll/, 'restoring focus must not scroll the pane, which would undo the line above');
+});
+
+test('a paint that would change nothing is not made, so a reader\'s selection survives an uneventful write', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const source = functionSource(appJs, 'renderRunView');
+  assert.match(
+    source,
+    /if \(markup === paintedRun\) return;/,
+    'markup identical to what is already on screen must not be written again — innerHTML would throw away the text the reader had selected',
+  );
+  const guardAt = source.indexOf('markup === paintedRun');
+  assert.ok(guardAt < source.indexOf('container.innerHTML'), 'and the guard must come before the write, not after it');
+  assert.match(source, /paintedRun = markup/, 'each paint must record what it painted, or the guard can never fire');
+
+  const retime = functionSource(appJs, 'retimeRunView');
+  assert.doesNotMatch(
+    retime,
+    /paintedRun/,
+    'the retimer edits the DOM in place, so it must not touch the record of what was last painted — that is why the comparison is against the markup and not against the DOM',
+  );
 });
