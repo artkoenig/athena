@@ -1,0 +1,96 @@
+{
+  "version": 1,
+  "issue": "docs/issues/2026-08-08-run-state-in-argus-ui",
+  "workflow": "agile-loop",
+  "codemap": "skills/agent-brief/assets/backlog.mjs — the recorder, the only writer of backlog.json; it gains the best-effort send to the collector after every write it makes.\nskills/agent-brief/assets/backlog.test.mjs — the recorder's suite: the send, the silence when no collector is configured, and the unchanged stdout and exit codes.\nskills/agent-brief/assets/CLAUDE.md — the suite doc for that directory, which owns what the suite covers, its helpers and where a new case belongs.\ntools/argus/src/server.mjs — the collector's HTTP surface: the ingest endpoint for run state, the JSON API routes over it, the auth gate and the SSE stream.\ntools/argus/src/store.mjs — what the collector holds in memory and serves; the latest state per run belongs here.\ntools/argus/src/persist.mjs — what the collector appends to and replays from a measurement directory, so run state survives a restart.\ntools/argus/test/server.test.mjs — the surface's suite: ingest, authentication, the read endpoints, the stream frame.\ntools/argus/test/store.test.mjs — the store's suite: latest-state-per-run and listing.\ntools/argus/test/persist.test.mjs — the persistence suite: the restart round trip.\ntools/argus/test/CLAUDE.md — that suite's doc, which owns its conventions, helpers and where a new case belongs.\ntools/argus/README.md — the collector's user-facing page: what it now accepts and serves.\ntools/argus/CLAUDE.md — the collector's conventions page, which carries its module rules and its one-suite-per-module rule.\ntools/argus-ui/public/index.html — the page's markup, where the run view's shell and its switcher sit.\ntools/argus-ui/public/app.js — the page's fetching, rendering, stream handling and view switching.\ntools/argus-ui/public/styles.css — the run view's styling.\ntools/argus-ui/test/page.test.mjs — the page suite that scans public/ and asserts the page's structure.\ntools/argus-ui/test/independence.test.mjs — the independence guard, whose list of owned modules has to cover whatever module the view adds.\ntools/argus-ui/test/CLAUDE.md — that suite's doc, which owns its conventions and where a new case belongs.\ntools/argus-ui/README.md — the interface's user-facing page: what it now shows.\ntools/argus-ui/CLAUDE.md — the interface's conventions page, which names its modules and its one-suite-per-module rule.",
+  "increments": [
+    {
+      "id": "collector",
+      "title": "The collector accepts, keeps, persists, serves and announces a run's state",
+      "goal": "Give the collector an endpoint of its own that accepts a run's backlog state, keep the latest state per run, serve the runs it holds and the full state of one over its JSON API behind the existing authentication, persist it across a restart, and announce every write on the existing SSE stream.",
+      "criteria": [
+        "A POST of a run's state to an endpoint of the collector's own is accepted and identified by the issue the state belongs to; a second POST for the same run replaces what was held for it, so the collector keeps the latest state per run and no history.",
+        "The JSON API answers both questions: the runs the collector holds, with what a reader needs to pick one including when each was last written, and the full state of one named run; asking for a run it does not hold answers 404.",
+        "The new ingest endpoint and the new read endpoints sit behind the collector's existing authentication and reject an unauthenticated caller exactly as its other endpoints do.",
+        "A collector restarted against the same measurement directory still serves the run state it held, persisted the way the sessions it already holds are persisted.",
+        "A write to a run's state puts a frame on the existing /api/stream SSE stream that tells an already-connected client which run changed.",
+        "tools/argus/README.md documents what the collector now accepts and serves, and tools/argus/test/CLAUDE.md and tools/argus/CLAUDE.md are current for the cases and modules this increment adds, in the same commit as the change.",
+        "npm --prefix tools/argus test exits 0 and ./test.sh exits 0."
+      ],
+      "status": "todo",
+      "note": "",
+      "branch": "",
+      "steps": []
+    },
+    {
+      "id": "recorder",
+      "title": "The recorder pushes the state it just wrote, best-effort and invisible",
+      "goal": "Make the recorder send the run's state to the configured collector after every write it makes, without changing anything an agent or a workflow sees and without ever costing a run a failure, a wait or a line of output.",
+      "criteria": [
+        "init, record, branch and close each send the state they just wrote to the collector, identified by the issue the state belongs to.",
+        "The recorder stays the only writer of backlog.json and keeps its zero dependencies; no agent page and no workflow prompt changes, so how an agent calls the recorder is exactly what it is today.",
+        "The collector's address and its token are read from the environment variables the rest of uroboros already uses for that collector, and from nowhere else.",
+        "With no collector configured in the environment, the recorder does nothing extra.",
+        "A collector that is unreachable, slow or refusing costs the recorder neither a non-zero exit nor a wait beyond a short timeout, and produces no output: the exit codes and the one confirmation line of every subcommand stay byte-identical to today's.",
+        "skills/agent-brief/assets/CLAUDE.md is current for the cases and helpers this increment adds, in the same commit as the change.",
+        "node --test skills/agent-brief/assets/backlog.test.mjs exits 0 and ./test.sh exits 0."
+      ],
+      "status": "todo",
+      "note": "",
+      "branch": "",
+      "steps": []
+    },
+    {
+      "id": "ui",
+      "title": "argus-ui shows a run's backlog state, live and switchable",
+      "goal": "Give the interface a run view that shows a run's whole backlog state as the collector serves it, opens on the most recently written run, lets the reader switch runs, and updates itself over the collector's SSE stream.",
+      "criteria": [
+        "The view shows, for the run it is showing: the issue and the workflow it belongs to and when it was last written; the increments in the backlog's order, each with its id, title, status, branch and note; a count of how many increments are closed and how many are open; and the codemap.",
+        "Per increment it shows the steps recorded so far, each with its label, its time and its return, collapsed to a summary line and expandable to the full return; the run's own steps — the opening cut, each close, the publish — are shown the same way.",
+        "The view opens on the run written to most recently, and the reader can switch to any other run the collector holds.",
+        "A write to the shown run's state reaches an already-open page live over the collector's Server-Sent-Events stream: no polling, no reload, no manual refresh.",
+        "A closed increment reads as closed, with its status and its note, and an increment with no steps renders as the normal state it is rather than an empty panel that looks broken.",
+        "argus-ui still imports nothing outside itself and reads no uroboros file; test/independence.test.mjs still guards exactly that rule, covers every module the view adds, and passes.",
+        "tools/argus-ui/README.md says what the interface now shows, and tools/argus-ui/test/CLAUDE.md and tools/argus-ui/CLAUDE.md are current for the cases and modules this increment adds, in the same commit as the change.",
+        "npm --prefix tools/argus-ui test exits 0 and ./test.sh exits 0."
+      ],
+      "status": "todo",
+      "note": "",
+      "branch": "",
+      "steps": []
+    }
+  ],
+  "run": {
+    "steps": [
+      {
+        "label": "decompose",
+        "at": "2026-08-08T10:04:05.196Z",
+        "return": {
+          "summary": "Opening cut of docs/issues/2026-08-08-run-state-in-argus-ui, three increments along the three halves the issue itself names: the collector that holds and serves the state, the recorder that pushes it, the interface that shows it. I cut here and not finer because each of the three is a whole deliverable a reader can judge on its own and each lands in a different project with its own suite; cutting inside one of them (store before endpoint, markup before data) would leave halves nobody asked for. I rejected merging the collector and the recorder into one 'the state reaches the collector' increment: it would span two projects and two suites in one review, and the recorder's rules — best-effort, silent, byte-identical output, zero dependencies — are delicate enough to deserve their own verdict. The collector goes first because it is the load-bearing one: it fixes the wire contract (the endpoint, the payload, how a run is identified, what the list and the detail carry) that the other two are written against, so getting it wrong is what the run most needs to learn early. The recorder is second because it is the producer, and it can be judged against a real endpoint once the collector has one. The interface is last because it is the largest surface and the only one that can be judged against real served state.\n\nWhere each acceptance criterion went. Recorder criterion 1 (sends after init, record, branch and close; stays the only writer; zero dependencies; no agent page or workflow prompt changes) and criterion 2 (best-effort and invisible; nothing without a collector; no failure, no wait, no stdout; byte-identical exit codes and confirmation line) and criterion 3 (address and token from the environment the rest of uroboros already uses, and nowhere else) are all in `recorder`. Criterion 4 (an endpoint of its own, latest state per run, served over the JSON API, behind the existing authentication) and criterion 5 (survives a restart, persisted like the sessions) are in `collector`. Criterion 7 (everything the run view shows), criterion 8 (opens on the most recently written run, switch to any other), criterion 9 (a closed increment reads as closed, an increment with no steps is normal) and criterion 10 (independence still guarded and passing) are in `ui`. Criterion 11 (documentation of each half current in the same commit) splits by half, which is how it is written: the collector's page and suite docs in `collector`, the interface's in `ui`, and the recorder's suite doc in `recorder`.\n\nTwo criteria I split deliberately, and why. Criterion 6 (a write reaches an already-open page live over the SSE stream) needs both ends: `collector` owns putting the frame on the existing stream, `ui` owns the page reacting to it, and the criterion as the issue states it is only provable in `ui` — its criterion there is the whole of it, the collector's is the frame alone. Criterion 12 (`./test.sh` is green) is the standing bar every increment has to leave the repository at, so it is a criterion of all three rather than of the last one only; each states it alongside the one project suite that increment adds cases to.\n\nOne code fact the cut turns on and does not settle: exactly which environment variables count as 'the same environment the rest of uroboros already uses for it'. `tools/argus/src/claude.mjs` exports `UROBOROS_OBS_URL` for the endpoint and the collector's token is `UROBOROS_OBS_TOKEN` in `tools/argus/src/config.mjs` and `tools/argus-ui/src/config.mjs`, so the answer looks settled by the code — the `recorder` researcher confirms it rather than choosing it, and no human decision is needed.\n\nOne live guard the later increments will meet, found while mapping and worth naming so it is not discovered by a red suite: `test-repo.sh` fails any file under `tools/argus/*.md` that describes an argus-ui view in words the interface no longer uses ('tabs', 'waterfall', 'tools table' among them), so the collector's documentation of the new endpoints must stay about what it serves and say nothing about how the page lays it out.\n\nNo push failure: `backlog.json` and this return are committed and pushed on branch claude/argus-workflow-backlog-status-nvqmvr.",
+          "codemap": "skills/agent-brief/assets/backlog.mjs — the recorder, the only writer of backlog.json; it gains the best-effort send to the collector after every write it makes.\nskills/agent-brief/assets/backlog.test.mjs — the recorder's suite: the send, the silence when no collector is configured, and the unchanged stdout and exit codes.\nskills/agent-brief/assets/CLAUDE.md — the suite doc for that directory, which owns what the suite covers, its helpers and where a new case belongs.\ntools/argus/src/server.mjs — the collector's HTTP surface: the ingest endpoint for run state, the JSON API routes over it, the auth gate and the SSE stream.\ntools/argus/src/store.mjs — what the collector holds in memory and serves; the latest state per run belongs here.\ntools/argus/src/persist.mjs — what the collector appends to and replays from a measurement directory, so run state survives a restart.\ntools/argus/test/server.test.mjs — the surface's suite: ingest, authentication, the read endpoints, the stream frame.\ntools/argus/test/store.test.mjs — the store's suite: latest-state-per-run and listing.\ntools/argus/test/persist.test.mjs — the persistence suite: the restart round trip.\ntools/argus/test/CLAUDE.md — that suite's doc, which owns its conventions, helpers and where a new case belongs.\ntools/argus/README.md — the collector's user-facing page: what it now accepts and serves.\ntools/argus/CLAUDE.md — the collector's conventions page, which carries its module rules and its one-suite-per-module rule.\ntools/argus-ui/public/index.html — the page's markup, where the run view's shell and its switcher sit.\ntools/argus-ui/public/app.js — the page's fetching, rendering, stream handling and view switching.\ntools/argus-ui/public/styles.css — the run view's styling.\ntools/argus-ui/test/page.test.mjs — the page suite that scans public/ and asserts the page's structure.\ntools/argus-ui/test/independence.test.mjs — the independence guard, whose list of owned modules has to cover whatever module the view adds.\ntools/argus-ui/test/CLAUDE.md — that suite's doc, which owns its conventions and where a new case belongs.\ntools/argus-ui/README.md — the interface's user-facing page: what it now shows.\ntools/argus-ui/CLAUDE.md — the interface's conventions page, which names its modules and its one-suite-per-module rule.",
+          "questions": [],
+          "increments": [
+            {
+              "id": "collector",
+              "title": "The collector accepts, keeps, persists, serves and announces a run's state",
+              "status": "todo",
+              "note": "Opening cut."
+            },
+            {
+              "id": "recorder",
+              "title": "The recorder pushes the state it just wrote, best-effort and invisible",
+              "status": "todo",
+              "note": "Opening cut."
+            },
+            {
+              "id": "ui",
+              "title": "argus-ui shows a run's backlog state, live and switchable",
+              "status": "todo",
+              "note": "Opening cut."
+            }
+          ]
+        }
+      }
+    ]
+  }
+}
