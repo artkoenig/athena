@@ -61,11 +61,16 @@ const span = (name, attributes = {}, extra = {}) => {
     endMs,
     durationMs: endMs - startMs,
     status: { code: 'ok', message: '' },
-    events: [],
+    events: extra.events ?? [],
     links: [],
     attrs: { 'session.id': SESSION, ...attributes },
   };
 };
+
+// A span event carrying text, in the decoder's shape. The attribute key is
+// not pinned by the CLI's documentation and the store counts every string
+// value on a span event regardless of its name, so the key here is arbitrary.
+const toolOutputEvent = (timeMs, text) => ({ timeMs, name: 'tool.output', attrs: { 'tool.output': text } });
 
 test('token and cost metrics roll up per session and per model', () => {
   const store = new TelemetryStore();
@@ -663,6 +668,110 @@ test('a content byte budget evicts the oldest body first, keeping its reported l
   const newest = store.getContextAt(SESSION, NOW + 2000);
   assert.equal(newest.body, bodies[2]);
   assert.notEqual(newest.bodyEvicted, true);
+});
+
+test('tool content on span events counts against the budget and loses its text oldest-first', () => {
+  const store = new TelemetryStore({ maxContentBytes: 300 });
+  const text = 'x'.repeat(150);
+  store.ingest('traces', [
+    span('claude_code.tool', {}, { spanId: 't1', startMs: 0, events: [toolOutputEvent(NOW, text)] }),
+    span('claude_code.tool', {}, { spanId: 't2', startMs: 1000, events: [toolOutputEvent(NOW + 1000, text)] }),
+    span('claude_code.tool', {}, { spanId: 't3', startMs: 2000, events: [toolOutputEvent(NOW + 2000, text)] }),
+  ]);
+
+  assert.ok(store.contentBytes <= 300);
+
+  const t1 = store.spans.find((s) => s.spanId === 't1');
+  assert.ok(t1, 'the span itself stays in the index; only its content is evicted');
+  assert.equal(t1.name, 'claude_code.tool');
+  assert.equal(t1.startMs, NOW);
+  assert.equal(t1.events[0].name, 'tool.output');
+  assert.equal(t1.events[0].timeMs, NOW);
+  assert.deepEqual(t1.events[0].attrs, {});
+  assert.equal(t1.contentEvicted, true);
+
+  const t3 = store.spans.find((s) => s.spanId === 't3');
+  assert.equal(Object.values(t3.events[0].attrs)[0], text);
+  assert.notEqual(t3.contentEvicted, true);
+});
+
+test('prompt and response text share the content budget without ever dropping the event record', () => {
+  const store = new TelemetryStore({ maxContentBytes: 300 });
+  const prompt = 'x'.repeat(150);
+  const response = 'y'.repeat(150);
+  store.ingest('logs', [
+    log('claude_code.user_prompt', { prompt }, NOW),
+    log('claude_code.assistant_response', { response }, NOW + 1000),
+    log('claude_code.assistant_response', { response }, NOW + 2000),
+  ]);
+
+  assert.ok(store.contentBytes <= 300);
+
+  const events = store.queryEvents({ sessionId: SESSION });
+  assert.equal(events.length, 3, 'the budget drops text, never a record');
+
+  const oldest = events.find((event) => event.timeMs === NOW);
+  assert.equal(oldest.attrs.prompt, undefined);
+  assert.equal(oldest.contentEvicted, true);
+
+  const newest = events.find((event) => event.timeMs === NOW + 2000);
+  assert.equal(newest.attrs.response, response);
+});
+
+test('the content budget spans signals and evicts across them in time order', () => {
+  const store = new TelemetryStore({ maxContentBytes: 300 });
+  const spanText = 'x'.repeat(150);
+  const olderBody = 'y'.repeat(150);
+  const newerBody = 'z'.repeat(150);
+  store.ingest('traces', [
+    span('claude_code.tool', {}, { spanId: 'tool-1', startMs: 0, events: [toolOutputEvent(NOW, spanText)] }),
+  ]);
+  store.ingest('logs', [
+    bodyEvent('claude_code.api_request_body', { body: olderBody }, NOW + 1000),
+    bodyEvent('claude_code.api_request_body', { body: newerBody }, NOW + 2000),
+  ]);
+
+  assert.ok(store.contentBytes <= 300);
+
+  const tool = store.spans.find((s) => s.spanId === 'tool-1');
+  assert.deepEqual(tool.events[0].attrs, {}, 'the oldest text went first, though it arrived on the other signal');
+  assert.equal(store.getContextAt(SESSION, NOW + 2000).body, newerBody);
+});
+
+test('content bytes are given back when a record leaves the count window', () => {
+  const store = new TelemetryStore({ maxLogs: 2 });
+  const response = 'x'.repeat(1000);
+  store.ingest(
+    'logs',
+    [0, 1, 2, 3, 4, 5].map((i) => log('claude_code.assistant_response', { response }, NOW + i * 1000)),
+  );
+
+  assert.equal(store.logs.length, 2);
+  assert.equal(store.contentBytes, 2000, 'neither a leak (bytes never given back) nor a double subtraction');
+});
+
+test('a dropped session gives back its content bytes, spans included', () => {
+  const store = new TelemetryStore({ retentionMs: 1000 });
+  const old = Date.now() - 60_000;
+  const oldOffset = old - NOW;
+  const text = 'x'.repeat(1000);
+  store.ingest('traces', [
+    span('claude_code.tool', {}, { spanId: 'old-tool', startMs: oldOffset, endMs: oldOffset + 100, events: [toolOutputEvent(old, text)] }),
+  ]);
+  store.ingest('logs', [log('claude_code.assistant_response', { response: text }, old)]);
+
+  assert.equal(store.sessions.size, 0);
+  assert.equal(store.contentBytes, 0);
+});
+
+test('clear() resets content byte accounting, counting new content once', () => {
+  const store = new TelemetryStore();
+  const response = 'x'.repeat(1000);
+  store.ingest('logs', [log('claude_code.assistant_response', { response }, NOW)]);
+  store.clear();
+  store.ingest('logs', [log('claude_code.assistant_response', { response }, NOW + 1000)]);
+
+  assert.equal(store.contentBytes, 1000, 'the cleared bytes are gone and the new ones are counted once');
 });
 
 test('a dropped session leaves no content or agent index behind', () => {
