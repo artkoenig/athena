@@ -76,7 +76,7 @@
       ],
       "status": "todo",
       "note": "Sharpened after ui landed. The view, its data path, its run picker and its live re-fetch all exist and were accepted, so this increment is the step rendering alone and nothing else. Two criteria were added against what ui showed: a step return has no fixed shape and the collector holds the document opaquely, so arbitrary returns have to render rather than crash; and the ui review observed that the README's opening sentence still enumerates only sessions, timeline and context, which this increment's documentation criterion now covers. Not split: collapsing a return to a line and opening it to the whole is one change, and the per-increment steps and the run's own steps are the same rendering applied twice.",
-      "branch": "",
+      "branch": "claude/argus-workflow-backlog-status-nvqmvr--ui-steps",
       "steps": []
     }
   ],
