@@ -126,6 +126,28 @@
             ],
             "questions": []
           }
+        },
+        {
+          "label": "implement:recorder.0",
+          "at": "2026-08-08T10:57:33.710Z",
+          "return": {
+            "deviations": [],
+            "commands": [
+              {
+                "command": "node --test skills/agent-brief/assets/backlog.test.mjs",
+                "exitCode": 0,
+                "note": "30 cases, all pass. Before the change the same run was exit 1 with 5 failures: the four write-and-send cases plus the error-status case, each red on zero requests where some were expected."
+              },
+              {
+                "command": "./test.sh",
+                "exitCode": 0,
+                "note": "All 6 suites in the repository pass, the recorder's among them; nothing skipped or excluded."
+              }
+            ],
+            "blockers": [],
+            "questions": [],
+            "summary": "skills/agent-brief/assets/backlog.mjs now pushes every document it writes to the collector named by the OTLP environment, best-effort and silent; no other file changed."
+          }
         }
       ]
     },

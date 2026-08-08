@@ -14,11 +14,28 @@
 // `record` prints one confirmation line and never any part of the file, so an
 // agent forbidden to read the state can still write into it.
 //
+// Every write is followed by a best-effort push of the document just written
+// to the collector, so a human watching a run sees the state without reading
+// the file. That send is silent by design: it prints nothing, checks no
+// answer, retries nothing, and never changes an exit code or a confirmation
+// line — a collector that is absent, refusing, hung or angry is invisible to
+// the agent that called this. Its address and bearer token come from the OTLP
+// collector environment and nowhere else — OTEL_EXPORTER_OTLP_ENDPOINT with
+// OTEL_EXPORTER_OTLP_HEADERS first, then UROBOROS_OBS_URL with
+// UROBOROS_OBS_TOKEN — so there is no flag, no config file and no default
+// address, and with none of them set nothing is sent. The collector only ever
+// receives a copy: this CLI stays the one writer of the file.
+//
 // Zero dependencies, no build step: it runs from a checkout, from a plugin
 // cache and from an installing project alike, so it hard-codes no path.
 import fs from 'node:fs'
+import path from 'node:path'
 
 const STATUSES = ['done', 'blocked', 'dropped']
+
+// The whole budget for the send. Short, and deliberately not configurable:
+// configurability would be a second place the environment is read.
+const SEND_TIMEOUT_MS = 2000
 
 const USAGE = [
   'usage:',
@@ -139,6 +156,7 @@ function init(backlogPath, payloadFile) {
   process.stdout.write(
     `wrote ${backlogPath} with ${backlog.increments.length} increment(s)\n`,
   )
+  return backlog
 }
 
 // `record` is every agent's own call, once per step. The increment id `-` puts
@@ -166,6 +184,7 @@ function record(backlogPath, incrementId, label, payloadFile) {
 
   writeBacklog(backlogPath, backlog)
   process.stdout.write(`recorded ${label}\n`)
+  return backlog
 }
 
 // `branch` names the branch an increment is worked on. The agent that creates
@@ -181,6 +200,7 @@ function branch(backlogPath, incrementId, branchName) {
 
   writeBacklog(backlogPath, backlog)
   process.stdout.write(`recorded branch ${branchName} on ${incrementId}\n`)
+  return backlog
 }
 
 // `close` is the planner's verdict call. Shedding the steps is the point as
@@ -212,6 +232,79 @@ function close(backlogPath, incrementId, status, note) {
 
   writeBacklog(backlogPath, backlog)
   process.stdout.write(`closed ${incrementId} as ${status}\n`)
+  return backlog
+}
+
+// Reads the collector out of an environment and returns null when that
+// environment names none — the common case, and the one that costs not a
+// syscall. Takes the environment as an argument rather than reaching for
+// `process.env`, so it stays a pure function of what it is given.
+//
+// The OTLP pair wins over the uroboros pair because it is the block a
+// measured session always carries; `otelEnvFor` in argus sets both to the
+// same address and secret anyway, so this reads one collector under two
+// names, never two collectors.
+function collectorFrom(env) {
+  const base = firstNonEmpty(env.OTEL_EXPORTER_OTLP_ENDPOINT, env.UROBOROS_OBS_URL)
+  if (!base) return null
+  const url = base.replace(/\/+$/, '') + '/api/runs'
+
+  // OTLP convention: a comma-separated list of key=value header pairs. Argus
+  // writes exactly `Authorization=Bearer <token>`, and the value rides
+  // verbatim — this is not the place to guess at a scheme.
+  const headers = firstNonEmpty(env.OTEL_EXPORTER_OTLP_HEADERS)
+  if (headers) {
+    for (const pair of headers.split(',')) {
+      const at = pair.indexOf('=')
+      if (at < 0) continue
+      if (pair.slice(0, at).trim().toLowerCase() !== 'authorization') continue
+      const value = pair.slice(at + 1).trim()
+      if (value) return { url, authorization: value }
+    }
+  }
+
+  const token = firstNonEmpty(env.UROBOROS_OBS_TOKEN)
+  return { url, authorization: token ? `Bearer ${token}` : '' }
+}
+
+function firstNonEmpty(...values) {
+  for (const value of values) {
+    if (typeof value !== 'string') continue
+    const trimmed = value.trim()
+    if (trimmed) return trimmed
+  }
+  return ''
+}
+
+// The send, and the whole of what the collector ever gets. One attempt, a
+// short bound, and an empty catch: a refused connection, a hung server, a
+// non-2xx answer and a Node too old to have `fetch` all end the same way,
+// with nothing said and nothing changed. Retrying would be pointless anyway —
+// every send carries the complete document, so the next write resends it.
+async function announce(state, backlogPath) {
+  try {
+    if (typeof fetch !== 'function') return
+    const collector = collectorFrom(process.env)
+    if (!collector) return
+
+    // Sent explicitly rather than left to the collector's own fallback, so a
+    // state whose issue is empty is still filed under a name a reader knows:
+    // the directory the state was written into.
+    const id = firstNonEmpty(state && state.issue) || path.dirname(backlogPath)
+
+    const headers = { 'content-type': 'application/json' }
+    if (collector.authorization) headers.authorization = collector.authorization
+
+    await fetch(collector.url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ id, state }),
+      signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
+    })
+  } catch {
+    // Best-effort: the agent that called this is owed its confirmation line
+    // and its exit code, and owes the collector nothing.
+  }
 }
 
 function read(backlogPath) {
@@ -231,22 +324,26 @@ function need(count) {
   if (rest.length < count) fail(`${command} needs ${count} argument(s)\n${USAGE}`, 2)
 }
 
+// Every subcommand that writes returns the document it wrote; `read` returns
+// nothing, and so sends nothing.
+let state
+
 switch (command) {
   case 'init':
     need(2)
-    init(rest[0], rest[1])
+    state = init(rest[0], rest[1])
     break
   case 'record':
     need(4)
-    record(rest[0], rest[1], rest[2], rest[3])
+    state = record(rest[0], rest[1], rest[2], rest[3])
     break
   case 'branch':
     need(3)
-    branch(rest[0], rest[1], rest[2])
+    state = branch(rest[0], rest[1], rest[2])
     break
   case 'close':
     need(3)
-    close(rest[0], rest[1], rest[2], rest[3])
+    state = close(rest[0], rest[1], rest[2], rest[3])
     break
   case 'read':
     need(1)
@@ -255,3 +352,10 @@ switch (command) {
   default:
     fail(command ? `unknown command "${command}"\n${USAGE}` : USAGE, 2)
 }
+
+// One send site, so no subcommand added later can forget it. It runs after
+// the confirmation line is already out, so the send's latency is never in
+// front of the caller's answer, and after every failure path — those all go
+// through fail(), which exits — so a call that wrote nothing sends nothing.
+// `rest[0]` is the backlog path for all four writing subcommands.
+if (state) await announce(state, rest[0])
