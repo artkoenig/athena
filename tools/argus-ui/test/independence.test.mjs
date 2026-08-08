@@ -30,6 +30,7 @@ test('the interface is a project of its own, with everything a project needs', (
     'public/timeline.js',
     'public/format.js',
     'public/context.js',
+    'public/run.js',
     'public/styles.css',
     'test',
   ]) {
@@ -58,6 +59,7 @@ test('nothing in the interface reaches outside the interface', () => {
     'public/timeline.js',
     'public/format.js',
     'public/context.js',
+    'public/run.js',
   ]) {
     assert.ok(covered.includes(owned), `the scan does not cover ${owned} — it is not there to check`);
   }
@@ -83,7 +85,7 @@ test('the pure modules the tests import reach for no browser global', () => {
   // prose, and context.js exports fetchLaneContext — so the patterns below name
   // the browser globals themselves, not the bare words, or this case would fail
   // on the files as they stand today.
-  const files = ['public/context.js', 'public/timeline.js'];
+  const files = ['public/context.js', 'public/timeline.js', 'public/run.js'];
   const problems = [];
   for (const relative of files) {
     const full = path.join(PROJECT, relative);

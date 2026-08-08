@@ -1013,3 +1013,181 @@ test('a live refresh still repaints the timeline and the lane panel, dropdown le
     'renderLanePanel must still pass the remembered open state, or a live refresh would snap the dropdown shut',
   );
 });
+
+// Increment ui — the run view beside the session view.
+
+// Criterion 1 and 5 — the shell exists beside the session view's, which is untouched.
+
+test('index.html carries the run view\'s shell, beside the session view\'s, which stays', () => {
+  const indexHtml = fs.readFileSync(path.join(PUBLIC, 'index.html'), 'utf8');
+  for (const needle of [
+    'id="run-sidebar"',
+    'id="run-list"',
+    'id="run-count"',
+    'id="run-detail"',
+    'data-view="sessions"',
+    'data-view="runs"',
+  ]) {
+    assert.ok(indexHtml.includes(needle), `index.html must carry ${needle}`);
+  }
+  assert.match(indexHtml, /<body[^>]*data-view=/, 'the body must carry the data-view flag the stylesheet switches on');
+
+  for (const needle of ['id="session-list"', 'id="session-count"', 'id="detail"', 'id="session-search"', 'id="setup-modal"']) {
+    assert.ok(indexHtml.includes(needle), `the new shell must not arrive by displacing the existing one: ${needle}`);
+  }
+});
+
+test('app.js imports the run module, and index.html still loads app.js as a module', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  assert.match(
+    appJs,
+    /from\s+['"]\.\/run\.js['"]/,
+    'app.js must import run.js so the run view is reached by the page, not tested as an island',
+  );
+
+  const indexHtml = fs.readFileSync(path.join(PUBLIC, 'index.html'), 'utf8');
+  const scriptTags = indexHtml.match(/<script\b[^>]*>/gi) ?? [];
+  const loadsAppAsModule = scriptTags.some(
+    (tag) => /src=["']\/app\.js["']/.test(tag) && /type=["']module["']/.test(tag),
+  );
+  assert.ok(loadsAppAsModule, 'index.html must still load /app.js as a module');
+});
+
+// Criterion 3 — the data comes from the run endpoints and nowhere else.
+
+test('the run loaders ask the collector\'s run endpoints, and nowhere else', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const loadRuns = functionSource(appJs, 'loadRuns');
+  assert.match(loadRuns, /\/api\/runs\b/, 'loadRuns must ask the collector\'s run-list endpoint');
+
+  const loadRun = functionSource(appJs, 'loadRun');
+  assert.match(loadRun, /\/api\/runs\//, 'loadRun must ask the one-run endpoint');
+  assert.match(loadRun, /encodeURIComponent\(/, 'the selected run\'s id must be encoded into the path');
+
+  for (const [name, source] of [['loadRuns', loadRuns], ['loadRun', loadRun]]) {
+    assert.doesNotMatch(source, /\bfetch\(/, `${name} must go through the page's own api() helper, never a bare fetch — this is how "from no other source" is provable as text`);
+    assert.match(source, /\bapi\(/, `${name} must call the page's own api() helper`);
+  }
+});
+
+test('the state literal carries the run view\'s own fields', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const start = appJs.indexOf('const state = {');
+  assert.ok(start >= 0, 'app.js must still declare the state literal');
+  const end = appJs.indexOf('\n};', start);
+  assert.ok(end >= 0, 'the state literal must still close with `\\n};`');
+  const stateSlice = appJs.slice(start, end);
+
+  assert.match(stateSlice, /\bruns:\s*\[\]/, 'the page must hold the runs list it fetched');
+  assert.match(stateSlice, /\bselectedRunId:\s*null\b/, 'no run is selected until one is picked or the collector answers');
+  assert.match(stateSlice, /\brun:\s*null\b/, 'no run state is held until it is fetched');
+  assert.match(stateSlice, /\bview:\s*['"]sessions['"]/, 'the page must open on the session view');
+});
+
+test('pickRunId decides what is shown, from the page\'s own runs and selection', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const loadRuns = functionSource(appJs, 'loadRuns');
+  const slice = callArguments(loadRuns, 'pickRunId');
+  assert.match(slice, /state\.runs\b/, 'pickRunId must be handed the page\'s own list of runs');
+  assert.match(slice, /state\.selectedRunId\b/, 'pickRunId must be handed the page\'s own current selection');
+});
+
+test('clicking a run in the picker switches to it', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const anchor = "document.getElementById('run-list').addEventListener('click'";
+  const start = appJs.indexOf(anchor);
+  assert.ok(start >= 0, 'app.js must delegate a click listener on #run-list');
+  const rest = appJs.slice(start + anchor.length);
+  const next = rest.indexOf('.addEventListener(');
+  const slice = next === -1 ? rest : rest.slice(0, next);
+  assert.match(slice, /\[data-run\]/, 'the run-list click handler must recognise a run row by its data-run attribute');
+  assert.match(slice, /selectRun\(/, 'clicking a run row must select it');
+});
+
+test('the view switch is wired to setView, which writes both the state and the body flag', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const wireEvents = functionSource(appJs, 'wireEvents');
+  const viewIdx = wireEvents.indexOf('data-view');
+  assert.ok(viewIdx >= 0, 'wireEvents must wire a listener on [data-view]');
+  const setViewIdx = wireEvents.indexOf('setView(', viewIdx);
+  assert.ok(setViewIdx > viewIdx, 'the [data-view] branch must call setView(...)');
+
+  const setView = functionSource(appJs, 'setView');
+  assert.match(setView, /state\.view\s*=/, 'setView must write the page\'s own view state');
+  assert.match(
+    setView,
+    /document\.body\.dataset\.view\s*=/,
+    'setView must write the body\'s data-view flag the stylesheet switches on',
+  );
+});
+
+// Criterion 4 — live, and not by polling.
+
+test('connectStream reacts to the run frame, and the existing listeners stay', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const connectStream = functionSource(appJs, 'connectStream');
+  assert.match(connectStream, /addEventListener\(\s*['"]hello['"]/, 'the hello listener must still be there');
+  assert.match(connectStream, /addEventListener\(\s*['"]ingest['"]/, 'the ingest listener must still be there');
+
+  const runIdx = connectStream.search(/addEventListener\(\s*['"]run['"]/);
+  assert.ok(runIdx >= 0, 'connectStream must register a run listener');
+  const runListenerTail = connectStream.slice(runIdx);
+  const endIdx = runListenerTail.indexOf(');\n');
+  const runListener = endIdx === -1 ? runListenerTail : runListenerTail.slice(0, endIdx);
+  assert.match(runListener, /runFrame\(/, 'the run listener must parse the frame with runFrame');
+  assert.match(runListener, /refreshRuns\(/, 'the run listener must refresh the run view');
+});
+
+test('no timer fetches run state', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const refresh = functionSource(appJs, 'refresh');
+  assert.doesNotMatch(refresh, /loadRuns\(/, 'the ingest-driven refresh must never touch loadRuns');
+  assert.doesNotMatch(refresh, /loadRun\(/, 'the ingest-driven refresh must never touch loadRun');
+  assert.doesNotMatch(refresh, /refreshRuns\(/, 'the ingest-driven refresh must never touch refreshRuns');
+
+  const boot = functionSource(appJs, 'boot');
+  assert.match(boot, /setInterval\(/, 'boot must still schedule the slow repaint');
+  assert.match(boot, /renderSessionList\(\)/, 'the slow repaint must still refresh the session list');
+  for (const name of ['loadRuns', 'loadRun', 'refreshRuns']) {
+    assert.doesNotMatch(boot, new RegExp(`${name}\\(`), `boot's own setInterval body must name no run function: ${name}`);
+  }
+
+  for (const match of appJs.matchAll(/setInterval\(([\s\S]*?)\n\s*\},/g)) {
+    const body = match[1];
+    for (const name of ['loadRuns', 'loadRun', 'refreshRuns']) {
+      assert.doesNotMatch(body, new RegExp(`${name}\\(`), `no setInterval anywhere in app.js may name a run loader: ${name}`);
+    }
+  }
+});
+
+// Criterion 5 — the session view keeps working: the run view paints only in
+// its own containers.
+
+test('the run view paints only in its own containers, and renderDetail is untouched by it', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const renderRunPicker = functionSource(appJs, 'renderRunPicker');
+  assert.match(renderRunPicker, /run-list/, 'renderRunPicker must paint the run list container');
+  assert.match(renderRunPicker, /run-count/, 'renderRunPicker must paint the run count');
+
+  const renderRunView = functionSource(appJs, 'renderRunView');
+  assert.match(renderRunView, /run-detail/, 'renderRunView must paint the run detail container');
+
+  const renderDetail = functionSource(appJs, 'renderDetail');
+  for (const needle of ['run-list', 'run-count', 'run-detail']) {
+    assert.doesNotMatch(
+      renderDetail,
+      new RegExp(needle),
+      `renderDetail must name none of the run view's own containers: ${needle} — the session view stays untouched`,
+    );
+  }
+});
+
+// Criterion 7 — the documentation.
+
+test('README.md describes the run view: the runs list, the increments with status, and the codemap', () => {
+  const readme = fs.readFileSync(path.join(PROJECT, 'README.md'), 'utf8');
+  assert.match(readme, /\brun/i, 'README must describe the run view at all');
+  assert.match(readme, /increment/i, 'README must name the increments the run view shows');
+  assert.match(readme, /status/i, 'README must say the increments show their status');
+  assert.match(readme, /codemap/i, 'README must name the codemap the run view shows');
+});
