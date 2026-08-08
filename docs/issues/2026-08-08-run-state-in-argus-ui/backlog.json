@@ -443,6 +443,28 @@
             "openQuestions": [],
             "questions": []
           }
+        },
+        {
+          "label": "implement:ui.1",
+          "at": "2026-08-08T12:03:53.171Z",
+          "return": {
+            "deviations": [],
+            "commands": [
+              {
+                "command": "npm --prefix tools/argus-ui test",
+                "exitCode": 0,
+                "note": "286 cases, 286 pass, 0 fail, nothing skipped; run from the repository root after the CLAUDE.md edit."
+              },
+              {
+                "command": "./test.sh",
+                "exitCode": 0,
+                "note": "PASS: all 6 suites, nothing skipped or excluded."
+              }
+            ],
+            "blockers": [],
+            "questions": [],
+            "summary": "Rewrote the false one-test-file-per-module claim in the 'Tests' section of tools/argus-ui/CLAUDE.md to name the modules that actually carry a suite and to say outright that public/format.js carries no file of its own."
+          }
         }
       ]
     },
