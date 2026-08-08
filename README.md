@@ -8,8 +8,8 @@
 just the name: a run reviews and corrects its own work, and what a run learns
 about the workflow is written back into the workflow. It ships as a Claude Code
 plugin and assumes a modern Anthropic agent — at least Opus 5. The rules are one
-page, [`rulebook.md`](rulebook.md), which the session running the work reads;
-this one won't repeat it.
+page, [`rulebook.md`](rulebook.md), handed to the session running the work at
+its start; this one won't repeat it.
 
 ## Context is the scarce resource
 
@@ -169,20 +169,24 @@ claude plugin install uroboros@uroboros
 A session then gets the subagents, the skills and the `uroboros:agile-loop` workflow
 of the current `main`. The plugin pins no version, so every push to `main` is a
 new version, and updates come with the next session, not with a
-re-installation. The rulebook is a page, and the session reads it.
+re-installation. The rulebook is a page, and the plugin's SessionStart hook
+hands it to the session.
 
 ## What reaches whom
 
 Two things carry uroboros into a session, and only one of them reaches an
-agent. The rulebook is read by the session and stops there: it is not a memory
-filename, so nothing loads it as project memory and no subagent inherits it. An
-agent is assembled from its own page and the shared brief
+agent. The rulebook is delivered to the session by the plugin's SessionStart
+hook and stops there, for two reasons at once: that hook fires for a session
+that is starting, and a subagent is dispatched inside a running one and starts
+none; and `rulebook.md` is not a memory filename, so nothing loads it as
+project memory and no subagent inherits it that way either. An agent is
+assembled from its own page and the shared brief
 [`agent-brief`](skills/agent-brief/), both preloaded at dispatch, both shipped
 with the plugin.
 
 ```mermaid
 flowchart LR
-    RB["rulebook.md"] -->|"read at the start of the work"| S["The session"]
+    RB["rulebook.md"] -->|"delivered by the SessionStart hook"| S["The session"]
     S -->|"hands it the issue directory"| WF["uroboros:agile-loop"]
     WF -->|"dispatches"| A["An agent"]
     PAGE["its page in agents/"] -->|"its role"| A
@@ -201,14 +205,14 @@ So the two cases differ in one thing only, and it is not uroboros':
 flowchart TB
     subgraph HERE["in this repository"]
         direction LR
-        H1["rulebook.md"] -->|"read"| HS["session"]
+        H1["rulebook.md"] -->|"delivered"| HS["session"]
         H2["page + agent-brief"] --> HA["agent"]
         H3["this checkout's own rules"] -. "on a read of the files they govern" .-> HS
         H3 -. "same, on an agent's own read" .-> HA
     end
     subgraph THERE["in a project that installed uroboros"]
         direction LR
-        T1["rulebook.md"] -->|"read"| TS["session"]
+        T1["rulebook.md"] -->|"delivered"| TS["session"]
         T2["page + agent-brief"] --> TA["agent"]
         T3["the project's own CLAUDE.md"] --> TS
         T3 -->|"inherited"| TA

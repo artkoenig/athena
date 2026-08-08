@@ -123,6 +123,74 @@ else
 fi
 
 echo
+echo "=== the rulebook reaches the session and stops there"
+
+# The rulebook binds the session and nothing else. Two facts make that true and
+# neither is visible from the tree, so both are pinned here: the hook delivers
+# the page, and no other channel carries it.
+
+# 1. Wired at all. A hook script nothing dispatches is a rulebook nobody gets,
+#    and the session would run with no rules and no sign of it.
+if [ -f "$root/hooks/hooks.json" ] &&
+  grep -q 'SessionStart' "$root/hooks/hooks.json" &&
+  grep -q 'session-start.sh' "$root/hooks/hooks.json"; then
+  ok "hooks.json dispatches session-start.sh on SessionStart"
+else
+  no "hooks.json does not wire session-start.sh to SessionStart — the rulebook would never be delivered"
+fi
+
+# 2. Delivered, verbatim, as valid JSON. The script is run for real rather than
+#    read, because everything that can break here breaks at run time: an unset
+#    variable under `set -u`, a quote the encoder misses, a stray line on
+#    stdout. The rulebook's own opening heading has to come back out the other
+#    end, so a hook that emits well-formed JSON carrying nothing is caught too.
+delivery_tmp="$(mktemp)"
+if (cd "$root" && bash hooks/session-start.sh) >"$delivery_tmp" 2>/dev/null; then
+  if node -e '
+    const fs = require("fs");
+    const answer = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    const out = answer.hookSpecificOutput || {};
+    if (out.hookEventName !== "SessionStart") throw new Error("wrong hookEventName: " + out.hookEventName);
+    const context = out.additionalContext || "";
+    const rulebook = fs.readFileSync(process.argv[2], "utf8");
+    // Verbatim, not merely mentioned: a pointer to the file would leave the
+    // session free to skip it, which is the whole reason the text is inlined.
+    const body = rulebook.replace(/\r/g, "").trimEnd();
+    if (!context.includes(body)) throw new Error("additionalContext does not carry rulebook.md verbatim");
+  ' "$delivery_tmp" "$root/rulebook.md" 2>/dev/null; then
+    ok "session-start.sh hands the session rulebook.md verbatim, as valid hook JSON"
+  else
+    no "session-start.sh runs, but its output does not carry rulebook.md verbatim as valid hook JSON"
+  fi
+else
+  no "session-start.sh exits non-zero, so no session gets the rulebook"
+fi
+rm -f "$delivery_tmp"
+
+# 3. And no second channel. `additionalContext` goes to the session that is
+#    starting; a subagent is dispatched inside a running session and never
+#    starts one, so the hook cannot reach it. The one way the rulebook could
+#    still be inherited is a memory filename at the plugin root — a CLAUDE.md
+#    there loads as project memory in this checkout and is passed to every
+#    subagent, which no installing project reproduces.
+if [ -e "$root/CLAUDE.md" ]; then
+  no "CLAUDE.md at the repository root would load as project memory and be inherited by every subagent"
+else
+  ok "no CLAUDE.md at the repository root, so nothing here loads as inheritable project memory"
+fi
+
+# The other way in is an agent's own context: a page that reads the rulebook,
+# or a shipped skill that carries it, would put session rules in front of an
+# agent that is not the session. What binds an agent lives in the shared brief.
+rulebook_readers="$(grep -ln 'rulebook' "$root"/agents/*.md "$root"/skills/*/SKILL.md 2>/dev/null || true)"
+if [ -z "$rulebook_readers" ]; then
+  ok "no agent page and no shipped skill names the rulebook"
+else
+  no "these reach an agent and name the rulebook:"
+  echo "$rulebook_readers" | sed "s|^$root/|       |"
+fi
+
+echo
 echo "=== the run state is the channel, and no prose handoff is left"
 
 # The five handoff files used to be the channel between agents and the record
