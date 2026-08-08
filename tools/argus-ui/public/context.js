@@ -506,6 +506,11 @@ export function renderContextPanel({
 } = {}) {
   if (!lane) return '';
 
+  // Matching already treats a whitespace-only query as no query, so the box
+  // renders it as none too — otherwise clearing the search leaves a panel
+  // that differs from the never-searched one by invisible bytes in `value`.
+  if (!normalizeQuery(search)) search = '';
+
   const title = `<span class="context-title">${esc(lane.label)}</span>`;
   const shell = (dataState, inner) =>
     `<div class="panel context-panel" data-state="${dataState}" data-context-lane="${esc(lane.key)}">${inner}</div>`;
