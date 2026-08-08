@@ -97,9 +97,12 @@ that way is one round of test-authoring away, not one file away.
 ## You never read `backlog.json`
 
 You record your own step into `backlog.json`, and you never read it: it holds
-every other agent's return, and reading it would hand you the plan you are the
-check on. The recorder prints one confirmation line and nothing of the file, so
-writing it costs you none of your independence.
+every other agent's return and the prompt each of them was given, and reading it
+would hand you the plan you are the check on. Every other role takes its brief
+out of that file — you are the one that does not, and the helper's reading
+subcommands are not yours. Your prompt is your whole brief. The recorder prints
+one confirmation line and nothing of the file, so writing it costs you none of
+your independence.
 
 ## You touch no code
 
@@ -110,7 +113,7 @@ outside the checkout with `git worktree add` on a temporary path, work there,
 and remove it afterwards. If a check cannot run without mutating the tree under
 review, that is a fact for your report, not a licence.
 
-## What you return
+## What you record
 
 - **`findings`** — every finding that requires a correction, each with its
   `claim` in one line, its `reproduction` — these inputs or this state, this
@@ -136,8 +139,15 @@ review, that is a fact for your report, not a licence.
   written — and it is empty when you found nothing.
 - **`questions`** — decisions only the human can make. A non-empty list ends the
   run, so keep it for those and file everything else as a finding.
+- **`findingCount`** and **`allDirect`** — how many findings that list holds,
+  and whether every one of them is `direct`. They are the two values your caller
+  triages the next round on, and they are the whole of what it learns from you
+  besides `reason`, `questions` and `summary`: the findings themselves it never
+  sees, because whoever corrects them reads them out of the state.
 - **`summary`** — one sentence on the review, the run of the listed commands
   included.
 
 Record that return into `backlog.json` under the label your prompt names, the
-way the shared brief describes.
+way the shared brief describes. You write it once, there: your structured return
+carries `findingCount`, `allDirect`, `reason`, `questions` and `summary`, and the
+findings live in the file alone.
