@@ -1,4 +1,4 @@
-# Every agent writes its return twice, and the two copies can disagree
+# Make backlog.json the single source of truth for a run
 
 ## Problem
 
@@ -53,62 +53,117 @@ can see the difference.
 
 ### What constrains the fix
 
-- **The workflow script cannot write files.** It runs in a harness with no
-  filesystem and no Node API, so "let the script record the return" is not
-  available.
-- **A dedicated recorder agent does not help by itself.** Whatever writes the
-  file has to emit its content as output; moving the emission to another
-  agent moves the cost rather than removing it.
+- **The workflow script cannot write or read files.** This is a documented
+  property of the Claude Code workflow runtime, not a choice this project made:
+  "No direct filesystem or shell access from the workflow itself — Agents read,
+  write, and run commands. The script coordinates the agents."
+  (https://code.claude.com/docs/en/workflows). The script can compose strings
+  and dispatch agents, and nothing else. Everything that touches the repository
+  goes through an agent.
+- **The runtime's own resume is too short-lived to serve as the state.** The
+  runtime caches each agent's result and replays it on resume, but only "within
+  the same Claude Code session"; a session that exits starts the workflow
+  fresh. `backlog.json` exists to cover exactly that gap.
 - **Handoff files were already tried and rejected.** `ce82369` (#60,
   "Structured prompts replace the handoff files, and backlog.json carries the
-  run") removed exactly that mechanism. A fix that reintroduces per-role prose
-  files reopens what that change closed, so any file-based direction has to
-  say how it differs.
+  run") removed per-role prose files. This issue moves content back into a file
+  and has to stay clearly on the other side of that line: there is one
+  structured state file, it is the run state that already exists, only the
+  shipped helper writes it, every entry is addressed by its step label, and no
+  role gets a prose file of its own.
+
+## Decisions
+
+Taken with the human on 2026-08-08, before the criteria below were written.
+
+- **`backlog.json` is the single source of truth.** A role writes its return
+  once, into the file. The next role reads it from the file. The content does
+  not travel through the workflow script.
+- **A dispatch prompt carries pointers, not content.** It names the steps the
+  agent has to read; it does not paste them in.
+- **The reviewer stays blind.** It never reads the run state, because the state
+  holds the plan it is the check on. Its whole brief keeps arriving in its
+  prompt.
+- **Nothing in the file is ever deleted.** The human wants every recorded step
+  and every dispatch prompt kept for later analysis of a run.
+- **Reads are addressed, not wholesale.** Growth is handled by each reader
+  naming what it needs, not by trimming the file.
 
 ## Acceptance criteria
 
-- [ ] No agent of a run emits the same content twice. For each role, the
-      content of its step return is generated once, and the measurement that
-      shows it — the payload written versus the structured return, per role —
-      is reported.
-- [ ] What `backlog.json` holds for a step and what the workflow hands the
-      next role are the same content, and that cannot silently drift: either
-      one is derived from the other, or a check fails the step when they
-      differ. Prose asking the agent to copy carefully does not satisfy this.
-- [ ] A run resumed from `backlog.json` alone reaches the same next dispatch
-      as the live run would have — the resume path keeps working, whatever
-      replaces the double emission.
-- [ ] The recording rule reads the same way in all the places that state it:
-      `skills/agent-brief/SKILL.md`, the dispatch prompts in
-      `workflows/agile-loop.js`, and every page under `agents/` that repeats
-      it. No page is left describing the two-emission flow.
-- [ ] `backlog.mjs` keeps its guarantees whatever the calling convention
-      becomes: it stays the only writer of `backlog.json`, a repeated step
-      replaces its own earlier entry, closing an increment sheds its step
-      returns, and `record` still prints one confirmation line and no part of
-      the file, so an agent forbidden to read the state can write into it.
-- [ ] `test-repo.sh` covers the new flow: that a step's recorded state and the
-      next dispatch carry the same content, and that a resume still finds it.
-      The existing driver cases for the state channel keep passing.
+- [ ] Each role generates the content of its step return once. It writes that
+      content into `backlog.json` and does not also emit it as its structured
+      return. Report, per role, the size of what was written against the size
+      of what was returned, measured on a real run.
+- [ ] A role's structured return carries only what the workflow script needs in
+      order to steer: which increment and branch the step worked, whether the
+      step succeeded, the questions that block it, and the closed list of
+      commands the reviewer must run. State per role what its schema keeps and
+      what moved into the file.
+- [ ] A role's structured return is a projection of what it wrote into
+      `backlog.json`, and every field of it is recoverable from the file by an
+      addressed read. A step that wrote its entry and then died still hands the
+      resumed run everything the script needs to dispatch the next role. Those
+      few steering fields are the one content the file and the return share,
+      and that is accepted.
+- [ ] A role writes its entry into `backlog.json` before it returns, so a step
+      that ends between the two leaves the file authoritative rather than
+      stale.
+- [ ] A dispatch prompt names the step labels the agent must read out of
+      `backlog.json` and carries none of their content. The reviewer's prompt
+      is the single exception, and it stays a full brief.
+- [ ] The reviewer neither reads `backlog.json` nor receives any other agent's
+      output. It records its findings into the state it cannot read.
+- [ ] Every read of `backlog.json` names what it needs, and the helper returns
+      only that. No agent in a run reads the whole file.
+- [ ] No agent emits the content of `backlog.json` as its return. The step that
+      opens a run returns an index — the issue branch of the run, which step
+      labels are recorded, which increments exist, which branch each is on, and
+      which steps ended in questions — and not the file.
+- [ ] What the planner reads before closing an increment is bounded by that one
+      increment. Its size does not grow with the number of increments already
+      closed.
+- [ ] `backlog.json` keeps everything ever written to it. Closing an increment
+      no longer sheds its step returns.
+- [ ] A step written a second time keeps its earlier entry as history, and the
+      readers get the current one. Resume and the correction rounds keep
+      working on the current entry.
+- [ ] Every dispatch prompt is recorded into `backlog.json` verbatim, beside
+      the step it dispatched, including the reviewer's. The step that opens a
+      run is the exception, because it runs before the file exists.
+- [ ] A run whose session died resumes from `backlog.json` alone and reaches
+      the same next dispatch the live run would have reached. The existing
+      driver cases for resume keep passing.
+- [ ] The recording and reading rules read the same way in all the places that
+      state them: `skills/agent-brief/SKILL.md`, the dispatch prompts in
+      `workflows/agile-loop.js`, and every page under `agents/`. No page is
+      left describing the two-emission flow or the shedding close.
+- [ ] `backlog.mjs` stays the only writer of `backlog.json`, and `record` still
+      prints one confirmation line and no part of the file, so an agent
+      forbidden to read the state can still write into it.
+- [ ] `test-repo.sh` covers the new flow: that a dispatch prompt carries no
+      step content, that a role's brief reaches it through an addressed read,
+      that a closed increment keeps its returns, and that a resume still finds
+      what it needs.
 - [ ] `./test.sh` is green.
 
 ## Out of scope
 
 - **The size of what the roles return.** The researcher's 25 KB plan may well
-  be too much, but shrinking it is a separate judgment about what a plan
-  should contain. This issue is about emitting it once, whatever its size.
-- **Which fields each role's schema carries.** The schemas stay as they are
-  except where a field exists only to serve the double emission.
-- **The planner's payload envelope.** `init` takes `issue`/`workflow` where
-  the return has `questions`/`summary`; that asymmetry is part of the calling
-  convention this issue may change, but normalizing the envelope is not a goal
-  of its own.
+  be too much, but shrinking it is a separate judgment about what a plan should
+  contain. This issue is about emitting it once, whatever its size.
+- **The growth of the committed file.** `backlog.json` now grows for the whole
+  life of an issue and is committed on every step. That is intended, and no
+  rotation, compaction or archiving scheme is part of this issue.
 - **Retrofitting past runs.** Nothing has to be recovered or re-recorded from
   `backlog.json` files written before this change.
+- **The planner's payload envelope.** `init` takes `issue`/`workflow` where the
+  return has `questions`/`summary`; normalizing that asymmetry is not a goal of
+  its own, though the calling convention this issue changes may touch it.
 
 ## Notes on provenance
 
-These criteria were derived from the transcripts of run `wf_00d4cd24-684`, not
-from a grilling interview — no human has approved them yet. The numbers above
-are reproducible from the agent transcripts in that run's directory, comparing
-each agent's `Write` payload against its `StructuredOutput` input.
+The measurements come from the transcripts of run `wf_00d4cd24-684` and are
+reproducible from that run's directory, comparing each agent's `Write` payload
+against its `StructuredOutput` input. The decisions and criteria come from the
+grilling interview of 2026-08-08.
