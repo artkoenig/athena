@@ -181,8 +181,9 @@ const PLAN = {
       description:
         'The whole work order for the test-author and the only thing it is given: per case ' +
         'the criterion it proves, input, state, expected result, the level, the test file by ' +
-        'path, the framework, the conventions of that file, and the command that runs just ' +
-        'it. Name what you leave untested and why.',
+        'path, the framework, and the command that runs just it. The conventions of that ' +
+        'file live in its suite doc, not here — say only where that doc is missing or ' +
+        'wrong. Name what you leave untested and why.',
     },
     checks: {
       type: 'array',
