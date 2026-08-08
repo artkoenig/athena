@@ -88,6 +88,15 @@ export const ERROR_EVENTS = new Set([EVENT.apiError, EVENT.apiRefusal, EVENT.int
  */
 export const CONTENT_EVENTS = new Set([EVENT.apiRequestBody, EVENT.apiResponseBody]);
 
+/**
+ * Attribute names that carry content text: `body` (OTEL_LOG_RAW_API_BODIES),
+ * `prompt` (OTEL_LOG_USER_PROMPTS), `response` (OTEL_LOG_ASSISTANT_RESPONSES),
+ * `tool_input`/`tool_parameters` (OTEL_LOG_TOOL_DETAILS). The CLI truncates
+ * every one of them at CLAUDE_CODE_OTEL_CONTENT_MAX_LENGTH, which the env
+ * block raises to 1 000 000 — which is why the store budgets them by byte.
+ */
+export const CONTENT_TEXT_ATTRS = ['body', 'prompt', 'response', 'tool_input', 'tool_parameters'];
+
 /** Lane key for everything a session did outside a subagent. */
 export const MAIN_AGENT = 'main';
 

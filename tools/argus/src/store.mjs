@@ -17,6 +17,7 @@
 
 import {
   CONTENT_EVENTS,
+  CONTENT_TEXT_ATTRS,
   EVENT,
   ERROR_EVENTS,
   MAIN_AGENT,
@@ -57,9 +58,11 @@ const DEFAULTS = {
   maxMetricPoints: 50_000,
   maxSessions: 500,
   retentionMs: 24 * 60 * 60 * 1000,
-  // Raw API bodies make the count-based log window unbounded in bytes: 50 000
+  // Content text makes the count-based windows unbounded in bytes: 50 000
   // records of up to a megabyte each. This is the separate budget that bounds
-  // them, and it drops body text only — never a record and never its metadata.
+  // every content-bearing text the env block turns on — user prompts, assistant
+  // responses, tool details, the tool content carried on span events and raw
+  // API bodies — and it drops text only, never a record and never its metadata.
   maxContentBytes: 256 * 1024 * 1024,
 };
 
@@ -226,8 +229,10 @@ export class TelemetryStore {
     this.seq = 0;
     this.startedAt = Date.now();
     this.received = { traces: 0, metrics: 0, logs: 0 };
-    /** Bytes of body text held across every session, against maxContentBytes. */
+    /** Bytes of content text held across every signal, against maxContentBytes. */
     this.contentBytes = 0;
+    /** Every record that arrived carrying content text, in ingest order. */
+    this.textRecords = [];
   }
 
   /** Drop everything but keep subscribers attached. */
@@ -240,6 +245,7 @@ export class TelemetryStore {
     this.traces.clear();
     this.received = { traces: 0, metrics: 0, logs: 0 };
     this.contentBytes = 0;
+    this.textRecords = [];
   }
 
   /* ------------------------------ pub/sub ------------------------------ */
@@ -273,6 +279,12 @@ export class TelemetryStore {
       record.seq = ++this.seq;
       const sessionId = sessionIdOf(record);
       record.sessionId = sessionId;
+      // Every signal is counted in one place, so none can be forgotten.
+      record.contentBytes = contentBytesOf(record);
+      if (record.contentBytes > 0) {
+        this.contentBytes += record.contentBytes;
+        this.textRecords.push(record);
+      }
       const session = this.#session(sessionId, record);
       touched.add(sessionId);
       if (signal === 'traces') this.#applySpan(session, record);
@@ -513,7 +525,6 @@ export class TelemetryStore {
       log.bodyLength = contentMetaOf(log).bodyLength;
       log.bodyEvicted = false;
       session.content.push(log);
-      this.contentBytes += bodyBytesOf(log);
     }
 
     switch (log.eventName) {
@@ -734,6 +745,22 @@ export class TelemetryStore {
     this.#trim('metricPoints', this.options.maxMetricPoints, cutoff, (point) => point.timeMs);
     this.#evictSessions(cutoff);
     this.#evictContent();
+    if (this.textRecords.length > this.options.maxSpans + this.options.maxLogs) this.#compactTextRecords();
+  }
+
+  /**
+   * Forget the records that have no text left. One entry is a reference, so the
+   * list stays under the two record windows between compactions and this O(n)
+   * pass is amortized — filtering on every batch would scan for nothing.
+   */
+  #compactTextRecords() {
+    this.textRecords = this.textRecords.filter((record) => record.contentBytes > 0);
+  }
+
+  /** Give back what a record accounted for. Idempotent, so a double release is safe. */
+  #releaseContent(record) {
+    this.contentBytes -= record.contentBytes ?? 0;
+    record.contentBytes = 0;
   }
 
   #trim(field, max, cutoff, timeOf) {
@@ -747,13 +774,12 @@ export class TelemetryStore {
     else if (field === 'logs') this.#unindexLogs(removed);
   }
 
-  /** A log that left the window leaves the content index with it. */
+  /** A log that left the window gives back its bytes and leaves the content index. */
   #unindexLogs(removed) {
     for (const log of removed) {
+      this.#releaseContent(log);
       if (!CONTENT_EVENTS.has(log.eventName)) continue;
       const session = this.sessions.get(log.sessionId);
-      this.contentBytes -= bodyBytesOf(log);
-      dropBody(log);
       if (!session) continue;
       const at = session.content.indexOf(log);
       if (at >= 0) session.content.splice(at, 1);
@@ -761,35 +787,34 @@ export class TelemetryStore {
   }
 
   /**
-   * Hold the total body text under `maxContentBytes` by dropping the oldest
-   * bodies first. Only the text goes: the record keeps its place in the event
-   * window, its reported length and its timing, so a timeline drawn from it is
-   * unchanged and only the message list of an old point in time is gone.
+   * Hold the total content text under `maxContentBytes` by dropping the oldest
+   * text first, whichever signal carries it — prompts, assistant responses,
+   * tool details, the tool content on span events and raw API bodies. Only the
+   * text goes: the record keeps its place in the event window, its reported
+   * length and its timing, and a span event keeps its name and its time, so a
+   * timeline drawn from it is unchanged and only the content of an old point in
+   * time is gone.
    *
    * This is a memory bound and nothing else. A recording made without the
-   * content flags has no bodies to begin with, and nothing here invents one.
+   * content flags has no text to begin with, and nothing here invents one.
    */
   #evictContent() {
     const budget = this.options.maxContentBytes;
     if (!(budget >= 0) || this.contentBytes <= budget) return;
-    const withBodies = [];
-    for (const session of this.sessions.values()) {
-      for (const record of session.content) {
-        if (typeof record.attrs?.body === 'string') withBodies.push(record);
-      }
-    }
-    withBodies.sort((a, b) => a.timeMs - b.timeMs || a.seq - b.seq);
-    for (const record of withBodies) {
+    const withText = this.textRecords.filter((record) => record.contentBytes > 0);
+    const timeOf = (record) => record.timeMs || record.startMs || 0;
+    withText.sort((a, b) => timeOf(a) - timeOf(b) || a.seq - b.seq);
+    for (const record of withText) {
       if (this.contentBytes <= budget) break;
-      this.contentBytes -= bodyBytesOf(record);
-      dropBody(record);
-      record.bodyEvicted = true;
+      this.#releaseContent(record);
+      dropContent(record);
     }
   }
 
   #unindexSpans(removed) {
     const byTrace = new Map();
     for (const span of removed) {
+      this.#releaseContent(span);
       if (!span.traceId) continue;
       let ids = byTrace.get(span.traceId);
       if (!ids) {
@@ -828,13 +853,17 @@ export class TelemetryStore {
     this.sessions.delete(id);
     // The session object carries the content index and the agent maps, so they
     // go with it — but the bytes they accounted for have to be given back.
-    for (const record of session.content) this.contentBytes -= bodyBytesOf(record);
     for (const traceId of session.traceIds) {
       this.traces.delete(traceId);
       this.spansByTrace.delete(traceId);
     }
-    this.spans = this.spans.filter((span) => span.sessionId !== id);
-    this.logs = this.logs.filter((log) => log.sessionId !== id);
+    const keep = (record) => {
+      if (record.sessionId !== id) return true;
+      this.#releaseContent(record);
+      return false;
+    };
+    this.spans = this.spans.filter(keep);
+    this.logs = this.logs.filter(keep);
     this.metricPoints = this.metricPoints.filter((point) => point.sessionId !== id);
   }
 
@@ -1210,15 +1239,50 @@ export class TelemetryStore {
   }
 }
 
-/** Bytes of body text one content record is holding, 0 once it has none. */
-function bodyBytesOf(record) {
-  const body = record.attrs?.body;
-  return typeof body === 'string' ? Buffer.byteLength(body) : 0;
+/**
+ * Bytes of content text one record is holding, 0 once it has none: the named
+ * content attributes, plus — on a span — every string on every span event.
+ * Span events exist to carry tool content in this CLI, and counting their whole
+ * attribute set is both simpler and more conservative than guessing which key
+ * the `tool.output` event uses.
+ */
+function contentBytesOf(record) {
+  let bytes = 0;
+  const attrs = record.attrs;
+  if (attrs) {
+    for (const key of CONTENT_TEXT_ATTRS) {
+      const value = attrs[key];
+      if (typeof value === 'string') bytes += Buffer.byteLength(value);
+    }
+  }
+  if (Array.isArray(record.events)) {
+    for (const event of record.events) {
+      for (const value of Object.values(event?.attrs ?? {})) {
+        if (typeof value === 'string') bytes += Buffer.byteLength(value);
+      }
+    }
+  }
+  return bytes;
 }
 
 /** Let go of the text, keep everything that describes it. */
-function dropBody(record) {
-  if (record.attrs && 'body' in record.attrs) delete record.attrs.body;
+function dropContent(record) {
+  const attrs = record.attrs;
+  if (attrs) {
+    for (const key of CONTENT_TEXT_ATTRS) {
+      if (key in attrs) delete attrs[key];
+    }
+  }
+  if (Array.isArray(record.events)) {
+    // The event keeps its name and its time: a timeline still knows a tool
+    // produced output there, and only the payload is gone.
+    for (const event of record.events) {
+      if (event?.attrs) event.attrs = {};
+    }
+  }
+  record.contentEvicted = true;
+  // `contentItem` serves `bodyEvicted` over the API, so the body path is unchanged.
+  if (CONTENT_EVENTS.has(record.eventName)) record.bodyEvicted = true;
 }
 
 /**

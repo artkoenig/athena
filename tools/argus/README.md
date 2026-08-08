@@ -587,10 +587,13 @@ npm run demo      # emit a synthetic session
 - **A measurement with bodies is orders of magnitude larger.** Content is on by default, and
   a single request body runs to hundreds of kilobytes, so `logs.jsonl` grows by megabytes
   per minute of real work — plan for gigabytes where the same run without content wrote
-  megabytes. In memory a separate budget bounds it: past `maxContentBytes` (256 MB) the
-  oldest body **text** is dropped, while its length, timing and lane stay, so the timeline
-  is unchanged and only the message list of a long-past moment is gone. On disk the file
-  rotates at 512 MB with one previous generation kept.
+  megabytes. In memory a separate budget bounds every content-bearing text the env block
+  turns on — user prompts, assistant responses, tool details, the tool content carried on
+  span events and the raw bodies: past `maxContentBytes` (256 MB) the oldest **text** is
+  dropped, whichever signal carries it, while the record, its timing, its lane, the
+  reported body length and a span event's own name and time stay, so the timeline is
+  unchanged and only the content of a long-past moment is gone. On disk the file rotates
+  at 512 MB with one previous generation kept.
 - **Attribution to a subagent needs traces.** `agent.name` does not arrive on body events
   (checked: 2.1.226); the lane is resolved from the record's span, up the tree to the
   `claude_code.tool.execution` span of the `Agent` call that dispatched it. Without traces
