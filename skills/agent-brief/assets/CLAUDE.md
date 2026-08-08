@@ -8,7 +8,7 @@ Tests for `backlog.mjs`, the CLI that is the only writer of a run's `backlog.jso
 
 The line the whole suite defends is that nothing is deleted and nothing leaks: a close and a re-record keep what they replace, and a read returns only what its caller named.
 
-One case at the end is about what the recorder does *not* do. It used to push every document it wrote to a telemetry collector, which put a network call, a two-second timeout and a pair of environment variables inside every step of every run; that job belongs to the `FileChanged` hook on `backlog.json` now (`hooks/backlog-changed.mjs`, with its own suite). So the case runs the whole sequence of writing subcommands with a real, listening, correctly named collector in the environment under all four variable names — and asserts it receives nothing at all, while every write still lands on disk.
+One case at the end is about what the recorder does *not* do. It used to push every document it wrote to a telemetry collector, which put a network call, a two-second timeout and a pair of environment variables inside every step of every run; that job belongs to a hook watching from outside now (`hooks/backlog-changed.mjs`, with its own suite). So the case runs the whole sequence of writing subcommands with a real, listening, correctly named collector in the environment under all four variable names — and asserts it receives nothing at all, while every write still lands on disk.
 
 ## Helpers and fixtures
 

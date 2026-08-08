@@ -10,9 +10,9 @@
         ]
       }
     ],
-    "FileChanged": [
+    "PostToolUse": [
       {
-        "matcher": "backlog.json",
+        "matcher": "Bash",
         "hooks": [
           {
             "type": "command",

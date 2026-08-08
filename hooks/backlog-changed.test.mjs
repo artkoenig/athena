@@ -43,7 +43,7 @@ const stateOf = (extra = {}) => ({
 });
 
 // Writes the state the way the recorder does — through a temp file and a
-// rename — so what the hook reads is what a real change leaves behind.
+// rename — so what the hook reads is what a real write leaves behind.
 function writeState(dir, state) {
   const file = path.join(dir, 'backlog.json');
   fs.writeFileSync(file + '.tmp', JSON.stringify(state, null, 2) + '\n');
@@ -92,8 +92,8 @@ function collectorStub(options = {}) {
 }
 
 // Spawns the hook the way Claude Code does — the event as JSON on stdin — and
-// resolves to { code, stdout, stderr }. `input` goes in verbatim, so a case
-// can hand it something that is not JSON at all.
+// resolves to { code, stdout, stderr }. `input` goes in verbatim when it is a
+// string, so a case can hand it something that is not JSON at all.
 function runHook(input, env) {
   const child = spawn(hook, [], { env, stdio: ['pipe', 'pipe', 'pipe'] });
   let stdout = '';
@@ -108,23 +108,35 @@ function runHook(input, env) {
   });
 }
 
-const event = (file, extra = {}) => ({
+// A well-formed PostToolUse payload for a Bash call, common fields included.
+// `agent_id` and `agent_type` are there because every write of a run state is
+// made by a subagent, and that is the shape the hook actually meets.
+const event = (command, extra = {}) => ({
   session_id: 'session-1',
   transcript_path: '/dev/null',
-  cwd: '/home/someone/project',
+  cwd: '/nonexistent-cwd',
   permission_mode: 'default',
-  hook_event_name: 'FileChanged',
-  file_path: file,
-  change_type: 'modified',
+  agent_id: 'agent-7',
+  agent_type: 'uroboros:implementer',
+  hook_event_name: 'PostToolUse',
+  tool_name: 'Bash',
+  tool_input: { command },
+  tool_response: 'recorded implement:i1.0\n',
+  tool_use_id: 'toolu_1',
   ...extra,
 });
+
+// The recorder is always invoked like this, with the helper's own path in
+// front and the state's path as the first argument of the subcommand.
+const recordCall = (file) =>
+  `node "/plugins/uroboros/skills/agent-brief/assets/backlog.mjs" record ${file} i1 implement:i1.0 /tmp/return.json`;
 
 test('with no collector in the environment nothing is sent, and nothing is said', async () => {
   const dir = tmpDir();
   const file = writeState(dir, stateOf());
   const stub = await collectorStub();
   try {
-    const result = await runHook(event(file), cleanEnv());
+    const result = await runHook(event(recordCall(file)), cleanEnv());
 
     assert.equal(result.code, 0, 'telemetry being off is the ordinary case, not a failure');
     assert.equal(result.stderr, '', 'an unconfigured collector is not worth a line in the debug log');
@@ -134,12 +146,12 @@ test('with no collector in the environment nothing is sent, and nothing is said'
   }
 });
 
-test('a changed run state is posted whole to the collector, identified by the issue it names', async () => {
+test('a write of the run state is posted whole to the collector, identified by the issue it names', async () => {
   const dir = tmpDir();
   const file = writeState(dir, stateOf({ increments: [{ id: 'i1', status: 'todo' }], running: { label: 'research:i1.0' } }));
   const stub = await collectorStub();
   try {
-    const result = await runHook(event(file), cleanEnv({ OTEL_EXPORTER_OTLP_ENDPOINT: stub.url }));
+    const result = await runHook(event(recordCall(file)), cleanEnv({ OTEL_EXPORTER_OTLP_ENDPOINT: stub.url }));
 
     assert.equal(result.code, 0);
     assert.equal(stub.requests.length, 1);
@@ -162,7 +174,7 @@ test('a state that names no issue is filed under the directory it lives in, neve
   const file = writeState(dir, stateOf({ issue: '' }));
   const stub = await collectorStub();
   try {
-    await runHook(event(file), cleanEnv({ OTEL_EXPORTER_OTLP_ENDPOINT: stub.url }));
+    await runHook(event(recordCall(file)), cleanEnv({ OTEL_EXPORTER_OTLP_ENDPOINT: stub.url }));
 
     assert.equal(stub.requests.length, 1);
     assert.equal(JSON.parse(stub.requests[0].body).id, dir);
@@ -171,90 +183,154 @@ test('a state that names no issue is filed under the directory it lives in, neve
   }
 });
 
-test('a created state is sent like a modified one — the opening cut is a change too', async () => {
+test('a path relative to the command is resolved against the directory the tool ran in, not this process', async () => {
+  const dir = tmpDir();
+  fs.mkdirSync(path.join(dir, 'docs', 'issues', 'x'), { recursive: true });
+  writeState(path.join(dir, 'docs', 'issues', 'x'), stateOf());
+  const stub = await collectorStub();
+  try {
+    const result = await runHook(
+      event('node backlog.mjs record docs/issues/x/backlog.json i1 implement:i1.0 /tmp/r.json', { cwd: dir }),
+      cleanEnv({ OTEL_EXPORTER_OTLP_ENDPOINT: stub.url }),
+    );
+
+    assert.equal(result.code, 0);
+    assert.equal(stub.requests.length, 1, "a relative path is how an agent actually writes it, and the event's cwd is the only thing that can resolve it");
+  } finally {
+    await stub.close();
+  }
+});
+
+test('a state unchanged since the last send is not sent again, so the reads of a run cost nothing', async () => {
   const dir = tmpDir();
   const file = writeState(dir, stateOf());
   const stub = await collectorStub();
   try {
-    await runHook(event(file, { change_type: 'created' }), cleanEnv({ OTEL_EXPORTER_OTLP_ENDPOINT: stub.url }));
+    const env = cleanEnv({ OTEL_EXPORTER_OTLP_ENDPOINT: stub.url });
 
-    assert.equal(stub.requests.length, 1, 'the first write of a run is the one a watching human is most waiting for');
+    await runHook(event(recordCall(file)), env);
+    assert.equal(stub.requests.length, 1, 'the write is sent');
+
+    // What a run does between two writes: index, steps, codemap — every one of
+    // them a Bash call naming the state, and not one of them a change.
+    await runHook(event(`node backlog.mjs index ${file}`), env);
+    await runHook(event(`node backlog.mjs steps ${file} i1 research:i1.0 --fields plan`), env);
+    await runHook(event(`node backlog.mjs codemap ${file}`), env);
+    assert.equal(stub.requests.length, 1, 'a read names the state and changes nothing, so it must not reach the collector');
+
+    writeState(dir, stateOf({ increments: [{ id: 'i1', status: 'done' }] }));
+    await runHook(event(recordCall(file)), env);
+    assert.equal(stub.requests.length, 2, 'the next real write is sent');
+    assert.equal(JSON.parse(stub.requests[1].body).state.increments[0].status, 'done');
   } finally {
     await stub.close();
   }
 });
 
-test('a deleted state sends nothing and withdraws nothing', async () => {
+test('a send the collector refused is retried by the next call, not remembered as delivered', async () => {
   const dir = tmpDir();
-  const file = path.join(dir, 'backlog.json');
-  const stub = await collectorStub();
+  const file = writeState(dir, stateOf());
+  const refusing = await collectorStub({ status: 500 });
   try {
-    const result = await runHook(event(file, { change_type: 'deleted' }), cleanEnv({ OTEL_EXPORTER_OTLP_ENDPOINT: stub.url }));
+    const result = await runHook(event(recordCall(file)), cleanEnv({ OTEL_EXPORTER_OTLP_ENDPOINT: refusing.url }));
+    assert.equal(result.code, 0, "a 500 is the collector's problem, never the run's");
+    assert.match(result.stderr, /answered 500/);
 
-    assert.equal(result.code, 0);
-    assert.equal(stub.requests.length, 0, 'the collector keeps the last version it was given, which is what a finished run should read as');
+    // Same bytes, and it goes again: the memo is written only once the
+    // collector has actually taken the document.
+    await runHook(event(recordCall(file)), cleanEnv({ OTEL_EXPORTER_OTLP_ENDPOINT: refusing.url }));
+    assert.equal(refusing.requests.length, 2);
   } finally {
-    await stub.close();
+    await refusing.close();
   }
 });
 
-test('a file that is not a run state is not sent, however the matcher was read', async () => {
+test('a Bash call that never mentions a run state is dropped without a word', async () => {
   const dir = tmpDir();
-  const file = path.join(dir, 'backlogXjson');
-  fs.writeFileSync(file, JSON.stringify(stateOf()));
-  const stub = await collectorStub();
-  try {
-    const result = await runHook(event(file), cleanEnv({ OTEL_EXPORTER_OTLP_ENDPOINT: stub.url }));
-
-    assert.equal(result.code, 0);
-    assert.equal(stub.requests.length, 0, 'the matcher is a pattern the CLI applies; this is the guarantee');
-    assert.match(result.stderr, /not a run state/);
-  } finally {
-    await stub.close();
-  }
-});
-
-test('an input that is not JSON, and one that names no file, cost the run nothing', async () => {
+  writeState(dir, stateOf());
   const stub = await collectorStub();
   try {
     const env = cleanEnv({ OTEL_EXPORTER_OTLP_ENDPOINT: stub.url });
 
-    const garbage = await runHook('not json at all', env);
-    assert.equal(garbage.code, 0);
-    assert.match(garbage.stderr, /not JSON/);
-
-    const nameless = await runHook({ hook_event_name: 'FileChanged', change_type: 'modified' }, env);
-    assert.equal(nameless.code, 0);
-    assert.match(nameless.stderr, /no file_path/);
-
+    for (const command of ['npm test', 'git commit -m "backlog"', 'node backlog.mjs --help']) {
+      const result = await runHook(event(command), env);
+      assert.equal(result.code, 0);
+      assert.equal(result.stderr, '', `\`${command}\` is the overwhelming majority of Bash calls and must cost nothing at all`);
+    }
     assert.equal(stub.requests.length, 0);
   } finally {
     await stub.close();
   }
 });
 
-test('a state that is gone or does not parse is skipped, and the write that follows sends it', async () => {
+test('the half-written file the recorder renames away is not mistaken for the state', async () => {
+  const dir = tmpDir();
+  const file = writeState(dir, stateOf());
+  fs.writeFileSync(file + '.tmp', '{ "issue": "docs/issu');
+  const stub = await collectorStub();
+  try {
+    const result = await runHook(event(`cat ${file}.tmp`), cleanEnv({ OTEL_EXPORTER_OTLP_ENDPOINT: stub.url }));
+
+    assert.equal(result.code, 0);
+    assert.equal(stub.requests.length, 0, 'backlog.json.tmp is not backlog.json, and the boundary in the pattern is what says so');
+  } finally {
+    await stub.close();
+  }
+});
+
+test('a tool that is not Bash is dropped, however the matcher was read', async () => {
+  const dir = tmpDir();
+  const file = writeState(dir, stateOf());
+  const stub = await collectorStub();
+  try {
+    const result = await runHook(
+      event(recordCall(file), { tool_name: 'Read', tool_input: { file_path: file } }),
+      cleanEnv({ OTEL_EXPORTER_OTLP_ENDPOINT: stub.url }),
+    );
+
+    assert.equal(result.code, 0);
+    assert.equal(stub.requests.length, 0, 'the matcher is a pattern the CLI applies; this is the guarantee');
+  } finally {
+    await stub.close();
+  }
+});
+
+test('an input that is not JSON costs the run nothing', async () => {
+  const stub = await collectorStub();
+  try {
+    const result = await runHook('not json at all', cleanEnv({ OTEL_EXPORTER_OTLP_ENDPOINT: stub.url }));
+
+    assert.equal(result.code, 0);
+    assert.match(result.stderr, /not JSON/);
+    assert.equal(stub.requests.length, 0);
+  } finally {
+    await stub.close();
+  }
+});
+
+test('a state that is not there, and one that does not parse, are skipped and the write that follows sends it', async () => {
   const dir = tmpDir();
   const file = path.join(dir, 'backlog.json');
   const stub = await collectorStub();
   try {
     const env = cleanEnv({ OTEL_EXPORTER_OTLP_ENDPOINT: stub.url });
 
-    const missing = await runHook(event(file), env);
+    // The opening cut announces itself before `init` has written anything.
+    const missing = await runHook(event(`node backlog.mjs start ${file} - decompose /tmp/p.txt`), env);
     assert.equal(missing.code, 0);
     assert.match(missing.stderr, /cannot read/);
 
     fs.writeFileSync(file, '{ "issue": "docs/issu');
-    const half = await runHook(event(file), env);
+    const half = await runHook(event(recordCall(file)), env);
     assert.equal(half.code, 0);
-    assert.match(half.stderr, /cannot read/);
+    assert.match(half.stderr, /does not parse/);
     assert.equal(stub.requests.length, 0);
 
     writeState(dir, stateOf());
-    const whole = await runHook(event(file), env);
+    const whole = await runHook(event(recordCall(file)), env);
     assert.equal(whole.code, 0);
     assert.equal(whole.stderr, '');
-    assert.equal(stub.requests.length, 1, 'the next change sends the whole document, so nothing is lost by skipping');
+    assert.equal(stub.requests.length, 1, 'the next write sends the whole document, so nothing is lost by skipping');
   } finally {
     await stub.close();
   }
@@ -265,7 +341,7 @@ test('the token in the OTLP headers variable rides as the bearer header', async 
   const file = writeState(dir, stateOf());
   const stub = await collectorStub();
   try {
-    await runHook(event(file), cleanEnv({
+    await runHook(event(recordCall(file)), cleanEnv({
       OTEL_EXPORTER_OTLP_ENDPOINT: stub.url,
       OTEL_EXPORTER_OTLP_HEADERS: 'Authorization=Bearer s3cret',
     }));
@@ -282,7 +358,7 @@ test('UROBOROS_OBS_URL and UROBOROS_OBS_TOKEN configure the send when the OTLP n
   const file = writeState(dir, stateOf());
   const stub = await collectorStub();
   try {
-    await runHook(event(file), cleanEnv({ UROBOROS_OBS_URL: stub.url, UROBOROS_OBS_TOKEN: 'env-secret' }));
+    await runHook(event(recordCall(file)), cleanEnv({ UROBOROS_OBS_URL: stub.url, UROBOROS_OBS_TOKEN: 'env-secret' }));
 
     assert.equal(stub.requests.length, 1);
     assert.equal(stub.requests[0].url, '/api/runs');
@@ -292,19 +368,9 @@ test('UROBOROS_OBS_URL and UROBOROS_OBS_TOKEN configure the send when the OTLP n
   }
 });
 
-test('a collector that refuses the state, that refuses the connection, or that never answers, all exit 0', async () => {
+test('a collector that refuses the connection, and one that never answers, both exit 0', async () => {
   const dir = tmpDir();
   const file = writeState(dir, stateOf());
-
-  const refusing = await collectorStub({ status: 500 });
-  try {
-    const result = await runHook(event(file), cleanEnv({ OTEL_EXPORTER_OTLP_ENDPOINT: refusing.url }));
-    assert.equal(result.code, 0, 'a 500 is the collector\'s problem, never the run\'s');
-    assert.equal(refusing.requests.length, 1, 'the send did reach it — it is the answer that is being tolerated, not a skipped send');
-    assert.match(result.stderr, /answered 500/);
-  } finally {
-    await refusing.close();
-  }
 
   // Claim a free port and give it straight back: it now refuses outright.
   // Using a just-closed port rather than a fixed one keeps this case from
@@ -312,13 +378,13 @@ test('a collector that refuses the state, that refuses the connection, or that n
   const gone = await collectorStub();
   const deadUrl = gone.url;
   await gone.close();
-  const refused = await runHook(event(file), cleanEnv({ OTEL_EXPORTER_OTLP_ENDPOINT: deadUrl }));
+  const refused = await runHook(event(recordCall(file)), cleanEnv({ OTEL_EXPORTER_OTLP_ENDPOINT: deadUrl }));
   assert.equal(refused.code, 0);
   assert.match(refused.stderr, /send failed/);
 
   const hanging = await collectorStub({ hang: true });
   try {
-    const result = await runHook(event(file), cleanEnv({ OTEL_EXPORTER_OTLP_ENDPOINT: hanging.url }));
+    const result = await runHook(event(recordCall(file)), cleanEnv({ OTEL_EXPORTER_OTLP_ENDPOINT: hanging.url }));
     // No wall-clock assertion: a spawn's duration measures process start and
     // the machine's load. What matters is that it ends at all — a hook that
     // waited on the collector forever would hang this suite, not fail it.
@@ -335,8 +401,8 @@ test('nothing is ever written to stdout: a hook that prints is a hook whose outp
   const file = writeState(dir, stateOf());
   const stub = await collectorStub();
   try {
-    const sent = await runHook(event(file), cleanEnv({ OTEL_EXPORTER_OTLP_ENDPOINT: stub.url }));
-    const quiet = await runHook(event(file), cleanEnv());
+    const sent = await runHook(event(recordCall(file)), cleanEnv({ OTEL_EXPORTER_OTLP_ENDPOINT: stub.url }));
+    const quiet = await runHook(event('npm test'), cleanEnv());
 
     assert.equal(sent.stdout, '');
     assert.equal(quiet.stdout, '');

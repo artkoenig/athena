@@ -70,11 +70,11 @@ script.
 
 ## Watch a run while it runs
 
-An issue's run state arrives on its own. The plugin subscribes to
-`backlog.json` with a `FileChanged` hook, so every write an agent makes lands
-at `POST /api/runs` as it happens — the cut, each step's return, and the step
-now in flight while it is still in flight. `GET /api/runs` lists what has
-arrived.
+An issue's run state arrives on its own. A hook of the plugin follows
+`backlog.json`, so every write an agent makes lands at `POST /api/runs` as it
+happens — the cut, each step's return, and the step now in flight while it is
+still in flight. `GET /api/runs` lists what has arrived, `GET /api/runs/<id>`
+is one run whole.
 
 Nothing has to be turned on for it beyond the environment block above, and
 nothing has to be turned off: with no collector named, the hook reads its input

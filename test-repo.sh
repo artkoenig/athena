@@ -202,13 +202,18 @@ echo "=== the collector is reached from the hook and from nowhere else"
 # tree shows neither.
 
 # 1. Wired at all. A hook script nothing dispatches sends nothing, and a run
-#    would look stuck to whoever is watching it with no sign why.
-if grep -q 'FileChanged' "$root/hooks/hooks.json" &&
+#    would look stuck to whoever is watching it with no sign why. PostToolUse
+#    on Bash and not the FileChanged this describes: FileChanged is not in
+#    every Claude Code that runs this plugin yet, and a hook that silently
+#    never fires is worse than one that fires often. The recorder is always
+#    run as a Bash call, and tool events fire inside a subagent too, which is
+#    where every write of a run state is made.
+if grep -q 'PostToolUse' "$root/hooks/hooks.json" &&
   grep -q 'backlog-changed.mjs' "$root/hooks/hooks.json" &&
-  grep -q '"matcher": "backlog.json"' "$root/hooks/hooks.json"; then
-  ok "hooks.json subscribes backlog-changed.mjs to FileChanged on backlog.json"
+  grep -q '"matcher": "Bash"' "$root/hooks/hooks.json"; then
+  ok "hooks.json subscribes backlog-changed.mjs to PostToolUse on Bash"
 else
-  no "hooks.json does not wire backlog-changed.mjs to FileChanged on backlog.json — no run state would reach a collector"
+  no "hooks.json does not wire backlog-changed.mjs to PostToolUse on Bash — no run state would reach a collector"
 fi
 
 # 2. The script itself has to exist, parse, and be runnable as the command

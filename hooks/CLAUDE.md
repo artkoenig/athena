@@ -3,17 +3,30 @@
 The plugin's two hooks, declared in `hooks.json` and shipped by `plugin.json`.
 
 `session-start.sh` puts the rulebook in front of a starting session and warns a
-cloud session running an outdated plugin. `backlog-changed.mjs` is the
-`FileChanged` subscription on `backlog.json`: it pushes a run's state to the
-telemetry collector as the run writes it.
+cloud session running an outdated plugin. `backlog-changed.mjs` follows
+`backlog.json` and pushes a run's state to the telemetry collector as the run
+writes it.
 
 That second one is the only place in uroboros that talks to a collector. The
 recorder every agent writes its step through used to do the send itself, which
 put a network call and a pair of environment variables inside every step of
 every run and gave the workflow's agents a reference to something they must
-know nothing about. The hook is what replaced it: the writers write, and the
-session's own file watcher notices. A run nobody is watching pays nothing,
-because the hook fires on a change and never otherwise.
+know nothing about. The hook is what replaced it: the writers write, and this
+watches from outside.
+
+It hangs off `PostToolUse` on `Bash` rather than the `FileChanged` event that
+describes exactly what it does, because `FileChanged` is not in every Claude
+Code that runs this plugin yet and a hook that silently never fires is worse
+than one that fires often. The recorder is always run as a Bash call, and tool
+events fire inside a subagent the same as in the main conversation — which
+matters, because every write of a run state is made by a subagent.
+
+Firing often is paid for by the order of the gates: no collector in the
+environment first, then the tool, then a command that never mentions a run
+state, then a document identical to the one already sent. A run reads its state
+several times for every write, and that last gate — a digest of the last
+accepted document, kept per file in the temp directory — is what keeps the
+reads off the wire.
 
 ## Tests for `backlog-changed.mjs`
 
@@ -26,11 +39,15 @@ real HTTP server.
 The environment gate (no collector named means nothing sent and not a word
 said); the send itself (`POST /api/runs`, a JSON content-type, the whole
 document, and the run identified by the `issue` the state names); the fallback
-id for a state that names none; `created` sent like `modified` and `deleted`
-sent not at all; a `file_path` whose basename is not `backlog.json` refused
-however the matcher was read; an input that is not JSON and one that names no
-file; a state that is gone or half-written skipped, with the write that follows
-sending it whole; both environment name pairs
+id for a state that names none; a relative path resolved against the event's
+`cwd` and not this process's; the unchanged-document gate, with the three reads
+a run makes between two writes sending nothing and the next real write sending
+again; a refused send retried by the next call rather than remembered as
+delivered; a Bash call that never mentions a run state dropped without a word;
+`backlog.json.tmp` not mistaken for `backlog.json`; a tool that is not Bash
+refused however the matcher was read; an input that is not JSON; a state that
+is not there and one that does not parse, with the write that follows sending
+it whole; both environment name pairs
 (`OTEL_EXPORTER_OTLP_ENDPOINT`/`OTEL_EXPORTER_OTLP_HEADERS` and
 `UROBOROS_OBS_URL`/`UROBOROS_OBS_TOKEN`) configuring the address and the bearer
 header; a collector that answers 500, one that refuses the connection and one
@@ -38,9 +55,10 @@ that never answers, all three exiting 0; and stdout staying empty on every
 path.
 
 The line the whole suite defends is that this hook cannot cost a run anything.
-`FileChanged` has no decision control — the change already happened — so every
-failure exits 0 and says why on stderr, which on a zero exit goes to the debug
-log and never in front of the human.
+`PostToolUse` cannot block — the tool already ran — and a non-zero exit only
+puts stderr in front of the agent as feedback, which would turn a collector's
+bad day into something an agent has to reason about. So every failure exits 0
+and says why on stderr, which on a zero exit goes to the debug log.
 
 ### Helpers and fixtures
 
@@ -65,19 +83,30 @@ All defined at the top of the file; every case reuses them.
 - `runHook(input, env)` — spawns the hook with `input` on stdin (verbatim when
   it is a string, so a case can hand it something that is not JSON) and
   resolves to `{ code, stdout, stderr }`.
-- `event(file, extra)` — a well-formed `FileChanged` payload, common fields
-  included; spread `extra` to change `change_type` or drop a field.
+- `event(command, extra)` — a well-formed `PostToolUse` payload for a Bash call
+  running `command`, common fields included. It carries `agent_id` and
+  `agent_type` because every write of a run state is made by a subagent, and
+  that is the shape the hook actually meets; spread `extra` to change the tool,
+  the `cwd` or the input.
+- `recordCall(file)` — the command line the recorder is actually invoked with,
+  so a case exercises the string the hook has to find a path in rather than a
+  convenient one.
 
 ### Where a new case belongs
 
 Flat top-level `test(...)` calls after the helpers, in the order the hook's own
-concerns run: the environment gate, the send, the ids, the change types, the
-inputs it refuses, the file states it tolerates, the two environment name
-pairs, the collector answers it tolerates, and the stdout guarantee last.
+gates run: the environment, the send, the ids, the unchanged-document gate and
+its retry, the calls it drops, the inputs it refuses, the file states it
+tolerates, the two environment name pairs, the collector answers it tolerates,
+and the stdout guarantee last.
 
 A case about something *not* being sent asserts on `stub.requests.length`
 against a stub that is genuinely listening — a stub that was never started
 would pass the same assertion for the wrong reason.
+
+A case about the unchanged-document gate needs its own temp directory: the
+digest is remembered per absolute path across processes, so two cases sharing a
+directory would share a memo.
 
 ### Faked vs real
 
