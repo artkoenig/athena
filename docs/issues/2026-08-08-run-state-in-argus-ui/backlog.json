@@ -55,6 +55,77 @@
             "questions": [],
             "summary": "The recorder gains one best-effort, silent POST of the document it just wrote to the collector named by the OTLP environment, sent from a single site in its dispatch tail and bounded by a 2 s abort, with the suite and its doc extended to cover the send, the silence and the untouched stdout and exit codes."
           }
+        },
+        {
+          "label": "tests:recorder.0",
+          "at": "2026-08-08T10:53:45.991Z",
+          "return": {
+            "summary": "Wrote all eight planned cases plus their two shared confirmation/silence assertions into skills/agent-brief/assets/backlog.test.mjs, added the cleanEnv/collectorStub/runAsync helpers and scrubbed run()/runFails() to use cleanEnv(), updated skills/agent-brief/assets/CLAUDE.md for all five doc changes the plan named, and confirmed with `node --test skills/agent-brief/assets/backlog.test.mjs` (30 cases, exit non-zero: 25 pass, 5 fail) that the five cases needing a real send fail today for the right reason (zero requests recorded) while the two silence/unchanged-output cases and the connection-refusal case already pass, as the plan expects.",
+            "cases": [
+              {
+                "case": "every write sends the document it just wrote to the collector, and read sends nothing",
+                "file": "skills/agent-brief/assets/backlog.test.mjs",
+                "testName": "every write sends the document it just wrote to the collector, and read sends nothing",
+                "expected": "Exactly 4 recorded requests in order (init, record, branch, close), each POST /api/runs with a JSON content-type and body { id: 'docs/issues/x', state: X } where X deep-equals the file right after that write; the fourth request's state shows increments[0].status 'done' and increments[0].steps []; read adds no fifth request.",
+                "got": "Fails: 'read must add no fifth request — it never writes, so it never sends\\n\\n0 !== 4' — the recorder makes no send today, so stub.requests stays empty instead of holding four."
+              },
+              {
+                "case": "the confirmation lines and the exit codes are unchanged with a collector configured",
+                "file": "skills/agent-brief/assets/backlog.test.mjs",
+                "testName": "the confirmation lines and the exit codes are unchanged with a collector configured",
+                "expected": "init's stdout exactly 'wrote <path> with 1 increment(s)\\n', record's exactly 'recorded research:i1.0\\n', branch's exactly 'recorded branch some-branch on i1\\n', close's exactly 'closed i1 as done\\n', every stderr empty.",
+                "got": "Passes today, as the plan expects: with no send implemented yet, stdout and stderr are already exactly today's confirmation lines and nothing more. This case guards that a collector being configured never changes them once the send exists."
+              },
+              {
+                "case": "the token in the OTLP headers variable rides as the bearer header",
+                "file": "skills/agent-brief/assets/backlog.test.mjs",
+                "testName": "the token in the OTLP headers variable rides as the bearer header",
+                "expected": "One request recorded, with headers.authorization === 'Bearer s3cret'.",
+                "got": "Fails: 'Expected values to be strictly equal:\\n\\n0 !== 1' on stub.requests.length — no request reaches the stub at all yet."
+              },
+              {
+                "case": "UROBOROS_OBS_URL and UROBOROS_OBS_TOKEN configure the send when the OTLP names are absent",
+                "file": "skills/agent-brief/assets/backlog.test.mjs",
+                "testName": "UROBOROS_OBS_URL and UROBOROS_OBS_TOKEN configure the send when the OTLP names are absent",
+                "expected": "One request at '/api/runs' with headers.authorization === 'Bearer env-secret'.",
+                "got": "Fails: 'Expected values to be strictly equal:\\n\\n0 !== 1' on stub.requests.length — same absence of any send."
+              },
+              {
+                "case": "with no collector in the environment nothing is sent",
+                "file": "skills/agent-brief/assets/backlog.test.mjs",
+                "testName": "with no collector in the environment nothing is sent",
+                "expected": "stub.requests stays empty across init and record with all four env names absent; both exit 0 with today's confirmation lines and empty stderr; backlog.json carries the recorded step.",
+                "got": "Passes both before and after the change is expected, by the plan's own design: it exists to keep this silence from regressing once the send lands, not to prove the send's absence."
+              },
+              {
+                "case": "a collector that refuses the connection costs neither the exit code nor a word of output",
+                "file": "skills/agent-brief/assets/backlog.test.mjs",
+                "testName": "a collector that refuses the connection costs neither the exit code nor a word of output",
+                "expected": "Both init and record resolve with exit 0, stdout exactly the two confirmation lines, stderr empty, and backlog.json holds the step, against a url whose port has just been closed so the connection is refused outright.",
+                "got": "Passes today, but only vacuously: since no send is attempted at all yet, the outcome is indistinguishable from a correct implementation. Recorded under openQuestions — a closed port leaves no server able to record whether a connection was even tried, so this case structurally cannot go red before the change the way the plan's own 'what is already red' note expects of it."
+              },
+              {
+                "case": "a collector that never answers costs at most a short wait, and nothing else",
+                "file": "skills/agent-brief/assets/backlog.test.mjs",
+                "testName": "a collector that never answers costs at most a short wait, and nothing else",
+                "expected": "runAsync's record call resolves rather than rejecting with a killed child, exit 0, stdout exactly 'recorded research:i1.0\\n', stderr empty, torn down with closeAllConnections().",
+                "got": "Fails: 'the send did reach the collector — this is a stall on the response, not a recorder that skipped sending\\n\\n0 !== 1' — I added a stub.requests.length assertion (not spelled out in the plan's per-case Expected list but implied by its 'what is already red' note) so the case is red for the missing send rather than trivially green; that assertion is disclosed in openQuestions."
+              },
+              {
+                "case": "a collector that refuses the state leaves the exit code and the confirmation line alone",
+                "file": "skills/agent-brief/assets/backlog.test.mjs",
+                "testName": "a collector that refuses the state leaves the exit code and the confirmation line alone",
+                "expected": "Against a 500-with-JSON-error and a 401-with-www-authenticate-header stub in turn, record still exits 0, stdout exactly 'recorded research:i1.0\\n', stderr empty, state still written to disk.",
+                "got": "Fails on the first iteration (500): 'the send did reach the collector — it is the 500 response that is being tolerated, not a skipped send\\n\\n0 !== 1' — same added stub.requests.length assertion as case 7, same reasoning."
+              }
+            ],
+            "openQuestions": [
+              "Case 6 ('a collector that refuses the connection') cannot be made red before the implementation the way the plan's 'what is already red' note claims for cases 6-8: once the stub's port is closed there is no server left to record whether a connection was attempted, so the case's specified assertions (exit 0, unchanged stdout, empty stderr, step on disk) hold identically whether or not a send is ever tried. I left the case exactly as specified rather than inventing an assertion the plan did not ask for and the scenario cannot support.",
+              "For cases 7 and 8, the plan's per-case 'Expected' bullets do not themselves list a stub.requests.length assertion, but the plan's closing 'what is already red' note states cases 6-8 must fail before the change on 'zero requests recorded where some are expected' — which only cases 7 and 8 can structurally satisfy, since their stubs' TCP connections succeed (hang and error-status stubs both receive the request before failing to help). I added that assertion to 7 and 8 to honor the stated red expectation; flagging it since it is one assertion beyond the case's literal enumerated list.",
+              "Case 1's stub answers 200 for every request, so its own assertions do not exercise a JSON body larger than a trivial ok:true — fine per the plan, just noting the collector's own body-cap and content behavior is explicitly out of scope here per 'Not tested, and why'."
+            ],
+            "questions": []
+          }
         }
       ]
     },
