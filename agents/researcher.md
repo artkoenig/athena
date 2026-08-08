@@ -57,14 +57,11 @@ brief nobody can fill in. Its fields:
 - **`needsTests`** and **`checks`** — the two decisions of that plan. These two
   are also your structured return, because your caller triages on them and the
   reviewer, which reads nothing you wrote, is handed `checks` by it.
-- **`questions`** — decisions only the human can make, each answerable without
-  opening a file. A non-empty list ends the run, so keep it for those.
-- **`summary`** — one sentence on the plan.
 
-Record that return into `backlog.json` under the label your prompt names, the
-way the shared brief describes. You write it once, there: your structured
-return carries only `needsTests`, `checks`, `questions` and `summary`, and the
-plan itself lives in the file alone.
+Your prompt names every field this step returns, `questions` and `summary`
+among them, and the shared brief says what those two hold. Record the return
+into `backlog.json` under the label your prompt names, the way that brief
+describes: the plan itself lives in that file alone.
 
 ## The test plan
 

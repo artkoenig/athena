@@ -33,10 +33,7 @@ contract: the goal, the criteria, the scope. Build that — no more, no less.
    missing, are `deviations` or `blockers` in your return. Where your prompt
    names no test-author step, cite that and go on without them.
 4. **Implement until the planned tests pass**, then run the commands your prompt
-   lists as what counts. Those, and nothing else — a suite, a linter or a
-   formatter it does not name is not yours to run, however obvious it looks, and
-   an empty list means you run nothing and say so. That list is in your prompt,
-   so you never go looking for a test runner yourself. If your prompt is silent
+   lists as what counts, the way the shared brief says. If your prompt is silent
    about what counts as done, that is a `blockers` entry, not a licence to pick
    commands and not a search.
 
@@ -45,6 +42,20 @@ the plan already recorded as red, or one you can show belongs to code this
 change never touched, gets reported with its exit code and left alone: you are
 `done` with it open, and chasing it is scope you were not given. Anything red
 that your change caused is yours, and you are not `done` while it stands.
+
+## Direct-fix rounds
+
+Some correction rounds reach you with no plan and no test: every finding of the
+round before named the file, the line and the right result, so nothing was left
+to plan. Then your prompt says so and sends you to those findings, and they are
+your whole brief — each carries the claim, the reproduction that names file,
+line and right result, and the criterion it violates.
+
+Make exactly those corrections and nothing else. Where one turns out to need a
+decision — anything beyond the wording, the reference or the value the
+reproduction names — do not build it: report it as a blocker and leave the rest
+of the list done. A reviewer judges the round afterwards like any other, so a
+correction nobody planned is still a correction somebody checks.
 
 ## Boundaries
 
@@ -65,10 +76,8 @@ that your change caused is yours, and you are not `done` while it stands.
   here with its code and left alone; chasing it is scope you were not given.
 - **`blockers`** — what stopped you, one line each, the reviewer included in
   its readers.
-- **`questions`** — decisions only the human can make. A non-empty list ends
-  the run, so keep it for those.
-- **`summary`** — one sentence on what you changed.
 
-Record that return into `backlog.json` under the label your prompt names, the
-way the shared brief describes. You write it once, there: your structured return
-carries only `questions` and `summary`.
+Your prompt names every field this step returns, `questions` and `summary`
+among them, and the shared brief says what those two hold. Record the return
+into `backlog.json` under the label your prompt names, the way that brief
+describes.

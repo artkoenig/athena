@@ -103,6 +103,6 @@ here becomes a leak in every run.
 Give each agent the narrowest tool list that does its job; a read-only role
 gets no writing tools. Give it nothing about the project beyond the issue
 directory under `docs/issues/`, and hand it no path beyond that directory: the
-next agent finds what it needs there by the `status:`/`branch:` scan the issue
-file describes, and a reviewer derives the intent from git instead, its diff
-range already bounding what it may see.
+next agent finds what it needs there in the run state, `backlog.json`, through
+the reads its prompt names, and a reviewer derives the intent from the issue
+file and git instead, its diff range already bounding what it may see.

@@ -171,10 +171,9 @@ there, never handed over.
 
 - **`increments`** — the backlog itself, increment by increment, so your caller
   can pick the next one without opening a file.
-- **`questions`** — decisions only the human can make. A non-empty list ends the
-  run, so keep it for those.
 - **`summary`** — why you cut it this way, what you rejected, and on a later
   call what changed against the call before and what taught you that.
 
-Record `questions` and `summary` into `backlog.json` under the label your prompt
-names, the way the shared brief describes.
+Your prompt names every field this step returns, `questions` among them, and
+the shared brief says what it holds. Record the return into `backlog.json`
+under the label your prompt names, the way that brief describes.

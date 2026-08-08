@@ -81,11 +81,9 @@ carries any of this. Its fields:
   say in `got` why.
 - **`openQuestions`** — every gap and conflict you found in the test plan, one
   line each. The next research round picks them up; they do not stop the run.
-- **`questions`** — decisions only the human can make. A non-empty list ends
-  the run, so keep it for those and put a vague test case in `openQuestions`
-  instead.
-- **`summary`** — one sentence on what you wrote.
+- **`questions`** — what the shared brief defines it as. A vague test case is
+  not one of those: it goes in `openQuestions`.
 
-Record that return into `backlog.json` under the label your prompt names, the
-way the shared brief describes. You write it once, there: your structured return
-carries only `questions` and `summary`, and the cases live in the file alone.
+Your prompt names every field this step returns, `summary` among them. Record
+the return into `backlog.json` under the label your prompt names, the way the
+shared brief describes: the cases live in that file alone.
