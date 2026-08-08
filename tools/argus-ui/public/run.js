@@ -2,33 +2,32 @@
  * argus-ui — the run view.
  *
  * The workflow state an argus collector holds: which runs it has seen, and for
- * one of them the backlog it was recorded from — the issue, the workflow, the
- * step in flight right now, the increments with their goals, their criteria,
- * their statuses, their recorded steps and their earlier attempts, and the
- * codemap. Pure functions returning HTML strings, like `timeline.js` and
+ * one of them the `backlog.json` it was recorded from, shown as the document it
+ * is. Pure functions returning HTML strings, like `timeline.js` and
  * `context.js`, so the suite imports this module straight into `node --test`
  * and no browser global is reachable here.
  *
  * Two shapes arrive from the collector and must never be confused: a list
  * entry's `increments` is a count, while `state.increments` is the array of
- * increments themselves. Everything shown per increment is read from the
- * state, never from the entry's own count.
+ * increments themselves. The head's counts are read from the state, never from
+ * the entry's own count.
  *
- * Nothing recorded is summarised away. A step return, the prompt that produced
- * it and every superseded attempt at it are all reachable from the pane; what
- * the page decides is only what is open by default, because a run holds far
- * more text than a screen does. Everything is laid out — an object as its
- * fields, a list as a list — rather than dumped as JSON, and the raw JSON stays
- * one click away for whatever the layout could not shape.
+ * The pane is a tree of the recorded document and nothing else. An earlier
+ * version laid each part out under a heading of its own — increment cards, step
+ * rows, a codemap panel — and a run of any size arrived as one page of prose
+ * with no way to fold a part of it away. So the document is now shown as its
+ * own structure: every key under the key that holds it, every record and every
+ * list a `<details>` that opens onto what is inside it, and nothing renamed,
+ * reordered or summarised on the way. What the page decides is only what is
+ * open when it arrives — the top level, and the increment being worked.
  *
- * Every `<details>` here carries a `data-panel` key naming its place in the run
- * rather than its position on the page — `inc/<id>/<label>/prompt`,
- * `run/attempts/0/<label>`. A run being worked rewrites this pane on every
- * write, and without those keys each rewrite would close whatever the reader
- * had opened; `renderRunView` in `app.js` reads them before it repaints and
- * puts each panel back the way the reader left it. That is why a key must be
- * stable across writes, and why the running step's key carries its label: a
- * different step is a different panel, and opens by default like the first.
+ * Every `<details>` carries a `data-panel` key naming its path in the document
+ * — `tree/increments/2/steps/0/return` — rather than its position on the page.
+ * A run being worked rewrites this pane on every write, and without those keys
+ * each rewrite would close whatever the reader had opened; `renderRunView` in
+ * `app.js` reads them before it repaints and puts each panel back the way the
+ * reader left it. A path is stable across writes as long as the value stays
+ * where it is, which is what the recorder guarantees.
  */
 
 import { esc, fmtAgo, previewOf } from './format.js';
@@ -133,198 +132,218 @@ export function renderRunList({ items = [], selectedId = null } = {}) {
     .join('');
 }
 
+/* ---------------------------- the document tree --------------------------- */
+
+/** Whether a value is a record — the one shape whose keys are read by name. */
+const isRecord = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
+
+/** Whether a value has children to open onto. */
+const isContainer = (value) => Array.isArray(value) || isRecord(value);
+
 /**
- * What a step whose return the recorder shed at close says in place of a
- * preview. A close deletes the `return` key outright, so the line has nothing
- * to show; saying why reads as the record it is rather than as a broken row.
+ * The fields a record can be recognised by across two writes. A run rewrites
+ * this pane whenever the recorder writes, and the planner re-cuts the backlog
+ * between increments: keyed by position, the increment a reader had opened
+ * would become whichever increment landed in that slot afterwards. So a list
+ * whose entries carry a distinct one of these is keyed by it instead.
  */
-export const STEP_SHED_NOTE = 'return shed at close';
+const REF_KEYS = ['id', 'label'];
 
-/** Whether a return is a plain object, the one shape a `summary` is read from. */
-const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
-
-/** JSON, or the value's own string form where it will not serialise. */
-function jsonOf(value) {
-  try {
-    const text = JSON.stringify(value, null, 2);
-    return typeof text === 'string' ? text : String(value);
-  } catch {
-    return String(value);
+/**
+ * What each entry of a list is keyed by: its own identity where every entry has
+ * a distinct one, its index otherwise. An identity is prefixed with `#` so it
+ * can never be read as the index of a neighbouring entry, and the fallback
+ * keeps the keys of one list unique whatever the recorder wrote — two panels
+ * sharing a key would restore each other's open state.
+ */
+export function listRefs(list) {
+  for (const key of REF_KEYS) {
+    const refs = list.map((item) =>
+      isRecord(item) && typeof item[key] === 'string' && item[key].trim() ? `#${item[key]}` : null,
+    );
+    if (refs.every(Boolean) && new Set(refs).size === refs.length) return refs;
   }
+  return list.map((_, index) => String(index));
 }
 
 /**
- * How deep the laid-out rendering goes before it hands the rest to JSON. A
- * step return is two or three levels at most — a list of findings, each with a
- * few fields, one of which may itself be a list — so a bound this size lays out
- * everything a run actually records, and the fall-back is there for the shape
- * nobody anticipated rather than as the ordinary case.
+ * The children of a container as `[key, value, ref]`: the name the row is shown
+ * under, what is inside it, and what its panel is keyed by. An array's key is
+ * its index, so a path through a list reads the same way as a path through a
+ * record; its ref is `listRefs`' answer, so the reader's open row survives a
+ * re-cut that moved it.
  */
-const VALUE_DEPTH = 4;
-
-/** A key as a heading: `testPlan` and `finding_count` read as words. */
-export function fieldLabel(key) {
-  return String(key ?? '')
-    .replace(/[_-]+/g, ' ')
-    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
-    .trim();
-}
-
-/**
- * One recorded value, laid out.
- *
- * The recorder stores an agent's whole structured return, which is any JSON at
- * all: a paragraph of plan, a list of commands, a list of findings each with a
- * file and a reproduction. Rendering that as `JSON.stringify` output made the
- * page technically complete and practically unreadable — quotes, braces and
- * escaped newlines around the one sentence the reader came for. So each shape
- * gets the markup it is: a multi-line string keeps its lines, a list of strings
- * is a list, an object is its fields under their own names, and only what is
- * deeper than `VALUE_DEPTH` or of no shape at all falls back to JSON.
- */
-export function renderValue(value, depth = 0) {
-  if (value === null || value === undefined) return '<p class="run-value-empty">–</p>';
-  if (typeof value === 'string') {
-    if (!value.trim()) return '<p class="run-value-empty">–</p>';
-    return value.includes('\n')
-      ? `<pre class="run-value-text">${esc(value)}</pre>`
-      : `<p class="run-value-text">${esc(value)}</p>`;
-  }
-  if (typeof value === 'number' || typeof value === 'boolean') {
-    return `<p class="run-value-scalar"><code>${esc(String(value))}</code></p>`;
-  }
-  if (depth >= VALUE_DEPTH) return `<pre class="run-value-raw">${esc(jsonOf(value))}</pre>`;
+export function childEntries(value) {
   if (Array.isArray(value)) {
-    if (!value.length) return '<p class="run-value-empty">none</p>';
-    return `<ul class="run-value-list">${value
-      .map((item) => `<li>${renderValue(item, depth + 1)}</li>`)
-      .join('')}</ul>`;
+    const refs = listRefs(value);
+    return value.map((item, index) => [String(index), item, refs[index]]);
   }
-  if (isPlainObject(value)) {
-    const keys = Object.keys(value);
-    if (!keys.length) return '<p class="run-value-empty">none</p>';
-    return `<dl class="run-fields">${keys
-      .map(
-        (key) =>
-          `<dt>${esc(fieldLabel(key))}</dt><dd>${renderValue(value[key], depth + 1)}</dd>`,
-      )
-      .join('')}</dl>`;
-  }
-  return `<pre class="run-value-raw">${esc(jsonOf(value))}</pre>`;
+  if (isRecord(value)) return Object.entries(value).map(([key, item]) => [key, item, key]);
+  return [];
+}
+
+/** `[4]` for a list of four, `{6}` for a record of six fields. */
+export function badgeOf(value) {
+  if (Array.isArray(value)) return `[${value.length}]`;
+  if (isRecord(value)) return `{${Object.keys(value).length}}`;
+  return '';
 }
 
 /**
- * One recorded step, read for the page: `{ label, at, timeMs, hasReturn, text,
- * preview, prompt, history }`.
+ * The field a record is known by, in the order the backlog actually uses: an
+ * increment carries a `title`, a step a `label`, an agent return a `summary`.
+ * A record carrying none of them is named by the keys it holds, which is its
+ * structure and the next best thing to a name.
+ */
+const NAME_KEYS = ['title', 'label', 'summary', 'id', 'goal'];
+
+function nameOf(record) {
+  for (const key of NAME_KEYS) {
+    const value = record[key];
+    if (typeof value === 'string' && value.trim()) return value;
+  }
+  return Object.keys(record).join(', ');
+}
+
+/**
+ * The one line a collapsed node shows beside its key.
  *
- * The recorder writes `{ label, at, return }` with `at` an ISO-8601 string and
- * `return` the agent's whole structured return — any JSON value at all — plus
- * `prompt`, the dispatch prompt verbatim, and `history`, the entries this label
- * superseded, oldest first. So every field is treated as possibly absent or of
- * an unexpected shape, and an unparseable instant reads as `0`, which `fmtAgo`
- * prints as "never" rather than as `NaN`.
+ * Bounded on purpose: a record is named by its own naming field, and a list by
+ * the name of its first entry. Walking further would cost a whole subtree per
+ * summary and would print the run twice — once folded and once in the hints.
+ */
+export function hintOf(value) {
+  if (value === null || value === undefined) return 'null';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (Array.isArray(value)) {
+    if (!value.length) return '';
+    return hintOf(value[0]);
+  }
+  if (isRecord(value)) return nameOf(value);
+  return String(value);
+}
+
+/**
+ * A string this long, or carrying a line break, gets a disclosure of its own
+ * rather than a place on the key's line. Prompts, plans and the codemap are all
+ * pages of text, and a page of text on a line is the wall this view replaced.
+ */
+export const INLINE_CHARS = 80;
+
+const isFolded = (text) => text.includes('\n') || text.length > INLINE_CHARS;
+
+/** The instants the recorder writes, which is the only string an age is added to. */
+const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
+
+/**
+ * The age beside a recorded instant. The value itself is still printed
+ * verbatim — this is a reading aid next to it, not a replacement for it — and
+ * it carries `data-at`, so the slow tick brings it current without a repaint.
+ */
+function ageMarkup(text) {
+  if (!ISO_INSTANT.test(text)) return '';
+  const ms = Date.parse(text);
+  if (!Number.isFinite(ms)) return '';
+  return `<span class="json-ago" ${atAttr(text)}>${agoText(ms)}</span>`;
+}
+
+/** One value that fits on its key's line, typed the way JSON types it. */
+function scalarMarkup(value) {
+  if (value === null || value === undefined) return '<span class="json-null">null</span>';
+  if (typeof value === 'boolean') return `<span class="json-bool">${value}</span>`;
+  if (typeof value === 'number') return `<span class="json-number">${esc(String(value))}</span>`;
+  if (typeof value === 'string') {
+    if (!value) return '<span class="json-empty">""</span>';
+    return `<span class="json-string">${esc(value)}</span>${ageMarkup(value)}`;
+  }
+  return `<span class="json-string">${esc(String(value))}</span>`;
+}
+
+/**
+ * How deep a container opens by default. The top level of the document is open
+ * — `version`, `issue`, `increments`, `run` — and everything under it is folded,
+ * so a run of any size arrives as a page that fits on a screen.
+ */
+export const OPEN_DEPTH = 1;
+
+/**
+ * One node of the document: its key, what is inside it, and a disclosure where
+ * there is something to open.
  *
- * The key's presence is what decides `hasReturn`, never its truthiness: a
- * return recorded as `null`, `0`, `''` or `false` is a return that was made.
+ * `openPaths` names the nodes that open regardless of depth. Nothing else about
+ * the value changes what is rendered — a key is printed as the recorder wrote
+ * it, a list keeps its order, and an unexpected shape is a node like any other.
  */
-export function stepView(step) {
-  const entry = step && typeof step === 'object' ? step : {};
-  const label = typeof entry.label === 'string' ? entry.label : '';
-  const at = typeof entry.at === 'string' ? entry.at : '';
-  const parsed = Date.parse(at);
-  const timeMs = Number.isFinite(parsed) ? parsed : 0;
-  const hasReturn = Object.hasOwn(entry, 'return') && entry.return !== undefined;
+export function renderNode(key, value, { path = 'tree', depth = 0, openPaths = new Set(), ref = null } = {}) {
+  const here = `${path}/${ref ?? key}`;
+  const name = `<span class="json-key">${esc(key)}</span>`;
 
-  let text = '';
-  if (hasReturn) {
-    const value = entry.return;
-    text = typeof value === 'string' ? value : jsonOf(value);
-    if (typeof text !== 'string') text = String(value);
+  if (typeof value === 'string' && isFolded(value)) {
+    return `<li class="json-node"><details class="json-fold" data-panel="${attr(here)}"${
+      openPaths.has(here) ? ' open' : ''
+    }><summary>${name}<span class="json-badge">${value.length} chars</span><span class="json-hint">${esc(
+      previewOf(value),
+    )}</span></summary><pre class="json-text">${esc(value)}</pre></details></li>`;
   }
 
-  // The collapsed line prefers the return's own summary — every uroboros agent
-  // return carries one — and falls back to the serialised text, so a return of
-  // any other shape still shows something rather than nothing.
-  const summary =
-    hasReturn && isPlainObject(entry.return) && typeof entry.return.summary === 'string'
-      ? entry.return.summary
-      : '';
-  const preview = hasReturn ? previewOf(summary || text) : STEP_SHED_NOTE;
+  if (!isContainer(value)) {
+    return `<li class="json-leaf">${name}${scalarMarkup(value)}</li>`;
+  }
 
-  const prompt = typeof entry.prompt === 'string' ? entry.prompt : '';
-  const history = Array.isArray(entry.history) ? entry.history : [];
+  const entries = childEntries(value);
+  // An empty list or record is a fact the document states, so it is printed as
+  // one rather than as a disclosure that opens onto nothing. Its own brackets
+  // say it better than a count of nothing would.
+  if (!entries.length) {
+    return `<li class="json-leaf">${name}<span class="json-empty">${
+      Array.isArray(value) ? '[]' : '{}'
+    }</span></li>`;
+  }
 
-  return { label, at, timeMs, hasReturn, text, preview, prompt, history, value: entry.return };
+  const open = depth < OPEN_DEPTH || openPaths.has(here);
+  return `<li class="json-node"><details class="json-fold" data-panel="${attr(here)}"${
+    open ? ' open' : ''
+  }><summary>${name}<span class="json-badge">${esc(badgeOf(value))}</span><span class="json-hint">${esc(
+    previewOf(hintOf(value)),
+  )}</span></summary><ul class="json-tree">${entries
+    .map(([childKey, childValue, childRef]) =>
+      renderNode(childKey, childValue, { path: here, depth: depth + 1, openPaths, ref: childRef }),
+    )
+    .join('')}</ul></details></li>`;
+}
+
+/** The whole document, as the tree of its own keys. */
+export function renderTree(value, { path = 'tree', openPaths = new Set() } = {}) {
+  const entries = childEntries(value);
+  if (!entries.length) return '<div class="placeholder">This run holds no state yet</div>';
+  return `<ul class="json-tree json-root">${entries
+    .map(([key, child, ref]) => renderNode(key, child, { path, depth: 0, openPaths, ref }))
+    .join('')}</ul>`;
 }
 
 /**
- * The panels under one step: what the agent was asked, what it returned laid
- * out, the same return as raw JSON, and every attempt this one superseded.
- *
- * All four are `<details>` of their own and all four start closed. A step body
- * that opened with a page of prompt in it would bury the return underneath it,
- * and the return is what a reader opens a step for.
+ * The nodes a run opens on beyond its top level: the increment being worked and
+ * the steps recorded under it. Everything else in the document is one click
+ * away, and this is the one place a reader wants to be standing when a run is
+ * going.
  */
-function stepPanels(view, key) {
-  const parts = [];
-  if (view.prompt) {
-    parts.push(
-      `<details class="run-panel" data-panel="${attr(key)}/prompt"><summary>Prompt<span class="run-panel-hint">${esc(
-        previewOf(view.prompt),
-      )}</span></summary><pre class="run-prompt">${esc(view.prompt)}</pre></details>`,
-    );
-  }
-  if (view.hasReturn) {
-    parts.push(`<div class="run-return">${renderValue(view.value)}</div>`);
-    parts.push(
-      `<details class="run-panel" data-panel="${attr(
-        key,
-      )}/raw"><summary>Raw JSON</summary><pre class="run-step-return">${esc(
-        view.text,
-      )}</pre></details>`,
-    );
-  }
-  if (view.history.length) {
-    parts.push(
-      `<details class="run-panel" data-panel="${attr(key)}/superseded"><summary>Superseded<span class="run-panel-hint">${
-        view.history.length
-      } earlier attempt(s)</span></summary><ol class="run-steps">${view.history
-        .map((entry, at) => renderStep(entry, `${key}/history/${at}`))
-        .join('')}</ol></details>`,
-    );
-  }
-  return parts.join('');
+export function openPathsFor(state, path = 'tree') {
+  const open = new Set();
+  const running = runningView(state);
+  if (!running?.increment) return open;
+  const increments = Array.isArray(state?.increments) ? state.increments : [];
+  const index = increments.findIndex((increment) => increment?.id === running.increment);
+  if (index < 0) return open;
+  // Through the same refs the tree keys its rows by, or this would open the row
+  // that happens to sit at that index rather than the increment being worked.
+  const here = `${path}/increments/${listRefs(increments)[index]}`;
+  open.add(here);
+  open.add(`${here}/steps`);
+  return open;
 }
 
-/**
- * One step row: the collapsed line in the `<summary>`, everything the step
- * holds in the body. Native `<details>`, so opening one costs the page no state
- * of its own — and costs nothing to keep open across a repaint that only
- * rewrites the ages.
- */
-function renderStep(step, keyPrefix = '') {
-  const view = stepView(step);
-  const key = `${keyPrefix}/${view.label}`;
-  return `<li class="run-step"><details data-panel="${attr(
-    key,
-  )}"><summary><span class="run-step-label">${esc(
-    view.label,
-  )}</span><span class="run-step-preview">${esc(view.preview)}</span><span class="run-step-time" ${atAttr(
-    view.at,
-  )}>${agoText(view.timeMs)}</span></summary>${stepPanels(view, key)}</details></li>`;
-}
-
-/**
- * A list of recorded steps, in the order the backlog holds them and never
- * sorted. Empty for a list that is missing, not an array, or empty: a closed
- * increment's steps are shed by design, and its card should read as the
- * ordinary closed card it is rather than carry an empty panel.
- */
-export function renderSteps(steps, keyPrefix = '') {
-  const list = Array.isArray(steps) ? steps : [];
-  if (!list.length) return '';
-  return `<ol class="run-steps">${list.map((step) => renderStep(step, keyPrefix)).join('')}</ol>`;
-}
+/* ----------------------------- the step in flight ------------------------- */
 
 /**
  * The step in flight, read for the page: `{ label, increment, at, timeMs,
@@ -355,9 +374,10 @@ export function runningView(state) {
  * when, and the whole prompt it was dispatched with, which is where its goal
  * and its acceptance criteria are written.
  *
- * This is the one panel that opens by default. It is the answer to the question
- * a reader has while a run is going — what is happening right now — and it is
- * gone from the state the moment that step returns, so it can never accumulate.
+ * It sits above the tree because "what is happening right now" is the question
+ * a reader has while a run is going, and answering it should not cost a walk
+ * down the tree. The state's own `running` key is in the tree all the same:
+ * the tree shows the document, whole.
  */
 export function renderRunning(running) {
   if (!running) return '';
@@ -382,80 +402,11 @@ export function renderRunning(running) {
   </div>`;
 }
 
-/** An increment's own acceptance criteria, as the planner cut them. */
-function renderCriteria(criteria) {
-  const list = Array.isArray(criteria) ? criteria.filter((c) => typeof c === 'string' && c) : [];
-  if (!list.length) return '';
-  return `<ul class="run-criteria">${list.map((c) => `<li>${esc(c)}</li>`).join('')}</ul>`;
-}
-
 /**
- * The rounds this increment already closed. `close` moves an attempt's steps
- * into `attempts` rather than deleting them, so this is where the work of a
- * blocked first attempt is read back from — the one part of the record that was
- * written down and shown nowhere.
- */
-function renderAttempts(attempts, keyPrefix = '') {
-  const list = Array.isArray(attempts) ? attempts : [];
-  if (!list.length) return '';
-  return `<details class="run-panel" data-panel="${attr(
-    keyPrefix,
-  )}/attempts"><summary>Earlier attempts<span class="run-panel-hint">${
-    list.length
-  } closed</span></summary>${list
-    .map((attempt, round) => {
-      const closedAs = typeof attempt?.closedAs === 'string' ? attempt.closedAs : '';
-      const at = typeof attempt?.at === 'string' ? attempt.at : '';
-      const parsed = Date.parse(at);
-      const timeMs = Number.isFinite(parsed) ? parsed : 0;
-      return `<div class="run-attempt">
-        <div class="run-attempt-head">
-          ${closedAs ? `<span class="chip">${esc(closedAs)}</span>` : ''}
-          <span class="run-step-time" ${atAttr(at)}>${agoText(timeMs)}</span>
-        </div>
-        ${renderSteps(attempt?.steps, `${keyPrefix}/attempts/${round}`)}
-      </div>`;
-    })
-    .join('')}</details>`;
-}
-
-/**
- * One increment card, marked closed when its status says a close wrote it and
- * marked running while it is the one being worked. Everything the planner cut
- * into it is here — the goal it delivers and the criteria it is judged by, not
- * only its title and its status — because that is the brief every step under
- * the card was working to.
- */
-function renderIncrement(increment, runningId = '') {
-  const status = typeof increment?.status === 'string' ? increment.status : '';
-  const note = typeof increment?.note === 'string' ? increment.note : '';
-  const goal = typeof increment?.goal === 'string' ? increment.goal : '';
-  // Rendered without a label of its own: a label with nothing after it is the
-  // one thing an unset value must never leave behind.
-  const worked = typeof increment?.branch === 'string' ? increment.branch : '';
-  const isRunning = !!runningId && increment?.id === runningId;
-  return `<li class="run-increment"${isClosedIncrement(increment) ? ' data-closed="true"' : ''}${
-    isRunning ? ' data-running="true"' : ''
-  }>
-    <div class="run-increment-head">
-      <span class="run-increment-id">${esc(increment?.id)}</span>
-      <span class="run-increment-title">${esc(increment?.title)}</span>
-      ${status ? `<span class="chip">${esc(status)}</span>` : ''}
-      ${isRunning ? '<span class="chip run-chip-live">running</span>' : ''}
-    </div>
-    ${goal ? `<p class="run-goal">${esc(goal)}</p>` : ''}
-    ${renderCriteria(increment?.criteria)}
-    ${worked ? `<div class="run-increment-ref"><code>${esc(worked)}</code></div>` : ''}
-    ${note ? `<p class="run-note">${esc(note)}</p>` : ''}
-    ${renderSteps(increment?.steps, `inc/${increment?.id ?? ''}`)}
-    ${renderAttempts(increment?.attempts, `inc/${increment?.id ?? ''}`)}
-  </li>`;
-}
-
-/**
- * One run, whole. The collector holds the recorded state opaquely, so every
- * field is treated as possibly absent: what is missing is left out rather than
- * printed as a hole.
+ * One run, whole. The collector holds the recorded state opaquely, so the head
+ * treats every field it names as possibly absent — but the tree below it names
+ * nothing: it renders whatever keys the document has, which is what keeps this
+ * view correct for a state the recorder has not written yet.
  */
 export function renderRun(run) {
   if (!run) {
@@ -469,22 +420,10 @@ export function renderRun(run) {
   }
 
   const held = run.state && typeof run.state === 'object' ? run.state : {};
-  const increments = Array.isArray(held.increments) ? held.increments : [];
-  const counts = incrementCounts(increments);
+  const counts = incrementCounts(held.increments);
   const issue = run.issue || held.issue || run.id || '';
   const workflow = run.workflow || held.workflow || '';
-  const codemap = typeof held.codemap === 'string' ? held.codemap : '';
   const running = runningView(held);
-  // The run's own steps — the opening cut, each close, the publish. The backlog
-  // holds them under `run` rather than under any increment, so they sit in a
-  // panel of their own: showing one inside a card would attribute a close or a
-  // publish to whichever increment it landed near.
-  const runSteps =
-    held.run && typeof held.run === 'object' && Array.isArray(held.run.steps) ? held.run.steps : [];
-  const runAttempts =
-    held.run && typeof held.run === 'object' && Array.isArray(held.run.attempts)
-      ? held.run.attempts
-      : [];
 
   return `
     <div class="run-head">
@@ -503,31 +442,15 @@ export function renderRun(run) {
 
     ${renderRunning(running)}
 
-    ${
-      increments.length
-        ? `<ol class="run-increments">${increments
-            .map((increment) => renderIncrement(increment, running?.increment ?? ''))
-            .join('')}</ol>`
-        : '<div class="placeholder">No increments recorded for this run</div>'
-    }
-
-    ${
-      runSteps.length || runAttempts.length
-        ? `<div class="panel run-steps-panel">
-             <div class="run-steps-head">Run steps</div>
-             ${renderSteps(runSteps, 'run')}
-             ${renderAttempts(runAttempts, 'run')}
-           </div>`
-        : ''
-    }
-
-    ${
-      codemap
-        ? `<div class="panel run-codemap">
-             <div class="run-codemap-head">Codemap</div>
-             <pre>${esc(codemap)}</pre>
-           </div>`
-        : ''
-    }
+    <div class="panel run-tree-panel">
+      <div class="run-tree-head">
+        <span class="run-tree-title">backlog.json</span>
+        <span class="run-tree-controls">
+          <button type="button" class="ghost-button" data-tree="open">Expand all</button>
+          <button type="button" class="ghost-button" data-tree="close">Collapse all</button>
+        </span>
+      </div>
+      ${renderTree(held, { openPaths: openPathsFor(held) })}
+    </div>
   `;
 }

@@ -78,23 +78,24 @@ for an `HttpOnly; SameSite=Strict` cookie and drops it from the address bar.
   goal and acceptance criteria are written. That banner appears the moment a
   step is dispatched and is gone the moment it returns, so a run that has been
   quiet for twenty minutes reads as one long step rather than as a stuck page.
-  Under it the run shows its issue, its workflow, when its state last changed,
-  and its increments in backlog order — each with its id, title, status, the
-  goal it delivers, its own acceptance criteria, the branch it is worked on,
-  the note its close left and the steps recorded against it — over how many of
-  them are closed and how many still open, the run's own steps in a panel of
-  their own, and the codemap the run was planned against. Every step is one line
-  carrying its label, a preview of what the agent returned and when it was
-  recorded, expanding to what the agent was asked, what it returned laid out
-  field by field, the same return as raw JSON, and every earlier attempt at that
-  step the recorder kept. A closed increment shows no current step, because the
-  recorder sheds them as it closes it — its rounds are behind **Earlier
-  attempts** instead; a run step whose return was shed keeps its label and its
-  time and says on its line that the return is gone. It follows the same
-  Server-Sent Events stream, so a run being worked on updates itself while it is
-  on screen, and the ages on it stay current between two writes without the pane
-  repainting under an open panel. The switch beside **Setup** moves between this
-  and the sessions.
+  Under it the run's `backlog.json` is shown as the document it is: every key
+  under the key that holds it, spelled the way the recorder wrote it, with each
+  record and each list a row that folds. A row says what is inside it before it
+  is opened — how many fields or entries, and the name the thing goes by, an
+  increment's title, a step's label, an agent return's summary — so the document
+  is browsable without reading it. The top level arrives open and everything
+  under it folded, except the increment being worked, which opens with its
+  steps; **Expand all** and **Collapse all** take the whole document either way.
+  Nothing is renamed, reordered, summarised or dropped: a page of prompt, a plan
+  or the codemap expands to its full text, a value five levels down is a row
+  like any other, and an instant is printed as recorded with its age beside it.
+  It follows the same Server-Sent Events stream, so a run being worked on
+  updates itself while it is on screen without moving you: the rows you opened
+  stay open, you keep your place on the page, and an increment stays the row you
+  opened even when the planner re-cuts the backlog around it. A write that would
+  change nothing on screen is not made at all, and between two writes the ages
+  are brought current without the pane repainting under them. The switch beside
+  **Setup** moves between this and the sessions.
 
 ## How it reaches the collector
 

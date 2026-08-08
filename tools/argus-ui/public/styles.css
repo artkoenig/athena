@@ -1038,123 +1038,115 @@ body[data-view="runs"] #detail {
   margin-top: 3px;
 }
 
-.run-increments {
-  list-style: none;
-  margin: 0 0 18px;
-  padding: 0;
-}
-
-.run-increment {
-  padding: 10px 12px;
-  margin-bottom: 6px;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-left: 2px solid var(--accent);
-  border-radius: var(--radius);
-}
-
-/* A closed increment recedes: what is still open is what a reader is looking for. */
-.run-increment[data-closed="true"] {
-  border-left-color: var(--ok);
-  opacity: 0.75;
-}
-
-.run-increment-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 8px;
-}
-
-.run-increment-id {
-  font-family: var(--mono);
-  font-size: 11px;
-  color: var(--accent);
-}
-
-.run-increment-title {
-  flex: 1 1 auto;
-  min-width: 0;
-  font-size: 13px;
-  font-weight: 500;
-}
-
-.run-increment-ref {
-  margin-top: 4px;
-  font-size: 11px;
-  color: var(--text-faint);
-  word-break: break-all;
-}
-
 .run-note {
   margin: 6px 0 0;
   font-size: 12px;
   color: var(--text-dim);
 }
 
-.run-codemap {
+/* ------------------------- the document, as a tree ----------------------- */
+
+/* The recorded backlog document, shown as its own structure. Every record and
+   every list is a disclosure, so a run of any size arrives folded to a page
+   that fits on a screen and the reader opens the part they came for. */
+.run-tree-panel {
   padding: 10px 12px;
 }
 
-.run-codemap-head {
+.run-tree-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.run-tree-title {
+  font-family: var(--mono);
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--text-faint);
-  margin-bottom: 6px;
 }
 
-.run-codemap pre {
-  margin: 0;
-  max-height: 50vh;
-  overflow: auto;
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-size: 11px;
+.run-tree-controls {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
 }
 
-/* One recorded step per row, collapsed to a line and expanding to its whole
-   return — the same shape as a context block, which is what a reader already
-   knows how to open. */
-.run-steps {
+.json-tree {
   list-style: none;
+  margin: 0;
   padding: 0;
-  margin: 6px 0 0;
 }
 
-.run-step {
-  border-top: 1px solid var(--border);
+/* Nesting reads as nesting: every level steps in by one guide line, which is
+   what makes a path down the document followable without reading the keys. */
+.json-tree .json-tree {
+  margin-left: 7px;
+  padding-left: 9px;
+  border-left: 1px solid var(--border);
 }
 
-.run-step > details > summary {
-  display: grid;
-  grid-template-columns: 160px 1fr auto;
+.json-node > details > summary,
+.json-leaf {
+  display: flex;
   align-items: baseline;
   gap: 8px;
-  padding: 4px 0;
+  padding: 2px 0;
+  min-width: 0;
+}
+
+.json-node > details > summary {
   cursor: pointer;
   list-style: none;
 }
 
-.run-step > details > summary::-webkit-details-marker {
+.json-node > details > summary::-webkit-details-marker {
   display: none;
 }
 
-.run-step > details > summary:hover {
+/* The fold marker is drawn rather than left to the browser, so the row keeps
+   its grid and the marker turns with the disclosure. */
+.json-node > details > summary::before {
+  content: "▸";
+  width: 10px;
+  flex: 0 0 auto;
+  font-size: 9px;
+  color: var(--text-faint);
+}
+
+.json-node > details[open] > summary::before {
+  content: "▾";
+}
+
+.json-node > details > summary:hover {
   background: var(--panel-hover);
 }
 
-.run-step-label {
+/* A leaf lines up under its siblings' keys rather than under their markers. */
+.json-leaf {
+  padding-left: 18px;
+}
+
+.json-key {
+  flex: 0 0 auto;
   font-family: var(--mono);
   font-size: 11px;
   color: var(--accent);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-/* Whatever the return's length, the collapsed row stays one line. */
-.run-step-preview {
+.json-badge {
+  flex: 0 0 auto;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-faint);
+}
+
+/* Whatever is inside, the folded row stays one line. */
+.json-hint {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1163,16 +1155,37 @@ body[data-view="runs"] #detail {
   color: var(--text-faint);
 }
 
-.run-step-time {
+.json-string {
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-dim);
+  word-break: break-word;
+}
+
+.json-number,
+.json-bool {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text);
+}
+
+.json-null,
+.json-empty {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.json-ago {
+  flex: 0 0 auto;
   font-family: var(--mono);
   font-size: 10px;
   color: var(--text-faint);
-  text-align: right;
 }
 
-/* One enormous return must not bury the increments under it. */
-.run-step-return {
-  margin: 0 0 8px;
+/* One page of prompt must not bury the document under it. */
+.json-text {
+  margin: 2px 0 6px 18px;
   padding: 8px;
   max-height: 50vh;
   overflow: auto;
@@ -1180,20 +1193,9 @@ body[data-view="runs"] #detail {
   word-break: break-word;
   font-family: var(--mono);
   font-size: 11px;
+  color: var(--text-dim);
   background: var(--bg-sunken);
   border-radius: var(--radius);
-}
-
-.run-steps-panel {
-  padding: 10px 12px;
-}
-
-.run-steps-head {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--text-faint);
-  margin-bottom: 6px;
 }
 
 /* --------------------------- the step in flight -------------------------- */
@@ -1254,16 +1256,10 @@ body[data-view="runs"] #detail {
   color: var(--accent);
 }
 
-.run-increment[data-running="true"] {
-  opacity: 1;
-  border-left-color: var(--accent);
-}
+/* ------------------------ the running step's prompt ---------------------- */
 
-/* ------------------------ what a step actually holds --------------------- */
-
-/* The prompt, the raw JSON and the superseded attempts, each behind its own
-   closed disclosure. A step body that opened with a page of prompt in it would
-   bury the return, and the return is what a step is opened for. */
+/* The one disclosure outside the tree, and the one that opens by default: what
+   the step in flight was asked for is where its goal and its criteria are. */
 .run-panel {
   margin: 6px 0 8px;
 }
@@ -1311,122 +1307,6 @@ body[data-view="runs"] #detail {
   color: var(--text-dim);
   background: var(--bg-sunken);
   border-radius: var(--radius);
-}
-
-/* An increment's goal and its criteria: the brief every step under the card
-   was working to, which the card used to leave in the file. */
-.run-goal {
-  margin: 6px 0 0;
-  font-size: 12px;
-  color: var(--text-dim);
-}
-
-.run-criteria {
-  margin: 6px 0 0;
-  padding-left: 18px;
-  font-size: 11.5px;
-  color: var(--text-faint);
-}
-
-.run-criteria li {
-  margin-bottom: 2px;
-}
-
-.run-attempt {
-  padding: 6px 0 2px;
-  border-top: 1px solid var(--border);
-}
-
-.run-attempt-head {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-}
-
-/* ------------------------- a return, laid out ---------------------------- */
-
-/* A recorded return is any JSON at all, and serialised whole it was technically
-   complete and practically unreadable: braces and escaped newlines around the
-   one sentence the reader came for. Each shape gets the markup it is instead —
-   fields under their own names, lists as lists, prose as prose. */
-.run-return {
-  margin: 4px 0 8px;
-  font-size: 12px;
-}
-
-.run-fields {
-  margin: 0;
-  display: grid;
-  grid-template-columns: minmax(90px, 160px) 1fr;
-  gap: 2px 10px;
-}
-
-.run-fields > dt {
-  font-size: 10.5px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-faint);
-  padding-top: 3px;
-}
-
-.run-fields > dd {
-  margin: 0;
-  min-width: 0;
-}
-
-/* Nesting reads as nesting: a field whose value is itself a record steps in
-   rather than restarting the two-column grid at the left margin. */
-.run-fields .run-fields {
-  grid-template-columns: minmax(80px, 140px) 1fr;
-}
-
-.run-value-text {
-  margin: 2px 0;
-  white-space: pre-wrap;
-  word-break: break-word;
-  color: var(--text-dim);
-}
-
-pre.run-value-text,
-.run-value-raw {
-  padding: 6px 8px;
-  max-height: 40vh;
-  overflow: auto;
-  font-family: var(--mono);
-  font-size: 11px;
-  background: var(--bg-sunken);
-  border-radius: var(--radius);
-}
-
-.run-value-scalar {
-  margin: 2px 0;
-}
-
-.run-value-scalar code {
-  font-family: var(--mono);
-  font-size: 11px;
-  color: var(--accent);
-}
-
-.run-value-empty {
-  margin: 2px 0;
-  color: var(--text-faint);
-}
-
-.run-value-list {
-  margin: 2px 0;
-  padding-left: 18px;
-  color: var(--text-dim);
-}
-
-.run-value-list > li {
-  margin-bottom: 3px;
-}
-
-/* A list of records is a stack of cards, not eight bullets of braces. */
-.run-value-list > li > .run-fields {
-  padding: 4px 0;
-  border-top: 1px solid var(--border);
 }
 
 /* -------------------------------- misc --------------------------------- */

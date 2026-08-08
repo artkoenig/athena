@@ -20,16 +20,17 @@ here is the user-facing page; this file is for changing the code.
   `app.js` boots the page and owns every browser global; `format.js`,
   `timeline.js`, `context.js` and `run.js` beside it are pure modules returning
   strings, which is what makes them testable without a DOM. `run.js` is the run
-  view — the workflow state the collector serves over `/api/runs`, down to the
-  step in flight, each increment's goal, criteria and recorded steps and the
-  run's own, every step collapsed to a line that opens onto what the agent was
-  asked, what it returned and the attempts it superseded.
-- **Nothing recorded is summarised away, and nothing is dumped as JSON.** What
-  the pane decides is only what is open by default: the running step's prompt,
-  because that is the question a reader has while a run is going, and nothing
-  else. A return is laid out as the shape it is — fields under their names, a
-  list as a list, prose as prose — and the raw JSON stays behind a disclosure
-  for whatever the layout could not shape.
+  view — the workflow state the collector serves over `/api/runs`, shown as the
+  `backlog.json` document it is.
+- **The run pane shows the document, not a description of it.** `renderNode` is
+  the one renderer every level is built from: a key is printed as the recorder
+  wrote it, a list keeps its order and is keyed by index, every record and every
+  list is a `<details>` that folds, and nothing is renamed, reordered,
+  summarised or dropped on the way. An earlier version laid each part out under
+  a heading of its own and a run of any size arrived as one page of prose with
+  no way to fold a part of it away. What the pane decides is only what is open
+  when it arrives: the top level, the increment being worked, and the running
+  step's prompt, because that is the question a reader has while a run is going.
 - **A repaint must leave the reader where they were.** The session pane is
   rebuilt whole on every ingest, and a live session ingests constantly. So an
   open context block is remembered by a key naming what the block is —
@@ -43,6 +44,17 @@ here is the user-facing page; this file is for changing the code.
   elements carrying a `data-at` instant and touches nothing else — repainting
   the pane would collapse every `<details>` the reader had opened, and fetching
   would ask the collector for a state that has not changed.
+- **The run pane's repaint leaves the reader where they were too, by path.**
+  `renderRunView` restores every disclosure by its `data-panel` key, then the
+  scroll position — in that order, because the pane's height depends on what is
+  open — then focus, without scrolling to it. Markup identical to what is on screen is not written at all;
+  `innerHTML` would drop the reader's text selection for no change. A key is a
+  value's path in the document, and a list of records is keyed by each record's
+  own `id` or `label` rather than by its index: the planner re-cuts the backlog
+  between increments, and a position key would hand the reader's open row to
+  whatever landed in that slot. Where a list has no distinct identity to key by,
+  `listRefs` falls back to the index — two rows sharing a key would restore each
+  other's state.
 - **Local only.** No entry on the `PATH`, no skill, no mention in the plugin
   manifest, never deployed. The collector is the half that travels.
 
