@@ -20,7 +20,7 @@ const metric = (name, value, attributes = {}, extra = {}) => ({
   ...extra,
 });
 
-const log = (eventName, attributes = {}, timeMs = Date.now()) => ({
+const log = (eventName, attributes = {}, timeMs = Date.now(), spanId = '') => ({
   ...base,
   eventName,
   severity: 'INFO',
@@ -28,9 +28,20 @@ const log = (eventName, attributes = {}, timeMs = Date.now()) => ({
   observedMs: timeMs,
   body: null,
   traceId: '',
-  spanId: '',
+  spanId,
   attrs: { 'session.id': SESSION, ...attributes },
 });
+
+// A request/response body event, in the attribute shape real captured
+// telemetry (Claude Code 2.1.226) carries it: `body_length`/`body_truncated`
+// arrive as strings, exactly like every other numeric OTLP attribute.
+const bodyEvent = (eventName, { model = 'claude-opus-5', body = '{}', truncated = false, querySource = 'sdk' } = {}, timeMs = Date.now(), spanId = '') =>
+  log(
+    eventName,
+    { model, body, body_length: String(body.length), body_truncated: String(truncated), query_source: querySource },
+    timeMs,
+    spanId,
+  );
 
 // Spans carry absolute wall-clock timestamps; anything older than the retention
 // window is evicted on ingest, so fixtures have to sit near "now".
@@ -456,4 +467,208 @@ test('clear() empties the store but keeps subscribers attached', () => {
   assert.equal(store.sessions.size, 0);
   store.ingest('logs', [log('claude_code.user_prompt')]);
   assert.equal(notified, 2);
+});
+
+/* --- content: request/response bodies, and the agent lanes they attribute to --- */
+
+test('queryContent returns content records oldest-first with metadata, and no body field', () => {
+  const store = new TelemetryStore();
+  store.ingest('logs', [
+    bodyEvent('claude_code.api_request_body', { body: '{"messages":[]}', truncated: true }, NOW + 2000),
+    bodyEvent('claude_code.api_request_body', { body: '{}' }, NOW),
+    bodyEvent('claude_code.api_response_body', { body: '{"content":[]}' }, NOW + 1000),
+  ]);
+
+  const items = store.queryContent({ sessionId: SESSION });
+  assert.deepEqual(items.map((item) => item.timeMs), [NOW, NOW + 1000, NOW + 2000]);
+  assert.deepEqual(items.map((item) => item.eventName), [
+    'claude_code.api_request_body',
+    'claude_code.api_response_body',
+    'claude_code.api_request_body',
+  ]);
+  for (const item of items) {
+    assert.equal(item.model, 'claude-opus-5');
+    assert.equal(typeof item.bodyLength, 'number');
+    assert.equal(typeof item.bodyTruncated, 'boolean');
+    assert.ok(!('body' in item), 'a content list item must never carry the full text');
+  }
+  assert.equal(items[2].bodyTruncated, true);
+});
+
+test('getContextAt returns the newest request body at or before the asked time, body intact', () => {
+  const store = new TelemetryStore();
+  const bodies = ['{"n":1}', '{"n":2}', '{"n":3}'];
+  store.ingest(
+    'logs',
+    bodies.map((body, i) => bodyEvent('claude_code.api_request_body', { body }, NOW + i * 1000)),
+  );
+
+  const context = store.getContextAt(SESSION, NOW + 1500);
+  assert.equal(context.body, bodies[1]);
+  assert.equal(context.timeMs, NOW + 1000);
+
+  assert.equal(store.getContextAt(SESSION, NOW - 1), null);
+});
+
+test('agent attribution walks the span tree from a body event to its dispatching subagent lane', () => {
+  const store = new TelemetryStore();
+  store.ingest('traces', [
+    span('claude_code.interaction', {}, { spanId: 'root' }),
+    span(
+      'claude_code.tool',
+      { tool_name: 'Agent', subagent_type: 'general-purpose', tool_use_id: 'tu-agent' },
+      { spanId: 'agent-tool', parentSpanId: 'root' },
+    ),
+    span('claude_code.tool.execution', {}, { spanId: 'agent-exec', parentSpanId: 'agent-tool' }),
+  ]);
+  store.ingest('logs', [
+    bodyEvent('claude_code.api_request_body', { body: '{"main":true}' }, NOW, 'root'),
+    bodyEvent(
+      'claude_code.api_request_body',
+      { body: '{"sub":true}', querySource: 'agent:builtin:general-purpose' },
+      NOW + 1000,
+      'agent-exec',
+    ),
+  ]);
+
+  const agents = store.getSession(SESSION).agents;
+  assert.equal(agents.length, 2);
+  assert.ok(agents.some((agent) => agent.key === 'main'));
+  const sub = agents.find((agent) => agent.name === 'general-purpose');
+  assert.ok(sub, 'the dispatching Agent tool span names the lane');
+  assert.equal(sub.key, 'agent-exec', 'the lane is keyed by the execution span, not the dispatch span');
+
+  const subContent = store.queryContent({ agent: 'agent-exec' });
+  assert.equal(subContent.length, 1);
+  assert.equal(subContent[0].timeMs, NOW + 1000);
+});
+
+test('lane attribution does not depend on ingest order: execution span arrives before its dispatching tool span', () => {
+  const store = new TelemetryStore();
+  store.ingest('traces', [span('claude_code.tool.execution', {}, { spanId: 'agent-exec', parentSpanId: 'agent-tool' })]);
+  store.ingest('traces', [
+    span('claude_code.interaction', {}, { spanId: 'root' }),
+    span(
+      'claude_code.tool',
+      { tool_name: 'Agent', subagent_type: 'general-purpose', tool_use_id: 'tu-agent' },
+      { spanId: 'agent-tool', parentSpanId: 'root' },
+    ),
+  ]);
+  store.ingest('logs', [
+    bodyEvent('claude_code.api_request_body', { body: '{"main":true}' }, NOW, 'root'),
+    bodyEvent(
+      'claude_code.api_request_body',
+      { body: '{"sub":true}', querySource: 'agent:builtin:general-purpose' },
+      NOW + 1000,
+      'agent-exec',
+    ),
+  ]);
+
+  const agents = store.getSession(SESSION).agents;
+  assert.equal(agents.length, 2);
+  const sub = agents.find((agent) => agent.name === 'general-purpose');
+  assert.ok(sub, 'span and log pipelines flush separately; the walk must not assume span-before-log');
+  assert.equal(sub.key, 'agent-exec');
+});
+
+test('a tool_decision two hops below an execution span resolves to that subagent lane, not main', () => {
+  const store = new TelemetryStore();
+  store.ingest('traces', [
+    span('claude_code.interaction', {}, { spanId: 'root' }),
+    span(
+      'claude_code.tool',
+      { tool_name: 'Agent', subagent_type: 'general-purpose', tool_use_id: 'tu-agent' },
+      { spanId: 'agent-tool', parentSpanId: 'root' },
+    ),
+    span('claude_code.tool.execution', {}, { spanId: 'agent-exec', parentSpanId: 'agent-tool' }),
+    span('claude_code.tool', { tool_name: 'Bash', agent_id: 'a132abc' }, { spanId: 'bash-tool', parentSpanId: 'agent-exec' }),
+    span('tool.blocked_on_user', {}, { spanId: 'blocked', parentSpanId: 'bash-tool' }),
+  ]);
+  store.ingest('logs', [
+    bodyEvent('claude_code.api_request_body', { body: '{"main":true}' }, NOW, 'root'),
+    bodyEvent(
+      'claude_code.api_request_body',
+      { body: '{"sub":true}', querySource: 'agent:builtin:general-purpose' },
+      NOW + 1000,
+      'agent-exec',
+    ),
+  ]);
+  const decisionAt = NOW + 5000;
+  store.ingest('logs', [log('claude_code.tool_decision', { tool_name: 'Bash', decision: 'accept' }, decisionAt, 'blocked')]);
+
+  const agents = store.getSession(SESSION).agents;
+  assert.equal(agents.length, 2, 'the two-hops-deep log must land on an existing lane, not open a third one');
+  const sub = agents.find((agent) => agent.key === 'agent-exec');
+  const main = agents.find((agent) => agent.key === 'main');
+  assert.equal(sub.lastMs, decisionAt, 'the walk climbs past the Bash tool span and the blocked_on_user span to the execution span');
+  assert.notEqual(main.lastMs, decisionAt, 'the log must not be attributed to main');
+});
+
+test('without any spans, a body event lane falls back to its query_source', () => {
+  const store = new TelemetryStore();
+  store.ingest('logs', [
+    bodyEvent('claude_code.api_request_body', { body: '{}', querySource: 'agent:builtin:reviewer' }, NOW),
+    bodyEvent('claude_code.api_request_body', { body: '{}', querySource: 'sdk' }, NOW + 1000),
+  ]);
+
+  const agents = store.getSession(SESSION).agents;
+  const reviewer = agents.find((agent) => agent.name === 'reviewer');
+  assert.ok(reviewer, 'a query_source names a lane even with no span tree to walk');
+  assert.equal(reviewer.source, 'agent:builtin:reviewer');
+  const main = agents.find((agent) => agent.key === 'main');
+  assert.ok(main);
+  assert.notEqual(main.key, reviewer.key);
+});
+
+test('each lane reports firstMs/lastMs bounding only its own records', () => {
+  const store = new TelemetryStore();
+  store.ingest('traces', [
+    span('claude_code.interaction', {}, { spanId: 'root' }),
+    span(
+      'claude_code.tool',
+      { tool_name: 'Agent', subagent_type: 'general-purpose', tool_use_id: 'tu-agent' },
+      { spanId: 'agent-tool', parentSpanId: 'root' },
+    ),
+    span('claude_code.tool.execution', {}, { spanId: 'agent-exec', parentSpanId: 'agent-tool' }),
+  ]);
+  store.ingest('logs', [
+    bodyEvent('claude_code.api_request_body', { body: '{}' }, NOW, 'root'),
+    bodyEvent('claude_code.api_request_body', { body: '{}' }, NOW + 3000, 'root'),
+    bodyEvent('claude_code.api_request_body', { body: '{}', querySource: 'agent:builtin:general-purpose' }, NOW + 1000, 'agent-exec'),
+    bodyEvent('claude_code.api_request_body', { body: '{}', querySource: 'agent:builtin:general-purpose' }, NOW + 2000, 'agent-exec'),
+  ]);
+
+  const agents = store.getSession(SESSION).agents;
+  const main = agents.find((agent) => agent.key === 'main');
+  const sub = agents.find((agent) => agent.key === 'agent-exec');
+  assert.equal(main.firstMs, NOW);
+  assert.equal(main.lastMs, NOW + 3000);
+  assert.equal(sub.firstMs, NOW + 1000);
+  assert.equal(sub.lastMs, NOW + 2000);
+});
+
+test('a content byte budget evicts the oldest body first, keeping its reported length', () => {
+  const store = new TelemetryStore({ maxContentBytes: 300 });
+  const bodies = ['x'.repeat(150), 'y'.repeat(150), 'z'.repeat(150)];
+  store.ingest(
+    'logs',
+    bodies.map((body, i) => bodyEvent('claude_code.api_request_body', { body }, NOW + i * 1000)),
+  );
+
+  const oldest = store.getContextAt(SESSION, NOW);
+  assert.equal(oldest.body, null, 'the budget drops content, never the timeline metadata');
+  assert.equal(oldest.bodyEvicted, true);
+  assert.equal(oldest.bodyLength, bodies[0].length);
+
+  const newest = store.getContextAt(SESSION, NOW + 2000);
+  assert.equal(newest.body, bodies[2]);
+  assert.notEqual(newest.bodyEvicted, true);
+});
+
+test('a dropped session leaves no content or agent index behind', () => {
+  const store = new TelemetryStore({ retentionMs: 1000 });
+  const old = Date.now() - 60_000;
+  store.ingest('logs', [bodyEvent('claude_code.api_request_body', { body: '{}' }, old)]);
+  assert.equal(store.sessions.size, 0);
+  assert.equal(store.queryContent({ sessionId: SESSION }).length, 0);
 });

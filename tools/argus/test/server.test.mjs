@@ -70,6 +70,72 @@ function logsPayloadJson(sessionId) {
   });
 }
 
+function logsPayloadBody(sessionId, { eventName, timeMs, attrs = {}, spanId = '' }) {
+  return JSON.stringify({
+    resourceLogs: [
+      {
+        resource: { attributes: [{ key: 'session.id', value: { stringValue: sessionId } }] },
+        scopeLogs: [
+          {
+            logRecords: [
+              {
+                timeUnixNano: String(BigInt(timeMs) * 1000000n),
+                severityNumber: 9,
+                eventName,
+                spanId,
+                attributes: [
+                  { key: 'session.id', value: { stringValue: sessionId } },
+                  ...Object.entries(attrs).map(([key, value]) => ({ key, value: { stringValue: String(value) } })),
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+}
+
+function agentDispatchTracePayload(sessionId, { toolSpanId, execSpanId }) {
+  return encodeMessage(
+    {
+      resourceSpans: [
+        {
+          resource: { attributes: [{ key: 'session.id', value: { stringValue: sessionId } }] },
+          scopeSpans: [
+            {
+              spans: [
+                {
+                  traceId: '33'.repeat(16),
+                  spanId: toolSpanId,
+                  name: 'claude_code.tool',
+                  startTimeUnixNano: T0,
+                  endTimeUnixNano: T0 + 100n * 1000000n,
+                  attributes: [
+                    { key: 'session.id', value: { stringValue: sessionId } },
+                    { key: 'tool_name', value: { stringValue: 'Agent' } },
+                    { key: 'subagent_type', value: { stringValue: 'general-purpose' } },
+                  ],
+                },
+                {
+                  traceId: '33'.repeat(16),
+                  spanId: execSpanId,
+                  parentSpanId: toolSpanId,
+                  name: 'claude_code.tool.execution',
+                  startTimeUnixNano: T0,
+                  endTimeUnixNano: T0 + 100n * 1000000n,
+                  attributes: [{ key: 'session.id', value: { stringValue: sessionId } }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+    EXPORT_TRACE_REQUEST,
+  );
+}
+
 async function withServer(options, run) {
   const store = new TelemetryStore();
   const server = createServer({ store, endpoint: 'http://test', log: () => {}, ...options });
@@ -395,5 +461,149 @@ test('the SSE stream announces ingest', async () => {
     }
     assert.match(frame, /"sessionIds":\["s-sse"\]/);
     controller.abort();
+  });
+});
+
+test('GET /api/sessions/:id/content answers the content records, with agent and timeMs, never a body', async () => {
+  await withServer({}, async ({ base }) => {
+    const sessionId = 's-content';
+    const ingested = await fetch(`${base}/v1/logs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: logsPayloadBody(sessionId, {
+        eventName: 'claude_code.api_request_body',
+        timeMs: Number(T0 / 1000000n),
+        attrs: {
+          model: 'claude-opus-5',
+          body: '{"messages":[]}',
+          body_length: '15',
+          body_truncated: 'false',
+          query_source: 'sdk',
+        },
+      }),
+    });
+    assert.equal(ingested.status, 200);
+
+    const content = await (await fetch(`${base}/api/sessions/${sessionId}/content`)).json();
+    assert.equal(content.items.length, 1);
+    assert.equal(content.items[0].agent, 'main');
+    assert.equal(typeof content.items[0].timeMs, 'number');
+    assert.ok(!('body' in content.items[0]), 'the content list must never carry the full text');
+  });
+});
+
+test('GET /api/sessions/:id/context answers the nearest body, null before every body, 404 for an unknown session', async () => {
+  await withServer({}, async ({ base }) => {
+    const sessionId = 's-context';
+    const t0 = Number(T0 / 1000000n);
+    const bodyText = '{"messages":[{"role":"user","content":"hi"}]}';
+    const ingested = await fetch(`${base}/v1/logs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: logsPayloadBody(sessionId, {
+        eventName: 'claude_code.api_request_body',
+        timeMs: t0,
+        attrs: {
+          model: 'claude-opus-5',
+          body: bodyText,
+          body_length: String(bodyText.length),
+          body_truncated: 'false',
+          query_source: 'sdk',
+        },
+      }),
+    });
+    assert.equal(ingested.status, 200);
+
+    const at = await (await fetch(`${base}/api/sessions/${sessionId}/context?at=${t0 + 1000}`)).json();
+    assert.equal(at.context.body, bodyText);
+
+    const before = await (await fetch(`${base}/api/sessions/${sessionId}/context?at=${t0 - 1000}`)).json();
+    assert.equal(before.context, null);
+
+    assert.equal((await fetch(`${base}/api/sessions/nope/context?at=${t0}`)).status, 404);
+  });
+});
+
+test('GET /api/events no longer ships body text: length and a resolved agent survive, the text does not', async () => {
+  await withServer({}, async ({ base }) => {
+    const sessionId = 's-events-body';
+    const bodyText = 'x'.repeat(500);
+    const ingested = await fetch(`${base}/v1/logs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: logsPayloadBody(sessionId, {
+        eventName: 'claude_code.api_request_body',
+        timeMs: Number(T0 / 1000000n),
+        attrs: {
+          model: 'claude-opus-5',
+          body: bodyText,
+          body_length: String(bodyText.length),
+          body_truncated: 'false',
+          query_source: 'sdk',
+        },
+      }),
+    });
+    assert.equal(ingested.status, 200);
+
+    const events = await (await fetch(`${base}/api/events?session=${sessionId}`)).json();
+    assert.equal(events.items.length, 1);
+    const item = events.items[0];
+    assert.ok(!JSON.stringify(item).includes(bodyText), 'body text must not ride along on the event feed');
+    assert.equal(item.bodyLength, bodyText.length);
+    assert.equal(item.agent, 'main');
+  });
+});
+
+test('GET /api/events?agent filters by lane, and GET /api/sessions/:id lists the lanes', async () => {
+  await withServer({}, async ({ base }) => {
+    const sessionId = 's-lanes';
+    const t0 = Number(T0 / 1000000n);
+    const toolSpanId = '44'.repeat(8);
+    const execSpanId = '55'.repeat(8);
+
+    const trace = await fetch(`${base}/v1/traces`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-protobuf' },
+      body: agentDispatchTracePayload(sessionId, { toolSpanId, execSpanId }),
+    });
+    assert.equal(trace.status, 200);
+
+    const mainBody = await fetch(`${base}/v1/logs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: logsPayloadBody(sessionId, {
+        eventName: 'claude_code.api_request_body',
+        timeMs: t0,
+        attrs: { model: 'm', body: '{"main":1}', body_length: '10', body_truncated: 'false', query_source: 'sdk' },
+      }),
+    });
+    assert.equal(mainBody.status, 200);
+
+    const subBody = await fetch(`${base}/v1/logs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: logsPayloadBody(sessionId, {
+        eventName: 'claude_code.api_request_body',
+        timeMs: t0 + 1000,
+        attrs: {
+          model: 'm',
+          body: '{"sub":1}',
+          body_length: '9',
+          body_truncated: 'false',
+          query_source: 'agent:builtin:general-purpose',
+        },
+        spanId: execSpanId,
+      }),
+    });
+    assert.equal(subBody.status, 200);
+
+    const filtered = await (await fetch(`${base}/api/events?session=${sessionId}&agent=${execSpanId}`)).json();
+    assert.equal(filtered.items.length, 1);
+    assert.equal(filtered.items[0].agent, execSpanId);
+
+    const detail = await (await fetch(`${base}/api/sessions/${sessionId}`)).json();
+    assert.equal(detail.agents.length, 2);
+    assert.ok(detail.agents.some((agent) => agent.key === 'main'));
+    assert.ok(detail.agents.some((agent) => agent.name === 'general-purpose'));
   });
 });

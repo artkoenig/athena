@@ -35,6 +35,30 @@ test('the env block stays free of naming configuration', () => {
   assert.ok(!('OTEL_RESOURCE_ATTRIBUTES' in env));
 });
 
+test('the env block turns on content by default: prompts, tool detail, tool content and raw bodies', () => {
+  // The full request/response body is the context at the time of the request,
+  // which is what the timeline needs — so every one of these ships by default
+  // instead of behind an opt-in nobody remembers to pass.
+  const env = otelEnvFor('http://localhost:4318');
+  assert.equal(env.OTEL_LOG_USER_PROMPTS, '1');
+  assert.equal(env.OTEL_LOG_ASSISTANT_RESPONSES, '1');
+  assert.equal(env.OTEL_LOG_TOOL_DETAILS, '1');
+  assert.equal(env.OTEL_LOG_TOOL_CONTENT, '1');
+  assert.equal(env.OTEL_LOG_RAW_API_BODIES, '1');
+  // Tuning, not a pinned figure: only that a whole context is not truncated.
+  const maxLength = Number(env.CLAUDE_CODE_OTEL_CONTENT_MAX_LENGTH);
+  assert.ok(maxLength >= 100000, `CLAUDE_CODE_OTEL_CONTENT_MAX_LENGTH must be large enough, got ${env.CLAUDE_CODE_OTEL_CONTENT_MAX_LENGTH}`);
+});
+
+test('tool content stays off when traces are, since it needs a span to land on', () => {
+  const env = otelEnvFor('http://localhost:4318', { traces: false });
+  assert.equal(env.OTEL_LOG_USER_PROMPTS, '1');
+  assert.equal(env.OTEL_LOG_ASSISTANT_RESPONSES, '1');
+  assert.equal(env.OTEL_LOG_TOOL_DETAILS, '1');
+  assert.equal(env.OTEL_LOG_RAW_API_BODIES, '1');
+  assert.ok(!('OTEL_LOG_TOOL_CONTENT' in env), 'tool content has nowhere to attach without spans');
+});
+
 test('the env block carries the collector address under its own stable name', () => {
   // The OTEL_* variables say where an agent sends telemetry; UROBOROS_OBS_* say
   // where the collector is, which is what this tool's own commands read.

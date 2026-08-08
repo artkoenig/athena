@@ -107,6 +107,25 @@ test('the settings format nests the env block the way Claude Code expects', asyn
   assert.equal(parsed.env.OTEL_EXPORTER_OTLP_ENDPOINT, 'http://127.0.0.1:4318');
 });
 
+test('every format env prints carries the flag the CLI needs to emit request/response bodies', async () => {
+  const { execFile } = await import('node:child_process');
+  const { promisify } = await import('node:util');
+  const bin = new URL('../bin/argus.mjs', import.meta.url).pathname;
+  const run = async (args) => (await promisify(execFile)(process.execPath, [bin, ...args])).stdout;
+
+  const shell = await run(['env']);
+  assert.match(shell, /^export OTEL_LOG_RAW_API_BODIES="1"$/m, 'default (shell) format');
+
+  const json = JSON.parse(await run(['env', '--format', 'json']));
+  assert.equal(json.OTEL_LOG_RAW_API_BODIES, '1');
+
+  const dotenv = await run(['env', '--format', 'dotenv']);
+  assert.match(dotenv, /^OTEL_LOG_RAW_API_BODIES=1$/m);
+
+  const settings = JSON.parse(await run(['env', '--format', 'settings']));
+  assert.equal(settings.env.OTEL_LOG_RAW_API_BODIES, '1');
+});
+
 test('a measurement is named by its local wall clock, zero padded', async () => {
   // Imported dynamically so a missing export fails this case alone instead of
   // taking the whole file down with it.
