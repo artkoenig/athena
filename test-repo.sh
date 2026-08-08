@@ -1362,6 +1362,128 @@ else
 fi
 
 echo
+echo "=== the session can tell a dead run from a live one"
+
+# Finding 3 / criterion 1: a session used to trust transcript file timestamps
+# and reported a dead run as running. The rulebook has to ground liveness in
+# the task's own status instead. -F because the phrase carries an apostrophe;
+# double-quoted for the same reason.
+if grep -qF "the task's own status" "$root/rulebook.md"; then
+  ok "the rulebook grounds liveness in the task's own status"
+else
+  no "the rulebook does not ground liveness in the task's own status:"
+  grep -n "task" "$root/rulebook.md" | sed 's/^/       /'
+fi
+
+# Criterion 1's other half: the wrong check has to be named and ruled out, not
+# just left unmentioned, so a session cannot reach for it by default.
+if grep -qF 'transcript file timestamps do not establish it' "$root/rulebook.md"; then
+  ok "the rulebook says transcript file timestamps do not establish liveness"
+else
+  no "the rulebook does not rule out transcript file timestamps:"
+  grep -n 'transcript' "$root/rulebook.md" | sed 's/^/       /'
+fi
+
+# Criterion 2: the kill is caused by an ordinary user turn, not a container
+# reset. -i because the sentence may open the clause with a capital letter.
+if grep -qiF 'user turn kills a running workflow' "$root/rulebook.md"; then
+  ok "the rulebook says a user turn kills a running workflow"
+else
+  no "the rulebook does not say a user turn kills a running workflow:"
+  grep -in 'user turn' "$root/rulebook.md" | sed 's/^/       /'
+fi
+
+# Criterion 2's other fact: the killed agent restarts from zero, so an
+# interruption costs a whole agent rather than resuming mid-flight.
+if grep -qF 'restarts from zero' "$root/rulebook.md"; then
+  ok "the rulebook says the killed agent restarts from zero"
+else
+  no "the rulebook does not say the killed agent restarts from zero:"
+  grep -n 'restart' "$root/rulebook.md" | sed 's/^/       /'
+fi
+
+# Criterion 3: a session that takes a message mid-run is told to check
+# liveness and resume, not to report progress from stale files.
+if grep -qF 'check liveness and resume' "$root/rulebook.md"; then
+  ok "the rulebook tells a session that takes a message mid-run to check liveness and resume"
+else
+  no "the rulebook does not tell a session to check liveness and resume:"
+  grep -n 'liveness' "$root/rulebook.md" | sed 's/^/       /'
+fi
+
+# Criterion 3's negative half: reporting from stale files is the mistake the
+# rulebook rules out by name.
+if grep -qF 'stale files' "$root/rulebook.md"; then
+  ok "the rulebook forbids reporting progress from stale files"
+else
+  no "the rulebook does not forbid reporting progress from stale files:"
+  grep -n 'stale' "$root/rulebook.md" | sed 's/^/       /'
+fi
+
+# Criterion 4: the periodic self check-in and the resumeFromRunId re-entry
+# belong to another issue, so no loop skill page may describe them yet. This
+# case is green until a page names one of the three terms; the mutation
+# proving it can go red lives in a temporary worktree, not here.
+hits="$(grep -rniE 'resumeFromRunId|self check-in|periodic check' "$root/rulebook.md" "$root"/skills/*/SKILL.md "$root"/agents/*.md 2>/dev/null || true)"
+if [ -z "$hits" ]; then
+  ok "no loop skill page describes the resume mechanism another issue owns"
+else
+  no "a loop skill page describes the resume mechanism another issue owns:"
+  echo "$hits" | sed 's/^/       /'
+fi
+
+# Criterion 5: the coverage-only correction round left the pages saying it
+# runs every agent; that has to be corrected to name the shortened chain.
+if grep -qF 'only the agents its findings need' "$root/rulebook.md"; then
+  ok "the rulebook says a correction round runs only the agents its findings need"
+else
+  no "the rulebook does not say a correction round runs only the agents its findings need:"
+  grep -n 'correction round runs' "$root/rulebook.md" | sed 's/^/       /'
+fi
+
+# Criterion 6: an agent working in a project with no tools/argus/ checkout has
+# to be told what to run instead of being pointed at a script it cannot run.
+# -F because the string carries punctuation.
+if grep -qF 'argus start --background' "$root/skills/agent-brief/SKILL.md"; then
+  ok "the shared brief tells an agent with no tools/argus/ checkout what to run instead"
+else
+  no "the shared brief does not name argus start --background:"
+  grep -n 'argus start' "$root/skills/agent-brief/SKILL.md" | sed 's/^/       /'
+fi
+
+# The settlement keeps the one prohibition that survives: never tear a
+# collector down by hand. This case already holds; the worktree mutation
+# below proves it can go red.
+if grep -qF 'pkill' "$root/skills/agent-brief/SKILL.md"; then
+  ok "the shared brief still forbids tearing a collector down with pkill"
+else
+  no "the shared brief no longer mentions pkill:"
+  grep -n 'collector' "$root/skills/agent-brief/SKILL.md" | sed 's/^/       /'
+fi
+
+# Criterion 6's agreement check: the brief and the argus skill page have to
+# name the same start command, or an agent following one contradicts the
+# other. This case already holds; the worktree mutation below proves it can
+# go red.
+if grep -qF 'argus start --background' "$root/skills/argus/SKILL.md"; then
+  ok "the argus skill names the same start command as the shared brief"
+else
+  no "the argus skill does not name argus start --background:"
+  grep -n 'argus start' "$root/skills/argus/SKILL.md" | sed 's/^/       /'
+fi
+
+# Criterion 8: this guard has to run inside ./test.sh, not only when invoked
+# by hand, or a regression here is never caught by the suite the project
+# actually runs. This case already holds; the worktree mutation below proves
+# it can go red.
+if grep -qF 'test-repo.sh' "$root/test.sh"; then
+  ok "./test.sh runs test-repo.sh"
+else
+  no "./test.sh does not run test-repo.sh:"
+  grep -n 'test-repo' "$root/test.sh" | sed 's/^/       /'
+fi
+
+echo
 if [ "$failed" -eq 0 ]; then
   echo "PASS: $passed cases"
 else

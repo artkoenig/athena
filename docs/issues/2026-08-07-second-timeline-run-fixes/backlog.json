@@ -129,6 +129,113 @@
             ],
             "questions": []
           }
+        },
+        {
+          "label": "tests:liveness-docs.0",
+          "at": "2026-08-08T00:10:43.377Z",
+          "return": {
+            "summary": "Added the twelve-case \"the session can tell a dead run from a live one\" section to test-repo.sh, proving eight cases red in the checkout (liveness paragraph, transcript-timestamp disclaimer, user-turn kill, restart-from-zero, check-liveness-and-resume, stale-files ban, correction-round scope, and the argus-start-background fallback all missing from rulebook.md / skills/agent-brief/SKILL.md) and the remaining four (resumeFromRunId leak guard, pkill prohibition, brief/argus-skill agreement, test.sh wiring) proven red-capable via one mutation at a time in a disposable git worktree.",
+            "cases": [
+              {
+                "case": "Criterion 1 — the rulebook establishes liveness from the task's own status.",
+                "file": "/home/user/uroboros/test-repo.sh",
+                "testName": "the rulebook grounds liveness in the task's own status",
+                "expected": "grep -qF \"the task's own status\" \"$root/rulebook.md\" succeeds once the liveness paragraph lands.",
+                "got": "FAIL — the rulebook does not ground liveness in the task's own status: (printed grep -n 'task' hits at rulebook.md:26,32,33, none matching the required phrase). Confirmed red in `bash test-repo.sh` run in the checkout."
+              },
+              {
+                "case": "Criterion 1 — the rulebook says plainly that transcript file timestamps do not establish liveness.",
+                "file": "/home/user/uroboros/test-repo.sh",
+                "testName": "the rulebook says transcript file timestamps do not establish liveness",
+                "expected": "grep -qF 'transcript file timestamps do not establish it' \"$root/rulebook.md\" succeeds once the sentence lands.",
+                "got": "FAIL — the rulebook does not rule out transcript file timestamps: (looser grep -n 'transcript' produced no hits at all — the word is absent from rulebook.md). Confirmed red in the checkout run."
+              },
+              {
+                "case": "Criterion 2 — the rulebook says a user turn kills a running workflow.",
+                "file": "/home/user/uroboros/test-repo.sh",
+                "testName": "the rulebook says a user turn kills a running workflow",
+                "expected": "grep -qiF 'user turn kills a running workflow' \"$root/rulebook.md\" succeeds once the fact lands.",
+                "got": "FAIL — the rulebook does not say a user turn kills a running workflow: (looser grep -in 'user turn' produced no hits). Confirmed red in the checkout run."
+              },
+              {
+                "case": "Criterion 2 — the rulebook says the killed agent restarts from zero rather than resuming mid-flight.",
+                "file": "/home/user/uroboros/test-repo.sh",
+                "testName": "the rulebook says the killed agent restarts from zero",
+                "expected": "grep -qF 'restarts from zero' \"$root/rulebook.md\" succeeds once the fact lands.",
+                "got": "FAIL — the rulebook does not say the killed agent restarts from zero: (looser grep -n 'restart' produced no hits). Confirmed red in the checkout run."
+              },
+              {
+                "case": "Criterion 3 — the rulebook tells a session that took a message mid-run to check liveness and resume.",
+                "file": "/home/user/uroboros/test-repo.sh",
+                "testName": "the rulebook tells a session that takes a message mid-run to check liveness and resume",
+                "expected": "grep -qF 'check liveness and resume' \"$root/rulebook.md\" succeeds once the instruction lands.",
+                "got": "FAIL — the rulebook does not tell a session to check liveness and resume: (looser grep -n 'liveness' produced no hits). Confirmed red in the checkout run."
+              },
+              {
+                "case": "Criterion 3 — the rulebook forbids reporting progress from stale files.",
+                "file": "/home/user/uroboros/test-repo.sh",
+                "testName": "the rulebook forbids reporting progress from stale files",
+                "expected": "grep -qF 'stale files' \"$root/rulebook.md\" succeeds once the prohibition lands.",
+                "got": "FAIL — the rulebook does not forbid reporting progress from stale files: (looser grep -n 'stale' produced no hits). Confirmed red in the checkout run."
+              },
+              {
+                "case": "Criterion 4 — no page describes the resume mechanism another issue owns.",
+                "file": "/home/user/uroboros/test-repo.sh",
+                "testName": "no loop skill page describes the resume mechanism another issue owns",
+                "expected": "grep -rniE 'resumeFromRunId|self check-in|periodic check' over rulebook.md, skills/*/SKILL.md and agents/*.md returns nothing.",
+                "got": "Green in the checkout (no hits). Proven capable of going red in a disposable git worktree (`git worktree add --detach <tmp> HEAD`, edited copy of test-repo.sh dropped in): appending 'resumeFromRunId is used somewhere.' to the worktree's rulebook.md flipped the case to `FAIL — a loop skill page describes the resume mechanism another issue owns:` naming rulebook.md:87. Reverted with `git checkout -- rulebook.md`; worktree later removed with `git worktree remove --force`."
+              },
+              {
+                "case": "Criterion 5 — the rulebook says a correction round runs only the agents its findings need.",
+                "file": "/home/user/uroboros/test-repo.sh",
+                "testName": "the rulebook says a correction round runs only the agents its findings need",
+                "expected": "grep -qF 'only the agents its findings need' \"$root/rulebook.md\" succeeds once the sentence lands.",
+                "got": "FAIL — the rulebook does not say a correction round runs only the agents its findings need: (looser grep -n 'correction round runs' produced no hits). Confirmed red in the checkout run."
+              },
+              {
+                "case": "Criterion 6 — the shared brief tells an agent with no tools/argus/ checkout what to run instead.",
+                "file": "/home/user/uroboros/test-repo.sh",
+                "testName": "the shared brief tells an agent with no tools/argus/ checkout what to run instead",
+                "expected": "grep -qF 'argus start --background' \"$root/skills/agent-brief/SKILL.md\" succeeds once the fallback command lands.",
+                "got": "FAIL — the shared brief does not name argus start --background: (looser grep -n 'argus start' produced no hits in skills/agent-brief/SKILL.md; the page currently only says a session in another project 'has no tools/argus/ to run it from' without saying what to do instead). Confirmed red in the checkout run."
+              },
+              {
+                "case": "Criterion 6 — the shared brief still forbids tearing a collector down with pkill.",
+                "file": "/home/user/uroboros/test-repo.sh",
+                "testName": "the shared brief still forbids tearing a collector down with pkill",
+                "expected": "grep -qF 'pkill' \"$root/skills/agent-brief/SKILL.md\" succeeds; this already holds and must survive the settlement.",
+                "got": "Green in the checkout. Proven capable of going red in the same disposable worktree: deleting the 'Never start a collector by hand, and never kill one with `pkill`.' clause from the worktree's skills/agent-brief/SKILL.md flipped the case to `FAIL — the shared brief no longer mentions pkill:`. Reverted with `git checkout -- skills/agent-brief/SKILL.md`."
+              },
+              {
+                "case": "Criterion 6 — the brief and the argus skill name the same start command, so the two pages agree.",
+                "file": "/home/user/uroboros/test-repo.sh",
+                "testName": "the argus skill names the same start command as the shared brief",
+                "expected": "grep -qF 'argus start --background' \"$root/skills/argus/SKILL.md\" succeeds; this already holds.",
+                "got": "Green in the checkout. Proven capable of going red in the same disposable worktree: deleting line 23 ('argus start --background') from the worktree's skills/argus/SKILL.md flipped the case to `FAIL — the argus skill does not name argus start --background:` (looser grep then only found the unrelated 'argus start --open ...' line). Reverted with `git checkout -- skills/argus/SKILL.md`."
+              },
+              {
+                "case": "Criterion 8 — the guard runs inside ./test.sh rather than only by hand.",
+                "file": "/home/user/uroboros/test-repo.sh",
+                "testName": "./test.sh runs test-repo.sh",
+                "expected": "grep -qF 'test-repo.sh' \"$root/test.sh\" succeeds; this already holds.",
+                "got": "Green in the checkout. Proven capable of going red in the same disposable worktree: renaming the invocation in the worktree's test.sh from 'test-repo.sh' to 'test-repo-renamed.sh' flipped the case to `FAIL — ./test.sh does not run test-repo.sh:` naming test.sh:30. Reverted with `git checkout -- test.sh`, then the whole worktree removed with `git worktree remove --force`."
+              }
+            ],
+            "openQuestions": [],
+            "questions": [],
+            "commandRuns": [
+              "bash test-repo.sh (checkout, before edits): PASS: 82 cases, exit 0 — confirms every suite test-repo.sh already carries was green at the start of this increment.",
+              "bash test-repo.sh (checkout, after the new section): FAIL: 8 of 94 cases, exit 1 — the eight FAIL lines are cases 1-6, 8 and 9 exactly as the plan predicted; cases 7, 10, 11 and 12 are ok.",
+              "git worktree add --detach <tmp-path> HEAD, then one mutation at a time with `bash test-repo.sh` after each and `git checkout -- <file>` before the next: confirmed case 7 (resumeFromRunId inserted into rulebook.md), case 10 (pkill sentence deleted from skills/agent-brief/SKILL.md), case 11 (argus start --background line deleted from skills/argus/SKILL.md) and case 12 (test-repo.sh renamed in test.sh) each flip their own case, and only their own case plus the already-red baseline ones, to FAIL. Worktree removed afterward with `git worktree remove --force`.",
+              "./test.sh was not run, per the plan's instruction that it is not mine to run."
+            ],
+            "notes": [
+              "Wrote only test-repo.sh; rulebook.md, skills/agent-brief/SKILL.md and skills/argus/SKILL.md were read but never edited in the checkout.",
+              "Case order and grep patterns follow the plan verbatim, including the plan's own choice of -qiF for the user-turn case and plain single quotes (no -F) for the transcript-timestamps case, since that pattern carries no apostrophe or slash.",
+              "The four already-green cases (7, 10, 11, 12) are asserted positively (their ok text names what the page currently says or omits), per criterion 7's provability requirement.",
+              "Nothing here touches skills/grill/SKILL.md, the resumeFromRunId/self-check-in mechanism itself, or ./test.sh's own manifest drift check — all explicitly out of scope for this increment."
+            ]
+          }
         }
       ]
     },
