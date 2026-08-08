@@ -81,10 +81,10 @@ test('nothing in the interface reaches outside the interface', () => {
 });
 
 test('the pure modules the tests import reach for no browser global', () => {
-  // Both files' own doc comments use the words document, fetch and location in
-  // prose, and context.js exports fetchLaneContext — so the patterns below name
-  // the browser globals themselves, not the bare words, or this case would fail
-  // on the files as they stand today.
+  // The doc comments of context.js and timeline.js use the words document,
+  // fetch and location in prose, and context.js exports fetchLaneContext — so
+  // the patterns below name the browser globals themselves, not the bare words,
+  // or this case would fail on the files as they stand today.
   const files = ['public/context.js', 'public/timeline.js', 'public/run.js'];
   const problems = [];
   for (const relative of files) {

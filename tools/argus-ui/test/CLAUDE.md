@@ -8,8 +8,8 @@
 - `server.test.mjs` — the real `createServer` from `src/server.mjs` against a fake collector: static serving, proxying with token injection and cookie stripping, unbuffered SSE, 401→502, the `--token` cookie handoff, plus a source-text guard that the proxy names no route under `/api/`.
 - `timeline.test.mjs` — the pure functions of `public/timeline.js`: lanes, geometry, density curves, activity marks, the tool-mark merge, the live/scrub cursor, and the rendered timeline markup.
 - `context.test.mjs` — the pure functions of `public/context.js`: `contextBlocks` parsing, `renderContextPanel` markup, the lane→query mapping, `fetchLaneContext`, `lanePanelInput`, the block filter and the search.
-- `run.test.mjs` — the pure functions of `public/run.js`: `isClosedIncrement`/`CLOSED_STATUSES`, `incrementCounts`, `pickRunId`, `runFrame`, and the `renderRunList`/`renderRun` markup.
-- `page.test.mjs` — `public/app.js`, `index.html`, `styles.css` and the `.md` pages checked as source text: imports, event wiring, the boot path and the run view's fetch-and-repaint wiring, state shape, and deleted views staying deleted. `app.js` touches browser globals, so it is never imported.
+- `run.test.mjs` — the pure functions of `public/run.js`: `isClosedIncrement`/`CLOSED_STATUSES`, `incrementCounts`, `pickRunId`, `runFrame`, `shouldLoadRun`, and the `renderRunList`/`renderRun` markup.
+- `page.test.mjs` — `public/app.js`, `index.html`, `styles.css` and the `.md` pages checked as source text: imports, event wiring, the boot path and the run view's fetch-and-repaint wiring, state shape, deleted views staying deleted, and `refreshRuns` delegating its re-fetch decision to `shouldLoadRun`. `app.js` touches browser globals, so it is never imported.
 - `independence.test.mjs` — the project is complete, imports nothing outside itself, and the pure modules reach for no browser global.
 
 ## Helpers and fixtures

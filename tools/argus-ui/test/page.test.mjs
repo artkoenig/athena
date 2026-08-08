@@ -1220,3 +1220,39 @@ test('README.md describes the run view: the runs list, the increments with statu
   assert.match(readme, /status/i, 'README must say the increments show their status');
   assert.match(readme, /codemap/i, 'README must name the codemap the run view shows');
 });
+
+// Correction round 2 — refreshRuns delegates the re-fetch decision, and reads the shown run before the picker moves it.
+
+test('refreshRuns delegates the re-fetch decision to shouldLoadRun, and reads the shown run before the picker moves it', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  assert.match(
+    appJs,
+    /import\s*\{[^}]*\bshouldLoadRun\b[^}]*\}\s*from\s*['"]\.\/run\.js['"]/,
+    'app.js must import shouldLoadRun from run.js, or the name in refreshRuns resolves to nothing',
+  );
+
+  const refreshRuns = functionSource(appJs, 'refreshRuns');
+  const slice = callArguments(refreshRuns, 'shouldLoadRun');
+  assert.match(slice, /\bchangedId\b/, 'shouldLoadRun must be handed the frame\'s changedId');
+  assert.match(slice, /\bshown\b/, 'shouldLoadRun must be handed the selection as it stood before the picker moved it');
+  assert.match(slice, /state\.selectedRunId\b/, 'shouldLoadRun must be handed the selection the picker settled on');
+
+  assert.match(
+    refreshRuns,
+    /shouldLoadRun\([\s\S]*?\)\)\s*await loadRun\(/,
+    'the one call to loadRun must be the one shouldLoadRun guards',
+  );
+  assert.doesNotMatch(
+    refreshRuns,
+    /changedId\s*===\s*state\.selectedRunId/,
+    'the decision must not be spelled a second time inside app.js — this is the mutation the review reproduced',
+  );
+
+  const shownIdx = refreshRuns.indexOf('const shown');
+  const loadRunsIdx = refreshRuns.indexOf('loadRuns(');
+  assert.ok(shownIdx > -1, 'refreshRuns must read the shown run into a variable of its own');
+  assert.ok(
+    shownIdx < loadRunsIdx,
+    'shown must be read before loadRuns() moves the picker\'s selection, or a shown read afterward is always equal to state.selectedRunId and collapses the rule',
+  );
+});

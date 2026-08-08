@@ -9,6 +9,7 @@ import {
   runFrame,
   renderRunList,
   renderRun,
+  shouldLoadRun,
 } from '../public/run.js';
 import { fmtAgo } from '../public/format.js';
 
@@ -292,4 +293,50 @@ test('a malformed frame costs the page nothing', () => {
   for (const input of ['not json', '{}', 'null', '']) {
     assert.equal(runFrame(input), null, `runFrame(${JSON.stringify(input)}) must be null, not a thrown error`);
   }
+});
+
+// Correction round 2 — the rule that decides when the shown run's state is asked for again.
+
+test('with no frame, the state is always asked for — the boot and the explicit switch', () => {
+  assert.equal(
+    shouldLoadRun({ changedId: null, shownId: null, selectedId: 'a' }),
+    true,
+    'a boot with nothing selected must ask for the run the picker chose, or the page opens on "No run yet" instead of the latest run',
+  );
+  assert.equal(
+    shouldLoadRun({ changedId: null, shownId: 'a', selectedId: 'a' }),
+    true,
+    'an explicit switch to a run already shown must still fetch its state fresh',
+  );
+  assert.equal(shouldLoadRun(), true, 'a call with nothing to go on must read as a boot, never as "leave the pane empty"');
+  assert.equal(shouldLoadRun({}), true, 'a call with nothing to go on must read as a boot, never as "leave the pane empty"');
+});
+
+test('a frame naming the run on screen refreshes it — the live update', () => {
+  assert.equal(
+    shouldLoadRun({ changedId: 'a', shownId: 'a', selectedId: 'a' }),
+    true,
+    'a frame naming the run already on screen must trigger the live refresh',
+  );
+});
+
+test('a frame naming another run leaves the shown run alone, so a busy collector costs the pane no request', () => {
+  assert.equal(
+    shouldLoadRun({ changedId: 'b', shownId: 'a', selectedId: 'a' }),
+    false,
+    'a frame about a run that is not on screen must never cost the pane a fetch — a `return true` mutation would fail this',
+  );
+});
+
+test('a frame that arrives before anything was shown still paints, whichever run it named', () => {
+  assert.equal(
+    shouldLoadRun({ changedId: 'a', shownId: null, selectedId: 'a' }),
+    true,
+    'the first frame to arrive at an empty pane must still paint it',
+  );
+  assert.equal(
+    shouldLoadRun({ changedId: 'x', shownId: null, selectedId: 'a' }),
+    true,
+    'the frame named a run other than the one the picker chose, and the pane is still empty, so it must be filled — a `return changedId === selectedId` mutation would fail this',
+  );
 });

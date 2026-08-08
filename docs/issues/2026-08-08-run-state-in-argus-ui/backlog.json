@@ -505,6 +505,59 @@
             ],
             "questions": []
           }
+        },
+        {
+          "label": "tests:ui.2",
+          "at": "2026-08-08T12:18:14.515Z",
+          "return": {
+            "summary": "Wrote the four to five node:test cases for shouldLoadRun in run.test.mjs, the one page.test.mjs case pinning refreshRuns's delegation to it, corrected the stale independence.test.mjs comment, and updated test/CLAUDE.md's two bullets — all three touched test files fail exactly where the missing shouldLoadRun behaviour bites and the independence suite still passes untouched.",
+            "cases": [
+              {
+                "case": "A1 — Without a frame, the state is always asked for (boot with nothing shown, boot with the shown run already matching selection, and a call with nothing to go on)",
+                "file": "tools/argus-ui/test/run.test.mjs",
+                "testName": "with no frame, the state is always asked for — the boot and the explicit switch",
+                "expected": "shouldLoadRun({changedId:null, shownId:null, selectedId:'a'}) is true; shouldLoadRun({changedId:null, shownId:'a', selectedId:'a'}) is true; shouldLoadRun() and shouldLoadRun({}) are both true",
+                "got": "the whole file fails to load — `SyntaxError: The requested module '../public/run.js' does not provide an export named 'shouldLoadRun'` — because public/run.js does not yet export shouldLoadRun; the plan's own import list change (adding shouldLoadRun to the existing import) is what triggers this, and it is the correct proof that the rule does not exist yet, not a typo in the test"
+              },
+              {
+                "case": "A2 — A frame naming the run on screen refreshes it",
+                "file": "tools/argus-ui/test/run.test.mjs",
+                "testName": "a frame naming the run on screen refreshes it — the live update",
+                "expected": "shouldLoadRun({changedId:'a', shownId:'a', selectedId:'a'}) is true",
+                "got": "same module-level SyntaxError as A1 — public/run.js has no shouldLoadRun export, so node:test never reaches any test body in the file"
+              },
+              {
+                "case": "A3 — A frame naming another run leaves the shown run alone",
+                "file": "tools/argus-ui/test/run.test.mjs",
+                "testName": "a frame naming another run leaves the shown run alone, so a busy collector costs the pane no request",
+                "expected": "shouldLoadRun({changedId:'b', shownId:'a', selectedId:'a'}) is false",
+                "got": "same module-level SyntaxError as A1"
+              },
+              {
+                "case": "A4 — A frame that arrives before anything was shown still paints, whichever run it named",
+                "file": "tools/argus-ui/test/run.test.mjs",
+                "testName": "a frame that arrives before anything was shown still paints, whichever run it named",
+                "expected": "shouldLoadRun({changedId:'a', shownId:null, selectedId:'a'}) is true; shouldLoadRun({changedId:'x', shownId:null, selectedId:'a'}) is true",
+                "got": "same module-level SyntaxError as A1"
+              },
+              {
+                "case": "B — app.js's refreshRuns delegates the re-fetch decision to shouldLoadRun and does not restate it: imports shouldLoadRun from ./run.js, calls it with changedId, shown and state.selectedRunId, guards the one loadRun( call, never spells changedId === state.selectedRunId itself, and reads `const shown` before the loadRuns( call moves the selection",
+                "file": "tools/argus-ui/test/page.test.mjs",
+                "testName": "refreshRuns delegates the re-fetch decision to shouldLoadRun, and reads the shown run before the picker moves it",
+                "expected": "appJs matches an import of shouldLoadRun from ./run.js; callArguments(refreshRuns,'shouldLoadRun') names changedId, shown and state.selectedRunId; refreshRuns matches /shouldLoadRun([\\s\\S]*?)) await loadRun(/; refreshRuns does not match /changedId\\s*===\\s*state\\.selectedRunId/; the index of `const shown` is > -1 and < the index of `loadRuns(`",
+                "got": "AssertionError: 'app.js must import shouldLoadRun from run.js, or the name in refreshRuns resolves to nothing' — the current app.js imports only { pickRunId, renderRun, renderRunList, runFrame } from ./run.js, with no shouldLoadRun; the rest of the assertions in this test are never reached because assert.match throws on the first check, exactly the missing-behaviour failure the plan calls for"
+              },
+              {
+                "case": "C — the stale independence.test.mjs comment names only context.js's words, though timeline.js's doc comment also uses document, fetch and location in prose",
+                "file": "tools/argus-ui/test/independence.test.mjs",
+                "testName": "",
+                "expected": "no new test; the four comment lines at 84-87 are replaced with the wording the plan gives verbatim, naming both context.js and timeline.js, and nothing else in the file changes",
+                "got": "not a test case — a prose fix with nothing to assert; edited exactly as specified and reran the file (`node --test tools/argus-ui/test/independence.test.mjs`, 3 tests, 3 pass, exit 0) to confirm the comment change left the existing three tests green"
+              }
+            ],
+            "openQuestions": [],
+            "questions": []
+          }
         }
       ]
     },
