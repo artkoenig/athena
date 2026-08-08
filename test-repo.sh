@@ -1018,6 +1018,38 @@ else
 fi
 
 echo
+echo "=== every test suite carries its doc"
+
+# The suite doc is what spares the test-author reading a suite whole to find
+# its conventions (docs/issues/2026-08-08-suite-docs-own-the-test-conventions).
+# The test-author keeps it current; this pins only that a directory holding
+# tests carries one at all, so a new suite cannot ship undocumented and a
+# bootstrapped doc cannot be deleted silently.
+undocumented=""
+while IFS= read -r dir; do
+  [ -f "$dir/CLAUDE.md" ] || undocumented="$undocumented ${dir#"$root"/}"
+done < <(find "$root" -name '*.test.mjs' -not -path '*/node_modules/*' -not -path "$root/.git/*" -exec dirname {} \; | sort -u)
+if [ -z "$undocumented" ]; then
+  ok "every directory holding a *.test.mjs carries a CLAUDE.md suite doc"
+else
+  no "these test directories carry no CLAUDE.md:$undocumented"
+fi
+
+# The two pages that divide the responsibility have to keep naming it: the
+# test-author owns the doc, and the researcher's test plan points at it
+# instead of restating conventions.
+if grep -q 'CLAUDE.md' "$root/agents/test-author.md"; then
+  ok "the test-author's page names the suite doc it keeps"
+else
+  no "the test-author's page does not mention the suite doc"
+fi
+if grep -qi 'suite doc' "$root/agents/researcher.md"; then
+  ok "the researcher's page sends conventions to the suite doc"
+else
+  no "the researcher's page does not name the suite doc"
+fi
+
+echo
 echo "=== remote operation deploys the collector alone"
 
 # Dockerfile, compose.yaml and render.yaml build and run argus. The interface

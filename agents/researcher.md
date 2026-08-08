@@ -74,10 +74,12 @@ convention you did not write down. Answer all of this:
   untested and why, so an omission reads as a decision. A criterion missing
   from this list gets no test at all.
 - **How.** Per case: the level (unit, integration, end-to-end), the test file
-  by path, the framework, and the conventions of the tests already in that
-  file — how a case is named, how fixtures and setup work, what is faked and
-  what is real. Plus the command that runs just that file. "Follow the existing
-  style" is not an answer; you are the one who can read the style.
+  by path, the framework, and the command that runs just that file. The
+  conventions of that file — helpers, fixtures, naming, what is faked — are
+  not yours to restate: they live in the suite doc, the `CLAUDE.md` in the
+  test directory, and the test-author loads it on its own. Where that doc is
+  missing, or what you read contradicts it, say exactly that in the test plan
+  — the test-author writes or corrects the doc as part of its step.
 - **What counts as done.** A closed list of commands, verbatim, runnable from
   the repository root, whose exit codes judge the work. Closed means closed:
   nobody downstream runs anything else. Leave off a run you do not want — the
