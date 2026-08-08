@@ -76,10 +76,13 @@ excluded anything.
 Run `node tools/argus/scripts/with-collector.mjs [--port <n>] -- <command>` where
 you need a collector to talk to: it starts one on a free port, hands the command
 `ARGUS_URL` and `ARGUS_PORT`, and stops it when the command exits, whatever that
-command exits with. Never start a collector by hand, and never kill one with
-`pkill`. That script is there in an uroboros checkout only — the plugin ships
-`skills/`, `workflows/` and `agents/`, so a session in another project has no
-`tools/argus/` to run it from.
+command exits with. That script ships in an uroboros checkout alone — the plugin
+ships `skills/`, `workflows/` and `agents/` — so in a project with no
+`tools/argus/` directory run `argus start --background` instead: the plugin puts
+`argus` on the `PATH` of every session, the call prints the endpoint and the port
+it is listening on, and that collector ends by itself with the session that
+started it. Those two are the whole of how you reach a collector; never tear one
+down with `pkill`.
 
 ## Your step return
 

@@ -236,6 +236,30 @@
               "Nothing here touches skills/grill/SKILL.md, the resumeFromRunId/self-check-in mechanism itself, or ./test.sh's own manifest drift check — all explicitly out of scope for this increment."
             ]
           }
+        },
+        {
+          "label": "implement:liveness-docs.0",
+          "at": "2026-08-08T00:13:56.557Z",
+          "return": {
+            "deviations": [
+              "Placement of the criterion-5 sentence: the plan said \"append one sentence to that numbered item, after '...makes sure a pull request is open.'\". I put it immediately after that sentence, so it sits before the item's closing sentence about orchestration living in the workflow rather than at the very end of the item. The qualifier reads as a correction of the enumeration it follows, and the plan's own anchor names that position; the sentence itself is verbatim."
+            ],
+            "commands": [
+              {
+                "command": "bash test-repo.sh",
+                "exitCode": 0,
+                "note": "94 cases, all pass. Before the edits the same run was exit 1 with 8 of 94 failing: the six liveness cases (task's own status, transcript file timestamps, user turn kills a running workflow, restarts from zero, check liveness and resume, stale files), the correction-round case, and the 'argus start --background' case in the shared brief. The four cases the test plan recorded as already green (resume-mechanism guard, pkill, argus skill start command, ./test.sh runs test-repo.sh) stayed green."
+              },
+              {
+                "command": "./test.sh",
+                "exitCode": 0,
+                "note": "All 8 suites pass, test-repo.sh among them; the node suites report 41 tests, 0 failures. bin/check-commit-signing, which test.sh runs first, passed, so the pre-existing failure the plan warned about did not occur."
+              }
+            ],
+            "blockers": [],
+            "questions": [],
+            "summary": "Added the liveness paragraph and the correction-round sentence to rulebook.md Issue Mode step 4, and replaced the shared brief's 'A live collector' section with the two sanctioned ways to reach a collector and the single pkill prohibition."
+          }
         }
       ]
     },
