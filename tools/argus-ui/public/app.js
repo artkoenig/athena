@@ -50,6 +50,8 @@ const state = {
   // for: an answer that arrives after the selection moved on must not be painted.
   laneContext: { key: null, item: null },
   // Which blocks the reader has expanded, so a live refresh does not shut them.
+  // The keys belong to the blocks themselves — what a block is, not which
+  // record carried it — so they go on matching as the session writes more.
   expanded: new Set(),
   // Which context entries the reader has hidden, whether the filter's own
   // dropdown is open, and what they are searching the context for. All three are
@@ -163,6 +165,35 @@ function renderSessionList() {
 
 /* -------------------------------- detail -------------------------------- */
 
+/**
+ * How far into each open block the reader has scrolled, keyed by the block.
+ *
+ * The text inside an expanded block is capped at half the viewport and scrolls
+ * in its own `<pre>`, so putting the block back open is only half of leaving a
+ * reader where they were: without this, every repaint throws someone 40 KB into
+ * a tool result back to its first line. Read off the DOM before it is replaced.
+ */
+function readBlockScroll() {
+  const offsets = new Map();
+  for (const block of document.querySelectorAll('.ctx-block')) {
+    const key = block.querySelector('summary[data-block]')?.dataset.block;
+    const top = block.querySelector('.ctx-text')?.scrollTop;
+    if (key && top) offsets.set(key, top);
+  }
+  return offsets;
+}
+
+/** The same offsets written back onto the blocks the repaint rebuilt. */
+function applyBlockScroll(offsets) {
+  if (!offsets?.size) return;
+  for (const block of document.querySelectorAll('.ctx-block')) {
+    const key = block.querySelector('summary[data-block]')?.dataset.block;
+    const top = key ? offsets.get(key) : undefined;
+    const text = top === undefined ? null : block.querySelector('.ctx-text');
+    if (text) text.scrollTop = top;
+  }
+}
+
 function renderDetail() {
   const detail = document.getElementById('detail');
   const session = state.session;
@@ -171,6 +202,9 @@ function renderDetail() {
     return;
   }
   const errors = session.counts.apiErrors + session.counts.toolFailures;
+  // Read before the pane is replaced; renderLanePanel below finds the blocks
+  // already gone, so this is the copy that survives a whole-pane repaint.
+  const offsets = readBlockScroll();
 
   detail.innerHTML = `
     <div class="detail-head">
@@ -202,6 +236,7 @@ function renderDetail() {
     <div id="lane-panel"></div>
   `;
   renderLanePanel();
+  applyBlockScroll(offsets);
 }
 
 /* ------------------------------ empty state ----------------------------- */
@@ -436,6 +471,7 @@ function renderLanePanel() {
   const active = document.activeElement;
   const focusId = active && container.contains(active) ? active.id : null;
   const caret = typeof active?.selectionStart === 'number' ? active.selectionStart : null;
+  const offsets = readBlockScroll();
   const view = laneView();
   container.innerHTML = renderContextPanel(
     lanePanelInput({
@@ -448,6 +484,7 @@ function renderLanePanel() {
       search: state.contextSearch,
     }),
   );
+  applyBlockScroll(offsets);
   if (!focusId) return;
   const restored = document.getElementById(focusId);
   if (!restored) return;
