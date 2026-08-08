@@ -415,18 +415,34 @@ const noDispatch =
 // The prompt goes in verbatim because the run has to be readable afterwards
 // against what each agent was actually asked. It is cheap to keep now: a prompt
 // carries pointers into the state rather than the state's content.
+//
+// It is written first rather than last, and announced with `start`, because a
+// step runs for minutes to hours and the state used to say nothing at all in
+// between: a human watching a run saw one write per finished agent and a page
+// that looked stuck for the whole of every step. The announcement costs the
+// step one command and no commit, and it puts the goal and the criteria the
+// agent is working to in front of that human while the work is happening.
 function recordStep(incrementId, label, payload) {
   return (
+    `Announce this step before you begin it.\n` +
+    `1. Write the prompt you were given, verbatim and whole, to a file outside the ` +
+    `repository. Keep that file: the record below wants the same one.\n` +
+    `2. Run the \`start\` subcommand of the backlog helper your shared brief names, as ` +
+    `\`start ${dir}/backlog.json ${incrementId} ${label} <the prompt file>\`, before you do ` +
+    `any other work. It is what puts you in the run state as the step now running, so a ` +
+    `human watching the run sees what you were asked while you are still working on it. ` +
+    `It writes no commit of its own — the state change rides along with the commit you ` +
+    `make at the end.\n` +
+    '\n' +
     `Record this step before you return.\n` +
     `1. Write these fields to a JSON file outside the repository. That file is the only ` +
     `copy of your work anyone downstream ever reads, so put the substance in it, in full — ` +
     `no placeholders, no summaries that drop detail:\n` +
     payload.map(([name, text]) => `   - \`${name}\`: ${text}`).join('\n') +
     '\n' +
-    `2. Write the prompt you were given, verbatim and whole, to a second file outside the ` +
-    `repository.\n` +
-    `3. Run the \`record\` subcommand of the backlog helper your shared brief names, as ` +
-    `\`record ${dir}/backlog.json ${incrementId} ${label} <the return file> <the prompt file>\`.\n` +
+    `2. Run the \`record\` subcommand of the backlog helper your shared brief names, as ` +
+    `\`record ${dir}/backlog.json ${incrementId} ${label} <the return file> <the prompt file>\`, ` +
+    `with the prompt file you already wrote.\n` +
     `Your structured return is not that file: it carries only the few values the script ` +
     `steers on, and its schema names them.\n`
   )

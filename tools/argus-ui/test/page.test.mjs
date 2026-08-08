@@ -1317,3 +1317,30 @@ test('README.md says the run view shows each step, collapsed and expandable', ()
   assert.match(readme, /\bsteps?\b/i, 'README must say the run view shows steps');
   assert.match(readme, /expand/i, 'README must say a step expands to its whole return');
 });
+
+// Workflow details — the pane keeps the ages current between two writes without
+// repainting itself, and without asking the collector for anything.
+
+test('the slow repaint retimes the run pane instead of repainting it, so an open panel survives the tick', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const boot = functionSource(appJs, 'boot');
+  assert.match(boot, /retimeRunView\(\)/, 'the slow repaint must bring the run pane\'s ages current — a step in flight is the one thing that moves between two writes');
+  assert.doesNotMatch(
+    boot,
+    /renderRunView\(/,
+    'the tick must never repaint the pane: innerHTML would collapse every <details> the reader had opened',
+  );
+
+  const retime = functionSource(appJs, 'retimeRunView');
+  assert.match(retime, /data-at/, 'the retimer must find its elements by the instant they carry');
+  assert.match(retime, /fmtAgo\(/, 'and rewrite them through the same formatter the renderer used');
+  assert.doesNotMatch(retime, /innerHTML/, 'it rewrites text, never markup');
+  assert.doesNotMatch(retime, /api\(/, 'the state has not changed, only the clock — the retimer must fetch nothing');
+});
+
+test('the run module exports the reader for the step in flight, and app.js paints through it', () => {
+  const runJs = fs.readFileSync(path.join(PUBLIC, 'run.js'), 'utf8');
+  assert.match(runJs, /export function runningView\(/, 'run.js must expose the step in flight as a tested pure function');
+  assert.match(runJs, /export function renderRunning\(/, 'and the banner that paints it');
+  assert.match(runJs, /export function renderValue\(/, 'and the laid-out rendering of a recorded return');
+});

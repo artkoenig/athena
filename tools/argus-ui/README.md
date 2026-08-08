@@ -72,19 +72,29 @@ for an `HttpOnly; SameSite=Strict` cookie and drops it from the address bar.
   field the request carried — each showing its size and expanding to its full
   text.
 - **Runs** — the uroboros runs the collector holds, listed by when each was last
-  written and opening on the most recent one. A run shows its issue, its
-  workflow, when its state last changed, and its increments in backlog order —
-  each with its id, title, status, the branch it is worked on, the note its
-  close left and the steps recorded against it — over how many of them are
-  closed and how many still open, the run's own steps in a panel of their own,
-  and the codemap the run was planned against. Every step is one line carrying
-  its label, a preview of what the agent returned and when it was recorded,
-  expanding to that whole return. A closed increment shows no step at all,
-  because the recorder sheds them as it closes it; a run step whose return was
-  shed keeps its label and its time and says on its line that the return is
-  gone. It follows the same Server-Sent Events
-  stream, so a run being worked on updates itself while it is on screen. The
-  switch beside **Setup** moves between this and the sessions.
+  written and opening on the most recent one. At the top sits the step being
+  worked right now: which agent, on which increment, how long it has been
+  running, and the prompt it was dispatched with — which is where that step's
+  goal and acceptance criteria are written. That banner appears the moment a
+  step is dispatched and is gone the moment it returns, so a run that has been
+  quiet for twenty minutes reads as one long step rather than as a stuck page.
+  Under it the run shows its issue, its workflow, when its state last changed,
+  and its increments in backlog order — each with its id, title, status, the
+  goal it delivers, its own acceptance criteria, the branch it is worked on,
+  the note its close left and the steps recorded against it — over how many of
+  them are closed and how many still open, the run's own steps in a panel of
+  their own, and the codemap the run was planned against. Every step is one line
+  carrying its label, a preview of what the agent returned and when it was
+  recorded, expanding to what the agent was asked, what it returned laid out
+  field by field, the same return as raw JSON, and every earlier attempt at that
+  step the recorder kept. A closed increment shows no current step, because the
+  recorder sheds them as it closes it — its rounds are behind **Earlier
+  attempts** instead; a run step whose return was shed keeps its label and its
+  time and says on its line that the return is gone. It follows the same
+  Server-Sent Events stream, so a run being worked on updates itself while it is
+  on screen, and the ages on it stay current between two writes without the pane
+  repainting under an open panel. The switch beside **Setup** moves between this
+  and the sessions.
 
 ## How it reaches the collector
 

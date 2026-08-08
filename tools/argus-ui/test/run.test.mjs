@@ -10,6 +10,7 @@ import {
   renderRunList,
   renderRun,
   renderSteps,
+  runningView,
   stepView,
   STEP_SHED_NOTE,
   shouldLoadRun,
@@ -145,6 +146,10 @@ test('renderRun(null) is a placeholder with no increment card, for the collector
 test('the increments come from state.increments and never from the entry\'s own count', () => {
   const entry = runEntry({
     increments: 99,
+    // Pinned, because the assertion below is a search for "99" over the whole
+    // markup and the write instant renders into it: a clock that happened to
+    // produce 1999, :59:59 or .996 would fail this case for no reason at all.
+    updatedAtMs: Date.parse('2026-01-02T03:04:05.123Z'),
     state: doc({ increments: [increment({ id: 'a', title: 'Card Alpha' }), increment({ id: 'b', title: 'Card Bravo' })] }),
   });
   const html = renderRun(entry);
@@ -512,7 +517,8 @@ test('the run\'s own steps render in the order the backlog holds them, in a pane
     'the run\'s own step labels must land in the panel, not in the step-less card above it',
   );
 
-  const stepsHtml = renderSteps(ownSteps);
+  // The same renderer, given the key prefix the run's own steps are keyed under.
+  const stepsHtml = renderSteps(ownSteps, 'run');
   assert.ok(
     html.includes(stepsHtml),
     'the run\'s own steps must be rendered by the very same step-list renderer the increment cards use, not a second reimplementation, or the two could silently drift apart',
@@ -636,4 +642,268 @@ test('a rendered run carries the steps of the entry it was given and of no other
     !htmlB.includes('a-inc-step') && !htmlB.includes('a-run-step'),
     'A\'s steps must never leak into B\'s render',
   );
+});
+
+// Workflow details — the step in flight, and everything a step and an increment
+// hold that the pane used to leave in the file: the goal, the criteria, the
+// dispatch prompt, the superseded attempts, and a return laid out rather than
+// serialised.
+
+const running = (over = {}) => ({
+  increment: 'ui',
+  label: 'build:ui.0',
+  at: new Date(Date.now() - 4 * 60_000).toISOString(),
+  prompt: 'Goal: paint the run view.\nCriteria:\n  - it shows the step in flight',
+  ...over,
+});
+
+test('runningView reads the step in flight, and reads none where the state names none', () => {
+  const view = runningView(doc({ running: running() }));
+  assert.ok(view, 'a state carrying a running entry has a step in flight');
+  assert.equal(view.label, 'build:ui.0');
+  assert.equal(view.increment, 'ui');
+  assert.ok(view.timeMs > 0, 'the ISO instant must parse to a usable millisecond value');
+
+  assert.equal(runningView(doc()), null, 'a state with no running key has no step in flight');
+  assert.equal(runningView(doc({ running: {} })), null, 'an entry with no label is not a step in flight');
+  assert.equal(runningView(doc({ running: { at: 'x' } })), null, 'the label is what makes it one, not the instant');
+  assert.equal(runningView(null), null, 'no state at all is no step in flight');
+});
+
+test('a step in flight is announced above the increments, with its label, its increment and how long it has been running', () => {
+  const entry = runEntry({ state: doc({ running: running({ label: 'MARKER-LABEL' }) }) });
+  const html = renderRun(entry);
+
+  assert.ok(html.includes('MARKER-LABEL'), 'the running step must be named');
+  assert.ok(html.includes('run-running'), 'it must render in the banner of its own');
+  assert.ok(html.includes('running since'), 'the banner must say since when, which is the one thing that moves between two writes');
+  assert.ok(
+    html.indexOf('run-running') < html.indexOf('run-increments'),
+    'what is happening right now belongs above the backlog, not under it',
+  );
+});
+
+test('the running banner shows the prompt open, because the goal and the criteria of the step are in it', () => {
+  const prompt = 'Goal: MARKER-GOAL\nCriteria:\n  - MARKER-CRITERION';
+  const entry = runEntry({ state: doc({ running: running({ prompt }) }) });
+  const html = renderRun(entry);
+
+  assert.ok(html.includes('MARKER-GOAL'), 'the prompt the step was dispatched with must render');
+  assert.ok(html.includes('MARKER-CRITERION'), 'that includes the criteria it names');
+  assert.match(
+    html,
+    /<details class="run-panel" data-panel="running\/[^"]*\/prompt" open>/,
+    'the running prompt is the one panel that opens by default — it is the answer to the question a reader has while a run is going',
+  );
+});
+
+test('a step in flight with no prompt recorded says so instead of rendering an empty panel', () => {
+  const entry = runEntry({ state: doc({ running: running({ prompt: undefined }) }) });
+  const html = renderRun(entry);
+  assert.ok(html.includes('run-running'), 'the banner still renders — the step is still running');
+  assert.ok(html.includes('No prompt was recorded'), 'an absent prompt reads as the record it is, not as a broken panel');
+});
+
+test('the increment being worked is marked as running, and the others are not', () => {
+  const entry = runEntry({
+    state: doc({
+      running: running({ increment: 'b' }),
+      increments: [increment({ id: 'a' }), increment({ id: 'b' }), increment({ id: 'c' })],
+    }),
+  });
+  const html = renderRun(entry);
+  const marks = [...html.matchAll(/data-running="true"/g)];
+  assert.equal(marks.length, 1, 'a run works one increment at a time, so exactly one card carries the mark');
+
+  const cards = html.split('<li class="run-increment');
+  const marked = cards.filter((card) => card.includes('data-running="true"'));
+  assert.equal(marked.length, 1);
+  assert.ok(marked[0].includes('>b<'), 'the marked card must be the increment the running step names');
+});
+
+test("an increment shows the goal it delivers and the criteria it is judged by, which is the brief every step under it worked to", () => {
+  const inc = increment({
+    id: 'x',
+    goal: 'MARKER-GOAL: give the collector an endpoint of its own',
+    criteria: ['MARKER-ONE: a POST is accepted', 'MARKER-TWO: a second POST replaces the first'],
+  });
+  const html = renderRun(runEntry({ state: doc({ increments: [inc] }) }));
+
+  assert.ok(html.includes('MARKER-GOAL'), 'the goal must render');
+  assert.ok(html.includes('MARKER-ONE') && html.includes('MARKER-TWO'), 'every criterion must render');
+  const items = [...html.matchAll(/<li>MARKER-/g)];
+  assert.equal(items.length, 2, 'the criteria render as a list, one item each');
+});
+
+test('an increment with no goal and no criteria renders neither an empty paragraph nor an empty list', () => {
+  const html = renderRun(runEntry({ state: doc({ increments: [increment({ id: 'x' })] }) }));
+  assert.ok(!html.includes('run-goal'), 'an unset goal leaves no element behind');
+  assert.ok(!html.includes('run-criteria'), 'unset criteria leave no list behind');
+});
+
+test('a step shows the prompt it was dispatched with, closed, and never in the collapsed line', () => {
+  const s = step({ prompt: 'MARKER-PROMPT: what this agent was asked' });
+  const html = renderRun(runEntry({ state: doc({ increments: [increment({ id: 'x', steps: [s] })] }) }));
+
+  assert.ok(html.includes('MARKER-PROMPT'), 'the recorded prompt must be reachable from the pane');
+  assert.match(html, /<pre class="run-prompt">/, 'it renders in a pre of its own, verbatim');
+  const summaryMatch = html.match(/<summary><span class="run-step-label">[\s\S]*?<\/summary>/);
+  assert.ok(summaryMatch, "the step's collapsed line must still render");
+  assert.ok(!summaryMatch[0].includes('MARKER-PROMPT'), 'a page of prompt must never land in the one-line summary');
+});
+
+test('a superseded step is kept and reachable, so a step worked twice shows both attempts', () => {
+  const s = step({
+    label: 'research:x.0',
+    return: { summary: 'the attempt that stands' },
+    history: [{ label: 'research:x.0', at: new Date(Date.now() - 9 * 60_000).toISOString(), return: { summary: 'MARKER-EARLIER' } }],
+  });
+  const html = renderRun(runEntry({ state: doc({ increments: [increment({ id: 'x', steps: [s] })] }) }));
+
+  assert.ok(html.includes('MARKER-EARLIER'), 'the recorder keeps a superseded entry, and the pane must not throw it away again');
+  assert.ok(html.includes('Superseded'), 'the earlier attempts sit behind a panel that says what they are');
+});
+
+test("a closed increment's archived attempts are reachable, which is where a blocked round's work is read back from", () => {
+  const inc = increment({
+    id: 'x',
+    status: 'blocked',
+    note: 'the reviewer found two',
+    steps: [],
+    attempts: [
+      {
+        closedAs: 'blocked',
+        at: new Date(Date.now() - 30 * 60_000).toISOString(),
+        steps: [step({ label: 'review:x.0', return: { summary: 'MARKER-ARCHIVED' } })],
+      },
+    ],
+  });
+  const html = renderRun(runEntry({ state: doc({ increments: [inc] }) }));
+
+  assert.ok(html.includes('Earlier attempts'), 'the archive is announced');
+  assert.ok(html.includes('MARKER-ARCHIVED'), "the archived attempt's steps must be reachable, not merely counted");
+  assert.ok(html.includes('review:x.0'), 'each archived step keeps its label');
+});
+
+test('a return renders as its fields, not as a wall of JSON, and the raw JSON stays one click away', () => {
+  const s = step({
+    return: {
+      summary: 'a short summary line',
+      testPlan: 'first line\nsecond line',
+      checks: ['./test.sh', 'npm test'],
+      findingCount: 2,
+      allDirect: false,
+    },
+  });
+  const html = renderRun(runEntry({ state: doc({ increments: [increment({ id: 'x', steps: [s] })] }) }));
+
+  assert.match(html, /<dl class="run-fields">/, 'an object return renders as its fields');
+  assert.ok(html.includes('<dt>test Plan</dt>'), 'a camel-cased key reads as words in the heading');
+  assert.ok(html.includes('<dt>checks</dt>'), 'every field gets a heading of its own');
+  assert.match(html, /<ul class="run-value-list">/, 'a list of strings renders as a list');
+  assert.ok(html.includes('./test.sh') && html.includes('npm test'), 'every item of that list renders');
+  assert.ok(html.includes('<code>2</code>') && html.includes('<code>false</code>'), 'a number and a boolean render as themselves, false included');
+  assert.match(html, /<pre class="run-step-return">/, 'the raw JSON is still there for whatever the layout could not shape');
+});
+
+test('a return of a list of records lays each one out, and a shape nobody anticipated still falls back to JSON', () => {
+  const s = step({
+    return: {
+      findings: [
+        { file: 'a.js', why: 'MARKER-WHY-A' },
+        { file: 'b.js', why: 'MARKER-WHY-B' },
+      ],
+      deep: { a: { b: { c: { d: { e: 'MARKER-DEEP' } } } } },
+    },
+  });
+  const html = renderRun(runEntry({ state: doc({ increments: [increment({ id: 'x', steps: [s] })] }) }));
+
+  assert.ok(html.includes('MARKER-WHY-A') && html.includes('MARKER-WHY-B'), 'every record in the list renders');
+  assert.ok(html.includes('<dt>file</dt>'), 'a record inside a list renders as its fields too');
+  assert.ok(html.includes('MARKER-DEEP'), 'nothing recorded is dropped, however deep it sits');
+  assert.match(html, /<pre class="run-value-raw">/, 'past the layout depth the value falls back to JSON rather than to nothing');
+});
+
+test('a return that is a bare string renders as text, and an empty one renders a dash rather than a hole', () => {
+  const text = renderRun(
+    runEntry({ state: doc({ increments: [increment({ id: 'x', steps: [step({ return: 'MARKER-BARE' })] })] }) }),
+  );
+  assert.ok(text.includes('MARKER-BARE'), 'a string return renders as the text it is');
+  assert.match(text, /class="run-value-text"/, 'and not as a quoted JSON scalar');
+
+  const empty = renderRun(
+    runEntry({ state: doc({ increments: [increment({ id: 'x', steps: [step({ return: { plan: '' } })] })] }) }),
+  );
+  assert.match(empty, /class="run-value-empty"/, 'an empty field says so');
+  assert.ok(!empty.includes('undefined'), 'and never prints as the literal string undefined');
+});
+
+test('every instant in the pane carries data-at, so the ages can be retimed without repainting the markup around them', () => {
+  const entry = runEntry({
+    state: doc({
+      running: running(),
+      increments: [increment({ id: 'ui', steps: [step()] })],
+    }),
+  });
+  const html = renderRun(entry);
+  const stamped = [...html.matchAll(/data-at="([^"]*)"/g)];
+  assert.ok(stamped.length >= 3, `the write time, the running step and the recorded step must each be retimeable (found ${stamped.length})`);
+  for (const [, iso] of stamped) {
+    assert.ok(Number.isFinite(Date.parse(iso)), `data-at must hold a parseable instant, not a formatted age: ${iso}`);
+  }
+});
+
+test('a hostile prompt, goal or criterion is escaped like everything else', () => {
+  const entry = runEntry({
+    state: doc({
+      running: running({ prompt: '<script>a</script>' }),
+      increments: [
+        increment({
+          id: 'x',
+          goal: '<script>b</script>',
+          criteria: ['<script>c</script>'],
+          steps: [step({ prompt: '<script>d</script>', return: { plan: '<script>e</script>' } })],
+        }),
+      ],
+    }),
+  });
+  const html = renderRun(entry);
+  assert.ok(!html.includes('<script'), 'no raw script tag may reach the markup, from any of the five new channels');
+});
+
+test('every panel carries a key naming its place in the run, and no two panels share one', () => {
+  const entry = runEntry({
+    state: doc({
+      running: running(),
+      increments: [
+        increment({
+          id: 'a',
+          // The same label under two increments, and again inside an archived
+          // attempt: position on the page is not a key, place in the run is.
+          steps: [step({ label: 'research:0', prompt: 'p', history: [step({ label: 'research:0' })] })],
+          attempts: [{ closedAs: 'blocked', at: new Date().toISOString(), steps: [step({ label: 'research:0' })] }],
+        }),
+        increment({ id: 'b', steps: [step({ label: 'research:0', prompt: 'p' })] }),
+      ],
+      run: { steps: [step({ label: 'research:0' })] },
+    }),
+  });
+  const html = renderRun(entry);
+
+  const opens = [...html.matchAll(/<details\b([^>]*)>/g)].map((m) => m[1]);
+  assert.ok(opens.length >= 6, `the fixture must actually produce several panels (found ${opens.length})`);
+  for (const attrs of opens) {
+    assert.match(attrs, /data-panel="[^"]+"/, 'every details element must be keyed, or a repaint closes it');
+  }
+
+  const keys = [...html.matchAll(/data-panel="([^"]+)"/g)].map((m) => m[1]);
+  assert.equal(new Set(keys).size, keys.length, 'two panels sharing a key would restore each other\'s open state');
+});
+
+test('the running prompt is keyed on its own step, so the next step arrives with its prompt open again', () => {
+  const first = renderRun(runEntry({ state: doc({ running: running({ label: 'research:ui.0' }) }) }));
+  const second = renderRun(runEntry({ state: doc({ running: running({ label: 'build:ui.0' }) }) }));
+  const keyOf = (html) => html.match(/data-panel="(running\/[^"]*)"/)?.[1];
+  assert.ok(keyOf(first) && keyOf(second), 'both renders must key the running prompt');
+  assert.notEqual(keyOf(first), keyOf(second), 'a different step is a different panel, not the same one the reader may have closed');
 });

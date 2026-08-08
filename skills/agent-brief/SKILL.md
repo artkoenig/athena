@@ -98,22 +98,36 @@ one sentence, write that sentence in the imperative, and state each thing once:
 two wordings of one rule disagree after the first edit, and the reader follows
 whichever it saw last.
 
+**Announce yourself before you begin.** Write the prompt you were given —
+verbatim and whole — to a file outside the repository, then run
+
+```
+node "<base>/assets/backlog.mjs" start <issueDir>/backlog.json <incrementId> <label> <promptFile>
+```
+
+before any other work, with the increment id and the label your prompt gives
+you. `<base>` is the base directory of the `agent-brief` skill, which your
+context names on its `Base directory for this skill:` line; where no such line
+is there, find the helper with `find "$HOME/.claude/plugins" -path
+'*agent-brief/assets/backlog.mjs' | head -1`. That helper is the only writer of
+`backlog.json`, so you never edit that file by hand.
+
+Announcing puts you in the run state as the step now running, so a human
+watching sees what you were asked while you are still working on it. It commits
+nothing of its own: the change rides along with the commit you make at the end.
+Keep that prompt file — the record below takes the same one.
+
 **Record it before you finish, and before you return.** Write your return to a
-JSON file outside the repository, write the prompt you were given — verbatim and
-whole — to a second file outside the repository, then run
+JSON file outside the repository, then run
 
 ```
 node "<base>/assets/backlog.mjs" record <issueDir>/backlog.json <incrementId> <label> <returnFile> <promptFile>
 ```
 
-with the increment id and the label your prompt gives you. `<base>` is the base
-directory of the `agent-brief` skill, which your context names on its `Base
-directory for this skill:` line; where no such line is there, find the helper
-with `find "$HOME/.claude/plugins" -path '*agent-brief/assets/backlog.mjs' |
-head -1`. That helper is the only writer of `backlog.json`, so you never edit
-that file by hand. Recording before you return is what makes the file
-authoritative: a step that ends between the two leaves the state complete rather
-than stale.
+with the same increment id, label and prompt file. Recording before you return
+is what makes the file authoritative: a step that ends between the two leaves
+the state complete rather than stale. It also clears your running marker — the
+step has landed, and the state says so.
 
 `backlog.json` is the single source of truth of the run: a session that dies
 resumes from it, a step it holds is never worked twice, and a step it does not
