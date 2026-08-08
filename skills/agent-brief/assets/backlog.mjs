@@ -24,6 +24,7 @@ const USAGE = [
   'usage:',
   '  backlog.mjs init   <backlogPath> <payloadFile>',
   '  backlog.mjs record <backlogPath> <incrementId|-> <label> <payloadFile>',
+  '  backlog.mjs branch <backlogPath> <incrementId> <branchName>',
   '  backlog.mjs close  <backlogPath> <incrementId> <status> [note]',
   '  backlog.mjs read   <backlogPath>',
 ].join('\n')
@@ -77,7 +78,7 @@ function writeBacklog(backlogPath, backlog) {
   fs.renameSync(tmp, backlogPath)
 }
 
-function shapeIncrement(raw, steps) {
+function shapeIncrement(raw, steps, branch) {
   return {
     id: String(raw.id),
     title: raw.title || '',
@@ -85,6 +86,7 @@ function shapeIncrement(raw, steps) {
     criteria: Array.isArray(raw.criteria) ? raw.criteria : [],
     status: raw.status || 'todo',
     note: raw.note || '',
+    branch: branch || '',
     steps,
   }
 }
@@ -95,7 +97,9 @@ function shapeIncrement(raw, steps) {
 // increment the payload drops is gone with its steps; `run.steps` belongs to
 // the run rather than to any increment, so a re-cut never touches it. The
 // codemap is the payload's when it carries one and the file's when it does
-// not, so a re-cut that says nothing about the map cannot erase it.
+// not, so a re-cut that says nothing about the map cannot erase it. An
+// increment's branch is the file's alone — the `branch` subcommand is its one
+// writer, so the payload cannot set or erase it.
 function init(backlogPath, payloadFile) {
   const payload = readJson(payloadFile, 'the init payload')
   if (!payload || typeof payload !== 'object' || !Array.isArray(payload.increments)) {
@@ -103,12 +107,14 @@ function init(backlogPath, payloadFile) {
   }
 
   let priorSteps = new Map()
+  let priorBranches = new Map()
   let runSteps = []
   let priorCodemap = ''
   if (fs.existsSync(backlogPath)) {
     const existing = loadBacklog(backlogPath)
     for (const increment of existing.increments || []) {
       priorSteps.set(increment.id, Array.isArray(increment.steps) ? increment.steps : [])
+      priorBranches.set(increment.id, typeof increment.branch === 'string' ? increment.branch : '')
     }
     runSteps = (existing.run && Array.isArray(existing.run.steps) && existing.run.steps) || []
     priorCodemap = typeof existing.codemap === 'string' ? existing.codemap : ''
@@ -120,7 +126,11 @@ function init(backlogPath, payloadFile) {
     workflow: payload.workflow || '',
     codemap: typeof payload.codemap === 'string' ? payload.codemap : priorCodemap,
     increments: payload.increments.map((increment) =>
-      shapeIncrement(increment, priorSteps.get(String(increment.id)) || []),
+      shapeIncrement(
+        increment,
+        priorSteps.get(String(increment.id)) || [],
+        priorBranches.get(String(increment.id)) || '',
+      ),
     ),
     run: { steps: runSteps },
   }
@@ -156,6 +166,21 @@ function record(backlogPath, incrementId, label, payloadFile) {
 
   writeBacklog(backlogPath, backlog)
   process.stdout.write(`recorded ${label}\n`)
+}
+
+// `branch` names the branch an increment is worked on. The agent that creates
+// the branch calls it — before the checkout diverges, so the name is in the
+// state a resumed session reads. Recording a new name over an old one is the
+// fresh-attempt case, not an error.
+function branch(backlogPath, incrementId, branchName) {
+  const backlog = loadBacklog(backlogPath)
+  const increment = (backlog.increments || []).find((i) => i.id === incrementId)
+  if (!increment) fail(`no increment "${incrementId}" in ${backlogPath}`, 1)
+
+  increment.branch = branchName
+
+  writeBacklog(backlogPath, backlog)
+  process.stdout.write(`recorded branch ${branchName} on ${incrementId}\n`)
 }
 
 // `close` is the planner's verdict call. Shedding the steps is the point as
@@ -214,6 +239,10 @@ switch (command) {
   case 'record':
     need(4)
     record(rest[0], rest[1], rest[2], rest[3])
+    break
+  case 'branch':
+    need(3)
+    branch(rest[0], rest[1], rest[2])
     break
   case 'close':
     need(3)

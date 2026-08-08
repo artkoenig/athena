@@ -157,11 +157,14 @@ test('close sheds step returns and leaves the codemap standing', () => {
   })]);
   run(['record', backlogPath, 'i1', 'research:i1.0', writeJson(dir, 'step.json', { plan: 'x' })]);
 
+  run(['branch', backlogPath, 'i1', 'issue-branch--i1']);
+
   run(['close', backlogPath, 'i1', 'done']);
 
   const backlog = JSON.parse(fs.readFileSync(backlogPath, 'utf8'));
   assert.deepEqual(backlog.increments[0].steps, []);
   assert.equal(backlog.codemap, 'a.js — the parser', 'the codemap is run-level state, not a step return the close may shed');
+  assert.equal(backlog.increments[0].branch, 'issue-branch--i1', "the increment's branch survives its close — a blocked increment's unmerged branch stays findable");
 });
 
 test('record appends a step to the named increment and prints only the confirmation, nothing from the file', () => {
@@ -237,6 +240,65 @@ test('record against a path with no file exits 1 and creates nothing', () => {
 
   assert.equal(err.status, 1);
   assert.equal(fs.existsSync(backlogPath), false);
+});
+
+test('branch records the branch on the named increment and prints only the confirmation, nothing from the file', () => {
+  const dir = tmpDir();
+  const backlogPath = path.join(dir, 'backlog.json');
+  run(['init', backlogPath, writeJson(dir, 'init.json', backlogTemplate([
+    incrementPayload('i1', 'First'),
+    incrementPayload('i2', 'MARKER-IN-FILE-NOT-PAYLOAD'),
+  ]))]);
+
+  const stdout = run(['branch', backlogPath, 'i1', 'issue-branch--i1']);
+
+  assert.equal(stdout.trim().split('\n').length, 1, 'branch prints exactly one line');
+  assert.match(stdout, /issue-branch--i1/, 'the confirmation names the branch it recorded');
+  assert.equal(stdout.includes('MARKER-IN-FILE-NOT-PAYLOAD'), false, 'branch must print nothing from the file it wrote to — only the confirmation');
+
+  const backlog = JSON.parse(fs.readFileSync(backlogPath, 'utf8'));
+  assert.equal(backlog.increments.find((i) => i.id === 'i1').branch, 'issue-branch--i1');
+  assert.equal(backlog.increments.find((i) => i.id === 'i2').branch, '', 'the other increment keeps the empty branch init gave it');
+});
+
+test('branch recorded a second time replaces the name — the fresh-attempt case, not an error', () => {
+  const dir = tmpDir();
+  const backlogPath = path.join(dir, 'backlog.json');
+  run(['init', backlogPath, writeJson(dir, 'init.json', backlogTemplate([incrementPayload('i1', 'First')]))]);
+
+  run(['branch', backlogPath, 'i1', 'issue-branch--i1']);
+  run(['branch', backlogPath, 'i1', 'issue-branch--i1-take2']);
+
+  const backlog = JSON.parse(fs.readFileSync(backlogPath, 'utf8'));
+  assert.equal(backlog.increments[0].branch, 'issue-branch--i1-take2');
+});
+
+test('branch against an increment id no increment has exits 1 and leaves the file untouched', () => {
+  const dir = tmpDir();
+  const backlogPath = path.join(dir, 'backlog.json');
+  run(['init', backlogPath, writeJson(dir, 'init.json', backlogTemplate([incrementPayload('i1', 'First')]))]);
+  const before = fs.readFileSync(backlogPath, 'utf8');
+
+  const err = runFails(['branch', backlogPath, 'nope', 'issue-branch--nope']);
+
+  assert.equal(err.status, 1);
+  assert.equal(fs.readFileSync(backlogPath, 'utf8'), before, 'the file is byte-identical to before the failed call');
+});
+
+test('a re-cut keeps a recorded increment branch, and the init payload cannot set one', () => {
+  const dir = tmpDir();
+  const backlogPath = path.join(dir, 'backlog.json');
+  run(['init', backlogPath, writeJson(dir, 'init.json', backlogTemplate([incrementPayload('i1', 'First')]))]);
+  run(['branch', backlogPath, 'i1', 'issue-branch--i1']);
+
+  run(['init', backlogPath, writeJson(dir, 'recut.json', backlogTemplate([
+    incrementPayload('i1', 'First'),
+    incrementPayload('i2', 'Second', { branch: 'smuggled-branch' }),
+  ]))]);
+
+  const backlog = JSON.parse(fs.readFileSync(backlogPath, 'utf8'));
+  assert.equal(backlog.increments.find((i) => i.id === 'i1').branch, 'issue-branch--i1', 'an init payload that says nothing about the branch cannot erase it');
+  assert.equal(backlog.increments.find((i) => i.id === 'i2').branch, '', 'the branch subcommand is the one writer — a payload branch is ignored');
 });
 
 test("close sets status and note and empties only the closed increment's steps", () => {

@@ -393,6 +393,7 @@ function resumeBacklog() {
     increments: [
       {
         id: 'i1', title: 'Deliver i1', goal: 'Deliver i1.', criteria: ['does i1'], status: 'todo', note: '',
+        branch: 'issue-branch--i1',
         steps: [
           { label: 'research:i1.0', at: '2026-08-07T00:00:00.000Z', return: planReturn },
           { label: 'tests:i1.0', at: '2026-08-07T00:00:01.000Z', return: testsReturn },
@@ -415,6 +416,7 @@ function questionBacklog() {
     increments: [
       {
         id: 'i1', title: 'Deliver i1', goal: 'Deliver i1.', criteria: ['does i1'], status: 'todo', note: '',
+        branch: 'issue-branch--i1',
         steps: [
           { label: 'research:i1.0', at: '2026-08-07T00:00:00.000Z', return: planReturnWithMarkedQuestion },
         ],
@@ -515,31 +517,31 @@ function laterIncrementBacklog() {
 function contextFor(m) {
   switch (m) {
     case 'w1':
-      return { stateReturn: { exists: false, backlogJson: '', summary: '' }, decomposeReturn: decomposeReturnTwo, researchReturn: planReturn };
+      return { stateReturn: { exists: false, backlogJson: '', branch: 'issue-branch', summary: '' }, decomposeReturn: decomposeReturnTwo, researchReturn: planReturn };
     case 'w2':
-      return { stateReturn: { exists: true, backlogJson: JSON.stringify(resumeBacklog(), null, 2) + '\n', summary: '' }, decomposeReturn: decomposeReturnOne, researchReturn: planReturn };
+      return { stateReturn: { exists: true, backlogJson: JSON.stringify(resumeBacklog(), null, 2) + '\n', branch: 'issue-branch', summary: '' }, decomposeReturn: decomposeReturnOne, researchReturn: planReturn };
     case 'w3':
-      return { stateReturn: { exists: true, backlogJson: JSON.stringify(doneBacklog(), null, 2) + '\n', summary: '' }, decomposeReturn: decomposeReturnOne, researchReturn: planReturn };
+      return { stateReturn: { exists: true, backlogJson: JSON.stringify(doneBacklog(), null, 2) + '\n', branch: 'issue-branch', summary: '' }, decomposeReturn: decomposeReturnOne, researchReturn: planReturn };
     case 'w4':
     case 'w5':
     case 'w6':
     case 'w8':
-      return { stateReturn: { exists: false, backlogJson: '', summary: '' }, decomposeReturn: decomposeReturnOne, researchReturn: planReturn };
+      return { stateReturn: { exists: false, backlogJson: '', branch: 'issue-branch', summary: '' }, decomposeReturn: decomposeReturnOne, researchReturn: planReturn };
     case 'w7':
-      return { stateReturn: { exists: false, backlogJson: '', summary: '' }, decomposeReturn: decomposeReturnOne, researchReturn: planReturnWithQuestion };
+      return { stateReturn: { exists: false, backlogJson: '', branch: 'issue-branch', summary: '' }, decomposeReturn: decomposeReturnOne, researchReturn: planReturnWithQuestion };
     case 'w9':
-      return { stateReturn: { exists: true, backlogJson: JSON.stringify(questionBacklog(), null, 2) + '\n', summary: '' }, decomposeReturn: decomposeReturnOne, researchReturn: planReturn };
+      return { stateReturn: { exists: true, backlogJson: JSON.stringify(questionBacklog(), null, 2) + '\n', branch: 'issue-branch', summary: '' }, decomposeReturn: decomposeReturnOne, researchReturn: planReturn };
     case 'w10':
-      return { stateReturn: { exists: false, backlogJson: '', summary: '' }, decomposeReturn: decomposeReturnOne, researchReturn: planReturn, testsReturn: testsReturnWithOpenQuestion, verdictFor: (label) => (label === 'review:i1.0' ? verdictReturnWithFinding : verdictReturnClean) };
+      return { stateReturn: { exists: false, backlogJson: '', branch: 'issue-branch', summary: '' }, decomposeReturn: decomposeReturnOne, researchReturn: planReturn, testsReturn: testsReturnWithOpenQuestion, verdictFor: (label) => (label === 'review:i1.0' ? verdictReturnWithFinding : verdictReturnClean) };
     case 'w11':
-      return { stateReturn: { exists: false, backlogJson: '', summary: '' }, decomposeReturn: decomposeReturnOne, researchReturn: planReturn, closeFor: () => ({ questions: ['MARKER-CLOSE-QUESTION'], summary: 'closed' }) };
+      return { stateReturn: { exists: false, backlogJson: '', branch: 'issue-branch', summary: '' }, decomposeReturn: decomposeReturnOne, researchReturn: planReturn, closeFor: () => ({ questions: ['MARKER-CLOSE-QUESTION'], summary: 'closed' }) };
     case 'w12': {
       // Round 3, finding 2: the planner closes the increment and hands it
       // straight back as todo — the second chance MAX_ATTEMPTS exists for —
       // and settles it on the second pass.
       let replans = 0;
       return {
-        stateReturn: { exists: false, backlogJson: '', summary: '' },
+        stateReturn: { exists: false, backlogJson: '', branch: 'issue-branch', summary: '' },
         decomposeReturn: decomposeReturnOne,
         researchReturn: planReturn,
         closeFor: () => {
@@ -551,13 +553,17 @@ function contextFor(m) {
       };
     }
     case 'w13':
-      return { stateReturn: { exists: true, backlogJson: JSON.stringify(recutBacklog(true), null, 2) + '\n', summary: '' }, decomposeReturn: decomposeReturnRecut, researchReturn: planReturn };
+      return { stateReturn: { exists: true, backlogJson: JSON.stringify(recutBacklog(true), null, 2) + '\n', branch: 'issue-branch', summary: '' }, decomposeReturn: decomposeReturnRecut, researchReturn: planReturn };
     case 'w14':
-      return { stateReturn: { exists: true, backlogJson: JSON.stringify(recutBacklog(false), null, 2) + '\n', summary: '' }, decomposeReturn: decomposeReturnRecut, researchReturn: planReturn };
+      return { stateReturn: { exists: true, backlogJson: JSON.stringify(recutBacklog(false), null, 2) + '\n', branch: 'issue-branch', summary: '' }, decomposeReturn: decomposeReturnRecut, researchReturn: planReturn };
     case 'w15':
-      return { stateReturn: { exists: true, backlogJson: JSON.stringify(laterIncrementBacklog(), null, 2) + '\n', summary: '' }, decomposeReturn: decomposeReturnTwo, researchReturn: planReturn };
+      return { stateReturn: { exists: true, backlogJson: JSON.stringify(laterIncrementBacklog(), null, 2) + '\n', branch: 'issue-branch', summary: '' }, decomposeReturn: decomposeReturnTwo, researchReturn: planReturn };
     case 'w16':
-      return { stateReturn: { exists: false, backlogJson: '', summary: '' }, decomposeReturn: decomposeReturnOne, researchReturn: planReturn, verdictFor: (label) => (label === 'review:i1.0' ? verdictReturnWithDirectFinding : verdictReturnClean) };
+      return { stateReturn: { exists: false, backlogJson: '', branch: 'issue-branch', summary: '' }, decomposeReturn: decomposeReturnOne, researchReturn: planReturn, verdictFor: (label) => (label === 'review:i1.0' ? verdictReturnWithDirectFinding : verdictReturnClean) };
+    case 'w17':
+      // Every review round finds the same needs-plan defect, so the increment
+      // burns its correction rounds and closes blocked.
+      return { stateReturn: { exists: false, backlogJson: '', branch: 'issue-branch', summary: '' }, decomposeReturn: decomposeReturnOne, researchReturn: planReturn, verdictFor: () => verdictReturnWithFinding };
     default:
       throw new Error('unknown mode ' + m);
   }
@@ -630,12 +636,29 @@ async function main() {
     for (const l of ['research:i1.0', 'research:i2.0']) {
       assertTrue(!!byLabel(l) && byLabel(l).prompt.includes('MARKER-CODEMAP'), "the researcher's prompt " + l + ' does not carry the codemap');
     }
+    // The branch machinery: the attempt's first dispatch records and creates
+    // the increment branch, the accepted replan lands it on the issue branch,
+    // and the next increment starts its own.
+    assertTrue(!!byLabel('research:i1.0') && byLabel('research:i1.0').prompt.includes('git checkout -b issue-branch--i1'),
+      "increment i1's first dispatch is not told to create its branch");
+    assertTrue(!!byLabel('research:i2.0') && byLabel('research:i2.0').prompt.includes('git checkout -b issue-branch--i2'),
+      "increment i2's first dispatch is not told to create its branch");
+    assertTrue(!!byLabel('research:i1.0') && /\bbranch\b.*backlog\.json i1 issue-branch--i1/.test(byLabel('research:i1.0').prompt),
+      "increment i1's first dispatch is not told to record the branch in the run state");
+    assertTrue(!!byLabel('replan:i1') && byLabel('replan:i1').prompt.includes('merge') && byLabel('replan:i1').prompt.includes('issue-branch--i1'),
+      'the accepted replan is not told to merge the increment branch into the issue branch');
   } else if (mode === 'w2') {
     assertTrue(!labels.some((l) => l.startsWith('research:')), 'the researcher was dispatched even though its step was already recorded');
     assertTrue(!labels.some((l) => l.startsWith('tests:')), 'the test-author was dispatched even though its step was already recorded');
     const afterLoadState = calls[1];
     assertTrue(!!afterLoadState && afterLoadState.label.startsWith('implement:'), 'the first dispatch after load-state is not the implementer');
     assertTrue(!!afterLoadState && afterLoadState.prompt.includes(PLAN_MARKER), "the implementer's prompt does not carry the recorded plan's marker");
+    // The resume finds the recorded branch: the mid-flight increment continues
+    // on it instead of starting a fresh one.
+    assertTrue(!!afterLoadState && afterLoadState.prompt.includes('issue-branch--i1'),
+      "the resumed implementer's prompt does not carry the recorded increment branch");
+    assertTrue(!!afterLoadState && !afterLoadState.prompt.includes('git checkout -b issue-branch--i1'),
+      'the resumed increment is told to create its branch instead of continuing on it');
   } else if (mode === 'w3') {
     assertEqualArrays(labels, ['load-state', 'publish'], 'a fully-closed backlog dispatches more than the state loader and publish');
   } else if (mode === 'w4') {
@@ -658,6 +681,8 @@ async function main() {
     assertTrue(!!reviewCall && !reviewCall.prompt.includes(PLAN_MARKER), "the reviewer's prompt carries the implementation plan");
     assertTrue(!!reviewCall && !reviewCall.prompt.includes(TESTPLAN_MARKER), "the reviewer's prompt carries the test plan");
     assertTrue(!!reviewCall && !reviewCall.prompt.includes('MARKER-CODEMAP'), "the reviewer's prompt carries the codemap");
+    assertTrue(!!reviewCall && reviewCall.prompt.includes('git diff issue-branch...HEAD'),
+      "the reviewer's prompt does not name the increment's diff range against the issue branch");
   } else if (mode === 'w7') {
     assertEqualArrays(labels, ['load-state', 'decompose', 'research:i1.0', 'publish'], 'a question from the researcher does not stop the run at publish');
     assertTrue(!!result && !!result.blockedOnHuman, 'the returned result does not carry blockedOnHuman');
@@ -745,6 +770,13 @@ async function main() {
       'an increment the planner handed back as todo was not worked a second time');
     assertTrue(calls.filter((c) => c.label === 'research:i1.0').length === 2,
       'the researcher was not dispatched again for the second attempt');
+    // The hand-back starts a fresh branch: the first attempt worked
+    // issue-branch--i1, the second must not resume onto that abandoned work.
+    const attemptCalls = calls.filter((c) => c.label === 'research:i1.0');
+    assertTrue(attemptCalls.length === 2 && attemptCalls[0].prompt.includes('git checkout -b issue-branch--i1\`'),
+      "the first attempt's researcher is not told to create the base-named branch");
+    assertTrue(attemptCalls.length === 2 && attemptCalls[1].prompt.includes('git checkout -b issue-branch--i1-take2'),
+      "the second attempt's researcher is not sent to a fresh take2 branch");
     assertTrue(!!result && result.stopped === '',
       'the run stopped on the attempt backstop instead of working the increment again');
     assertTrue(!!result && result.delivered === 1 && Array.isArray(result.increments) && result.increments.length === 2,
@@ -774,19 +806,22 @@ async function main() {
     }
   } else if (mode === 'w15') {
     // Round 4, finding 1: a resumed run counted its increments from scratch,
-    // so the first increment it picked up was treated as increment 1 —
-    // baseline(1) is the empty string, and the reviewer was handed the code
-    // an earlier iteration had already accepted with nothing naming it. The
-    // human's result lost the closed increment's line the same way.
+    // so the first increment it picked up was treated as increment 1, and the
+    // human's result lost the closed increment's line. The reviewer needs no
+    // prose baseline anymore — its diff range simply does not contain what
+    // earlier increments landed — but the count and the result still must
+    // carry the closed increment.
     assertEqualArrays(labels,
       ['load-state', 'research:i2.0', 'tests:i2.0', 'implement:i2.0', 'review:i2.0', 'replan:i2', 'publish'],
       'the resumed run did not pick up the open increment behind the closed one');
     const resumedResearch = calls.find((c) => c.label === 'research:i2.0');
     assertTrue(!!resumedResearch && resumedResearch.prompt.includes('MARKER-CODEMAP'),
       "the resumed researcher's prompt does not carry the codemap saved in the state file");
+    assertTrue(!!resumedResearch && resumedResearch.prompt.includes('git checkout -b issue-branch--i2'),
+      'the resumed fresh increment is not told to start its own branch');
     const reviewCall = calls.find((c) => c.label === 'review:i2.0');
-    assertTrue(!!reviewCall && reviewCall.prompt.includes('Increment 1 was reviewed and accepted'),
-      "the resumed reviewer's prompt does not name the closed increment as its baseline");
+    assertTrue(!!reviewCall && reviewCall.prompt.includes('git diff issue-branch...HEAD'),
+      "the resumed reviewer's prompt does not name the increment's diff range");
     assertTrue(!!reviewCall && reviewCall.prompt.includes('increment 2 is yours'),
       'the resumed run does not count the open increment as the second');
     assertTrue(!!result && result.delivered === 2,
@@ -819,6 +854,22 @@ async function main() {
       'the review after a direct-fix round was handed no checks');
     assertTrue(!!reviewCall && !reviewCall.prompt.includes('MARKER-DIRECT-CLAIM'),
       "the review after a direct-fix round was handed the finding it wrote, and is no longer independent");
+  } else if (mode === 'w17') {
+    // A blocked increment's work stays off the issue branch: the replan that
+    // closes it is told not to merge and to name the unmerged branch in the
+    // note — that is what keeps unaccepted work out of the pull request.
+    assertEqualArrays(labels,
+      ['load-state', 'decompose',
+       'research:i1.0', 'tests:i1.0', 'implement:i1.0', 'review:i1.0',
+       'research:i1.1', 'tests:i1.1', 'implement:i1.1', 'review:i1.1',
+       'research:i1.2', 'tests:i1.2', 'implement:i1.2', 'review:i1.2',
+       'replan:i1', 'publish'],
+      'an increment that never passes review does not use up exactly its correction rounds');
+    const closeCall = calls.find((c) => c.label === 'replan:i1');
+    assertTrue(!!closeCall && /do not merge/i.test(closeCall.prompt) && closeCall.prompt.includes('issue-branch--i1'),
+      'the blocked replan is not told to keep the increment branch unmerged');
+    assertTrue(!!closeCall && !/Land it first/.test(closeCall.prompt),
+      'the blocked replan carries the accepted-merge instruction');
   } else {
     throw new Error('unknown mode ' + mode);
   }
@@ -861,6 +912,7 @@ for wf in "$root/workflows/agile-loop.js"; do
   run_driver "$wf" w13 "$wf_name: a Decompose worked again after the human's answer has its new cut worked, not the one the state file still held"
   run_driver "$wf" w14 "$wf_name: a Decompose worked again after a session died before recording it has its new cut worked"
   run_driver "$wf" w16 "$wf_name: a correction round whose findings are all direct fixes skips the researcher and the test-author, and is still reviewed"
+  run_driver "$wf" w17 "$wf_name: a blocked increment's branch is closed unmerged and named to the closing planner"
 done
 
 # Round 3, finding 2: only the incremental loop re-cuts, so an increment
