@@ -83,15 +83,28 @@ linter it leaves out, and an empty list means the review is a reading — so the
 cost of checking is a decision made once, with the codebase in view, instead of
 four agents each reaching for `test.sh` to be safe.
 
-Nothing passes between the agents as prose. Each returns a structured object,
-the workflow injects the slice the next role needs into its prompt, and each
-records its own return into `docs/issues/<timestamp>-<slug>/backlog.json`, then
-commits and pushes it. That file is the whole durable state of a run: start the
-same workflow on the same issue directory again and it reads the state back,
-skips every step already recorded there and carries on from the one that never
-finished. That is what makes unattended work possible: idea to pull request with
-nobody at the keyboard, and a session picking the work back up hours later
-resumes from the state rather than from a conversation that is gone.
+Nothing passes between the agents as prose, and nothing passes through the
+workflow script. Each agent writes its return once into
+`docs/issues/<timestamp>-<slug>/backlog.json`, then commits and pushes it, and
+the next role reads it back out of that file: a dispatch prompt names the step
+and the fields its agent may see, and carries none of their content. So a plan
+is written once rather than emitted twice, and the file the run resumes from and
+the brief the live run works from cannot drift apart, because there is only one
+of them.
+
+That file is the single source of truth of a run: start the same workflow on the
+same issue directory again and it reads the state's index back, skips every step
+already recorded there and carries on from the one that never finished. That is
+what makes unattended work possible: idea to pull request with nobody at the
+keyboard, and a session picking the work back up hours later resumes from the
+state rather than from a conversation that is gone.
+
+What the script itself carries is only steering — the cut, whether tests are
+needed, the closed list of commands, how many findings a review filed, and the
+questions that end a run — because the workflow runtime gives a script no
+filesystem and everything that touches the repository has to go through an
+agent. The reviewer is the one role outside all of it: it reads nothing and is
+handed nothing any agent produced, because it is the check on them.
 
 ## The backlog: the planner says what, the researcher says how
 
@@ -119,7 +132,7 @@ run is the point of the arrangement, not an escape hatch in it.
 ```mermaid
 flowchart LR
     ISSUE[("issue.md")] --> PLAN["planner<br/>maps the files, cuts the<br/>issue into increments"]
-    PLAN --> BACK[("backlog.json<br/>the codemap, the current cut,<br/>and every step's return")]
+    PLAN --> BACK[("backlog.json<br/>the codemap, the current cut, every<br/>step's return and the prompt behind it")]
     BACK -->|"the first increment<br/>still open"| CHAIN["researcher → test-author<br/>→ implementer → reviewer<br/>correction rounds as before"]
     CHAIN --> REPLAN["planner<br/>closes that increment and<br/>re-cuts the rest"]
     REPLAN --> BACK
@@ -134,10 +147,17 @@ falls out of that for free: it judges the increment branch against its
 merge-base, a diff that carries this increment's work and nothing settled
 earlier. Each increment is reviewed on its own: the workflow hands the reviewer
 that increment's criteria and names the increments still to come, so unfinished
-work reads as scheduled rather than as a finding. Closing an increment sheds
-the step returns that got it there, so the state stays the size of the work
-still open rather than the size of the run so far — the codemap and each
-increment's branch are run-level state, not a step return, and stay.
+work reads as scheduled rather than as a finding. Closing an increment ends its
+attempt: the steps that got it there move into the increment's `attempts`, where
+they stay for whoever reads the run afterwards, and its current steps start empty
+so an increment handed back is worked again rather than skipped as recorded.
+
+Nothing in the file is ever deleted, so a finished `backlog.json` is the whole
+record of the run — every step return, and the prompt each agent was dispatched
+with, verbatim. What keeps that affordable is that reads are addressed rather
+than wholesale: `index` for the run's skeleton, `steps` for the returns of the
+steps a role names, `codemap` for the map. Nobody in a run ever reads the file
+whole, so it is free to grow.
 
 The run stops on its own when the backlog empties, and hands back when it will
 not: eight increments spent, one increment worked twice and handed back again

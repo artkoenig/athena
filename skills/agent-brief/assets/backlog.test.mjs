@@ -223,22 +223,27 @@ test('a re-cut without a codemap keeps the one already in the file, and one with
   assert.equal(JSON.parse(fs.readFileSync(backlogPath, 'utf8')).codemap, 'a.js — the parser\nb.js — its one caller');
 });
 
-test('close sheds step returns and leaves the codemap standing', () => {
+test('close ends the attempt without losing it, and leaves the codemap standing', () => {
   const dir = tmpDir();
   const backlogPath = path.join(dir, 'backlog.json');
   run(['init', backlogPath, writeJson(dir, 'init.json', {
     ...backlogTemplate([incrementPayload('i1', 'First')]),
     codemap: 'a.js — the parser',
   })]);
-  run(['record', backlogPath, 'i1', 'research:i1.0', writeJson(dir, 'step.json', { plan: 'x' })]);
+  run(['record', backlogPath, 'i1', 'research:i1.0', writeJson(dir, 'step.json', { plan: 'MARKER-CLOSED-PLAN' })]);
 
   run(['branch', backlogPath, 'i1', 'issue-branch--i1']);
 
   run(['close', backlogPath, 'i1', 'done']);
 
-  const backlog = JSON.parse(fs.readFileSync(backlogPath, 'utf8'));
-  assert.deepEqual(backlog.increments[0].steps, []);
-  assert.equal(backlog.codemap, 'a.js — the parser', 'the codemap is run-level state, not a step return the close may shed');
+  const raw = fs.readFileSync(backlogPath, 'utf8');
+  const backlog = JSON.parse(raw);
+  assert.deepEqual(backlog.increments[0].steps, [], 'the closed attempt leaves no current step, so a hand-back is worked again rather than skipped');
+  assert.equal(backlog.increments[0].attempts.length, 1, 'the attempt it closed is kept');
+  assert.equal(backlog.increments[0].attempts[0].closedAs, 'done', 'the archived attempt carries the status it closed with');
+  assert.equal(backlog.increments[0].attempts[0].steps[0].label, 'research:i1.0');
+  assert.equal(raw.includes('MARKER-CLOSED-PLAN'), true, 'nothing a close touches is deleted — the step return is still in the file for whoever reads the run afterwards');
+  assert.equal(backlog.codemap, 'a.js — the parser', 'the codemap is run-level state, untouched by a close');
   assert.equal(backlog.increments[0].branch, 'issue-branch--i1', "the increment's branch survives its close — a blocked increment's unmerged branch stays findable");
 });
 
@@ -267,18 +272,70 @@ test('record appends a step to the named increment and prints only the confirmat
   assert.deepEqual(i1.steps[0].return, payload);
 });
 
-test('recording the same label twice replaces the entry instead of duplicating it', () => {
+test('recording the same label twice supersedes the entry instead of duplicating it, and keeps the earlier one as history', () => {
   const dir = tmpDir();
   const backlogPath = path.join(dir, 'backlog.json');
   run(['init', backlogPath, writeJson(dir, 'init.json', backlogTemplate([incrementPayload('i1', 'First')]))]);
 
   run(['record', backlogPath, 'i1', 'research:i1.0', writeJson(dir, 'first.json', { plan: 'first attempt' })]);
   run(['record', backlogPath, 'i1', 'research:i1.0', writeJson(dir, 'second.json', { plan: 'second attempt' })]);
+  run(['record', backlogPath, 'i1', 'research:i1.0', writeJson(dir, 'third.json', { plan: 'third attempt' })]);
 
   const backlog = JSON.parse(fs.readFileSync(backlogPath, 'utf8'));
   const i1 = backlog.increments.find((i) => i.id === 'i1');
-  assert.equal(i1.steps.length, 1, 'a repeated step after a crash replaces its own earlier entry, it does not pile up');
-  assert.equal(i1.steps[0].return.plan, 'second attempt');
+  assert.equal(i1.steps.length, 1, 'a repeated step after a crash supersedes its own earlier entry, it does not pile up beside it');
+  assert.equal(i1.steps[0].return.plan, 'third attempt', 'the current entry is the last one written');
+  assert.deepEqual(
+    i1.steps[0].history.map((h) => h.return.plan),
+    ['first attempt', 'second attempt'],
+    'every superseded entry is kept, oldest first',
+  );
+  assert.equal(
+    i1.steps[0].history.some((h) => Object.prototype.hasOwnProperty.call(h, 'history')),
+    false,
+    'history is flat: an archived entry does not carry a history of its own',
+  );
+});
+
+test('record stores the dispatch prompt verbatim beside the return when it is given one', () => {
+  const dir = tmpDir();
+  const backlogPath = path.join(dir, 'backlog.json');
+  run(['init', backlogPath, writeJson(dir, 'init.json', backlogTemplate([incrementPayload('i1', 'First')]))]);
+
+  // Not JSON, and not escaped by the caller: the prompt goes in as text, which
+  // is what keeps a multi-thousand-character prompt from being corrupted on
+  // its way into the file.
+  const prompt = 'Issue directory: docs/issues/x\nRead `steps` first.\n  - a "quoted" line\n';
+  const promptFile = path.join(dir, 'prompt.txt');
+  fs.writeFileSync(promptFile, prompt);
+
+  run(['record', backlogPath, 'i1', 'research:i1.0', writeJson(dir, 'payload.json', { plan: 'x' }), promptFile]);
+
+  const backlog = JSON.parse(fs.readFileSync(backlogPath, 'utf8'));
+  assert.equal(backlog.increments[0].steps[0].prompt, prompt, 'the prompt is stored byte for byte');
+});
+
+test('record without a prompt file stores no prompt key at all', () => {
+  const dir = tmpDir();
+  const backlogPath = path.join(dir, 'backlog.json');
+  run(['init', backlogPath, writeJson(dir, 'init.json', backlogTemplate([incrementPayload('i1', 'First')]))]);
+
+  run(['record', backlogPath, 'i1', 'research:i1.0', writeJson(dir, 'payload.json', { plan: 'x' })]);
+
+  const step = JSON.parse(fs.readFileSync(backlogPath, 'utf8')).increments[0].steps[0];
+  assert.equal(Object.prototype.hasOwnProperty.call(step, 'prompt'), false);
+});
+
+test('record with a prompt file that is not there exits 2 and leaves the file untouched', () => {
+  const dir = tmpDir();
+  const backlogPath = path.join(dir, 'backlog.json');
+  run(['init', backlogPath, writeJson(dir, 'init.json', backlogTemplate([incrementPayload('i1', 'First')]))]);
+  const before = fs.readFileSync(backlogPath, 'utf8');
+
+  const err = runFails(['record', backlogPath, 'i1', 'research:i1.0', writeJson(dir, 'payload.json', { plan: 'x' }), path.join(dir, 'nope.txt')]);
+
+  assert.equal(err.status, 2, 'a payload the caller named but did not write is a usage error, not an answer from the state');
+  assert.equal(fs.readFileSync(backlogPath, 'utf8'), before);
 });
 
 test('record with an increment id of "-" lands the step in run.steps and touches no increment', () => {
@@ -376,7 +433,7 @@ test('a re-cut keeps a recorded increment branch, and the init payload cannot se
   assert.equal(backlog.increments.find((i) => i.id === 'i2').branch, '', 'the branch subcommand is the one writer — a payload branch is ignored');
 });
 
-test("close sets status and note and empties only the closed increment's steps", () => {
+test("close sets status and note and clears only the closed increment's current steps", () => {
   const dir = tmpDir();
   const backlogPath = path.join(dir, 'backlog.json');
   run(['init', backlogPath, writeJson(dir, 'init.json', backlogTemplate([
@@ -393,50 +450,45 @@ test("close sets status and note and empties only the closed increment's steps",
   const i2 = backlog.increments.find((i) => i.id === 'i2');
   assert.equal(i1.status, 'done');
   assert.equal(i1.note, 'the review accepted it');
-  assert.deepEqual(i1.steps, [], "closing sheds the increment's own step returns");
+  assert.deepEqual(i1.steps, [], "closing ends the increment's attempt");
+  assert.equal(i1.attempts[0].steps.length, 1, 'and keeps that attempt whole');
   assert.equal(i2.steps.length, 1, "closing one increment leaves another increment's steps alone");
+  assert.deepEqual(i2.attempts, [], 'and opens no attempt on it');
 });
 
-test("close sheds the returns of the run's own steps and keeps their labels", () => {
+test("close carries the run steps of the closed increment into its attempt and leaves the run's own steps standing", () => {
   const dir = tmpDir();
   const backlogPath = path.join(dir, 'backlog.json');
   run(['init', backlogPath, writeJson(dir, 'init.json', backlogTemplate([
     incrementPayload('i1', 'First'),
     incrementPayload('i2', 'Second'),
   ]))]);
-  // A run-level step return (decompose's, the whole cut) is the largest
-  // payload backlog.json ever holds and belongs to no single increment, so
-  // it is the one this case marks and checks for.
-  const decomposePayload = {
-    increments: [incrementPayload('i1', 'First'), incrementPayload('i2', 'Second')],
-    summary: 'MARKER-RUN-STEP-RETURN',
-  };
-  run(['record', backlogPath, '-', 'decompose', writeJson(dir, 'decompose.json', decomposePayload)]);
+  // `decompose` belongs to the run and to no increment: it has to survive
+  // every close with its label, or the resumed run would work the opening cut
+  // again. `replan:i1` belongs to the increment being closed even though it
+  // sits in run.steps, so it goes into the attempt with the rest — otherwise
+  // an increment handed back as todo would find its previous close recorded.
+  run(['record', backlogPath, '-', 'decompose', writeJson(dir, 'decompose.json', { summary: 'opened' })]);
+  run(['record', backlogPath, '-', 'replan:i1', writeJson(dir, 'replan.json', { summary: 'closed' })]);
   run(['record', backlogPath, 'i1', 'research:i1.0', writeJson(dir, 'research.json', { plan: 'x' })]);
 
   run(['close', backlogPath, 'i1', 'done', 'the review accepted it']);
 
-  const raw = fs.readFileSync(backlogPath, 'utf8');
-  const backlog = JSON.parse(raw);
-  assert.equal(backlog.run.steps.length, 1, "closing sheds the run step's return, not the entry itself — the label stays so resume still skips it");
-  assert.equal(backlog.run.steps[0].label, 'decompose');
-  assert.match(backlog.run.steps[0].at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/, 'at is still an ISO timestamp after the shed');
-  assert.equal(Object.prototype.hasOwnProperty.call(backlog.run.steps[0], 'return'), false, 'the shed run step carries no return key at all');
-  assert.equal(raw.includes('MARKER-RUN-STEP-RETURN'), false, 'the sizable run-level payload is gone from the file on disk, not just absent from one parsed field');
+  const backlog = JSON.parse(fs.readFileSync(backlogPath, 'utf8'));
+  assert.deepEqual(backlog.run.steps.map((s) => s.label), ['decompose'], 'the run-level step that names no increment stays current');
+  assert.equal(backlog.run.steps[0].return.summary, 'opened', 'and keeps its return — nothing is deleted');
+  const archived = backlog.increments.find((i) => i.id === 'i1').attempts[0].steps.map((s) => s.label);
+  assert.deepEqual(archived.sort(), ['replan:i1', 'research:i1.0'], "the closed increment's own steps and its run-level close are archived together");
 });
 
-test('closing a second increment leaves the already-shed run steps shed', () => {
+test('closing a second increment leaves the first increment\'s archived attempt alone', () => {
   const dir = tmpDir();
   const backlogPath = path.join(dir, 'backlog.json');
   run(['init', backlogPath, writeJson(dir, 'init.json', backlogTemplate([
     incrementPayload('i1', 'First'),
     incrementPayload('i2', 'Second'),
   ]))]);
-  const decomposePayload = {
-    increments: [incrementPayload('i1', 'First'), incrementPayload('i2', 'Second')],
-    summary: 'MARKER-RUN-STEP-RETURN',
-  };
-  run(['record', backlogPath, '-', 'decompose', writeJson(dir, 'decompose.json', decomposePayload)]);
+  run(['record', backlogPath, '-', 'decompose', writeJson(dir, 'decompose.json', { summary: 'opened' })]);
   run(['record', backlogPath, 'i1', 'research:i1.0', writeJson(dir, 'research1.json', { plan: 'x' })]);
   run(['close', backlogPath, 'i1', 'done']);
 
@@ -444,8 +496,30 @@ test('closing a second increment leaves the already-shed run steps shed', () => 
   run(['close', backlogPath, 'i2', 'done']);
 
   const backlog = JSON.parse(fs.readFileSync(backlogPath, 'utf8'));
-  assert.equal(backlog.run.steps.length, 1, 'a second close does not re-grow the run steps the first close already shed');
-  assert.equal(Object.prototype.hasOwnProperty.call(backlog.run.steps[0], 'return'), false, 'the run step shed by the first close stays shed after the second');
+  assert.equal(backlog.increments.find((i) => i.id === 'i1').attempts.length, 1, 'the first close is not re-archived by the second');
+  assert.equal(backlog.increments.find((i) => i.id === 'i2').attempts.length, 1);
+  assert.deepEqual(backlog.run.steps.map((s) => s.label), ['decompose']);
+});
+
+test('an increment closed and re-cut starts a second attempt, and its first one is still there', () => {
+  const dir = tmpDir();
+  const backlogPath = path.join(dir, 'backlog.json');
+  run(['init', backlogPath, writeJson(dir, 'init.json', backlogTemplate([incrementPayload('i1', 'First')]))]);
+  run(['record', backlogPath, 'i1', 'research:i1.0', writeJson(dir, 'first.json', { plan: 'MARKER-FIRST-ATTEMPT' })]);
+  run(['close', backlogPath, 'i1', 'blocked', 'the review never accepted it']);
+
+  // The planner hands it back as todo, which is what `init` writes, and the
+  // second attempt records the same label again.
+  run(['init', backlogPath, writeJson(dir, 'recut.json', backlogTemplate([incrementPayload('i1', 'First')]))]);
+  run(['record', backlogPath, 'i1', 'research:i1.0', writeJson(dir, 'second.json', { plan: 'MARKER-SECOND-ATTEMPT' })]);
+
+  const raw = fs.readFileSync(backlogPath, 'utf8');
+  const i1 = JSON.parse(raw).increments[0];
+  assert.equal(i1.steps.length, 1, 'the second attempt records against an empty step list');
+  assert.equal(i1.steps[0].return.plan, 'MARKER-SECOND-ATTEMPT');
+  assert.equal(i1.steps[0].history, undefined, 'the second attempt does not inherit the first as history — the close already archived it');
+  assert.equal(i1.attempts.length, 1, 'a re-cut carries the archived attempt through');
+  assert.equal(raw.includes('MARKER-FIRST-ATTEMPT'), true, 'the first attempt is still in the file');
 });
 
 test('close on a backlog that carries no run key exits 0 and writes the status', () => {
@@ -480,6 +554,223 @@ test('close with a status outside done|blocked|dropped exits 1 and leaves the fi
 
   assert.equal(err.status, 1);
   assert.equal(fs.readFileSync(backlogPath, 'utf8'), before);
+});
+
+// The step a run's index has to summarise without leaking: two long content
+// fields, a list of objects, and the small values a workflow steers on.
+const researchReturn = {
+  needsTests: true,
+  plan: 'MARKER-PLAN-CONTENT'.padEnd(2000, '.'),
+  testPlan: 'MARKER-TESTPLAN-CONTENT'.padEnd(2000, '.'),
+  checks: ['./test.sh'],
+  cases: [{ case: 'MARKER-CASE-OBJECT', file: 'x.test.mjs' }],
+  questions: [],
+  summary: 'plan summary',
+};
+
+test('index carries the cut, the step labels and the small steering values, and no step content at all', () => {
+  const dir = tmpDir();
+  const backlogPath = path.join(dir, 'backlog.json');
+  run(['init', backlogPath, writeJson(dir, 'init.json', {
+    ...backlogTemplate([incrementPayload('i1', 'First'), incrementPayload('i2', 'Second')]),
+    codemap: 'MARKER-CODEMAP-CONTENT',
+  })]);
+  run(['branch', backlogPath, 'i1', 'issue-branch--i1']);
+  run(['record', backlogPath, '-', 'decompose', writeJson(dir, 'decompose.json', { summary: 'opened', questions: [] })]);
+  run(['record', backlogPath, 'i1', 'research:i1.0', writeJson(dir, 'research.json', researchReturn)]);
+
+  const stdout = run(['index', backlogPath]);
+  const idx = JSON.parse(stdout);
+
+  assert.deepEqual(idx.increments.map((i) => i.id), ['i1', 'i2'], 'the cut is what a workflow steers on, so it is in the index whole');
+  assert.equal(idx.increments[0].title, 'First');
+  assert.deepEqual(idx.increments[0].criteria, ['does i1']);
+  assert.equal(idx.increments[0].branch, 'issue-branch--i1');
+  assert.deepEqual(idx.increments[0].steps.map((s) => s.label), ['research:i1.0']);
+  assert.deepEqual(idx.run.steps.map((s) => s.label), ['decompose']);
+
+  const step = idx.increments[0].steps[0];
+  assert.equal(step.asked, false, 'a step whose return carried no question did not ask one');
+  assert.equal(step.return.needsTests, true, 'a boolean is a steering value and survives');
+  assert.deepEqual(step.return.checks, ['./test.sh'], 'a short list of short strings is a steering value and survives');
+  assert.equal(step.return.summary, 'plan summary');
+
+  assert.equal(stdout.includes('MARKER-PLAN-CONTENT'), false, 'a long string is content and is never in the index');
+  assert.equal(stdout.includes('MARKER-TESTPLAN-CONTENT'), false, 'nor is a second one');
+  assert.equal(stdout.includes('MARKER-CASE-OBJECT'), false, 'a list of objects is content and is never in the index');
+  assert.equal(stdout.includes('MARKER-CODEMAP-CONTENT'), false, 'the codemap is content and is never in the index');
+  assert.equal(idx.hasCodemap, true, 'the index says a codemap is there without carrying it');
+});
+
+test('index marks the step that ended a run with a question, and carries the questions themselves', () => {
+  const dir = tmpDir();
+  const backlogPath = path.join(dir, 'backlog.json');
+  run(['init', backlogPath, writeJson(dir, 'init.json', backlogTemplate([incrementPayload('i1', 'First')]))]);
+  run(['record', backlogPath, 'i1', 'research:i1.0', writeJson(dir, 'asked.json', {
+    ...researchReturn,
+    questions: ['MARKER-HUMAN-QUESTION'],
+  })]);
+
+  const idx = JSON.parse(run(['index', backlogPath]));
+  const step = idx.increments[0].steps[0];
+
+  assert.equal(step.asked, true, 'a resumed run has to know which steps ended on a question');
+  assert.deepEqual(step.return.questions, ['MARKER-HUMAN-QUESTION'], 'and it puts them back in front of the step it works again');
+});
+
+test('index reports a long question as asked even though the question itself does not survive the projection', () => {
+  const dir = tmpDir();
+  const backlogPath = path.join(dir, 'backlog.json');
+  run(['init', backlogPath, writeJson(dir, 'init.json', backlogTemplate([incrementPayload('i1', 'First')]))]);
+  run(['record', backlogPath, 'i1', 'research:i1.0', writeJson(dir, 'asked.json', {
+    questions: ['q'.padEnd(4000, 'q')],
+    summary: 'asked at length',
+  })]);
+
+  const idx = JSON.parse(run(['index', backlogPath]));
+  const step = idx.increments[0].steps[0];
+
+  assert.equal(step.asked, true, '`asked` is computed, not projected, so the one fact the run protocol turns on cannot be dropped for being long');
+  assert.equal(step.return.questions, undefined, 'the long question itself is content, and the step reads it back from the file');
+});
+
+test('index counts an increment\'s archived attempts without carrying them', () => {
+  const dir = tmpDir();
+  const backlogPath = path.join(dir, 'backlog.json');
+  run(['init', backlogPath, writeJson(dir, 'init.json', backlogTemplate([incrementPayload('i1', 'First')]))]);
+  run(['record', backlogPath, 'i1', 'research:i1.0', writeJson(dir, 'research.json', { plan: 'MARKER-ARCHIVED'.padEnd(2000, '.') })]);
+  run(['close', backlogPath, 'i1', 'blocked', 'not accepted']);
+
+  const stdout = run(['index', backlogPath]);
+  const idx = JSON.parse(stdout);
+
+  assert.equal(idx.increments[0].attempts, 1);
+  assert.deepEqual(idx.increments[0].steps, [], 'a closed increment has no current step');
+  assert.equal(stdout.includes('MARKER-ARCHIVED'), false, 'the archive grows in the file and never in the index');
+});
+
+test('index on a missing file exits 1 and prints nothing on stdout', () => {
+  const dir = tmpDir();
+
+  const err = runFails(['index', path.join(dir, 'backlog.json')]);
+
+  assert.equal(err.status, 1);
+  assert.equal(err.stdout || '', '');
+});
+
+test('steps returns the named steps of an increment, whole, and nothing else', () => {
+  const dir = tmpDir();
+  const backlogPath = path.join(dir, 'backlog.json');
+  run(['init', backlogPath, writeJson(dir, 'init.json', backlogTemplate([incrementPayload('i1', 'First')]))]);
+  run(['record', backlogPath, 'i1', 'research:i1.0', writeJson(dir, 'research.json', researchReturn)]);
+  run(['record', backlogPath, 'i1', 'tests:i1.0', writeJson(dir, 'tests.json', { cases: [{ case: 'MARKER-UNNAMED-STEP' }] })]);
+
+  const out = JSON.parse(run(['steps', backlogPath, 'i1', 'research:i1.0']));
+
+  assert.equal(out.length, 1, 'only the step that was named comes back');
+  assert.equal(out[0].label, 'research:i1.0');
+  assert.equal(out[0].return.plan, researchReturn.plan, 'the content comes back whole — this is the channel between the roles');
+  assert.equal(out[0].return.testPlan, researchReturn.testPlan);
+  assert.equal(JSON.stringify(out).includes('MARKER-UNNAMED-STEP'), false, 'the step nobody named is not in the answer');
+});
+
+test('steps --fields returns only the named fields, so a role never meets what its brief does not name', () => {
+  const dir = tmpDir();
+  const backlogPath = path.join(dir, 'backlog.json');
+  run(['init', backlogPath, writeJson(dir, 'init.json', backlogTemplate([incrementPayload('i1', 'First')]))]);
+  run(['record', backlogPath, 'i1', 'research:i1.0', writeJson(dir, 'research.json', researchReturn)]);
+
+  // The test-author's read: the test plan and nothing else. Meeting the
+  // implementation plan is what would make its tests an implementer's tests.
+  const stdout = run(['steps', backlogPath, 'i1', 'research:i1.0', '--fields', 'testPlan']);
+  const out = JSON.parse(stdout);
+
+  assert.deepEqual(Object.keys(out[0].return), ['testPlan'], 'only the named field comes back');
+  assert.equal(out[0].return.testPlan, researchReturn.testPlan, 'and it comes back whole');
+  assert.equal(stdout.includes('MARKER-PLAN-CONTENT'), false, 'the field nobody named never reaches the reader');
+});
+
+test('steps --fields takes several fields and ignores one the return does not carry', () => {
+  const dir = tmpDir();
+  const backlogPath = path.join(dir, 'backlog.json');
+  run(['init', backlogPath, writeJson(dir, 'init.json', backlogTemplate([incrementPayload('i1', 'First')]))]);
+  run(['record', backlogPath, 'i1', 'research:i1.0', writeJson(dir, 'research.json', researchReturn)]);
+
+  const out = JSON.parse(run(['steps', backlogPath, 'i1', 'research:i1.0', '--fields', 'plan,moduleMap,environment']));
+
+  assert.deepEqual(Object.keys(out[0].return), ['plan'], 'a field the step never recorded is absent, not null');
+});
+
+test('steps --fields with no list after it exits 2', () => {
+  const dir = tmpDir();
+  const backlogPath = path.join(dir, 'backlog.json');
+  run(['init', backlogPath, writeJson(dir, 'init.json', backlogTemplate([incrementPayload('i1', 'First')]))]);
+
+  assert.equal(runFails(['steps', backlogPath, 'i1', '--fields']).status, 2);
+});
+
+test('steps returns several named steps at once, and skips a label that has no entry', () => {
+  const dir = tmpDir();
+  const backlogPath = path.join(dir, 'backlog.json');
+  run(['init', backlogPath, writeJson(dir, 'init.json', backlogTemplate([incrementPayload('i1', 'First')]))]);
+  run(['record', backlogPath, 'i1', 'research:i1.0', writeJson(dir, 'research.json', { plan: 'x' })]);
+
+  const out = JSON.parse(run(['steps', backlogPath, 'i1', 'research:i1.0', 'tests:i1.0']));
+
+  assert.deepEqual(out.map((s) => s.label), ['research:i1.0'], 'a caller may name a step that never ran — it is simply absent, not an error');
+});
+
+test('steps with no label named returns every current step of that scope', () => {
+  const dir = tmpDir();
+  const backlogPath = path.join(dir, 'backlog.json');
+  run(['init', backlogPath, writeJson(dir, 'init.json', backlogTemplate([incrementPayload('i1', 'First')]))]);
+  run(['record', backlogPath, 'i1', 'research:i1.0', writeJson(dir, 'research.json', { plan: 'x' })]);
+  run(['record', backlogPath, 'i1', 'review:i1.0', writeJson(dir, 'review.json', { findings: [] })]);
+
+  const out = JSON.parse(run(['steps', backlogPath, 'i1']));
+
+  assert.deepEqual(out.map((s) => s.label), ['research:i1.0', 'review:i1.0'], 'this is the closing planner\'s read: everything the attempt produced');
+});
+
+test('steps with an increment id of "-" returns the run\'s own steps', () => {
+  const dir = tmpDir();
+  const backlogPath = path.join(dir, 'backlog.json');
+  run(['init', backlogPath, writeJson(dir, 'init.json', backlogTemplate([incrementPayload('i1', 'First')]))]);
+  run(['record', backlogPath, '-', 'decompose', writeJson(dir, 'decompose.json', { summary: 'opened' })]);
+  run(['record', backlogPath, 'i1', 'research:i1.0', writeJson(dir, 'research.json', { plan: 'x' })]);
+
+  const out = JSON.parse(run(['steps', backlogPath, '-']));
+
+  assert.deepEqual(out.map((s) => s.label), ['decompose']);
+});
+
+test('steps against an increment id no increment has exits 1', () => {
+  const dir = tmpDir();
+  const backlogPath = path.join(dir, 'backlog.json');
+  run(['init', backlogPath, writeJson(dir, 'init.json', backlogTemplate([incrementPayload('i1', 'First')]))]);
+
+  const err = runFails(['steps', backlogPath, 'nope']);
+
+  assert.equal(err.status, 1);
+});
+
+test('codemap prints the map alone, and the empty line when there is none', () => {
+  const dir = tmpDir();
+  const backlogPath = path.join(dir, 'backlog.json');
+  run(['init', backlogPath, writeJson(dir, 'init.json', {
+    ...backlogTemplate([incrementPayload('i1', 'First')]),
+    codemap: 'a.js — the parser\nb.js — its one caller',
+  })]);
+  run(['record', backlogPath, 'i1', 'research:i1.0', writeJson(dir, 'research.json', researchReturn)]);
+
+  const stdout = run(['codemap', backlogPath]);
+
+  assert.equal(stdout, 'a.js — the parser\nb.js — its one caller\n');
+  assert.equal(stdout.includes('MARKER-PLAN-CONTENT'), false, 'the map comes on its own, with no step return beside it');
+
+  const freshPath = path.join(dir, 'fresh.json');
+  run(['init', freshPath, writeJson(dir, 'no-map.json', backlogTemplate([incrementPayload('i1', 'First')]))]);
+  assert.equal(run(['codemap', freshPath]), '\n');
 });
 
 test("read prints the file's exact content", () => {

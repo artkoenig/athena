@@ -1,6 +1,6 @@
 ---
 name: agent-brief
-description: The rules every uroboros subagent works by, whatever its role — how it takes its brief, how it spends its tools, how it reports a command run, how it records, commits and pushes its step return, and the check mode that makes it enumerate its startup context instead of working. Every uroboros agent preloads it, so it reaches them wherever uroboros is installed; a session has no use for it.
+description: The rules every uroboros subagent works by, whatever its role — how it reads its brief out of the run state, how it spends its tools, how it reports a command run, how it records, commits and pushes its step return and the prompt that produced it, and the check mode that makes it enumerate its startup context instead of working. Every uroboros agent preloads it, so it reaches them wherever uroboros is installed; a session has no use for it.
 ---
 
 # The shared brief
@@ -26,13 +26,19 @@ request is your caller's, never yours.
 ## Your brief
 
 Your caller gives you the issue directory under `docs/issues/`, and your prompt
-carries the slice of the earlier steps' returns your role needs. That prompt
-and the files your page names are everything you get: nothing about the project
-reaches you except through them, and a fact your brief omits is a fact you do
-not have. Where you need one it does not carry, put the gap in your return's
-`questions` and return; do not go looking for it, and do not guess. A
-non-empty `questions` ends the run and puts the gap to the human, so keep it
-for decisions only a human can make.
+names the steps of `backlog.json` your role reads — that is where the earlier
+steps' work is, and no prompt carries it. Read exactly the steps and the fields
+your prompt names, with the helper subcommand it gives you, and take nothing
+else out of them: a field of another role's step that your prompt did not send
+you to is not yours, and reading it is how a role that is meant to be
+independent stops being one.
+
+That prompt, the steps it names and the files your page names are everything you
+get: nothing about the project reaches you except through them, and a fact your
+brief omits is a fact you do not have. Where you need one it does not carry, put
+the gap in your return's `questions` and return; do not go looking for it, and
+do not guess. A non-empty `questions` ends the run and puts the gap to the
+human, so keep it for decisions only a human can make.
 
 Paths are inferred, never handed to you beyond that directory. An agent that
 needs the history runs `git log` itself.
@@ -76,22 +82,28 @@ excluded anything.
 
 ## Your step return
 
-You return one structured object, and your page names its fields. That object
-is the whole channel: your caller hands the next role the slice of it that role
-needs, and nothing else you produce reaches anyone. So the substance goes in
-the fields, in full — no placeholders, no summaries that drop detail — and no
-file of your own carries it.
+Your step return is what you write into `backlog.json`, and your page names its
+fields. That file is the whole channel: the next role reads your step there, and
+nothing else you produce reaches anyone. So the substance goes in the fields, in
+full — no placeholders, no summaries that drop detail — and no file of your own
+carries it.
+
+You produce it once. The structured object you hand back to your caller is not a
+second copy of it: it carries only the few small values the workflow steers on,
+its schema names them, and everything else you did lives in the file. Writing
+your work out twice is how the two copies come to disagree.
 
 Every word of it is context the next agent pays for. So put one instruction in
 one sentence, write that sentence in the imperative, and state each thing once:
 two wordings of one rule disagree after the first edit, and the reader follows
 whichever it saw last.
 
-**Record it before you finish.** Write your return to a JSON file outside the
-repository, then run
+**Record it before you finish, and before you return.** Write your return to a
+JSON file outside the repository, write the prompt you were given — verbatim and
+whole — to a second file outside the repository, then run
 
 ```
-node "<base>/assets/backlog.mjs" record <issueDir>/backlog.json <incrementId> <label> <thatFile>
+node "<base>/assets/backlog.mjs" record <issueDir>/backlog.json <incrementId> <label> <returnFile> <promptFile>
 ```
 
 with the increment id and the label your prompt gives you. `<base>` is the base
@@ -99,12 +111,22 @@ directory of the `agent-brief` skill, which your context names on its `Base
 directory for this skill:` line; where no such line is there, find the helper
 with `find "$HOME/.claude/plugins" -path '*agent-brief/assets/backlog.mjs' |
 head -1`. That helper is the only writer of `backlog.json`, so you never edit
-that file by hand.
+that file by hand. Recording before you return is what makes the file
+authoritative: a step that ends between the two leaves the state complete rather
+than stale.
 
-`backlog.json` is the whole durable state of the run: a session that dies
+`backlog.json` is the single source of truth of the run: a session that dies
 resumes from it, a step it holds is never worked twice, and a step it does not
-hold is worked again from the start. Record your step, commit it with your
-work, and push the commit.
+hold is worked again from the start. Nothing in it is ever deleted — a step
+written a second time keeps its earlier entry as history, and closing an
+increment moves its steps into that increment's `attempts` — so the finished
+file is the whole record of the run for whoever reads it afterwards. Record your
+step, commit it with your work, and push the commit.
+
+Read it only where your prompt sends you, and never whole: the helper's reads
+are addressed — `index` for the run's skeleton, `steps` for the returns of the
+steps you name, `codemap` for the map — and that is what lets the file keep
+everything without any step paying for the rest of it.
 
 A step you work again may meet what its interrupted first run
 already committed: tests that exist and fail, code that half-exists. Read the

@@ -1,15 +1,30 @@
 #!/usr/bin/env node
-// The only writer of an issue's `backlog.json`. That file is the whole durable
-// state of a run: what the increments are, what each step of each increment
-// returned, and what the review made of it. A session that dies mid-run resumes
-// from it and from nothing else.
+// The only writer of an issue's `backlog.json`, and the only reader any agent
+// of a run goes through. That file is the single source of truth of a run: what
+// the increments are, what each step of each increment produced, the prompt
+// each step was dispatched with, and what the review made of it. An agent
+// writes its return here once and the next role reads it here; the workflow
+// script carries no content between them, because the workflow runtime gives a
+// script no filesystem at all.
 //
 // It is a CLI rather than a paragraph of instructions in every prompt because
-// three of its rules are the kind an agent gets subtly wrong: an increment kept
-// across a re-cut keeps the steps it already recorded, a step repeated after a
-// crash replaces its own earlier entry instead of piling up, and closing an
-// increment sheds its step returns and the returns of the run's own steps.
-// Enforced in code, they are testable; asked for in prose, they are hoped for.
+// four of its rules are the kind an agent gets subtly wrong: an increment kept
+// across a re-cut keeps the steps it already recorded, a step written a second
+// time supersedes its own earlier entry instead of piling up beside it, closing
+// an increment ends that attempt without losing what the attempt produced, and
+// nothing recorded is ever deleted. Enforced in code, they are testable; asked
+// for in prose, they are hoped for.
+//
+// Nothing here ever deletes. `close` moves an attempt's steps into the
+// increment's `attempts`, and `record` moves a superseded entry into the new
+// entry's `history`, so the file is the whole record of the run for whoever
+// analyses it afterwards.
+//
+// Reads are addressed, never wholesale — that is what keeps the file free to
+// grow. `index` is the run's skeleton with no step content in it, `steps` is
+// the returns of the steps you name, and `codemap` is the map alone. `read`
+// prints the file whole and exists for a human with git in hand; no agent of a
+// run uses it.
 //
 // `record` prints one confirmation line and never any part of the file, so an
 // agent forbidden to read the state can still write into it.
@@ -39,11 +54,14 @@ const SEND_TIMEOUT_MS = 2000
 
 const USAGE = [
   'usage:',
-  '  backlog.mjs init   <backlogPath> <payloadFile>',
-  '  backlog.mjs record <backlogPath> <incrementId|-> <label> <payloadFile>',
-  '  backlog.mjs branch <backlogPath> <incrementId> <branchName>',
-  '  backlog.mjs close  <backlogPath> <incrementId> <status> [note]',
-  '  backlog.mjs read   <backlogPath>',
+  '  backlog.mjs init    <backlogPath> <payloadFile>',
+  '  backlog.mjs record  <backlogPath> <incrementId|-> <label> <payloadFile> [promptFile]',
+  '  backlog.mjs branch  <backlogPath> <incrementId> <branchName>',
+  '  backlog.mjs close   <backlogPath> <incrementId> <status> [note]',
+  '  backlog.mjs index   <backlogPath>',
+  '  backlog.mjs steps   <backlogPath> <incrementId|-> [label ...] [--fields a,b,c]',
+  '  backlog.mjs codemap <backlogPath>',
+  '  backlog.mjs read    <backlogPath>',
 ].join('\n')
 
 // Exit 2 is "you called it wrong" — an unknown command, a missing argument,
@@ -66,6 +84,14 @@ function readJson(file, what) {
     return JSON.parse(text)
   } catch (err) {
     fail(`${what} at ${file} is not valid JSON: ${err.message}`, 2)
+  }
+}
+
+function readText(file, what) {
+  try {
+    return fs.readFileSync(file, 'utf8')
+  } catch {
+    fail(`cannot read ${what} at ${file}`, 2)
   }
 }
 
@@ -95,7 +121,7 @@ function writeBacklog(backlogPath, backlog) {
   fs.renameSync(tmp, backlogPath)
 }
 
-function shapeIncrement(raw, steps, branch) {
+function shapeIncrement(raw, steps, branch, attempts) {
   return {
     id: String(raw.id),
     title: raw.title || '',
@@ -105,6 +131,7 @@ function shapeIncrement(raw, steps, branch) {
     note: raw.note || '',
     branch: branch || '',
     steps,
+    attempts,
   }
 }
 
@@ -116,7 +143,8 @@ function shapeIncrement(raw, steps, branch) {
 // codemap is the payload's when it carries one and the file's when it does
 // not, so a re-cut that says nothing about the map cannot erase it. An
 // increment's branch is the file's alone — the `branch` subcommand is its one
-// writer, so the payload cannot set or erase it.
+// writer, so the payload cannot set or erase it. The attempts a kept increment
+// has already closed travel with it untouched.
 function init(backlogPath, payloadFile) {
   const payload = readJson(payloadFile, 'the init payload')
   if (!payload || typeof payload !== 'object' || !Array.isArray(payload.increments)) {
@@ -125,15 +153,19 @@ function init(backlogPath, payloadFile) {
 
   let priorSteps = new Map()
   let priorBranches = new Map()
+  let priorAttempts = new Map()
   let runSteps = []
+  let runAttempts = []
   let priorCodemap = ''
   if (fs.existsSync(backlogPath)) {
     const existing = loadBacklog(backlogPath)
     for (const increment of existing.increments || []) {
       priorSteps.set(increment.id, Array.isArray(increment.steps) ? increment.steps : [])
       priorBranches.set(increment.id, typeof increment.branch === 'string' ? increment.branch : '')
+      priorAttempts.set(increment.id, Array.isArray(increment.attempts) ? increment.attempts : [])
     }
     runSteps = (existing.run && Array.isArray(existing.run.steps) && existing.run.steps) || []
+    runAttempts = (existing.run && Array.isArray(existing.run.attempts) && existing.run.attempts) || []
     priorCodemap = typeof existing.codemap === 'string' ? existing.codemap : ''
   }
 
@@ -147,9 +179,10 @@ function init(backlogPath, payloadFile) {
         increment,
         priorSteps.get(String(increment.id)) || [],
         priorBranches.get(String(increment.id)) || '',
+        priorAttempts.get(String(increment.id)) || [],
       ),
     ),
-    run: { steps: runSteps },
+    run: { steps: runSteps, attempts: runAttempts },
   }
 
   writeBacklog(backlogPath, backlog)
@@ -162,13 +195,26 @@ function init(backlogPath, payloadFile) {
 // `record` is every agent's own call, once per step. The increment id `-` puts
 // the step in `run.steps`, which is where the steps that sit between increments
 // go — the opening cut, each close, the publish.
-function record(backlogPath, incrementId, label, payloadFile) {
+//
+// The payload is the step's whole return, and it is the only copy of it: the
+// next role reads it back out of here rather than being handed it in a prompt.
+// The optional prompt file is the dispatch prompt that produced it, stored
+// verbatim, so a run can be analysed afterwards against what each agent was
+// actually asked.
+//
+// A label written a second time supersedes the earlier entry rather than
+// replacing it: the old entry moves into the new one's `history`, oldest first,
+// so a step worked again after a crash or a question keeps both attempts.
+function record(backlogPath, incrementId, label, payloadFile, promptFile) {
   const payload = readJson(payloadFile, 'the step return')
+  const prompt = promptFile === undefined ? null : readText(promptFile, 'the dispatch prompt')
   const backlog = loadBacklog(backlogPath)
 
   let steps
   if (incrementId === '-') {
-    if (!backlog.run || !Array.isArray(backlog.run.steps)) backlog.run = { steps: [] }
+    if (!backlog.run || !Array.isArray(backlog.run.steps)) {
+      backlog.run = { steps: [], attempts: (backlog.run && backlog.run.attempts) || [] }
+    }
     steps = backlog.run.steps
   } else {
     const increment = (backlog.increments || []).find((i) => i.id === incrementId)
@@ -178,9 +224,19 @@ function record(backlogPath, incrementId, label, payloadFile) {
   }
 
   const entry = { label, at: new Date().toISOString(), return: payload }
+  if (prompt !== null) entry.prompt = prompt
+
   const at = steps.findIndex((step) => step.label === label)
-  if (at >= 0) steps[at] = entry
-  else steps.push(entry)
+  if (at >= 0) {
+    const prior = steps[at]
+    const priorHistory = Array.isArray(prior.history) ? prior.history : []
+    const superseded = Object.assign({}, prior)
+    delete superseded.history
+    entry.history = [...priorHistory, superseded]
+    steps[at] = entry
+  } else {
+    steps.push(entry)
+  }
 
   writeBacklog(backlogPath, backlog)
   process.stdout.write(`recorded ${label}\n`)
@@ -203,17 +259,17 @@ function branch(backlogPath, incrementId, branchName) {
   return backlog
 }
 
-// `close` is the planner's verdict call. Shedding the steps is the point as
-// much as the status is: a closed increment's record is its status, its note,
-// its criteria and the git history, and nobody downstream re-reads the returns
-// that got it there. The run's own steps shed with it — the opening cut is the
-// largest return of the run and belongs to no increment, so leaving it would
-// keep the whole cut in the file for every close that follows.
+// `close` is the planner's verdict call. It ends the attempt without losing it:
+// the increment's steps, together with the run-level steps that belong to this
+// increment, move into an entry in `attempts` that carries the status they
+// closed with. Nothing is deleted.
 //
-// The shed drops each run step's `return` and keeps its `label` and `at`. A
-// workflow resumes by asking whether a label is recorded, so the stub still
-// skips its step; deleting the entry outright would re-dispatch the opening
-// cut after every close.
+// Clearing `steps` is what an attempt boundary means to a resuming workflow. A
+// run resumes by asking whether a label is recorded, so an increment the
+// planner hands back as `todo` has to start with no recorded labels or its
+// second attempt would skip every step of its first. The run's own steps that
+// carry no increment id — the opening cut — stay where they are, so a close
+// never re-dispatches them.
 function close(backlogPath, incrementId, status, note) {
   if (!STATUSES.includes(status)) {
     fail(`status must be one of ${STATUSES.join('|')}, not "${status}"`, 1)
@@ -224,11 +280,23 @@ function close(backlogPath, incrementId, status, note) {
 
   increment.status = status
   increment.note = note || ''
-  increment.steps = []
 
+  const carried = []
   if (backlog.run && Array.isArray(backlog.run.steps)) {
-    for (const step of backlog.run.steps) delete step.return
+    const kept = []
+    for (const step of backlog.run.steps) {
+      if (typeof step.label === 'string' && step.label.endsWith(`:${incrementId}`)) carried.push(step)
+      else kept.push(step)
+    }
+    backlog.run.steps = kept
   }
+
+  const steps = [...(Array.isArray(increment.steps) ? increment.steps : []), ...carried]
+  if (!Array.isArray(increment.attempts)) increment.attempts = []
+  if (steps.length) {
+    increment.attempts.push({ closedAs: status, at: new Date().toISOString(), steps })
+  }
+  increment.steps = []
 
   writeBacklog(backlogPath, backlog)
   process.stdout.write(`closed ${incrementId} as ${status}\n`)
@@ -307,6 +375,130 @@ async function announce(state, backlogPath) {
   }
 }
 
+// The steering projection. A workflow script decides what to dispatch next from
+// a handful of small values a step returned — a boolean, a count, a list of
+// commands, the questions that block the run — and never from the step's
+// content. So the index carries every return field small enough to be one of
+// those and drops everything else: a plan, a module map, a test plan, a list of
+// cases or of findings is content, and content is read with `steps`, by the one
+// role that needs it.
+const SMALL_STRING = 500
+const SMALL_LIST = 50
+function smallValue(value) {
+  if (typeof value === 'boolean' || typeof value === 'number') return true
+  if (typeof value === 'string') return value.length <= SMALL_STRING
+  if (Array.isArray(value)) {
+    return (
+      value.length <= SMALL_LIST &&
+      value.every((item) => typeof item === 'string' && item.length <= SMALL_STRING)
+    )
+  }
+  return false
+}
+
+function steering(ret) {
+  const out = {}
+  if (!ret || typeof ret !== 'object') return out
+  for (const [key, value] of Object.entries(ret)) {
+    if (smallValue(value)) out[key] = value
+  }
+  return out
+}
+
+// `asked` is computed rather than projected. Every role's return carries
+// `questions`, a non-empty list ends the run, and a resumed run has to know
+// which steps ended that way even when the questions themselves were too long
+// to survive the projection.
+function indexStep(step) {
+  const ret = step && step.return
+  const questions =
+    ret && Array.isArray(ret.questions) ? ret.questions.filter(Boolean) : []
+  return {
+    label: step.label,
+    at: step.at || '',
+    asked: questions.length > 0,
+    return: steering(ret),
+  }
+}
+
+// `index` is the run's skeleton: what the cut is, what each increment stands
+// at, which steps are recorded, and the steering values of each. It never
+// carries the codemap or any step's content, so it stays the same size however
+// long the run gets — which is what lets the file itself keep everything.
+function index(backlogPath) {
+  const backlog = loadBacklog(backlogPath)
+  const out = {
+    version: backlog.version || 1,
+    issue: backlog.issue || '',
+    workflow: backlog.workflow || '',
+    hasCodemap: typeof backlog.codemap === 'string' && backlog.codemap.length > 0,
+    increments: (backlog.increments || []).map((increment) => ({
+      id: increment.id,
+      title: increment.title || '',
+      goal: increment.goal || '',
+      criteria: Array.isArray(increment.criteria) ? increment.criteria : [],
+      status: increment.status || 'todo',
+      note: increment.note || '',
+      branch: increment.branch || '',
+      steps: (increment.steps || []).map(indexStep),
+      attempts: (increment.attempts || []).length,
+    })),
+    run: { steps: ((backlog.run && backlog.run.steps) || []).map(indexStep) },
+  }
+  process.stdout.write(JSON.stringify(out, null, 2) + '\n')
+}
+
+// `steps` is how a role takes its brief: it names the increment and the labels
+// it needs, and gets those steps' returns. Naming no label returns every step of
+// that scope. A label with no entry is simply absent from the answer, so a
+// caller can ask for a step that may not have run.
+//
+// `--fields` is what keeps a role's independence when its brief and something it
+// must not see sit in the same step. The test-author reads the researcher's
+// `testPlan` and must never meet its `plan`, so its prompt names the fields and
+// the rest never reaches it. Without the flag the step comes back whole, which
+// is what the closing planner wants.
+function steps(backlogPath, incrementId, labels, fields) {
+  const backlog = loadBacklog(backlogPath)
+  let source
+  if (incrementId === '-') {
+    source = (backlog.run && backlog.run.steps) || []
+  } else {
+    const increment = (backlog.increments || []).find((i) => i.id === incrementId)
+    if (!increment) fail(`no increment "${incrementId}" in ${backlogPath}`, 1)
+    source = increment.steps || []
+  }
+  const wanted = labels.length
+    ? labels.map((label) => source.find((step) => step.label === label)).filter(Boolean)
+    : source
+  const project = (ret) => {
+    if (!fields) return ret
+    const out = {}
+    if (!ret || typeof ret !== 'object') return out
+    for (const field of fields) {
+      if (Object.prototype.hasOwnProperty.call(ret, field)) out[field] = ret[field]
+    }
+    return out
+  }
+  const out = wanted.map((step) => ({
+    label: step.label,
+    at: step.at || '',
+    return: project(step.return),
+  }))
+  process.stdout.write(JSON.stringify(out, null, 2) + '\n')
+}
+
+// The planner's map of the files the issue has to change. Every researcher
+// starts from it, and it is the one piece of content that belongs to the run
+// rather than to a step.
+function codemap(backlogPath) {
+  const backlog = loadBacklog(backlogPath)
+  process.stdout.write((typeof backlog.codemap === 'string' ? backlog.codemap : '') + '\n')
+}
+
+// The whole file, byte for byte. This is for a human analysing a finished run,
+// not for an agent in one: a run's reads are addressed, so that the file may
+// keep everything without any step paying for the rest of it.
 function read(backlogPath) {
   if (!fs.existsSync(backlogPath)) fail(`no backlog at ${backlogPath}`, 1)
   let text
@@ -335,7 +527,7 @@ switch (command) {
     break
   case 'record':
     need(4)
-    state = record(rest[0], rest[1], rest[2], rest[3])
+    state = record(rest[0], rest[1], rest[2], rest[3], rest[4])
     break
   case 'branch':
     need(3)
@@ -344,6 +536,24 @@ switch (command) {
   case 'close':
     need(3)
     state = close(rest[0], rest[1], rest[2], rest[3])
+    break
+  case 'index':
+    need(1)
+    index(rest[0])
+    break
+  case 'steps': {
+    need(2)
+    const at = rest.indexOf('--fields')
+    if (at >= 0 && at + 1 >= rest.length) fail(`--fields needs a comma-separated list\n${USAGE}`, 2)
+    const fields =
+      at >= 0 ? rest[at + 1].split(',').map((f) => f.trim()).filter(Boolean) : null
+    const labels = (at >= 0 ? rest.slice(2, at) : rest.slice(2)).filter(Boolean)
+    steps(rest[0], rest[1], labels, fields)
+    break
+  }
+  case 'codemap':
+    need(1)
+    codemap(rest[0])
     break
   case 'read':
     need(1)

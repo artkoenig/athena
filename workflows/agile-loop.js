@@ -28,11 +28,24 @@ export const meta = {
 // The script is the orchestrator. No agent dispatches another one — their
 // pages say so, and every prompt below repeats it.
 //
-// The channel between the agents is structured: each one returns an object,
-// this script injects the slice the next role needs into its prompt, and each
-// one records its own return into `<issueDir>/backlog.json` through the shipped
-// helper. That file is the only durable state of a run, and a fresh session
-// resumes from it alone.
+// `<issueDir>/backlog.json` is the single source of truth of a run. Each agent
+// writes its return there once, through the shipped helper, and the next role
+// reads it there: a dispatch prompt below names the steps its agent must read
+// and carries none of their content. So no content is ever produced twice, and
+// what a resumed run works from is the same object the live run worked from,
+// because there is only one of it.
+//
+// What this script does carry is steering: the cut, whether tests are needed,
+// the closed list of commands the reviewer runs, how many findings a review
+// filed, and the questions that end a run. Those few small values reach it as
+// each agent's structured return, and a resumed run recovers them from the
+// state's index rather than from any agent re-emitting them. That is the whole
+// of the duplication left, and it is the price of a script that has no
+// filesystem: the workflow runtime gives it `args`, `agent`, `log` and `phase`
+// and nothing else.
+//
+// The reviewer is the one role outside all of this. It reads nothing and is
+// handed nothing any agent produced, because it is the check on them.
 
 const MAX_CORRECTIONS = 2
 
@@ -44,7 +57,7 @@ const MAX_CORRECTIONS = 2
 //
 // MAX_BLOCKED is derived from the statuses in the run state, so it survives a
 // restart. MAX_ATTEMPTS is deliberately session-local: closing an increment
-// sheds its step returns, so nothing in the state counts attempts, and a
+// ends its attempt in the state, so nothing there counts attempts, and a
 // restart granting one more attempt is cheaper than a second counter in the
 // file that every writer would have to maintain.
 const MAX_INCREMENTS = 8
@@ -68,34 +81,102 @@ if (!dir) {
 
 const maxIncrements = Number(parsed.maxIncrements) > 0 ? Number(parsed.maxIncrements) : MAX_INCREMENTS
 
+// The index of the run state, not the state itself. It carries the cut, what
+// each increment stands at, which steps are recorded and the small steering
+// values each returned — never a codemap, a plan, a test plan or a finding. So
+// the one agent that reads the state for this script emits something whose
+// size does not grow with the run, however much the file itself keeps.
+const INDEX_STEP = {
+  type: 'object',
+  properties: {
+    label: { type: 'string', description: 'The step label, exactly as the index printed it.' },
+    asked: {
+      type: 'boolean',
+      description: 'The index\'s `asked` for this step: true when its return carried questions.',
+    },
+    questions: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'The step return\'s `questions`, when the index carried them. Empty otherwise.',
+    },
+    needsTests: {
+      type: 'boolean',
+      description: 'The step return\'s `needsTests` when the index carried one, false otherwise.',
+    },
+    checks: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'The step return\'s `checks` when the index carried them. Empty otherwise.',
+    },
+    findingCount: {
+      type: 'integer',
+      description: 'The step return\'s `findingCount` when the index carried one, 0 otherwise.',
+    },
+    allDirect: {
+      type: 'boolean',
+      description: 'The step return\'s `allDirect` when the index carried one, false otherwise.',
+    },
+    reason: {
+      type: 'string',
+      description: 'The step return\'s `reason` when the index carried one, empty otherwise.',
+    },
+  },
+  required: ['label', 'asked', 'questions', 'needsTests', 'checks', 'findingCount', 'allDirect', 'reason'],
+  additionalProperties: false,
+}
+
 const STATE = {
   type: 'object',
   properties: {
-    exists: { type: 'boolean', description: 'True only when backlog.json exists and you read it.' },
-    backlogJson: {
-      type: 'string',
-      description:
-        'The exact content of backlog.json, byte for byte. Empty string when it does not exist.',
-    },
+    exists: { type: 'boolean', description: 'True only when backlog.json exists and you read its index.' },
     branch: {
       type: 'string',
       description:
         'What `git branch --show-current` printed in the checkout. Empty string when it failed.',
     },
+    increments: {
+      type: 'array',
+      description: 'The index\'s `increments`, in the order it printed them. Empty when there is no state.',
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          title: { type: 'string' },
+          goal: { type: 'string' },
+          criteria: { type: 'array', items: { type: 'string' } },
+          status: { type: 'string', enum: ['todo', 'done', 'blocked', 'dropped'] },
+          note: { type: 'string' },
+          branch: { type: 'string' },
+          steps: { type: 'array', items: INDEX_STEP },
+        },
+        required: ['id', 'title', 'goal', 'criteria', 'status', 'note', 'branch', 'steps'],
+        additionalProperties: false,
+      },
+    },
+    runSteps: {
+      type: 'array',
+      description: 'The index\'s `run.steps`. Empty when there is no state.',
+      items: INDEX_STEP,
+    },
     summary: { type: 'string' },
   },
-  required: ['exists', 'backlogJson', 'branch', 'summary'],
+  required: ['exists', 'branch', 'increments', 'runSteps', 'summary'],
   additionalProperties: false,
 }
 
+// What each role hands back to this script: the values it steers on, and
+// nothing else. Everything a role produces for another role goes into the run
+// state instead, which is why none of these schemas carries a plan, a map, a
+// test plan, a case list or a finding.
 const BACKLOG = {
   type: 'object',
   properties: {
     increments: {
       type: 'array',
       description:
-        'Every increment in the backlog you just wrote, finished and dropped ones ' +
-        'included, in the order they should be worked.',
+        'The cut you just wrote with `init`, finished and dropped increments included, in ' +
+        'the order they should be worked. This is the one part of your work the script ' +
+        'steers on, so it comes back here as well as going into the file.',
       items: {
         type: 'object',
         properties: {
@@ -136,13 +217,6 @@ const BACKLOG = {
         additionalProperties: false,
       },
     },
-    codemap: {
-      type: 'string',
-      description:
-        'Every file the issue has to change: path and why, one line per file. The map of ' +
-        'the whole issue, not of one increment, updated on every call against what the ' +
-        'run has shown.',
-    },
     questions: {
       type: 'array',
       items: { type: 'string' },
@@ -152,7 +226,7 @@ const BACKLOG = {
     },
     summary: { type: 'string' },
   },
-  required: ['increments', 'codemap', 'questions', 'summary'],
+  required: ['increments', 'questions', 'summary'],
   additionalProperties: false,
 }
 
@@ -163,39 +237,13 @@ const PLAN = {
       type: 'boolean',
       description: 'False only when this increment has nothing a test could check.',
     },
-    plan: {
-      type: 'string',
-      description:
-        'The implementation plan: what gets built and the decisions behind it, the ' +
-        'rejected ones included.',
-    },
-    moduleMap: {
-      type: 'string',
-      description:
-        'The files the change touches: path, what each holds, the entry points. One line ' +
-        'per file.',
-    },
-    environment: {
-      type: 'string',
-      description:
-        'Every command the test plan asks anyone to run, with its prerequisites. ' +
-        '"There is no linter" is an answer.',
-    },
-    testPlan: {
-      type: 'string',
-      description:
-        'The whole work order for the test-author and the only thing it is given: per case ' +
-        'the criterion it proves, input, state, expected result, the level, the test file by ' +
-        'path, the framework, and the command that runs just it. The conventions of that ' +
-        'file live in its suite doc, not here — say only where that doc is missing or ' +
-        'wrong. Name what you leave untested and why.',
-    },
     checks: {
       type: 'array',
       items: { type: 'string' },
       description:
         'The closed list of commands, verbatim, runnable from the repo root, whose exit ' +
-        'codes judge this increment. Nobody downstream runs anything else.',
+        'codes judge this increment. Nobody downstream runs anything else. The reviewer ' +
+        'reads nothing you wrote, so this list reaches it through here.',
     },
     questions: {
       type: 'array',
@@ -206,39 +254,13 @@ const PLAN = {
     },
     summary: { type: 'string' },
   },
-  required: ['needsTests', 'plan', 'moduleMap', 'environment', 'testPlan', 'checks', 'questions', 'summary'],
+  required: ['needsTests', 'checks', 'questions', 'summary'],
   additionalProperties: false,
 }
 
 const TESTS = {
   type: 'object',
   properties: {
-    cases: {
-      type: 'array',
-      description: 'Every case the test plan named, written or not.',
-      items: {
-        type: 'object',
-        properties: {
-          case: { type: 'string', description: "The planned case in the plan's words, one line." },
-          file: { type: 'string', description: 'Test file by path. Empty when you did not write it.' },
-          testName: { type: 'string', description: "The test's name. Empty when you did not write it." },
-          expected: { type: 'string', description: 'What the case demands, one line.' },
-          got: {
-            type: 'string',
-            description: 'The failure it produced, one line — or why you did not write it.',
-          },
-        },
-        required: ['case', 'file', 'testName', 'expected', 'got'],
-        additionalProperties: false,
-      },
-    },
-    openQuestions: {
-      type: 'array',
-      items: { type: 'string' },
-      description:
-        'Gaps and conflicts in the test plan, one line each. The next research round picks ' +
-        'them up.',
-    },
     questions: {
       type: 'array',
       items: { type: 'string' },
@@ -248,39 +270,13 @@ const TESTS = {
     },
     summary: { type: 'string' },
   },
-  required: ['cases', 'openQuestions', 'questions', 'summary'],
+  required: ['questions', 'summary'],
   additionalProperties: false,
 }
 
 const BUILD = {
   type: 'object',
   properties: {
-    deviations: {
-      type: 'array',
-      items: { type: 'string' },
-      description:
-        'Every place you built something other than what the plan named: what it said, ' +
-        'what you did, why.',
-    },
-    commands: {
-      type: 'array',
-      description: 'Every command you ran from the list that counts, with its exit code.',
-      items: {
-        type: 'object',
-        properties: {
-          command: { type: 'string' },
-          exitCode: { type: 'integer' },
-          note: { type: 'string' },
-        },
-        required: ['command', 'exitCode', 'note'],
-        additionalProperties: false,
-      },
-    },
-    blockers: {
-      type: 'array',
-      items: { type: 'string' },
-      description: 'What stopped you, one line each. Empty when nothing did.',
-    },
     questions: {
       type: 'array',
       items: { type: 'string' },
@@ -290,49 +286,30 @@ const BUILD = {
     },
     summary: { type: 'string' },
   },
-  required: ['deviations', 'commands', 'blockers', 'questions', 'summary'],
+  required: ['questions', 'summary'],
   additionalProperties: false,
 }
 
 const VERDICT = {
   type: 'object',
   properties: {
-    findings: {
-      type: 'array',
+    findingCount: {
+      type: 'integer',
       description:
-        'Every finding that requires a correction. An empty list means the increment is accepted.',
-      items: {
-        type: 'object',
-        properties: {
-          claim: { type: 'string', description: 'What is wrong, one line.' },
-          reproduction: {
-            type: 'string',
-            description: 'These inputs or this state, this wrong result, at this file and line.',
-          },
-          criterion: {
-            type: 'string',
-            description: 'The acceptance criterion it violates, or "none".',
-          },
-          fix: {
-            type: 'string',
-            enum: ['direct', 'needs-plan'],
-            description:
-              'direct: the reproduction already names the file, the line and the right ' +
-              'result, so there is nothing left to plan — a typo, a stale reference, a ' +
-              'wrong number in prose. needs-plan: everything else, and everything you ' +
-              'hesitate over. A round in which every finding is direct skips research and ' +
-              'tests and goes straight to the fix.',
-          },
-        },
-        required: ['claim', 'reproduction', 'criterion', 'fix'],
-        additionalProperties: false,
-      },
+        'How many findings you recorded. 0 means the increment is accepted. The findings ' +
+        'themselves go into the run state; this is the count the script steers on.',
+    },
+    allDirect: {
+      type: 'boolean',
+      description:
+        'True only when findingCount is above 0 and every finding you recorded has fix ' +
+        '"direct". Such a round is corrected by the implementer alone, off your findings.',
     },
     reason: {
       type: 'string',
       description:
         'Why another correction round is needed, in one or two sentences a human reads in ' +
-        'the chat. Empty when findings is empty.',
+        'the chat. Empty when findingCount is 0.',
     },
     questions: {
       type: 'array',
@@ -343,7 +320,7 @@ const VERDICT = {
     },
     summary: { type: 'string' },
   },
-  required: ['findings', 'reason', 'questions', 'summary'],
+  required: ['findingCount', 'allDirect', 'reason', 'questions', 'summary'],
   additionalProperties: false,
 }
 
@@ -369,6 +346,49 @@ const PUSH = {
   additionalProperties: false,
 }
 
+// The fields a role writes into the run state. They are named in its dispatch
+// prompt rather than in a schema, because the schema describes what comes back
+// to this script and these never do: they are what the next role reads.
+const PLAN_PAYLOAD = [
+  ['needsTests', 'False only when this increment has nothing a test could check.'],
+  ['plan', 'The implementation plan: what gets built and the decisions behind it, the rejected ones included.'],
+  ['moduleMap', 'The files the change touches: path, what each holds, the entry points. One line per file.'],
+  ['environment', 'Every command the test plan asks anyone to run, with its prerequisites. "There is no linter" is an answer.'],
+  ['testPlan', 'The whole work order for the test-author and the only thing it is given: per case the criterion it proves, input, state, expected result, the level, the test file by path, the framework, and the command that runs just it. The conventions of that file live in its suite doc, not here — say only where that doc is missing or wrong. Name what you leave untested and why.'],
+  ['checks', 'The closed list of commands, verbatim, runnable from the repo root, whose exit codes judge this increment. Nobody downstream runs anything else.'],
+  ['questions', 'Decisions only the human can make. A non-empty list ends the run.'],
+  ['summary', 'One or two sentences a human reads in the chat.'],
+]
+
+const TESTS_PAYLOAD = [
+  ['cases', 'Every case the test plan named, written or not: an object per case with `case` (the planned case in the plan\'s words), `file`, `testName`, `expected` (what the case demands) and `got` (the failure it produced, or why you did not write it).'],
+  ['openQuestions', 'Gaps and conflicts in the test plan, one line each. The next research round reads them here.'],
+  ['questions', 'Decisions only the human can make. A non-empty list ends the run.'],
+  ['summary', 'One or two sentences a human reads in the chat.'],
+]
+
+const BUILD_PAYLOAD = [
+  ['deviations', 'Every place you built something other than what the plan named: what it said, what you did, why.'],
+  ['commands', 'Every command you ran from the list that counts, as objects with `command`, `exitCode` and `note`.'],
+  ['blockers', 'What stopped you, one line each. Empty when nothing did.'],
+  ['questions', 'Decisions only the human can make. A non-empty list ends the run.'],
+  ['summary', 'One or two sentences a human reads in the chat.'],
+]
+
+const VERDICT_PAYLOAD = [
+  ['findings', 'Every finding that requires a correction: an object per finding with `claim` (what is wrong, one line), `reproduction` (these inputs or this state, this wrong result, at this file and line), `criterion` (the acceptance criterion it violates, or "none") and `fix` — "direct" when the reproduction already names the file, the line and the right result so there is nothing left to plan, "needs-plan" for everything else and everything you hesitate over. An empty list means the increment is accepted.'],
+  ['findingCount', 'How many findings the list holds.'],
+  ['allDirect', 'True only when findingCount is above 0 and every finding has fix "direct".'],
+  ['reason', 'Why another correction round is needed, in one or two sentences. Empty when there are no findings.'],
+  ['questions', 'Decisions only the human can make. A non-empty list ends the run.'],
+  ['summary', 'One or two sentences a human reads in the chat.'],
+]
+
+const CUT_PAYLOAD = [
+  ['questions', 'Decisions only the human can make. A non-empty list ends the run.'],
+  ['summary', 'One or two sentences a human reads in the chat.'],
+]
+
 // The reviewer is handed no part of the plan — that is what keeps it an
 // independent pair of eyes. So the one thing it needs, the list of commands
 // that count for this increment, is handed to it here instead: what to run,
@@ -386,21 +406,62 @@ const noDispatch =
   'do NOT hand over to anyone — the script calls the next agent itself. Record ' +
   'your step return, commit it with your work, then push the commit.'
 
-// Every dispatch carries the one line that turns its return into durable state.
-// The agent writes the file; this script never touches it, because the workflow
-// runtime gives a script `args`, `agent`, `log` and `phase` and no file access
-// at all.
-function recordStep(incrementId, label) {
+// Every dispatch carries the two lines that make its work durable, and they are
+// the same two for every role: write the whole return into the run state, and
+// write the prompt that produced it beside it. The return file is the only copy
+// of the work — this script never sees those fields and no later prompt carries
+// them — so a field left out of it is a field the next role never gets.
+//
+// The prompt goes in verbatim because the run has to be readable afterwards
+// against what each agent was actually asked. It is cheap to keep now: a prompt
+// carries pointers into the state rather than the state's content.
+function recordStep(incrementId, label, payload) {
   return (
-    `Record this step: write your whole return to a JSON file outside the repository, then ` +
-    `run the \`record\` subcommand of the backlog helper your shared brief names, as ` +
-    `\`record ${dir}/backlog.json ${incrementId} ${label} <that file>\`.\n`
+    `Record this step before you return.\n` +
+    `1. Write these fields to a JSON file outside the repository. That file is the only ` +
+    `copy of your work anyone downstream ever reads, so put the substance in it, in full — ` +
+    `no placeholders, no summaries that drop detail:\n` +
+    payload.map(([name, text]) => `   - \`${name}\`: ${text}`).join('\n') +
+    '\n' +
+    `2. Write the prompt you were given, verbatim and whole, to a second file outside the ` +
+    `repository.\n` +
+    `3. Run the \`record\` subcommand of the backlog helper your shared brief names, as ` +
+    `\`record ${dir}/backlog.json ${incrementId} ${label} <the return file> <the prompt file>\`.\n` +
+    `Your structured return is not that file: it carries only the few values the script ` +
+    `steers on, and its schema names them.\n`
+  )
+}
+
+// How a role takes its brief. It names the step and the fields it needs and gets
+// exactly those out of the state — the plan, the test plan, the cases, the
+// findings. No prompt carries that content itself, so these lines are the
+// channel.
+//
+// The fields are named, not the step, wherever a role must not meet what sits
+// beside its brief: the test-author reads the researcher's `testPlan` and the
+// helper never hands it the `plan`. That is the same slicing the script used to
+// do when it pasted content into prompts, moved into the read.
+function readStep(incrementId, label, fields, what) {
+  return (
+    `  - \`steps ${dir}/backlog.json ${incrementId} ${label}` +
+    (fields ? ` --fields ${fields}` : '') +
+    `\` — ${what}\n`
+  )
+}
+
+function readBlock(intro, lines) {
+  return (
+    `${intro} It is in the run state, and these reads are how you get it. Run them before ` +
+    `anything else, with the \`steps\` subcommand of the backlog helper your shared brief ` +
+    `names:\n` +
+    lines.join('') +
+    `Those reads are your whole brief from the earlier steps: take nothing else out of the ` +
+    `run state, and read no other step.\n`
   )
 }
 
 // The question this step asked before the run stopped. The human records the
-// answer under `## Decisions` in issue.md, which is where this sends the agent;
-// the step's own recorded return is never replayed.
+// answer under `## Decisions` in issue.md, which is where this sends the agent.
 function answeredBlock(label) {
   const asked = carriedQuestions.get(label)
   return asked && asked.length
@@ -409,56 +470,13 @@ function answeredBlock(label) {
         '\n' +
         `The answer is under \`## Decisions\` in ${dir}/issue.md. Read it there first, then ` +
         `work this step again; ask again only what it does not answer.\n`
-    : ''
+    : `This step ended the previous run with a question for the human. The answer is under ` +
+      `\`## Decisions\` in ${dir}/issue.md, and your own earlier attempt is in the run state ` +
+      `under this step's label. Read both, then work this step again.\n`
 }
 
-// The slice each role gets, and no more. The researcher is given the planner's
-// codemap and builds its research on it; the test-author is given the test plan
-// and nothing else about the change; the implementer the plan, the map, the
-// environment, the checks and the tests that now exist; the reviewer the checks
-// and the increment's diff range alone — the range is a fact of git, never a
-// part of the plan.
-function casesBlock(tests, directFix) {
-  if (!tests) {
-    return directFix
-      ? 'No test was written for this round — a direct-fix round writes none.\n'
-      : 'No test was written for this round — the plan asked for none.\n'
-  }
-  const cases = Array.isArray(tests.cases) ? tests.cases : []
-  const open = Array.isArray(tests.openQuestions) ? tests.openQuestions : []
-  return (
-    'The tests that already exist, one line per case — case, file, test name, what it ' +
-    'demands, what it produced:\n' +
-    cases
-      .map(
-        (c) =>
-          `  - ${c.case} | ${c.file || '(not written)'} | ${c.testName || '(not written)'} | ` +
-          `demands ${c.expected} | got ${c.got}`,
-      )
-      .join('\n') +
-    '\n' +
-    (open.length
-      ? 'The test-author left these open:\n' + open.map((q) => `  - ${q}`).join('\n') + '\n'
-      : '')
-  )
-}
-
-function findingsBlock(verdict, round) {
-  const findings = (verdict && Array.isArray(verdict.findings) && verdict.findings) || []
-  return (
-    `This is correction loop ${round} of ${MAX_CORRECTIONS} for this increment. The review ` +
-    `found:\n` +
-    findings
-      .map(
-        (f, i) =>
-          `  ${i + 1}. ${f.claim}\n     Reproduction: ${f.reproduction}\n     Criterion: ${f.criterion}`,
-      )
-      .join('\n') +
-    '\n' +
-    `Plan the corrections. Set needsTests true only if a finding needs a new failing test ` +
-    `first, and then write that test's whole work order into testPlan — nothing from an ` +
-    `earlier round carries over, the list of commands that count included.\n`
-  )
+function questionBlock(label) {
+  return carriedQuestions.has(label) ? answeredBlock(label) : ''
 }
 
 // A correction round whose findings are all `direct` is worked without a plan.
@@ -469,40 +487,11 @@ function findingsBlock(verdict, round) {
 // the next round judges, which is what keeps this cheap rather than unsafe, and
 // it is also why the reviewer never makes the fix itself.
 //
-// A finding with no `fix` at all counts as `needs-plan`: the fast path is
-// something a verdict opts into, never something a missing field falls into.
+// A verdict that does not say `allDirect` counts as needing a plan: the fast
+// path is something a verdict opts into, never something a missing field falls
+// into.
 function isDirectFixRound(verdict) {
-  const findings = (verdict && Array.isArray(verdict.findings) && verdict.findings) || []
-  return findings.length > 0 && findings.every((f) => f && f.fix === 'direct')
-}
-
-function directFixBlock(verdict, round) {
-  const findings = (verdict && Array.isArray(verdict.findings) && verdict.findings) || []
-  return (
-    `This is correction loop ${round} of ${MAX_CORRECTIONS} for this increment, and it is a ` +
-    `direct-fix round: every finding names the file, the line and the right result, so ` +
-    `nobody planned this round and nobody wrote a test for it. Your brief is the findings ` +
-    `themselves:\n` +
-    findings
-      .map(
-        (f, i) =>
-          `  ${i + 1}. ${f.claim}\n     Reproduction: ${f.reproduction}\n     Criterion: ${f.criterion}`,
-      )
-      .join('\n') +
-    '\n' +
-    `Make exactly these corrections and nothing else. If one of them turns out to need a ` +
-    `decision — anything beyond the wording, the reference or the value the reproduction ` +
-    `names — do not build it: report it as a blocker and leave the rest of the list done.\n`
-  )
-}
-
-function openQuestionsBlock(tests) {
-  const open = (tests && Array.isArray(tests.openQuestions) && tests.openQuestions) || []
-  return open.length
-    ? `The test-author left these open in the round before, and they are yours to settle:\n` +
-        open.map((q) => `  - ${q}`).join('\n') +
-        '\n'
-    : ''
+  return !!(verdict && verdict.allDirect && (verdict.findingCount || 0) > 0)
 }
 
 // What every agent working an increment is told about the shape of the run. The
@@ -529,42 +518,40 @@ function scope(task, all, n) {
   )
 }
 
-// Every run opens with this one cheap dispatch. It is the only read of the run
-// state the script makes, and it is never recorded — it is the read that opens
-// a run, not a step of one.
+// Every run opens with this one cheap dispatch, and it is the only read of the
+// run state this script makes. It asks for the state's index and never for the
+// state: the index carries the cut, the recorded labels and the small steering
+// values, so what this agent has to emit stays the same size however much the
+// file has accumulated. It is not a step of the run — it runs before there is a
+// file to record into — so it records nothing.
 const state = await agent(
   `Issue directory: ${dir}\n` +
-    `Read ${dir}/backlog.json and return it. Run ` +
-    `\`node "<the agent-brief skill's assets directory>/backlog.mjs" read ${dir}/backlog.json\` ` +
-    `if you prefer; either way return its exact content in backlogJson and exists true. ` +
+    `Read the index of ${dir}/backlog.json and return it. Run ` +
+    `\`node "<the agent-brief skill's assets directory>/backlog.mjs" index ${dir}/backlog.json\`. ` +
     `If your context names no such skill base directory, find the helper with ` +
     `\`find "$HOME/.claude/plugins" -path '*agent-brief/assets/backlog.mjs' | head -1\`.\n` +
-    `If the file does not exist, return exists false and backlogJson "".\n` +
+    `Return exists true, the index's \`increments\` in increments and its \`run.steps\` in ` +
+    `runSteps. Each step of either carries the index's \`label\` and \`asked\`; fill ` +
+    `questions, needsTests, checks, findingCount, allDirect and reason from that step's ` +
+    `\`return\` object where the index carried them, and leave them empty otherwise.\n` +
+    `Do NOT read the file itself and do NOT return its content: the index is what this ` +
+    `dispatch is for.\n` +
+    `If the file does not exist, return exists false with both lists empty.\n` +
     `Return the branch the checkout is on, from \`git branch --show-current\`, in branch.\n` +
     `The checkout's copy of the state can trail the copy an in-flight increment carries: ` +
-    `where an increment in the file has status "todo" and a non-empty \`branch\` field, run ` +
+    `where an increment in the index has status "todo" and a non-empty \`branch\` field, run ` +
     `\`git fetch origin <that branch>\` and then ` +
     `\`git merge-base --is-ancestor HEAD origin/<that branch>\`. Exit 0 means that branch ` +
-    `continues this checkout, so return the output of ` +
-    `\`git show origin/<that branch>:${dir}/backlog.json\` in backlogJson instead. A failed ` +
-    `fetch, or any other exit, means the branch is an abandoned attempt: keep the ` +
-    `checkout's copy.\n` +
+    `continues this checkout, so write ` +
+    `\`git show origin/<that branch>:${dir}/backlog.json\` to a file outside the repository, ` +
+    `run the helper's \`index\` on that file, and return that index instead. A failed fetch, ` +
+    `or any other exit, means the branch is an abandoned attempt: keep the checkout's copy.\n` +
     `Read nothing else, change nothing, run no git command beyond the read-only ones named ` +
     `here, and do not dispatch any subagent.`,
   { agentType: 'general-purpose', phase: 'Load state', label: 'load-state', schema: STATE },
 )
 
-// A state file that does not parse is treated as no state: the run starts over
-// rather than dying on a half-written file no one can fix from here.
-let saved = null
-if (state && state.exists && state.backlogJson) {
-  try {
-    saved = JSON.parse(state.backlogJson)
-  } catch (err) {
-    log(`backlog.json did not parse (${err.message}) — starting this run from no state.`)
-    saved = null
-  }
-}
+const savedIndex = state && state.exists ? state : null
 
 // The branch the run publishes: whatever the checkout was on when it started.
 // Every increment is worked on its own branch off it and merged back into it
@@ -581,17 +568,21 @@ if (!issueBranch) {
 // again with the question in front of it. Replaying it instead would re-raise
 // the same question and end the resumed run at Publish without dispatching
 // anyone — the restart the rulebook promises would make no progress at all.
+//
+// What `recorded` holds is the steering projection of a step, not its content.
+// That is all this script ever had of a step return, live or resumed, so a
+// skipped step hands the same values on as a dispatched one; the content the
+// next role needs is in the file, and the next role reads it there either way.
 const recorded = new Map()
 const carriedQuestions = new Map()
-if (saved) {
+if (savedIndex) {
   const load = (s) => {
-    const asked =
-      s && s.return && Array.isArray(s.return.questions) ? s.return.questions.filter(Boolean) : []
-    if (asked.length) carriedQuestions.set(s.label, asked)
-    else recorded.set(s.label, s.return)
+    const asked = Array.isArray(s.questions) ? s.questions.filter(Boolean) : []
+    if (s.asked) carriedQuestions.set(s.label, asked)
+    else recorded.set(s.label, s)
   }
-  for (const s of (saved.run && saved.run.steps) || []) load(s)
-  for (const increment of saved.increments || []) {
+  for (const s of savedIndex.runSteps || []) load(s)
+  for (const increment of savedIndex.increments || []) {
     for (const s of increment.steps || []) load(s)
   }
 }
@@ -604,8 +595,8 @@ if (carriedQuestions.size) {
 // resumed run continues on the branch the dead session recorded; kept current
 // in-session so a fresh attempt gets a fresh name.
 const branches = new Map()
-if (saved) {
-  for (const t of saved.increments || []) {
+if (savedIndex) {
+  for (const t of savedIndex.increments || []) {
     if (typeof t.branch === 'string' && t.branch) branches.set(t.id, t.branch)
   }
 }
@@ -660,10 +651,10 @@ function branchBlock(taskId, incrementBranch, create) {
   )
 }
 
-// The whole of resume. A recorded step returns its stored payload and is never
-// dispatched again; the step in flight when a session died was never recorded,
-// so it repeats. Labels are keyed on the increment id, never on an ordinal a
-// re-cut would move.
+// The whole of resume. A recorded step returns its stored steering values and is
+// never dispatched again; the step in flight when a session died was never
+// recorded, so it repeats. Labels are keyed on the increment id, never on an
+// ordinal a re-cut would move.
 async function step(label, phaseName, run) {
   if (recorded.has(label)) {
     log(`${label}: recorded already, skipping`)
@@ -707,19 +698,19 @@ const cutWasReplayed = recorded.has('decompose')
 const backlog = await step('decompose', 'Decompose', () =>
   agent(
     `Issue directory: ${dir}\n` +
-      answeredBlock('decompose') +
+      questionBlock('decompose') +
       `Open the run state for ${dir}/issue.md: map the issue against the codebase, then ` +
       `decide the cut and write ${dir}/backlog.json with the \`init\` subcommand of the ` +
       `backlog helper your shared brief names, with workflow "agile-loop".\n` +
       `The codemap comes first: every file the issue has to change, path and why, one ` +
-      `line per file, in the payload's \`codemap\` field and in your return. The ` +
-      `researcher builds its research on it.\n` +
+      `line per file, in the payload's \`codemap\` field. Every researcher of this run reads ` +
+      `it back out of the state, so it exists nowhere else and no prompt carries it.\n` +
       `Whether and how to cut is yours: a backlog of one increment is the right cut for ` +
       `an issue that is one change. This run works at most ${maxIncrements} increments, ` +
       `so a cut that needs more than that is a cut that is too fine.\n` +
-      `Read ${dir}/backlog.json with the helper's \`read\` subcommand first if it is already ` +
-      `there.\n` +
-      recordStep('-', 'decompose') +
+      `If the state is already there, read its skeleton first with the helper's \`index\` ` +
+      `subcommand.\n` +
+      recordStep('-', 'decompose', CUT_PAYLOAD) +
       noDispatch,
     { agentType: 'uroboros:planner', phase: 'Decompose', label: 'decompose', schema: BACKLOG },
   ),
@@ -727,14 +718,16 @@ const backlog = await step('decompose', 'Decompose', () =>
 asksTheHuman('decompose', backlog)
 
 // Which of the two lists of increments the run works. A replayed cut is the
-// older of them: the decompose return is what the planner said when it opened
-// the run, and a status a later close set lives in the file, not in that
-// return. A Decompose dispatched again this session is the opposite case — the
-// planner has just rewritten the file, so its return is the newer of the two
-// and the snapshot this run read at startup is the stale one. Either side
+// older of them: what `recorded` holds for it is the steering projection of the
+// opening cut, and a status a later close set lives in the index this run read
+// at startup. A Decompose dispatched again this session is the opposite case —
+// the planner has just rewritten the file, so its return is the newer of the
+// two and the snapshot this run read at startup is the stale one. Either side
 // falls back to the other when it is empty.
 const savedIncrements =
-  saved && Array.isArray(saved.increments) && saved.increments.length ? saved.increments : null
+  savedIndex && Array.isArray(savedIndex.increments) && savedIndex.increments.length
+    ? savedIndex.increments
+    : null
 const cutIncrements =
   backlog && Array.isArray(backlog.increments) && backlog.increments.length
     ? backlog.increments
@@ -742,23 +735,16 @@ const cutIncrements =
 let increments =
   (cutWasReplayed ? savedIncrements || cutIncrements : cutIncrements || savedIncrements) || []
 
-// The codemap follows the same freshness rule as the cut it was written with:
-// a replayed Decompose means the file's copy is the current one, a Decompose
-// dispatched this session means its return is.
-const savedCodemap = saved && typeof saved.codemap === 'string' && saved.codemap ? saved.codemap : null
-const cutCodemap =
-  backlog && typeof backlog.codemap === 'string' && backlog.codemap ? backlog.codemap : null
-let codemap = (cutWasReplayed ? savedCodemap || cutCodemap : cutCodemap || savedCodemap) || ''
-
-// The planner said what files the issue changes; the researcher decides how.
-// Handed to every research dispatch, so no researcher rebuilds the map from
-// the filesystem.
+// The planner wrote the codemap into the state and nobody carries it in a
+// prompt. Every researcher reads it there, which is what keeps the largest
+// thing the planner produces from being emitted a second time.
 function codemapBlock() {
-  return codemap
-    ? `The planner's codemap — every file the issue has to change, and why:\n${codemap}\n` +
-        `Build your research on it: verify it where your increment touches, and where it ` +
-        `is wrong or incomplete, say so in your moduleMap.\n`
-    : ''
+  return (
+    `The planner's codemap — every file the issue has to change, and why — is in the run ` +
+    `state. Read it with the backlog helper's \`codemap\` subcommand, as ` +
+    `\`codemap ${dir}/backlog.json\`, and build your research on it: verify it where your ` +
+    `increment touches, and where it is wrong or incomplete, say so in your moduleMap.\n`
+  )
 }
 
 log(`Backlog: ${increments.map((t, i) => `${i + 1}. ${t.title}`).join(' | ')}`)
@@ -775,8 +761,8 @@ let stopped = ''
 // the file already holds closed was worked by an earlier session: it keeps its
 // ordinal and its line in the result — `done` is the accepted case, `blocked`
 // the not-accepted one, and a dropped increment was never worked and counts
-// for nothing. The findings behind a restored `blocked` were shed when it
-// closed, so its note is the reason the state still carries.
+// for nothing. The findings behind a restored `blocked` are in the attempt the
+// close archived, so its note is the reason this result carries.
 for (const t of increments) {
   if (t.status === 'done' || t.status === 'blocked') {
     worked.push({
@@ -829,10 +815,13 @@ if (!blockedOnHuman.length) {
     }
 
     let plan = null
-    let tests = null
+    let planLabel = ''
+    let testsLabel = ''
+    let previousTestsLabel = ''
     let verdict = null
+    let verdictLabel = ''
     for (let round = 0; round <= MAX_CORRECTIONS; round++) {
-      const previousTests = tests
+      previousTestsLabel = testsLabel
       // Decided before anything is dispatched, and only from the verdict of the
       // round before: round 0 is never a direct-fix round, so `plan` is always
       // the one an earlier round produced by the time this is true.
@@ -843,49 +832,89 @@ if (!blockedOnHuman.length) {
           `Increment ${n} round ${round}: every finding is a direct fix — research and tests ` +
             `skipped, checks carried over from round ${round - 1}.`,
         )
-        tests = null
+        testsLabel = ''
       } else {
         const researchLabel = `research:${task.id}.${round}`
+        // What the round before left for this one, all of it in the state: the
+        // review's findings, and the questions the test-author left open.
         plan = await step(researchLabel, 'Research', () =>
           agent(
             `Issue directory: ${dir}\n` +
-              answeredBlock(researchLabel) +
+              questionBlock(researchLabel) +
               branchBlock(task.id, incrementBranch, freshBranch && round === 0) +
               scope(task, increments, n) +
               codemapBlock() +
-              (round === 0 ? '' : findingsBlock(verdict, round)) +
-              openQuestionsBlock(previousTests) +
-              recordStep(task.id, researchLabel) +
+              (round === 0
+                ? ''
+                : readBlock(
+                    `This is correction loop ${round} of ${MAX_CORRECTIONS} for this increment, ` +
+                      `and what the round before produced is your work order.`,
+                    [
+                      readStep(
+                        task.id,
+                        verdictLabel,
+                        'findings',
+                        `the review's findings: what is wrong, how to reproduce each and which ` +
+                          `criterion it violates.`,
+                      ),
+                      previousTestsLabel
+                        ? readStep(
+                            task.id,
+                            previousTestsLabel,
+                            'openQuestions',
+                            `what the test-author left open, and it is yours to settle.`,
+                          )
+                        : '',
+                    ].filter(Boolean),
+                  ) +
+                  `Plan the corrections against those findings. Set needsTests true only if a ` +
+                  `finding needs a new failing test first, and then write that test's whole ` +
+                  `work order into testPlan — nothing from an earlier round carries over, the ` +
+                  `list of commands that count included.\n`) +
+              recordStep(task.id, researchLabel, PLAN_PAYLOAD) +
               noDispatch,
             { agentType: 'uroboros:researcher', phase: 'Research', label: researchLabel, schema: PLAN },
           ),
         )
+        planLabel = researchLabel
         if (asksTheHuman(researchLabel, plan)) break
         log(
           `Increment ${n} round ${round}: tests needed: ${plan.needsTests}; ` +
             `checks: ${plan.checks && plan.checks.length ? plan.checks.join(', ') : 'none'}`,
         )
 
-        tests = null
+        testsLabel = ''
         if (plan.needsTests) {
-          const testsLabel = `tests:${task.id}.${round}`
-          tests = await step(testsLabel, 'Tests', () =>
+          const label = `tests:${task.id}.${round}`
+          const tests = await step(label, 'Tests', () =>
             agent(
               `Issue directory: ${dir}\n` +
-                answeredBlock(testsLabel) +
+                questionBlock(label) +
                 branchBlock(task.id, incrementBranch, false) +
                 scope(task, increments, n) +
-                `Your work order is the test plan below, and it is the whole of what you are ` +
-                `given about the change:\n\n${plan.testPlan}\n\n` +
+                readBlock(
+                  `Your work order is the researcher's test plan, and it is the whole of what ` +
+                    `you are given about the change.`,
+                  [
+                    readStep(
+                      task.id,
+                      planLabel,
+                      'testPlan',
+                      `the test plan: per case the criterion it proves, the input, the state, ` +
+                        `the expected result, the file and the command that runs just it.`,
+                    ),
+                  ],
+                ) +
                 (round === 0
                   ? ''
                   : `The reviewer's reproduction spec is the criterion for this round.\n`) +
-                recordStep(task.id, testsLabel) +
+                recordStep(task.id, label, TESTS_PAYLOAD) +
                 noDispatch,
-              { agentType: 'uroboros:test-author', phase: 'Tests', label: testsLabel, schema: TESTS },
+              { agentType: 'uroboros:test-author', phase: 'Tests', label, schema: TESTS },
             ),
           )
-          if (asksTheHuman(testsLabel, tests)) break
+          testsLabel = label
+          if (asksTheHuman(label, tests)) break
         }
       }
 
@@ -893,20 +922,58 @@ if (!blockedOnHuman.length) {
       const build = await step(buildLabel, 'Implement', () =>
         agent(
           `Issue directory: ${dir}\n` +
-            answeredBlock(buildLabel) +
+            questionBlock(buildLabel) +
             branchBlock(task.id, incrementBranch, false) +
             (directFix
-              ? directFixBlock(verdict, round)
-              : `Your brief is the plan below.\n\n` +
-                `## Implementation plan\n${plan.plan}\n\n` +
-                `## Module map\n${plan.moduleMap}\n\n` +
-                `## Environment\n${plan.environment}\n\n`) +
-            casesBlock(tests, directFix) +
+              ? readBlock(
+                  `This is correction loop ${round} of ${MAX_CORRECTIONS} for this increment, ` +
+                    `and it is a direct-fix round: every finding names the file, the line and ` +
+                    `the right result, so nobody planned this round and nobody wrote a test ` +
+                    `for it. The findings themselves are your brief.`,
+                  [
+                    readStep(
+                      task.id,
+                      verdictLabel,
+                      'findings',
+                      `each with the claim, the reproduction that names the file, the line and ` +
+                        `the right result, and the criterion it violates.`,
+                    ),
+                  ],
+                ) +
+                `Make exactly those corrections and nothing else. If one of them turns out to ` +
+                `need a decision — anything beyond the wording, the reference or the value the ` +
+                `reproduction names — do not build it: report it as a blocker and leave the ` +
+                `rest of the list done.\n`
+              : readBlock(
+                  `Your brief is the plan the researcher wrote` +
+                    (testsLabel ? ` and the tests that already exist.` : `.`),
+                  [
+                    readStep(
+                      task.id,
+                      planLabel,
+                      'plan,moduleMap,environment',
+                      `what gets built and why, the files it touches, and the commands the ` +
+                        `plan asks anyone to run.`,
+                    ),
+                    testsLabel
+                      ? readStep(
+                          task.id,
+                          testsLabel,
+                          'cases',
+                          `the cases the test-author wrote, which test each became and the ` +
+                            `failure each produced. You may not edit any of them.`,
+                        )
+                      : '',
+                  ].filter(Boolean),
+                ) +
+                (testsLabel
+                  ? ''
+                  : `No test was written for this round — the plan asked for none.\n`)) +
             // No researcher ran this round, so the list of commands that counts
             // is the one the last round closed. It is the same code being
             // judged.
             checkList(plan.checks) +
-            recordStep(task.id, buildLabel) +
+            recordStep(task.id, buildLabel, BUILD_PAYLOAD) +
             noDispatch,
           Object.assign(
             { agentType: 'uroboros:implementer', phase: 'Implement', label: buildLabel, schema: BUILD },
@@ -922,7 +989,7 @@ if (!blockedOnHuman.length) {
       verdict = await step(reviewLabel, 'Review', () =>
         agent(
           `Issue directory: ${dir}\n` +
-            answeredBlock(reviewLabel) +
+            questionBlock(reviewLabel) +
             branchBlock(task.id, incrementBranch, false) +
             `Review round ${round} of increment ${n}. ` +
             // The increment's diff is a fact of git — its branch against the
@@ -936,14 +1003,20 @@ if (!blockedOnHuman.length) {
               : `Check the whole diff against main.\n`) +
             scope(task, increments, n) +
             checkList(plan.checks) +
-            recordStep(task.id, reviewLabel) +
+            // The one role that reads nothing. It records into the state and
+            // never opens it, because that state holds the plan it is the check
+            // on.
+            `Read nothing out of ${dir}/backlog.json — not with the helper, not by hand. It ` +
+            `holds every other agent's work, and this prompt is your whole brief.\n` +
+            recordStep(task.id, reviewLabel, VERDICT_PAYLOAD) +
             noDispatch,
           { agentType: 'uroboros:reviewer', phase: 'Review', label: reviewLabel, schema: VERDICT },
         ),
       )
+      verdictLabel = reviewLabel
       if (asksTheHuman(reviewLabel, verdict)) break
 
-      const found = (verdict.findings || []).length
+      const found = verdict.findingCount || 0
       const reason = verdict.reason || verdict.summary
       if (found === 0) {
         log(`Increment ${n} round ${round}: accepted — ${verdict.summary}`)
@@ -958,14 +1031,15 @@ if (!blockedOnHuman.length) {
 
     if (blockedOnHuman.length) break
 
-    const accepted = (verdict.findings || []).length === 0
+    const findingCount = (verdict && verdict.findingCount) || 0
+    const accepted = findingCount === 0
     worked.push({
       n,
       id: task.id,
       title: task.title,
       accepted,
-      findings: (verdict.findings || []).length,
-      reason: verdict.reason || verdict.summary,
+      findings: findingCount,
+      reason: (verdict && (verdict.reason || verdict.summary)) || '',
     })
 
     // Runs whether the review accepted or not: the planner owns the answer to a
@@ -975,13 +1049,12 @@ if (!blockedOnHuman.length) {
     const recut = await step(replanLabel, 'Replan', () =>
       agent(
         `Issue directory: ${dir}\n` +
-          answeredBlock(replanLabel) +
+          questionBlock(replanLabel) +
           `Increment ${task.id} — ${task.title} — has been worked. The review ` +
           (accepted
             ? `accepted it.\n`
             : `did not accept it after ${MAX_CORRECTIONS} correction rounds, with ` +
-              `${(verdict.findings || []).length} findings open: ` +
-              `${verdict.reason || verdict.summary}\n`) +
+              `${findingCount} findings open: ${verdict.reason || verdict.summary}\n`) +
           (incrementBranch
             ? accepted
               ? `Land it first: check out \`${issueBranch}\`, run ` +
@@ -992,14 +1065,19 @@ if (!blockedOnHuman.length) {
                 `\`${incrementBranch}\`. Check out \`${issueBranch}\` first, so the state you ` +
                 `write lands there, and name that unmerged branch in the note you close with.\n`
             : '') +
-          `Read ${dir}/backlog.json with the backlog helper's \`read\` subcommand. Close that ` +
-          `increment with the \`close\` subcommand and the status the verdict earns — closing ` +
-          `sheds its recorded step returns — then re-cut every increment still open against ` +
-          `what this one showed and write the new cut with the \`init\` subcommand. Update ` +
-          `the codemap against what this increment showed and hand the whole of it back, in ` +
-          `the payload's \`codemap\` field and in your return. ${n} of at ` +
-          `most ${maxIncrements} increments are spent.\n` +
-          recordStep('-', replanLabel) +
+          `What this increment turned up is what you re-cut against, and it is in the run ` +
+          `state. Read it with the backlog helper your shared brief names:\n` +
+          `  - \`steps ${dir}/backlog.json ${task.id}\` — every step this increment recorded, ` +
+          `whole. The researcher says there where the codemap was wrong.\n` +
+          `  - \`index ${dir}/backlog.json\` — the rest of the cut, with no step content in it.\n` +
+          `  - \`codemap ${dir}/backlog.json\` — the map as it stands.\n` +
+          `Close that increment with the \`close\` subcommand and the status the verdict ` +
+          `earns — closing ends the attempt and keeps everything it recorded — then re-cut ` +
+          `every increment still open against what this one showed and write the new cut with ` +
+          `the \`init\` subcommand. Update the codemap against what this increment showed and ` +
+          `write the whole of it into the payload's \`codemap\` field. ${n} of at most ` +
+          `${maxIncrements} increments are spent.\n` +
+          recordStep('-', replanLabel, CUT_PAYLOAD) +
           noDispatch,
         { agentType: 'uroboros:planner', phase: 'Replan', label: replanLabel, schema: BACKLOG },
       ),
@@ -1011,15 +1089,12 @@ if (!blockedOnHuman.length) {
     if (recut && Array.isArray(recut.increments) && recut.increments.length) {
       increments = recut.increments
     }
-    if (recut && typeof recut.codemap === 'string' && recut.codemap) {
-      codemap = recut.codemap
-    }
     // The planner may hand an increment already worked back as `todo` — the
-    // second chance MAX_ATTEMPTS exists for. Closing it emptied its steps in
-    // the run state, so the in-session map forgets them too: left there, every
-    // label of the next attempt would be found recorded, the attempt would
-    // dispatch nobody and would re-read this iteration's verdict and this
-    // iteration's re-cut as if they were the new ones.
+    // second chance MAX_ATTEMPTS exists for. Closing it ended its attempt in
+    // the run state, so the in-session map forgets its steps too: left there,
+    // every label of the next attempt would be found recorded, the attempt
+    // would dispatch nobody and would re-read this iteration's verdict and
+    // this iteration's re-cut as if they were the new ones.
     for (const t of increments) {
       if (t.status === 'todo' && attempts.has(t.id)) forgetSteps(t.id)
     }
@@ -1051,7 +1126,9 @@ if (blockedOnHuman.length) {
 // Every agent above commits and pushes its own step; this one makes sure the
 // branch has a pull request, which is the human's gate. It is dispatched every
 // time, recorded or not: a finished run re-asserting an open pull request costs
-// one cheap step, and a run whose push failed silently costs the work.
+// one cheap step, and a run whose push failed silently costs the work. Like the
+// state loader it is not a step of the run and records nothing — it is the one
+// dispatch that must leave the working tree exactly as it found it.
 phase('Publish')
 const push = await agent(
   `Issue directory: ${dir}\n` +
@@ -1070,13 +1147,15 @@ const push = await agent(
     'load them with ToolSearch first; there is no `gh` CLI. If an OPEN one exists, ' +
     'leave it alone: pushing already updated it. Report its URL.\n' +
     '3. If none is open, open one against the default branch. Title and body come ' +
-    `from the issue directory's \`issue.md\` and \`backlog.json\`: what was asked for, ` +
+    `from the issue directory's \`issue.md\` and from the run state's skeleton, which you ` +
+    `read with the backlog helper's \`index\` subcommand — never the state file whole: ` +
+    'what was asked for, ' +
     'which increments were delivered, which are still open or blocked and why, what the ' +
     'review said, and every open finding or recorded observation the human should see ' +
     'before merging. This run worked the issue in increments, so say plainly in the body ' +
     'when the backlog did NOT empty and name what is left, and when a question for the ' +
     'human ended the run. Name the branch of every blocked increment — its `branch` ' +
-    'field in `backlog.json` — so its unmerged work is findable without being in the ' +
+    'field in the index — so its unmerged work is findable without being in the ' +
     'diff. End the body with a blank line, `---`, and ' +
     '`🤖 Generated with [Claude Code](https://claude.com/claude-code)`.\n' +
     '4. If the only pull request for this branch is already MERGED, do NOT open a ' +
