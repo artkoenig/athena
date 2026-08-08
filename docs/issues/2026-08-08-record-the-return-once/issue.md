@@ -95,57 +95,61 @@ Taken with the human on 2026-08-08, before the criteria below were written.
       content into `backlog.json` and does not also emit it as its structured
       return. Report, per role, the size of what was written against the size
       of what was returned, measured on a real run.
-- [ ] A role's structured return carries only what the workflow script needs in
+      *Built and enforced by the schemas; the measurement is still owed — see
+      Status.*
+- [x] A role's structured return carries only what the workflow script needs in
       order to steer: which increment and branch the step worked, whether the
       step succeeded, the questions that block it, and the closed list of
       commands the reviewer must run. State per role what its schema keeps and
       what moved into the file.
-- [ ] A role's structured return is a projection of what it wrote into
+- [x] A role's structured return is a projection of what it wrote into
       `backlog.json`, and every field of it is recoverable from the file by an
       addressed read. A step that wrote its entry and then died still hands the
       resumed run everything the script needs to dispatch the next role. Those
       few steering fields are the one content the file and the return share,
       and that is accepted.
-- [ ] A role writes its entry into `backlog.json` before it returns, so a step
+- [x] A role writes its entry into `backlog.json` before it returns, so a step
       that ends between the two leaves the file authoritative rather than
       stale.
-- [ ] A dispatch prompt names the step labels the agent must read out of
+- [x] A dispatch prompt names the step labels the agent must read out of
       `backlog.json` and carries none of their content. The reviewer's prompt
       is the single exception, and it stays a full brief.
-- [ ] The reviewer neither reads `backlog.json` nor receives any other agent's
+- [x] The reviewer neither reads `backlog.json` nor receives any other agent's
       output. It records its findings into the state it cannot read.
-- [ ] Every read of `backlog.json` names what it needs, and the helper returns
+- [x] Every read of `backlog.json` names what it needs, and the helper returns
       only that. No agent in a run reads the whole file.
-- [ ] No agent emits the content of `backlog.json` as its return. The step that
+- [x] No agent emits the content of `backlog.json` as its return. The step that
       opens a run returns an index — the issue branch of the run, which step
       labels are recorded, which increments exist, which branch each is on, and
       which steps ended in questions — and not the file.
-- [ ] What the planner reads before closing an increment is bounded by that one
+- [x] What the planner reads before closing an increment is bounded by that one
       increment. Its size does not grow with the number of increments already
       closed.
-- [ ] `backlog.json` keeps everything ever written to it. Closing an increment
+- [x] `backlog.json` keeps everything ever written to it. Closing an increment
       no longer sheds its step returns.
-- [ ] A step written a second time keeps its earlier entry as history, and the
+- [x] A step written a second time keeps its earlier entry as history, and the
       readers get the current one. Resume and the correction rounds keep
       working on the current entry.
-- [ ] Every dispatch prompt is recorded into `backlog.json` verbatim, beside
-      the step it dispatched, including the reviewer's. The step that opens a
-      run is the exception, because it runs before the file exists.
-- [ ] A run whose session died resumes from `backlog.json` alone and reaches
+- [x] Every dispatch prompt is recorded into `backlog.json` verbatim, beside
+      the step it dispatched, including the reviewer's. The two dispatches that
+      are not steps of the run are the exceptions: the one that opens a run,
+      because it runs before the file exists, and the one that publishes,
+      because it must leave the working tree exactly as it found it.
+- [x] A run whose session died resumes from `backlog.json` alone and reaches
       the same next dispatch the live run would have reached. The existing
       driver cases for resume keep passing.
-- [ ] The recording and reading rules read the same way in all the places that
+- [x] The recording and reading rules read the same way in all the places that
       state them: `skills/agent-brief/SKILL.md`, the dispatch prompts in
       `workflows/agile-loop.js`, and every page under `agents/`. No page is
       left describing the two-emission flow or the shedding close.
-- [ ] `backlog.mjs` stays the only writer of `backlog.json`, and `record` still
+- [x] `backlog.mjs` stays the only writer of `backlog.json`, and `record` still
       prints one confirmation line and no part of the file, so an agent
       forbidden to read the state can still write into it.
-- [ ] `test-repo.sh` covers the new flow: that a dispatch prompt carries no
+- [x] `test-repo.sh` covers the new flow: that a dispatch prompt carries no
       step content, that a role's brief reaches it through an addressed read,
       that a closed increment keeps its returns, and that a resume still finds
       what it needs.
-- [ ] `./test.sh` is green.
+- [x] `./test.sh` is green.
 
 ## Out of scope
 
@@ -160,6 +164,33 @@ Taken with the human on 2026-08-08, before the criteria below were written.
 - **The planner's payload envelope.** `init` takes `issue`/`workflow` where the
   return has `questions`/`summary`; normalizing that asymmetry is not a goal of
   its own, though the calling convention this issue changes may touch it.
+
+## Status
+
+Worked directly on 2026-08-08, at the human's instruction, rather than through
+the loop. `./test.sh` is green: 50 cases in `test-repo.sh` including all sixteen
+driver modes, and 40 in the recorder suite.
+
+Two things the criteria ask for that the work does not yet have:
+
+- **The measurement is owed.** Every content field moved out of the return
+  schemas, so the second emission is gone by construction — the researcher's
+  return went from eight fields to four, and `plan`, `moduleMap`, `environment`
+  and `testPlan` now exist only in the file. But the numbers in "What it costs"
+  came from a real run, and the matching numbers for the new flow can only come
+  from another one. Take them from the next run this repository does.
+- **Write-before-return is prose, not a mechanism.** The order lives in the
+  dispatch prompt and in the shared brief. Nothing in the harness can enforce
+  it: the agent chooses when it calls the recorder and when it returns, and no
+  code of ours sits between the two.
+
+One thing the work added that the criteria did not name: `steps --fields`. The
+old flow kept a role's independence by slicing content into its prompt — the
+test-author got the `testPlan` and never the `plan` beside it. Moving the brief
+into a read would have handed it the whole step, so the field selector moves
+that same slicing into the helper. It is what `test-repo.sh` w4 and w5 now
+assert, and the guard runs in every driver mode: no dispatch prompt but the
+closing planner's may read a step without naming its fields.
 
 ## Notes on provenance
 

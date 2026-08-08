@@ -4,7 +4,9 @@ Tests for `backlog.mjs`, the CLI that is the only writer of a run's `backlog.jso
 
 ## What the suite covers
 
-`backlog.test.mjs` exercises all five CLI commands — `init`, `record`, `branch`, `close`, `read` — end to end: the init merge rules (kept increments keep steps and their branch, dropped ones vanish, `run.steps` and the codemap survive a re-cut, a payload cannot set a branch), record's replace-on-same-label and `-` routing into `run.steps`, branch's record-and-replace as the one writer of an increment's branch, close's status validation and shedding of step returns while codemap and branch stand, read's byte-exact output, exit codes with untouched files on failure, and the atomic `.tmp`-rename write.
+`backlog.test.mjs` exercises all eight CLI commands — `init`, `record`, `branch`, `close`, `index`, `steps`, `codemap`, `read` — end to end: the init merge rules (kept increments keep steps, their branch and their archived attempts, dropped ones vanish, `run.steps` and the codemap survive a re-cut, a payload cannot set a branch), record's supersede-with-history on a repeated label, its `-` routing into `run.steps` and its verbatim storage of the dispatch prompt, branch's record-and-replace as the one writer of an increment's branch, close's status validation and its archiving of the attempt (the increment's steps plus the run-level steps of that increment, with the run's own steps and the codemap left standing), the index's steering projection (small values survive, content and the codemap never appear, `asked` is computed so a long question still marks the step), `steps` with and without `--fields`, `codemap`'s isolated output, read's byte-exact output, exit codes with untouched files on failure, and the atomic `.tmp`-rename write.
+
+The line the whole suite defends is that nothing is deleted and nothing leaks: a close and a re-record keep what they replace, and a read returns only what its caller named.
 
 ## Helpers and fixtures
 
@@ -17,10 +19,13 @@ All defined at the top of `backlog.test.mjs`; every case reuses them.
 - `runFails(args)` — runs the CLI expecting non-zero exit, returns the error (`status`, `stdout`, `stderr`); an unexpected success is itself the failure.
 - `backlogTemplate(increments)` — minimal valid init payload (`issue`, `workflow`, `increments`).
 - `incrementPayload(id, title, extra)` — one well-formed increment; spread `extra` to override fields.
+- `researchReturn` — a realistic step return, defined just above the `index` cases: two `MARKER-…`-prefixed strings long enough to be content, a list of objects, and the small steering values beside them. Reuse it wherever a case has to tell content from steering; the markers are what the negative assertions look for.
 
 ## Where a new case belongs
 
-The file is helpers first, then flat top-level `test(...)` calls grouped by command in CLI order: init (including codemap and close-vs-codemap interplay), record, branch, close, read, and a final atomic-write case. Insert a new case inside the block for the command it exercises; a shared-mechanics case (like the `.tmp` one) goes at the end.
+The file is helpers first, then flat top-level `test(...)` calls grouped by command in CLI order: init (including codemap and close-vs-codemap interplay), record (including the prompt file and the supersede-with-history rule), branch, close (including the attempt archive across a re-cut), index, steps, codemap, read, and a final atomic-write case. Insert a new case inside the block for the command it exercises; a shared-mechanics case (like the `.tmp` one) goes at the end.
+
+A case about what a read must *not* return asserts on the raw stdout string, not on the parsed object — a field dropped from the projection and a field present but empty look the same after `JSON.parse`, and only the string catches content that leaked under a different key.
 
 ## Naming
 

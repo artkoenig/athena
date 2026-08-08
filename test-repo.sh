@@ -350,266 +350,208 @@ function assertEqualArrays(actual, expected, msg) {
   if (a !== e) fail(msg + ' — expected ' + e + ' got ' + a);
 }
 
-// Finding 1 (round 1): the two literals used to be 'PLAN-MARKER' and
-// 'TESTPLAN-MARKER', and 'TESTPLAN-MARKER'.includes('PLAN-MARKER') is true —
-// so the w4 assertion that the test-author's prompt does NOT carry
-// PLAN_MARKER failed against a prompt that in fact carried only the test
-// plan. Renamed so neither contains the other; DISJOINT_MARKERS below is the
-// standing guard against the same class of bug coming back unnoticed.
-const PLAN_MARKER = 'MARKER-IMPLEMENTATION-PLAN';
-const TESTPLAN_MARKER = 'MARKER-TEST-PLAN';
+// Content no longer travels in prompts: every role reads its brief out of
+// backlog.json, and a dispatch prompt carries the read that fetches it. So the
+// markers below are the ones that legitimately remain in a prompt — a command
+// to run, a question to re-ask, an increment title — and the reads themselves
+// are asserted as text. DISJOINT_MARKERS is the standing guard that no two of
+// them contain one another, which would let a slice assertion pass for the
+// wrong reason.
 const CHECK_MARKER = 'echo CHECK-MARKER';
 const DISJOINT_MARKERS = [
-  PLAN_MARKER,
-  TESTPLAN_MARKER,
   'CHECK-MARKER',
   'MARKER-HUMAN-QUESTION',
-  'MARKER-OPEN-QUESTION',
-  'MARKER-FINDING-CLAIM',
-  'MARKER-FINDING-REPRODUCTION',
-  'MARKER-FINDING-CRITERION',
   'MARKER-VERDICT-REASON',
   'MARKER-CLOSE-QUESTION',
   'MARKER-STALE-CUT',
   'MARKER-FRESH-CUT',
   'MARKER-CUT-QUESTION',
-  'MARKER-DIRECT-CLAIM',
-  'MARKER-DIRECT-REPRODUCTION',
-  'MARKER-CODEMAP',
 ];
 
+// The read a prompt has to carry for its role to have a brief at all. Written
+// out here exactly as the workflow renders it, so a change to the calling
+// convention fails these cases instead of silently leaving an agent with a
+// pointer to nothing.
+const STATE_PATH = 'docs/issues/x/backlog.json';
+const READ_CODEMAP = 'codemap ' + STATE_PATH;
+const READ_INDEX = 'index ' + STATE_PATH;
+const readStep = (id, label, fields) =>
+  'steps ' + STATE_PATH + ' ' + id + ' ' + label + (fields ? ' --fields ' + fields : '');
+
+// What each role hands back to the script now: the values it steers on, and
+// nothing else. A plan, a test plan, a case list and a finding are in the run
+// state and reach no prompt, so no fixture below carries them.
 const planReturn = {
   needsTests: true,
-  plan: PLAN_MARKER,
-  moduleMap: 'module map',
-  environment: 'environment',
-  testPlan: TESTPLAN_MARKER,
   checks: [CHECK_MARKER],
   questions: [],
   summary: 'plan summary',
 };
 const planReturnWithQuestion = Object.assign({}, planReturn, { questions: ['ask the human'] });
-const testsReturn = {
-  cases: [{ case: 'a case', file: 'x.test.mjs', testName: 'it works', expected: 'x', got: 'y' }],
-  openQuestions: [],
+const testsReturn = { questions: [], summary: 'tests summary' };
+const buildReturn = { questions: [], summary: 'build summary' };
+const verdictReturnClean = {
+  findingCount: 0,
+  allDirect: false,
+  reason: '',
   questions: [],
-  summary: 'tests summary',
+  summary: 'verdict summary',
 };
-const buildReturn = {
-  deviations: [],
-  commands: [{ command: 'echo hi', exitCode: 0, note: '' }],
-  blockers: [],
-  questions: [],
-  summary: 'build summary',
-};
-const verdictReturnClean = { findings: [], reason: '', questions: [], summary: 'verdict summary' };
-
-// Round 2, finding 1's fixture: a step that ended the previous run with a
-// question for the human. A resumed run must work this step again instead of
-// replaying the stale question, so w9 dispatches research:i1.0 a second time
-// and expects the clean planReturn back (see returnFor's ctx.researchReturn
-// override below).
-const planReturnWithMarkedQuestion = Object.assign({}, planReturn, {
-  questions: ['MARKER-HUMAN-QUESTION'],
-});
-// Round 2, finding 2's fixtures: a dirty round-0 review and the test-author's
-// open question from round 0, both of which the round-1 researcher prompt
-// must carry.
-const testsReturnWithOpenQuestion = Object.assign({}, testsReturn, {
-  openQuestions: ['MARKER-OPEN-QUESTION'],
-});
 const verdictReturnWithFinding = {
-  findings: [{
-    claim: 'MARKER-FINDING-CLAIM',
-    reproduction: 'MARKER-FINDING-REPRODUCTION',
-    criterion: 'MARKER-FINDING-CRITERION',
-    fix: 'needs-plan',
-  }],
+  findingCount: 1,
+  allDirect: false,
   reason: 'MARKER-VERDICT-REASON',
   questions: [],
   summary: 'verdict summary',
 };
-
-// w16's fixture: a review whose every finding is a direct fix — the wording of
-// a document, with the file, the line and the right word in the reproduction.
-// Such a round is worked without a researcher and without a test, so the
-// implementer is dispatched straight off this verdict.
-const verdictReturnWithDirectFinding = {
-  findings: [{
-    claim: 'MARKER-DIRECT-CLAIM',
-    reproduction: 'MARKER-DIRECT-REPRODUCTION',
-    criterion: 'none',
-    fix: 'direct',
-  }],
-  reason: 'MARKER-VERDICT-REASON',
-  questions: [],
-  summary: 'verdict summary',
-};
+// w16's fixture: a review whose every finding is a direct fix. Such a round is
+// worked without a researcher and without a test, so the implementer is
+// dispatched straight off the review's recorded findings.
+const verdictReturnWithDirectFinding = Object.assign({}, verdictReturnWithFinding, {
+  allDirect: true,
+});
 
 function increment(id) {
   return { id, title: 'Deliver ' + id, goal: 'Deliver ' + id + '.', criteria: ['does ' + id], status: 'todo', note: '' };
 }
-const decomposeReturnOne = { increments: [increment('i1')], codemap: 'MARKER-CODEMAP', questions: [], summary: 'backlog summary' };
-const decomposeReturnTwo = { increments: [increment('i1'), increment('i2')], codemap: 'MARKER-CODEMAP', questions: [], summary: 'backlog summary' };
+const decomposeReturnOne = { increments: [increment('i1')], questions: [], summary: 'backlog summary' };
+const decomposeReturnTwo = { increments: [increment('i1'), increment('i2')], questions: [], summary: 'backlog summary' };
 
-function resumeBacklog() {
+// The state loader returns the index of backlog.json, never the file: the cut,
+// the recorded labels and the small steering values of each. These builders
+// produce exactly what `backlog.mjs index` prints, flattened into the STATE
+// schema the workflow asks for.
+function idxStep(label, ret) {
+  const r = ret || {};
+  const questions = Array.isArray(r.questions) ? r.questions.filter(Boolean) : [];
   return {
-    version: 1,
-    issue: 'docs/issues/x',
-    workflow: 'agile-loop',
-    codemap: 'MARKER-CODEMAP',
-    increments: [
-      {
-        id: 'i1', title: 'Deliver i1', goal: 'Deliver i1.', criteria: ['does i1'], status: 'todo', note: '',
-        branch: 'issue-branch--i1',
-        steps: [
-          { label: 'research:i1.0', at: '2026-08-07T00:00:00.000Z', return: planReturn },
-          { label: 'tests:i1.0', at: '2026-08-07T00:00:01.000Z', return: testsReturn },
-        ],
-      },
-    ],
-    run: { steps: [{ label: 'decompose', at: '2026-08-07T00:00:00.000Z', return: decomposeReturnOne }] },
+    label,
+    asked: questions.length > 0,
+    questions,
+    needsTests: r.needsTests === true,
+    checks: Array.isArray(r.checks) ? r.checks : [],
+    findingCount: r.findingCount || 0,
+    allDirect: r.allDirect === true,
+    reason: r.reason || '',
   };
 }
 
-// Round 2, finding 1's fixture: a run whose research:i1.0 step ended with a
-// question for the human, recorded exactly as backlog.mjs record would leave
-// it. A resumed run must not replay this stale return.
-function questionBacklog() {
-  return {
-    version: 1,
-    issue: 'docs/issues/x',
-    workflow: 'agile-loop',
-    codemap: 'MARKER-CODEMAP',
-    increments: [
-      {
-        id: 'i1', title: 'Deliver i1', goal: 'Deliver i1.', criteria: ['does i1'], status: 'todo', note: '',
-        branch: 'issue-branch--i1',
-        steps: [
-          { label: 'research:i1.0', at: '2026-08-07T00:00:00.000Z', return: planReturnWithMarkedQuestion },
-        ],
-      },
-    ],
-    run: { steps: [{ label: 'decompose', at: '2026-08-07T00:00:00.000Z', return: decomposeReturnOne }] },
-  };
-}
-
-function doneBacklog() {
-  const closeLabel = 'replan:i1';
-  return {
-    version: 1,
-    issue: 'docs/issues/x',
-    workflow: 'agile-loop',
-    codemap: 'MARKER-CODEMAP',
-    increments: [
-      { id: 'i1', title: 'Deliver i1', goal: 'Deliver i1.', criteria: ['does i1'], status: 'done', note: 'accepted', steps: [] },
-    ],
-    run: {
-      steps: [
-        // Finding 5 (round 1): a real closed run has already shed the
-        // return of a run-level step — the `close` CLI drops the key but
-        // keeps the label and the timestamp — so this fixture now matches
-        // that shape instead of a full BACKLOG return surviving forever.
-        { label: 'decompose', at: '2026-08-07T00:00:00.000Z' },
-        { label: closeLabel, at: '2026-08-07T00:00:02.000Z', return: { summary: 'closed' } },
-      ],
+function idxIncrement(id, extra) {
+  return Object.assign(
+    {
+      id,
+      title: 'Deliver ' + id,
+      goal: 'Deliver ' + id + '.',
+      criteria: ['does ' + id],
+      status: 'todo',
+      note: '',
+      branch: '',
+      steps: [],
     },
-  };
+    extra || {},
+  );
 }
 
-// Round 4, finding 1's fixtures: a state file that holds increments while
-// its decompose step is not replayable, which is the only case in which the
-// Decompose is dispatched again with a populated backlog behind it.
-// `carried` true is the run whose opening cut ended with a question for the
-// human — the increments are in the file and the step is recorded with the
-// question. `carried` false is the session that died between the planner's
-// `init` and its `record` — the same increments, and no decompose step at
-// all. Both make the resumed run work Decompose again, and both used to
-// throw away the cut it returned.
-function recutBacklog(carried) {
-  return {
-    version: 1,
-    issue: 'docs/issues/x',
-    workflow: 'agile-loop',
-    codemap: 'MARKER-CODEMAP',
-    increments: [
-      { id: 'i1', title: 'MARKER-STALE-CUT', goal: 'Deliver i1.', criteria: ['does i1'], status: 'todo', note: '', steps: [] },
-      { id: 'i2', title: 'Deliver i2', goal: 'Deliver i2.', criteria: ['does i2'], status: 'todo', note: '', steps: [] },
+const noState = { exists: false, branch: 'issue-branch', increments: [], runSteps: [], summary: '' };
+const stateOf = (increments, runSteps) => ({
+  exists: true,
+  branch: 'issue-branch',
+  increments,
+  runSteps,
+  summary: '',
+});
+
+// A session that died mid-increment: research and tests are recorded, the
+// implementer never ran. The steering the implementer's round needs — the
+// checks the researcher closed — comes back out of the index, which is what
+// makes the resume work without anyone re-emitting the plan.
+const resumeState = () =>
+  stateOf(
+    [
+      idxIncrement('i1', {
+        branch: 'issue-branch--i1',
+        steps: [idxStep('research:i1.0', planReturn), idxStep('tests:i1.0', testsReturn)],
+      }),
     ],
-    run: {
-      steps: carried
-        ? [{
-            label: 'decompose',
-            at: '2026-08-07T00:00:00.000Z',
-            return: Object.assign({}, decomposeReturnTwo, { questions: ['MARKER-CUT-QUESTION'] }),
-          }]
-        : [],
-    },
-  };
-}
+    [idxStep('decompose', decomposeReturnOne)],
+  );
 
-// The cut the human's answer bought: one increment under an id the stale
-// file does not hold, so a run that works the superseded cut instead shows
-// it in the labels it dispatches as well as in the prompts it sends.
+// A run whose research:i1.0 ended with a question for the human. A resumed run
+// must not treat it as recorded: it works that step again, with the question in
+// front of it.
+const questionState = () =>
+  stateOf(
+    [
+      idxIncrement('i1', {
+        branch: 'issue-branch--i1',
+        steps: [idxStep('research:i1.0', Object.assign({}, planReturn, { questions: ['MARKER-HUMAN-QUESTION'] }))],
+      }),
+    ],
+    [idxStep('decompose', decomposeReturnOne)],
+  );
+
+// A finished run. `close` archived the increment's steps and the run-level
+// `replan:i1` with them, so the index shows an increment with no current step
+// and a run that still carries only its opening cut.
+const doneState = () =>
+  stateOf([idxIncrement('i1', { status: 'done', note: 'accepted' })], [idxStep('decompose', decomposeReturnOne)]);
+
+// A state file that holds increments while its decompose step is not
+// replayable, which is the only case in which Decompose is dispatched again
+// with a populated backlog behind it. `carried` true is the run whose opening
+// cut ended with a question; `carried` false is the session that died between
+// the planner's `init` and its `record`.
+const recutState = (carried) =>
+  stateOf(
+    [idxIncrement('i1', { title: 'MARKER-STALE-CUT' }), idxIncrement('i2')],
+    carried ? [idxStep('decompose', { questions: ['MARKER-CUT-QUESTION'] })] : [],
+  );
+
+// The cut the human's answer bought: one increment under an id the stale file
+// does not hold, so a run that works the superseded cut instead shows it in the
+// labels it dispatches as well as in the prompts it sends.
 const decomposeReturnRecut = {
   increments: [{ id: 'i3', title: 'MARKER-FRESH-CUT', goal: 'Deliver i3.', criteria: ['does i3'], status: 'todo', note: '' }],
-  codemap: 'MARKER-CODEMAP',
   questions: [],
   summary: 'backlog summary',
 };
 
-// Round 5's fixture (round 4, finding 1): a closed increment beside an open
-// one — the state a session leaves when it dies after `replan:i1` closed the
-// first increment and re-cut. The resumed run must count `i1` as increment 1
-// even though this session never worked it, pick `i2` up as increment 2, and
-// hand its reviewer the baseline block naming the accepted code in the diff.
-function laterIncrementBacklog() {
-  return {
-    version: 1,
-    issue: 'docs/issues/x',
-    workflow: 'agile-loop',
-    codemap: 'MARKER-CODEMAP',
-    increments: [
-      { id: 'i1', title: 'Deliver i1', goal: 'Deliver i1.', criteria: ['does i1'], status: 'done', note: 'accepted', steps: [] },
-      { id: 'i2', title: 'Deliver i2', goal: 'Deliver i2.', criteria: ['does i2'], status: 'todo', note: '', steps: [] },
-    ],
-    run: {
-      steps: [
-        { label: 'decompose', at: '2026-08-07T00:00:00.000Z' },
-        { label: 'replan:i1', at: '2026-08-07T00:00:02.000Z', return: { summary: 'closed' } },
-      ],
-    },
-  };
-}
+// A closed increment beside an open one — the state a session leaves when it
+// dies after `replan:i1` closed the first increment and re-cut.
+const laterIncrementState = () =>
+  stateOf(
+    [idxIncrement('i1', { status: 'done', note: 'accepted' }), idxIncrement('i2')],
+    [idxStep('decompose', decomposeReturnOne)],
+  );
 
 function contextFor(m) {
   switch (m) {
     case 'w1':
-      return { stateReturn: { exists: false, backlogJson: '', branch: 'issue-branch', summary: '' }, decomposeReturn: decomposeReturnTwo, researchReturn: planReturn };
+      return { stateReturn: noState, decomposeReturn: decomposeReturnTwo, researchReturn: planReturn };
     case 'w2':
-      return { stateReturn: { exists: true, backlogJson: JSON.stringify(resumeBacklog(), null, 2) + '\n', branch: 'issue-branch', summary: '' }, decomposeReturn: decomposeReturnOne, researchReturn: planReturn };
+      return { stateReturn: resumeState(), decomposeReturn: decomposeReturnOne, researchReturn: planReturn };
     case 'w3':
-      return { stateReturn: { exists: true, backlogJson: JSON.stringify(doneBacklog(), null, 2) + '\n', branch: 'issue-branch', summary: '' }, decomposeReturn: decomposeReturnOne, researchReturn: planReturn };
+      return { stateReturn: doneState(), decomposeReturn: decomposeReturnOne, researchReturn: planReturn };
     case 'w4':
     case 'w5':
     case 'w6':
     case 'w8':
-      return { stateReturn: { exists: false, backlogJson: '', branch: 'issue-branch', summary: '' }, decomposeReturn: decomposeReturnOne, researchReturn: planReturn };
+      return { stateReturn: noState, decomposeReturn: decomposeReturnOne, researchReturn: planReturn };
     case 'w7':
-      return { stateReturn: { exists: false, backlogJson: '', branch: 'issue-branch', summary: '' }, decomposeReturn: decomposeReturnOne, researchReturn: planReturnWithQuestion };
+      return { stateReturn: noState, decomposeReturn: decomposeReturnOne, researchReturn: planReturnWithQuestion };
     case 'w9':
-      return { stateReturn: { exists: true, backlogJson: JSON.stringify(questionBacklog(), null, 2) + '\n', branch: 'issue-branch', summary: '' }, decomposeReturn: decomposeReturnOne, researchReturn: planReturn };
+      return { stateReturn: questionState(), decomposeReturn: decomposeReturnOne, researchReturn: planReturn };
     case 'w10':
-      return { stateReturn: { exists: false, backlogJson: '', branch: 'issue-branch', summary: '' }, decomposeReturn: decomposeReturnOne, researchReturn: planReturn, testsReturn: testsReturnWithOpenQuestion, verdictFor: (label) => (label === 'review:i1.0' ? verdictReturnWithFinding : verdictReturnClean) };
+      return { stateReturn: noState, decomposeReturn: decomposeReturnOne, researchReturn: planReturn, verdictFor: (label) => (label === 'review:i1.0' ? verdictReturnWithFinding : verdictReturnClean) };
     case 'w11':
-      return { stateReturn: { exists: false, backlogJson: '', branch: 'issue-branch', summary: '' }, decomposeReturn: decomposeReturnOne, researchReturn: planReturn, closeFor: () => ({ questions: ['MARKER-CLOSE-QUESTION'], summary: 'closed' }) };
+      return { stateReturn: noState, decomposeReturn: decomposeReturnOne, researchReturn: planReturn, closeFor: () => ({ questions: ['MARKER-CLOSE-QUESTION'], summary: 'closed' }) };
     case 'w12': {
-      // Round 3, finding 2: the planner closes the increment and hands it
-      // straight back as todo — the second chance MAX_ATTEMPTS exists for —
-      // and settles it on the second pass.
+      // The planner closes the increment and hands it straight back as todo —
+      // the second chance MAX_ATTEMPTS exists for — and settles it on the
+      // second pass.
       let replans = 0;
       return {
-        stateReturn: { exists: false, backlogJson: '', branch: 'issue-branch', summary: '' },
+        stateReturn: noState,
         decomposeReturn: decomposeReturnOne,
         researchReturn: planReturn,
         closeFor: () => {
@@ -621,17 +563,17 @@ function contextFor(m) {
       };
     }
     case 'w13':
-      return { stateReturn: { exists: true, backlogJson: JSON.stringify(recutBacklog(true), null, 2) + '\n', branch: 'issue-branch', summary: '' }, decomposeReturn: decomposeReturnRecut, researchReturn: planReturn };
+      return { stateReturn: recutState(true), decomposeReturn: decomposeReturnRecut, researchReturn: planReturn };
     case 'w14':
-      return { stateReturn: { exists: true, backlogJson: JSON.stringify(recutBacklog(false), null, 2) + '\n', branch: 'issue-branch', summary: '' }, decomposeReturn: decomposeReturnRecut, researchReturn: planReturn };
+      return { stateReturn: recutState(false), decomposeReturn: decomposeReturnRecut, researchReturn: planReturn };
     case 'w15':
-      return { stateReturn: { exists: true, backlogJson: JSON.stringify(laterIncrementBacklog(), null, 2) + '\n', branch: 'issue-branch', summary: '' }, decomposeReturn: decomposeReturnTwo, researchReturn: planReturn };
+      return { stateReturn: laterIncrementState(), decomposeReturn: decomposeReturnTwo, researchReturn: planReturn };
     case 'w16':
-      return { stateReturn: { exists: false, backlogJson: '', branch: 'issue-branch', summary: '' }, decomposeReturn: decomposeReturnOne, researchReturn: planReturn, verdictFor: (label) => (label === 'review:i1.0' ? verdictReturnWithDirectFinding : verdictReturnClean) };
+      return { stateReturn: noState, decomposeReturn: decomposeReturnOne, researchReturn: planReturn, verdictFor: (label) => (label === 'review:i1.0' ? verdictReturnWithDirectFinding : verdictReturnClean) };
     case 'w17':
       // Every review round finds the same needs-plan defect, so the increment
       // burns its correction rounds and closes blocked.
-      return { stateReturn: { exists: false, backlogJson: '', branch: 'issue-branch', summary: '' }, decomposeReturn: decomposeReturnOne, researchReturn: planReturn, verdictFor: () => verdictReturnWithFinding };
+      return { stateReturn: noState, decomposeReturn: decomposeReturnOne, researchReturn: planReturn, verdictFor: () => verdictReturnWithFinding };
     default:
       throw new Error('unknown mode ' + m);
   }
@@ -643,18 +585,10 @@ function returnFor(label) {
   if (label === 'load-state') return ctx.stateReturn;
   if (label === 'decompose') return ctx.decomposeReturn;
   if (label.startsWith('research:')) return ctx.researchReturn;
-  // Round 2, w10: the round-0 test-author's openQuestions and the round-0
-  // review's findings both have to reach the round-1 researcher, so these
-  // two lookups take a per-mode override instead of the fixed fixture every
-  // earlier mode was content with.
   if (label.startsWith('tests:')) return ctx.testsReturn || testsReturn;
   if (label.startsWith('implement:')) return buildReturn;
   if (label.startsWith('review:')) return ctx.verdictFor ? ctx.verdictFor(label) : verdictReturnClean;
-  // Round 3, w11 and w12: the closing planner's return is a channel of its
-  // own — it can carry a question for the human (w11) and it can hand an
-  // increment back as todo (w12) — so these two labels take a per-mode
-  // override instead of the one fixed fixture.
-  if (label.startsWith('close:') || label.startsWith('replan:')) {
+  if (label.startsWith('replan:')) {
     return ctx.closeFor ? ctx.closeFor(label) : { summary: 'closed' };
   }
   if (label === 'publish') return { summary: 'published' };
@@ -662,9 +596,6 @@ function returnFor(label) {
 }
 
 async function main() {
-  // Guards finding 1 from returning: if any two of the three markers stop
-  // being disjoint, a slice assertion built on them can pass for the wrong
-  // reason, so this fires before a single dispatch happens, in every mode.
   for (const a of DISJOINT_MARKERS) {
     for (const b of DISJOINT_MARKERS) {
       if (a === b) continue;
@@ -680,29 +611,46 @@ async function main() {
     calls.push({ label: opts.label, agentType: opts.agentType, prompt });
     return returnFor(opts.label);
   };
-  // Round 2, w10: the reviewer's reason sentence has to reach the human in
-  // the chat, which in this driver means the log() the workflow calls, so
-  // the stub captures instead of discarding it.
   const logs = [];
   const result = await fn({ issueDir: 'docs/issues/x' }, stub, (m) => logs.push(String(m)), () => {});
   const labels = calls.map((c) => c.label);
+  const byLabel = (l) => calls.find((c) => c.label === l);
+
+  // The rule the whole channel rests on: the script has no content to leak into
+  // a prompt, so no prompt may read a step whole except the closing planner's,
+  // which is the one role that re-cuts against everything the increment
+  // produced. Every other read names its fields. Checked in every mode.
+  for (const c of calls) {
+    if (c.label.startsWith('replan:')) continue;
+    const unfiltered = c.prompt
+      .split('\n')
+      .filter((line) => line.includes('steps ' + STATE_PATH) && !line.includes('--fields'));
+    assertTrue(unfiltered.length === 0,
+      c.label + ' reads a step without naming the fields it may see: ' + JSON.stringify(unfiltered));
+  }
 
   if (mode === 'w1') {
     const expected = ['load-state', 'decompose', 'research:i1.0', 'tests:i1.0', 'implement:i1.0', 'review:i1.0', 'replan:i1',
       'research:i2.0', 'tests:i2.0', 'implement:i2.0', 'review:i2.0', 'replan:i2', 'publish'];
     assertEqualArrays(labels, expected, 'the labels dispatched are not the expected fresh-run sequence');
-    const byLabel = (l) => calls.find((c) => c.label === l);
     assertTrue(!!byLabel('decompose') && byLabel('decompose').agentType === 'uroboros:planner', 'decompose is not dispatched as uroboros:planner');
     assertTrue(!!byLabel('replan:i1') && byLabel('replan:i1').agentType === 'uroboros:planner', 'replan:i1 is not dispatched as uroboros:planner');
     assertTrue(!!byLabel('load-state') && byLabel('load-state').agentType === 'general-purpose', 'load-state is not dispatched as general-purpose');
     assertTrue(!!byLabel('publish') && byLabel('publish').agentType === 'general-purpose', 'publish is not dispatched as general-purpose');
     assertTrue(!!byLabel('replan:i2') && byLabel('replan:i2').agentType === 'uroboros:planner', 'replan:i2 is not dispatched as uroboros:planner');
-    // The planner said what files the issue changes; every researcher starts
-    // from that map, and the prompt asking for the cut asks for the map too.
-    assertTrue(!!byLabel('decompose') && /codemap/i.test(byLabel('decompose').prompt), "the decompose prompt never asks the planner for the codemap");
-    assertTrue(!!byLabel('replan:i1') && /codemap/i.test(byLabel('replan:i1').prompt), "the replan prompt never asks the planner to update the codemap");
+    // The state loader asks for the index and never for the file: the one read
+    // the script makes must not grow with the run.
+    const loader = byLabel('load-state');
+    assertTrue(!!loader && loader.prompt.includes(READ_INDEX), 'the state loader is not told to read the index');
+    assertTrue(!!loader && !/\bread docs\/issues\/x\/backlog\.json/.test(loader.prompt),
+      'the state loader is told to read the whole state file, which is what the index exists to avoid');
+    // The planner said what files the issue changes; every researcher reads
+    // that map out of the state, and the prompt asking for the cut asks for
+    // the map too.
+    assertTrue(!!byLabel('decompose') && /codemap/i.test(byLabel('decompose').prompt), 'the decompose prompt never asks the planner for the codemap');
+    assertTrue(!!byLabel('replan:i1') && /codemap/i.test(byLabel('replan:i1').prompt), 'the replan prompt never asks the planner to update the codemap');
     for (const l of ['research:i1.0', 'research:i2.0']) {
-      assertTrue(!!byLabel(l) && byLabel(l).prompt.includes('MARKER-CODEMAP'), "the researcher's prompt " + l + ' does not carry the codemap');
+      assertTrue(!!byLabel(l) && byLabel(l).prompt.includes(READ_CODEMAP), "the researcher's prompt " + l + ' is not sent to the codemap in the run state');
     }
     // The branch machinery: the attempt's first dispatch records and creates
     // the increment branch, the accepted replan lands it on the issue branch,
@@ -720,35 +668,63 @@ async function main() {
     assertTrue(!labels.some((l) => l.startsWith('tests:')), 'the test-author was dispatched even though its step was already recorded');
     const afterLoadState = calls[1];
     assertTrue(!!afterLoadState && afterLoadState.label.startsWith('implement:'), 'the first dispatch after load-state is not the implementer');
-    assertTrue(!!afterLoadState && afterLoadState.prompt.includes(PLAN_MARKER), "the implementer's prompt does not carry the recorded plan's marker");
+    // The resumed implementer gets its brief the same way a live one does: a
+    // read of the steps the dead session recorded. Nothing was replayed into
+    // its prompt, because nothing of the plan was ever in the script.
+    assertTrue(!!afterLoadState && afterLoadState.prompt.includes(readStep('i1', 'research:i1.0', 'plan,moduleMap,environment')),
+      "the resumed implementer is not sent to the recorded researcher step");
+    assertTrue(!!afterLoadState && afterLoadState.prompt.includes(readStep('i1', 'tests:i1.0', 'cases')),
+      'the resumed implementer is not sent to the recorded test-author step');
+    // The steering the round needs survived the crash in the state, not in a
+    // return anyone re-emitted: the checks reach the implementer's prompt out
+    // of the index.
+    assertTrue(!!afterLoadState && afterLoadState.prompt.includes('CHECK-MARKER'),
+      "the resumed implementer's prompt does not carry the checks the state recorded");
     // The resume finds the recorded branch: the mid-flight increment continues
     // on it instead of starting a fresh one.
     assertTrue(!!afterLoadState && afterLoadState.prompt.includes('issue-branch--i1'),
       "the resumed implementer's prompt does not carry the recorded increment branch");
     assertTrue(!!afterLoadState && !afterLoadState.prompt.includes('git checkout -b issue-branch--i1'),
       'the resumed increment is told to create its branch instead of continuing on it');
+    const reviewCall = calls.find((c) => c.label === 'review:i1.0');
+    assertTrue(!!reviewCall && reviewCall.prompt.includes('CHECK-MARKER'),
+      'the resumed reviewer was handed no checks, so the recorded plan never reached the one role that cannot read it');
   } else if (mode === 'w3') {
     assertEqualArrays(labels, ['load-state', 'publish'], 'a fully-closed backlog dispatches more than the state loader and publish');
   } else if (mode === 'w4') {
     const testsCall = calls.find((c) => c.label.startsWith('tests:'));
     assertTrue(!!testsCall, 'the test-author was never dispatched');
-    assertTrue(!!testsCall && testsCall.prompt.includes(TESTPLAN_MARKER), "the test-author's prompt does not carry the test plan");
-    assertTrue(!!testsCall && !testsCall.prompt.includes(PLAN_MARKER), "the test-author's prompt carries the implementation plan");
-    assertTrue(!!testsCall && !testsCall.prompt.includes('MARKER-CODEMAP'), "the test-author's prompt carries the codemap");
+    assertTrue(!!testsCall && testsCall.prompt.includes(readStep('i1', 'research:i1.0', 'testPlan')),
+      "the test-author is not sent to the researcher's test plan");
+    // Its independence is now enforced by the read, not by what the script
+    // pasted: the helper hands it `testPlan` and the implementation plan
+    // beside it never reaches it.
+    assertTrue(!!testsCall && !/--fields [^\n]*\bplan\b/.test(testsCall.prompt.replace(/--fields testPlan/g, '')),
+      "the test-author's read would hand it the implementation plan");
+    assertTrue(!!testsCall && !testsCall.prompt.includes(READ_CODEMAP), "the test-author is sent to the codemap");
+    assertTrue(!!testsCall && !testsCall.prompt.includes('review:'), "the test-author is sent to a review step");
   } else if (mode === 'w5') {
     const implCall = calls.find((c) => c.label.startsWith('implement:'));
     assertTrue(!!implCall, 'the implementer was never dispatched');
-    assertTrue(!!implCall && implCall.prompt.includes(PLAN_MARKER), "the implementer's prompt does not carry the plan");
+    assertTrue(!!implCall && implCall.prompt.includes(readStep('i1', 'research:i1.0', 'plan,moduleMap,environment')),
+      "the implementer is not sent to the researcher's plan");
+    assertTrue(!!implCall && implCall.prompt.includes(readStep('i1', 'tests:i1.0', 'cases')),
+      'the implementer is not sent to the tests that already exist');
     assertTrue(!!implCall && implCall.prompt.includes('CHECK-MARKER'), "the implementer's prompt does not carry the checks");
-    assertTrue(!!implCall && !implCall.prompt.includes(TESTPLAN_MARKER), "the implementer's prompt carries the test plan");
-    assertTrue(!!implCall && !implCall.prompt.includes('MARKER-CODEMAP'), "the implementer's prompt carries the codemap");
+    assertTrue(!!implCall && !implCall.prompt.includes('--fields testPlan'), "the implementer's read would hand it the test plan");
+    assertTrue(!!implCall && !implCall.prompt.includes(READ_CODEMAP), 'the implementer is sent to the codemap');
   } else if (mode === 'w6') {
     const reviewCall = calls.find((c) => c.label.startsWith('review:'));
     assertTrue(!!reviewCall, 'the reviewer was never dispatched');
     assertTrue(!!reviewCall && reviewCall.prompt.includes('CHECK-MARKER'), "the reviewer's prompt does not carry the checks");
-    assertTrue(!!reviewCall && !reviewCall.prompt.includes(PLAN_MARKER), "the reviewer's prompt carries the implementation plan");
-    assertTrue(!!reviewCall && !reviewCall.prompt.includes(TESTPLAN_MARKER), "the reviewer's prompt carries the test plan");
-    assertTrue(!!reviewCall && !reviewCall.prompt.includes('MARKER-CODEMAP'), "the reviewer's prompt carries the codemap");
+    // The one role that reads nothing. Every other brief is a read now, so the
+    // reviewer's independence is exactly the absence of one.
+    assertTrue(!!reviewCall && !/\bsteps docs\/issues\/x\/backlog\.json/.test(reviewCall.prompt),
+      'the reviewer is sent to read a step of the run state');
+    assertTrue(!!reviewCall && !reviewCall.prompt.includes(READ_CODEMAP), 'the reviewer is sent to the codemap');
+    assertTrue(!!reviewCall && !reviewCall.prompt.includes(READ_INDEX), 'the reviewer is sent to the index');
+    assertTrue(!!reviewCall && /read nothing out of/i.test(reviewCall.prompt),
+      'the reviewer is not told that the run state is closed to it');
     assertTrue(!!reviewCall && reviewCall.prompt.includes('git diff issue-branch...HEAD'),
       "the reviewer's prompt does not name the increment's diff range against the issue branch");
   } else if (mode === 'w7') {
@@ -756,26 +732,30 @@ async function main() {
     assertTrue(!!result && !!result.blockedOnHuman, 'the returned result does not carry blockedOnHuman');
     assertTrue(!!result && JSON.stringify(result.blockedOnHuman).includes('ask the human'), 'blockedOnHuman does not carry the question');
   } else if (mode === 'w8') {
-    // Finding 3 (round 1): a plain grep for the word "push" over the whole
-    // script survives even if the per-step push instruction is deleted,
-    // because the unrelated Publish prompt in both scripts also says
-    // "push". This asserts on every recorded step's own prompt instead.
+    // A plain grep for the word "push" over the whole script survives even if
+    // the per-step push instruction is deleted, because the unrelated Publish
+    // prompt also says "push". This asserts on every recorded step's own
+    // prompt instead — and on the two things that make the state the single
+    // source of truth: the return goes in, and the prompt goes in beside it.
     for (const c of calls) {
       if (c.label === 'load-state' || c.label === 'publish') continue;
       assertTrue(/backlog\.json/.test(c.prompt) && /\brecord\b/i.test(c.prompt),
         c.label + ' is not told to record its return into backlog.json');
       assertTrue(/\bpush\b/i.test(c.prompt),
         c.label + " is not told to push its step's commit");
+      assertTrue(/verbatim/i.test(c.prompt) && /prompt/i.test(c.prompt),
+        c.label + ' is not told to record the prompt it was dispatched with, verbatim');
+      assertTrue(/<the return file> <the prompt file>/.test(c.prompt),
+        c.label + ' is not given the record call that stores both');
     }
   } else if (mode === 'w9') {
-    // Round 2, finding 1: a recorded step whose return carried a question
-    // used to be replayed as-is, so a resumed run dispatched only
-    // load-state and publish, forever. This pins the fix: the step that
-    // asked is worked again, with the question and the answer's location in
-    // its prompt, and the run makes it all the way to a clean close.
-    const closeLabel = 'replan:i1';
+    // A recorded step whose return carried a question used to be replayed
+    // as-is, so a resumed run dispatched only load-state and publish, forever.
+    // This pins the fix: the step that asked is worked again, with the
+    // question and the answer's location in its prompt, and the run makes it
+    // all the way to a clean close.
     assertEqualArrays(labels,
-      ['load-state', 'research:i1.0', 'tests:i1.0', 'implement:i1.0', 'review:i1.0', closeLabel, 'publish'],
+      ['load-state', 'research:i1.0', 'tests:i1.0', 'implement:i1.0', 'review:i1.0', 'replan:i1', 'publish'],
       'the resumed run did not work the step that asked the human again, or did not carry on past it');
     const researchCall = calls.find((c) => c.label === 'research:i1.0');
     assertTrue(!!researchCall && researchCall.prompt.includes('MARKER-HUMAN-QUESTION'),
@@ -785,51 +765,43 @@ async function main() {
     assertTrue(!!result && Array.isArray(result.blockedOnHuman) && result.blockedOnHuman.length === 0,
       'the resumed run ended on the stale recorded question instead of making progress');
   } else if (mode === 'w10') {
-    // Round 2, finding 2: nothing exercised a correction round before this
-    // mode, so the findings channel (researcher <- reviewer) and the reason
-    // sentence (human <- reviewer) were both untested.
-    const closeLabel = 'replan:i1';
+    // The correction round: the findings channel (researcher <- reviewer) and
+    // the reason sentence (human <- reviewer). The findings are in the state
+    // now, so what the prompt has to carry is the read that fetches them.
     assertEqualArrays(labels,
       ['load-state', 'decompose', 'research:i1.0', 'tests:i1.0', 'implement:i1.0', 'review:i1.0',
-       'research:i1.1', 'tests:i1.1', 'implement:i1.1', 'review:i1.1', closeLabel, 'publish'],
+       'research:i1.1', 'tests:i1.1', 'implement:i1.1', 'review:i1.1', 'replan:i1', 'publish'],
       'a review with findings does not open exactly one correction round');
     const round1 = calls.find((c) => c.label === 'research:i1.1');
-    for (const marker of ['MARKER-FINDING-CLAIM', 'MARKER-FINDING-REPRODUCTION', 'MARKER-FINDING-CRITERION']) {
-      assertTrue(!!round1 && round1.prompt.includes(marker),
-        "the correction round's researcher prompt does not carry " + marker);
-    }
-    assertTrue(!!round1 && round1.prompt.includes('MARKER-OPEN-QUESTION'),
-      "the correction round's researcher prompt does not carry what the test-author left open");
+    assertTrue(!!round1 && round1.prompt.includes(readStep('i1', 'review:i1.0', 'findings')),
+      "the correction round's researcher is not sent to the review's findings");
+    assertTrue(!!round1 && round1.prompt.includes(readStep('i1', 'tests:i1.0', 'openQuestions')),
+      "the correction round's researcher is not sent to what the test-author left open");
     const round0 = calls.find((c) => c.label === 'research:i1.0');
-    assertTrue(!!round0 && !round0.prompt.includes('MARKER-FINDING-CLAIM'),
-      "the first round's researcher prompt carries findings that do not exist yet");
+    assertTrue(!!round0 && !round0.prompt.includes('review:i1'),
+      "the first round's researcher is sent to a review that does not exist yet");
     assertTrue(logs.some((l) => l.includes('MARKER-VERDICT-REASON')),
       "the reviewer's reason sentence never reached the human in the chat");
   } else if (mode === 'w11') {
-    // Round 3, finding 1: loop.js dispatched the Close step and dropped its
-    // return, so a question the closing planner asked reached nobody — no
-    // blockedOnHuman, no log line, and a run that reported itself finished.
-    // agile-loop.js already handled the same role in the same position, so
-    // this mode runs on both and pins them to one behaviour.
-    const closeLabel = 'replan:i1';
+    // A question the closing planner asks has to reach the human: no
+    // blockedOnHuman, no log line, and the run reports itself finished.
     assertEqualArrays(labels,
-      ['load-state', 'decompose', 'research:i1.0', 'tests:i1.0', 'implement:i1.0', 'review:i1.0', closeLabel, 'publish'],
+      ['load-state', 'decompose', 'research:i1.0', 'tests:i1.0', 'implement:i1.0', 'review:i1.0', 'replan:i1', 'publish'],
       'a question from the closing planner does not stop the run at publish');
     assertTrue(!!result && Array.isArray(result.blockedOnHuman) && result.blockedOnHuman.length === 1,
       "the closing planner's question did not end the run as blocked on the human");
     const blocked = JSON.stringify((result && result.blockedOnHuman) || []);
     assertTrue(blocked.includes('MARKER-CLOSE-QUESTION'),
       'blockedOnHuman does not carry the question the closing planner asked');
-    assertTrue(blocked.includes(closeLabel),
-      'blockedOnHuman does not name ' + closeLabel + ' as the step that asked');
+    assertTrue(blocked.includes('replan:i1'),
+      'blockedOnHuman does not name replan:i1 as the step that asked');
     assertTrue(logs.some((l) => l.includes('MARKER-CLOSE-QUESTION')),
       "the closing planner's question never reached the human in the chat");
   } else if (mode === 'w12') {
-    // Round 3, finding 2: labels are keyed on the increment id, so the second
-    // attempt at an increment the planner handed back re-used the first
-    // attempt's labels, found them all in the in-session recorded map,
-    // dispatched nobody and re-read the first attempt's verdict and re-cut.
-    // MAX_ATTEMPTS' second chance is what that cost.
+    // Labels are keyed on the increment id, so the second attempt at an
+    // increment the planner handed back re-used the first attempt's labels,
+    // found them all in the in-session recorded map, dispatched nobody and
+    // re-read the first attempt's verdict and re-cut.
     assertEqualArrays(labels,
       ['load-state', 'decompose',
        'research:i1.0', 'tests:i1.0', 'implement:i1.0', 'review:i1.0', 'replan:i1',
@@ -850,19 +822,17 @@ async function main() {
     assertTrue(!!result && result.delivered === 1 && Array.isArray(result.increments) && result.increments.length === 2,
       'the second attempt did not deliver the increment');
   } else if (mode === 'w13' || mode === 'w14') {
-    // Round 4, finding 1: both scripts preferred the increments of the state
-    // snapshot they read at startup over the ones Decompose returned,
-    // unconditionally — including when Decompose was dispatched in this
-    // session rather than replayed. So a planner that read the human's answer,
-    // re-cut and rewrote backlog.json had its new cut thrown away, and the run
-    // worked the cut the answer had just replaced.
-    const closeLabel = 'replan:i3';
+    // Both scripts preferred the increments of the state snapshot they read at
+    // startup over the ones Decompose returned, unconditionally — including
+    // when Decompose was dispatched in this session rather than replayed. So a
+    // planner that read the human's answer, re-cut and rewrote backlog.json had
+    // its new cut thrown away.
     assertEqualArrays(labels,
-      ['load-state', 'decompose', 'research:i3.0', 'tests:i3.0', 'implement:i3.0', 'review:i3.0', closeLabel, 'publish'],
+      ['load-state', 'decompose', 'research:i3.0', 'tests:i3.0', 'implement:i3.0', 'review:i3.0', 'replan:i3', 'publish'],
       'the run worked the stale cut from the state file instead of the cut the re-dispatched Decompose returned');
     assertTrue(!calls.some((c) => c.prompt.includes('MARKER-STALE-CUT')),
       'a prompt of this run carries the superseded increment the state file still held');
-    const closeCall = calls.find((c) => c.label === closeLabel);
+    const closeCall = calls.find((c) => c.label === 'replan:i3');
     assertTrue(!!closeCall && closeCall.prompt.includes('MARKER-FRESH-CUT'),
       'the closing planner was not told about the increment of the fresh cut');
     assertTrue(!!result && Array.isArray(result.blockedOnHuman) && result.blockedOnHuman.length === 0,
@@ -873,18 +843,15 @@ async function main() {
         'the Decompose worked again does not carry the question that ended the last run');
     }
   } else if (mode === 'w15') {
-    // Round 4, finding 1: a resumed run counted its increments from scratch,
-    // so the first increment it picked up was treated as increment 1, and the
-    // human's result lost the closed increment's line. The reviewer needs no
-    // prose baseline anymore — its diff range simply does not contain what
-    // earlier increments landed — but the count and the result still must
-    // carry the closed increment.
+    // A resumed run counted its increments from scratch, so the first
+    // increment it picked up was treated as increment 1, and the human's
+    // result lost the closed increment's line.
     assertEqualArrays(labels,
       ['load-state', 'research:i2.0', 'tests:i2.0', 'implement:i2.0', 'review:i2.0', 'replan:i2', 'publish'],
       'the resumed run did not pick up the open increment behind the closed one');
     const resumedResearch = calls.find((c) => c.label === 'research:i2.0');
-    assertTrue(!!resumedResearch && resumedResearch.prompt.includes('MARKER-CODEMAP'),
-      "the resumed researcher's prompt does not carry the codemap saved in the state file");
+    assertTrue(!!resumedResearch && resumedResearch.prompt.includes(READ_CODEMAP),
+      "the resumed researcher's prompt does not send it to the codemap the state file holds");
     assertTrue(!!resumedResearch && resumedResearch.prompt.includes('git checkout -b issue-branch--i2'),
       'the resumed fresh increment is not told to start its own branch');
     const reviewCall = calls.find((c) => c.label === 'review:i2.0');
@@ -899,33 +866,28 @@ async function main() {
       'the increment the earlier session closed has no line in result.increments');
   } else if (mode === 'w16') {
     // The direct-fix round: a review whose findings all need no plan is worked
-    // by the implementer alone, off the findings themselves, and is reviewed
-    // afterwards like any other. Without that path the same wrong word in a
-    // document costs a researcher, and with it skipping the review as well it
-    // would ship unread.
-    const closeLabel = 'replan:i1';
+    // by the implementer alone, off the findings it recorded, and is reviewed
+    // afterwards like any other.
     assertEqualArrays(labels,
       ['load-state', 'decompose', 'research:i1.0', 'tests:i1.0', 'implement:i1.0', 'review:i1.0',
-       'implement:i1.1', 'review:i1.1', closeLabel, 'publish'],
+       'implement:i1.1', 'review:i1.1', 'replan:i1', 'publish'],
       'a review whose findings are all direct fixes did not skip exactly the researcher and the test-author');
     const fixCall = calls.find((c) => c.label === 'implement:i1.1');
-    for (const marker of ['MARKER-DIRECT-CLAIM', 'MARKER-DIRECT-REPRODUCTION']) {
-      assertTrue(!!fixCall && fixCall.prompt.includes(marker),
-        "the direct-fix round's implementer prompt does not carry " + marker);
-    }
+    assertTrue(!!fixCall && fixCall.prompt.includes(readStep('i1', 'review:i1.0', 'findings')),
+      "the direct-fix round's implementer is not sent to the findings it corrects");
     assertTrue(!!fixCall && fixCall.prompt.includes('CHECK-MARKER'),
       "the direct-fix round's implementer prompt does not carry the checks the round before closed");
-    assertTrue(!!fixCall && !fixCall.prompt.includes(TESTPLAN_MARKER),
-      "the direct-fix round's implementer prompt carries a test plan");
+    assertTrue(!!fixCall && !fixCall.prompt.includes('--fields testPlan'),
+      "the direct-fix round's implementer is sent to a test plan");
     const reviewCall = calls.find((c) => c.label === 'review:i1.1');
     assertTrue(!!reviewCall && reviewCall.prompt.includes('CHECK-MARKER'),
       'the review after a direct-fix round was handed no checks');
-    assertTrue(!!reviewCall && !reviewCall.prompt.includes('MARKER-DIRECT-CLAIM'),
-      "the review after a direct-fix round was handed the finding it wrote, and is no longer independent");
+    assertTrue(!!reviewCall && !/\bsteps docs\/issues\/x\/backlog\.json/.test(reviewCall.prompt),
+      'the review after a direct-fix round is sent to read the finding it wrote, and is no longer independent');
   } else if (mode === 'w17') {
     // A blocked increment's work stays off the issue branch: the replan that
     // closes it is told not to merge and to name the unmerged branch in the
-    // note — that is what keeps unaccepted work out of the pull request.
+    // note.
     assertEqualArrays(labels,
       ['load-state', 'decompose',
        'research:i1.0', 'tests:i1.0', 'implement:i1.0', 'review:i1.0',
