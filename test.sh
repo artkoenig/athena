@@ -47,6 +47,9 @@ run "tools/argus-ui" \
 run "tools/log-parser" \
   npm --prefix "$root/tools/log-parser" test --silent
 
+run "tools/humanize: the duration formatter" \
+  node --test "$root/tools/humanize/duration.test.mjs"
+
 
 if [ "$failed" -eq 0 ]; then
   echo "PASS: all $total suites"
