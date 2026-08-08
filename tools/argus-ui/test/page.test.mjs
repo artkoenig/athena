@@ -1256,3 +1256,64 @@ test('refreshRuns delegates the re-fetch decision to shouldLoadRun, and reads th
     'shown must be read before loadRuns() moves the picker\'s selection, or a shown read afterward is always equal to state.selectedRunId and collapses the rule',
   );
 });
+
+// Increment ui-steps — the pane repaints wholesale, the stylesheet carries the
+// step rules, the README says what is shown.
+
+test('the run pane is repainted wholesale from the state the page holds', () => {
+  const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const renderRunView = functionSource(appJs, 'renderRunView');
+  assert.match(
+    renderRunView,
+    /container\.innerHTML\s*=\s*renderRun\(state\.run\)/,
+    'renderRunView must replace the pane\'s whole markup from state.run — a replacement rather than an append is what leaves no step of the previous state on the page after a switch or a live write',
+  );
+
+  const selectRun = functionSource(appJs, 'selectRun');
+  assert.match(selectRun, /renderRunView\(/, 'selectRun must still call renderRunView( — this is a guard, already green');
+  const refreshRuns = functionSource(appJs, 'refreshRuns');
+  assert.match(refreshRuns, /renderRunView\(/, 'refreshRuns must still call renderRunView( — this is a guard, already green');
+});
+
+test('the stylesheet styles a step collapsed to a line and expanded to its whole return', () => {
+  const css = fs.readFileSync(path.join(PUBLIC, 'styles.css'), 'utf8');
+  for (const cls of ['.run-steps', '.run-step-label', '.run-step-preview', '.run-step-time', '.run-step-return']) {
+    assert.ok(css.includes(cls), `styles.css must style ${cls}`);
+  }
+
+  const returnRuleMatch = css.match(/\.run-step-return\s*\{([^}]*)\}/);
+  assert.ok(returnRuleMatch, '.run-step-return must have a rule of its own');
+  const returnRule = returnRuleMatch[1];
+  assert.match(
+    returnRule,
+    /max-height/,
+    'the return\'s own rule must cap its height, or one enormous return can bury the increments',
+  );
+  assert.match(returnRule, /overflow/, 'the return\'s own rule must scroll rather than overflow the page');
+
+  const runJs = fs.readFileSync(path.join(PUBLIC, 'run.js'), 'utf8');
+  for (const cls of ['run-steps', 'run-step-label', 'run-step-preview', 'run-step-time', 'run-step-return']) {
+    const re = new RegExp(`class="[^"]*\\b${cls}\\b[^"]*"`);
+    assert.match(runJs, re, `public/run.js must emit ${cls} in a class="…" attribute, or the stylesheet rule styles nothing`);
+  }
+});
+
+test('README.md\'s opening description names the runs the interface shows', () => {
+  const readme = fs.readFileSync(path.join(PROJECT, 'README.md'), 'utf8');
+  const start = readme.indexOf('# argus-ui');
+  assert.ok(start >= 0, 'README.md must open with the # argus-ui heading');
+  const nextHeading = readme.indexOf('\n## ', start);
+  assert.ok(nextHeading >= 0, 'README.md must carry a first ## heading after the opening description');
+  const opening = readme.slice(start, nextHeading);
+  assert.match(
+    opening,
+    /\bruns\b/i,
+    'the opening description must name the runs the interface shows, in the plural, not only the sessions',
+  );
+});
+
+test('README.md says the run view shows each step, collapsed and expandable', () => {
+  const readme = fs.readFileSync(path.join(PROJECT, 'README.md'), 'utf8');
+  assert.match(readme, /\bsteps?\b/i, 'README must say the run view shows steps');
+  assert.match(readme, /expand/i, 'README must say a step expands to its whole return');
+});

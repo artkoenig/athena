@@ -9,11 +9,14 @@ import {
   runFrame,
   renderRunList,
   renderRun,
+  renderSteps,
+  stepView,
+  STEP_SHED_NOTE,
   shouldLoadRun,
 } from '../public/run.js';
-import { fmtAgo } from '../public/format.js';
+import { fmtAgo, PREVIEW_CHARS } from '../public/format.js';
 
-// The four factories every case builds its input from — modelled on the
+// The five factories every case builds its input from — modelled on the
 // collector's own wire contract (the recorder's backlog document, and the
 // entry the run endpoints wrap it in) and nothing else.
 
@@ -54,6 +57,14 @@ const listItem = (over = {}) => {
   const { state, ...rest } = runEntry(over);
   return rest;
 };
+
+/** One recorded step, either an increment's or the run's own. */
+const step = (over = {}) => ({
+  label: 'research:ui',
+  at: new Date(Date.now() - 60_000).toISOString(),
+  return: { summary: 'a short summary line' },
+  ...over,
+});
 
 // Criterion 1 — what the run view holds: the issue, the workflow, when it was
 // last written, its increments in order, the closed/open counts, the codemap.
@@ -338,5 +349,291 @@ test('a frame that arrives before anything was shown still paints, whichever run
     shouldLoadRun({ changedId: 'x', shownId: null, selectedId: 'a' }),
     true,
     'the frame named a run other than the one the picker chose, and the pane is still empty, so it must be filled — a `return changedId === selectedId` mutation would fail this',
+  );
+});
+
+// Increment ui-steps — the steps of each increment, and the run's own.
+
+test('an increment\'s steps render in the backlog\'s own order, each with its label, its instant and its return', () => {
+  const steps = [
+    step({ label: 'research:x', at: new Date(Date.now() - 3 * 60_000).toISOString(), return: { summary: 'marker-one' } }),
+    step({ label: 'tests:x', at: new Date(Date.now() - 2 * 60_000).toISOString(), return: { summary: 'marker-two' } }),
+    step({ label: 'impl:x', at: new Date(Date.now() - 1 * 60_000).toISOString(), return: { summary: 'marker-three' } }),
+  ];
+  const markers = steps.map((s) => s.return.summary);
+  assert.equal(new Set(markers).size, 3, 'the three markers must actually differ, or the order proved below is vacuous');
+
+  const inc = increment({ id: 'x', steps });
+  const entry = runEntry({ state: doc({ increments: [inc] }) });
+  const html = renderRun(entry);
+
+  for (const s of steps) {
+    assert.ok(html.includes(s.label), `the step's label ${s.label} must render`);
+    assert.ok(html.includes(`data-at="${s.at}"`), `the step's ISO instant must sit in data-at="${s.at}", not a locale-formatted string`);
+  }
+  assert.ok(
+    html.indexOf('research:x') < html.indexOf('tests:x') && html.indexOf('tests:x') < html.indexOf('impl:x'),
+    'the three steps must render in the backlog\'s own order',
+  );
+  const rows = [...html.matchAll(/<li class="run-step"/g)];
+  assert.equal(rows.length, 3, 'exactly one row per recorded step');
+});
+
+test('the collapsed line shows a preview and the expanded body shows the whole return', () => {
+  const s = step({ return: { summary: 'short summary', plan: 'a marker only the body may carry' } });
+  const inc = increment({ id: 'x', steps: [s] });
+  const entry = runEntry({ state: doc({ increments: [inc] }) });
+  const html = renderRun(entry);
+
+  assert.match(html, /<details/, 'a step must render as a details element');
+  assert.match(html, /<\/details>/, 'the details element must close');
+
+  const summaryMatch = html.match(/<summary[^>]*>([\s\S]*?)<\/summary>/);
+  assert.ok(summaryMatch, 'the collapsed line must render inside a <summary>');
+  const summarySlice = summaryMatch[1];
+  assert.ok(summarySlice.includes('short summary'), 'the collapsed line must show the return\'s summary');
+
+  const preMatch = html.match(/<pre class="run-step-return"[^>]*>([\s\S]*?)<\/pre>/);
+  assert.ok(preMatch, 'the whole return must render inside a <pre class="run-step-return">');
+  const preSlice = preMatch[1];
+  assert.ok(preSlice.includes('a marker only the body may carry'), 'the full return must carry the plan marker');
+  assert.ok(!summarySlice.includes('a marker only the body may carry'), 'the plan marker must not leak into the collapsed line');
+});
+
+test('a very long return collapses to one line and still opens to the whole of it', () => {
+  const long = 'x'.repeat(5000);
+  const s = step({ return: long });
+  const inc = increment({ id: 'x', steps: [s] });
+  const entry = runEntry({ state: doc({ increments: [inc] }) });
+  const html = renderRun(entry);
+
+  const previewMatch = html.match(/class="run-step-preview"[^>]*>([\s\S]*?)<\/[a-zA-Z]+>/);
+  assert.ok(previewMatch, 'the collapsed preview must render in its own run-step-preview element');
+  const preview = previewMatch[1];
+  assert.ok(
+    preview.length <= PREVIEW_CHARS + 1,
+    `the collapsed preview must be far shorter than the 5000-character return (was ${preview.length} chars)`,
+  );
+  assert.ok(preview.endsWith('…'), 'a truncated preview must end with the ellipsis previewOf uses');
+
+  const preMatch = html.match(/<pre class="run-step-return"[^>]*>([\s\S]*?)<\/pre>/);
+  assert.ok(preMatch, 'the full return must render inside a <pre>');
+  assert.ok(preMatch[1].includes(long), 'the full 5000-character run must reach the expanded body');
+
+  assert.ok(!html.includes('undefined'), 'a long return must never print as the literal string undefined');
+  assert.ok(!html.includes('NaN'), 'a long return must never print as the literal string NaN');
+});
+
+test('a return of any shape renders, and none of them prints undefined or NaN', () => {
+  const nested = { a: { b: { c: 'leaf-marker-deep' } } };
+  const steps = [
+    step({ label: 's-object', return: { detail: 'no summary field here' } }),
+    step({ label: 's-nested', return: nested }),
+    step({ label: 's-null', return: null }),
+    step({ label: 's-zero', return: 0 }),
+    step({ label: 's-string', return: 'a bare string return' }),
+  ];
+  const inc = increment({ id: 'x', steps });
+  const entry = runEntry({ state: doc({ increments: [inc] }) });
+
+  let html;
+  assert.doesNotThrow(() => {
+    html = renderRun(entry);
+  }, 'no shape of return may throw');
+
+  const rows = [...html.matchAll(/<li class="run-step"/g)];
+  assert.equal(rows.length, 5, 'every step must render a row, whatever shape its return takes');
+  assert.ok(html.includes('leaf-marker-deep'), 'a leaf three levels down a nested return must still reach the markup');
+  assert.ok(!html.includes('undefined'), 'no return shape may print as the literal string undefined');
+  assert.ok(!html.includes('NaN'), 'no return shape may print as the literal string NaN');
+});
+
+test('a step whose return was shed still renders its label and its time, with no return body', () => {
+  const shed = (() => {
+    const { return: _drop, ...rest } = step({ label: 'impl:shed' });
+    return rest;
+  })();
+  assert.ok(!('return' in shed), 'the fixture must actually lack the return key, not merely hold it as undefined — this is what the recorder\'s close leaves behind');
+
+  const inc = increment({ id: 'x', steps: [shed] });
+  const entry = runEntry({ state: doc({ increments: [inc] }) });
+  const html = renderRun(entry);
+
+  assert.ok(html.includes('impl:shed'), 'the label must still render');
+  assert.ok(html.includes(`data-at="${shed.at}"`), 'the instant must still render');
+  assert.ok(html.includes(STEP_SHED_NOTE), 'the shed note must mark the line');
+  assert.ok(!html.includes('run-step-return'), 'a shed step must render no return body');
+  assert.ok(!html.includes('undefined'), 'a shed return must never print as the literal string undefined');
+});
+
+test('an increment the backlog holds with no steps renders as the ordinary card it is', () => {
+  const closedEmpty = increment({ id: 'closed-one', status: 'done', note: 'accepted', steps: [] });
+  const { steps: _drop, ...noStepsField } = increment({ id: 'no-steps-field', title: 'Card No Steps' });
+  const entry = runEntry({ state: doc({ increments: [closedEmpty, noStepsField] }) });
+  const html = renderRun(entry);
+
+  assert.ok(html.includes(closedEmpty.id), 'the closed card must carry its id');
+  assert.ok(html.includes(noStepsField.id), 'the steps-less card must carry its id');
+  assert.ok(html.includes(closedEmpty.title), 'the closed card\'s title must render');
+  assert.ok(html.includes(noStepsField.title), 'the steps-less card\'s title must render');
+  assert.ok(html.includes('done'), 'the closed card\'s status must render');
+  assert.ok(html.includes('accepted'), 'the closed card\'s note must render');
+
+  assert.ok(!html.includes('run-steps'), 'no steps list may render for an increment with no steps, empty array or missing field alike');
+  assert.ok(!html.includes('run-step'), 'no step row may render for either increment');
+  assert.ok(!html.includes('undefined'), 'a steps-less increment must never print as the literal string undefined');
+  assert.ok(!html.includes('NaN'), 'a steps-less increment must never print as the literal string NaN');
+  assert.match(html, /data-closed="true"/, 'the closed card must still carry its closed mark, unaffected by having no steps');
+});
+
+test('the run\'s own steps render in the order the backlog holds them, in a panel of their own', () => {
+  const ownSteps = [step({ label: 'cut' }), step({ label: 'close:ui' }), step({ label: 'publish' })];
+  const inc = increment({ id: 'x', steps: [] });
+  const entry = runEntry({ state: doc({ increments: [inc], run: { steps: ownSteps } }) });
+  const html = renderRun(entry);
+
+  assert.ok(
+    html.indexOf('cut') < html.indexOf('close:ui') && html.indexOf('close:ui') < html.indexOf('publish'),
+    'the run\'s own steps must render in the backlog\'s own order',
+  );
+  for (const cls of ['run-step', 'run-step-label', 'run-step-return']) {
+    assert.ok(html.includes(cls), `the run\'s own steps must reuse the ${cls} class the increment steps use`);
+  }
+
+  const incrementsIdx = html.indexOf('run-increments');
+  const panelIdx = html.indexOf('run-steps-panel');
+  assert.ok(incrementsIdx >= 0, 'the increment cards must sit in a run-increments container');
+  assert.ok(panelIdx >= 0, 'the run\'s own steps must sit in a run-steps-panel container');
+  assert.ok(incrementsIdx < panelIdx, 'the run\'s own steps must sit outside and after the increment cards');
+
+  const between = html.slice(incrementsIdx, panelIdx);
+  assert.ok(
+    !between.includes('run-step-label'),
+    'the run\'s own step labels must land in the panel, not in the step-less card above it',
+  );
+
+  const stepsHtml = renderSteps(ownSteps);
+  assert.ok(
+    html.includes(stepsHtml),
+    'the run\'s own steps must be rendered by the very same step-list renderer the increment cards use, not a second reimplementation, or the two could silently drift apart',
+  );
+});
+
+test('a document carrying no run steps renders no run-steps panel', () => {
+  const codemap = 'codemap-marker-line';
+  const variants = [
+    doc({ codemap, run: { steps: [] } }),
+    doc({ codemap, run: null }),
+    doc({ codemap, run: 'not an object' }),
+    (() => {
+      const { run: _drop, ...rest } = doc({ codemap });
+      return rest;
+    })(),
+  ];
+
+  for (const state of variants) {
+    const entry = runEntry({ state });
+    let html;
+    assert.doesNotThrow(() => {
+      html = renderRun(entry);
+    }, `renderRun must not throw for run: ${JSON.stringify(state.run)}`);
+    assert.ok(!html.includes('run-steps-panel'), 'no panel may render when the document carries no run steps');
+    assert.ok(!html.includes('undefined'), 'a run-less document must never print as the literal string undefined');
+    assert.ok(!html.includes('NaN'), 'a run-less document must never print as the literal string NaN');
+    assert.ok(html.includes(codemap), 'the codemap must still render, proving the panel alone was skipped and not the whole tail');
+  }
+});
+
+test('stepView reads a step\'s label, instant and return, and never yields NaN', () => {
+  const s = step();
+  const view = stepView(s);
+  assert.equal(view.label, s.label);
+  assert.equal(view.at, s.at);
+  assert.equal(view.timeMs, Date.parse(s.at));
+  assert.equal(view.hasReturn, true);
+  assert.ok(view.preview.length > 0, 'a step carrying a return must yield a non-empty preview');
+
+  for (const bad of [step({ at: '' }), step({ at: 'not a date' }), step({ at: undefined })]) {
+    const badView = stepView(bad);
+    assert.equal(badView.timeMs, 0, `an unparseable instant must read as 0, not NaN, for at=${JSON.stringify(bad.at)}`);
+
+    const inc = increment({ id: 'x', steps: [bad] });
+    const entry = runEntry({ state: doc({ increments: [inc] }) });
+    const html = renderRun(entry);
+    assert.ok(html.includes(fmtAgo(0)), 'an unparseable instant must render as fmtAgo(0), which reads "never"');
+    assert.ok(!html.includes('NaN'), 'an unparseable instant must never print as the literal string NaN');
+  }
+
+  for (const empty of [stepView(undefined), stepView(null)]) {
+    assert.equal(empty.label, '', 'stepView(undefined/null) must still hand back an empty label, never throw');
+    assert.equal(empty.timeMs, 0, 'stepView(undefined/null) must still hand back timeMs 0, never throw');
+    assert.equal(empty.hasReturn, false, 'stepView(undefined/null) must still hand back hasReturn false, never throw');
+  }
+});
+
+test('a return recorded as null, 0, empty string or false is a return, not a shed one', () => {
+  const steps = [
+    step({ label: 's-null', return: null }),
+    step({ label: 's-zero', return: 0 }),
+    step({ label: 's-empty', return: '' }),
+    step({ label: 's-false', return: false }),
+  ];
+  for (const s of steps) {
+    assert.equal(
+      stepView(s).hasReturn,
+      true,
+      `a return of ${JSON.stringify(s.return)} must read as present — a truthiness check would fail this`,
+    );
+  }
+
+  const inc = increment({ id: 'x', steps });
+  const entry = runEntry({ state: doc({ increments: [inc] }) });
+  const html = renderRun(entry);
+  const returnBodies = [...html.matchAll(/<pre class="run-step-return"/g)];
+  assert.equal(returnBodies.length, 4, 'all four steps must render a return body, whatever falsy value the return itself is');
+  assert.ok(!html.includes(STEP_SHED_NOTE), 'the shed note must never appear when a return, however falsy, is actually present');
+});
+
+test('everything a step prints is escaped', () => {
+  const hostile = step({
+    label: '<script>alert(1)</script>',
+    at: '2026-01-01T00:00:00.000Z" onmouseover="x',
+    return: { summary: `<script>y</script> "double" 'single'` },
+  });
+  const inc = increment({ id: 'x', steps: [hostile] });
+  const entry = runEntry({ state: doc({ increments: [inc] }) });
+  const html = renderRun(entry);
+  assert.ok(!html.includes('<script'), 'a raw <script must never reach the markup, from the label or the return');
+  assert.ok(!html.includes('onmouseover='), 'a hostile at value must never break out of the data-at attribute');
+});
+
+test('a rendered run carries the steps of the entry it was given and of no other', () => {
+  const a = runEntry({
+    id: 'a',
+    state: doc({
+      increments: [increment({ id: 'inc-a', steps: [step({ label: 'a-inc-step' })] })],
+      run: { steps: [step({ label: 'a-run-step' })] },
+    }),
+  });
+  const b = runEntry({
+    id: 'b',
+    state: doc({
+      increments: [increment({ id: 'inc-b', steps: [step({ label: 'b-inc-step' })] })],
+      run: { steps: [step({ label: 'b-run-step' })] },
+    }),
+  });
+
+  const htmlA = renderRun(a);
+  assert.ok(htmlA.includes('a-inc-step') && htmlA.includes('a-run-step'), 'A\'s own steps must render');
+  assert.ok(
+    !htmlA.includes('b-inc-step') && !htmlA.includes('b-run-step'),
+    'B\'s steps must never leak into A\'s render',
+  );
+
+  const htmlB = renderRun(b);
+  assert.ok(htmlB.includes('b-inc-step') && htmlB.includes('b-run-step'), 'B\'s own steps must render');
+  assert.ok(
+    !htmlB.includes('a-inc-step') && !htmlB.includes('a-run-step'),
+    'A\'s steps must never leak into B\'s render',
   );
 });
