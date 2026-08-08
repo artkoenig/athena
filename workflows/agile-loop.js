@@ -1003,6 +1003,46 @@ if (blockedOnHuman.length) {
   )
 }
 
+// What the pull request body is made of, built from what this scope already
+// holds. The publishing agent used to be sent to read the run back out of
+// `backlog.json`, and that read was the most expensive step of the whole run: a
+// general-purpose agent carries no shared brief, so it first had to find the
+// helper, then ask the index, then ask each increment's steps — which a closed
+// increment no longer has, because `close` moves them into its attempts — and
+// then dig the rest out of the file by hand. Every value it was digging for is
+// named here. Handed over it costs a prompt; read back it cost more context than
+// every other dispatch of the Publish phase together.
+function runOutcome() {
+  const lines = ['Run outcome, from the run itself. This is the whole record the body needs:']
+  lines.push(`- The backlog now holds ${increments.length} increment(s):`)
+  for (const t of increments) {
+    const worksOn = branches.get(t.id) || t.branch || ''
+    lines.push(
+      `  - ${t.id} — ${t.title} [${t.status || 'todo'}]` +
+        (worksOn ? `, worked on branch \`${worksOn}\`` : '') +
+        (t.note ? ` — ${t.note}` : ''),
+    )
+  }
+  if (worked.length) {
+    lines.push('- What the review made of each increment worked:')
+    for (const w of worked) {
+      lines.push(
+        `  - ${w.n}. ${w.title} — ${w.accepted ? 'accepted' : 'NOT accepted'}` +
+          (typeof w.findings === 'number' ? `, ${w.findings} finding(s) open` : '') +
+          `: ${w.reason || 'no reason recorded'}`,
+      )
+    }
+  } else {
+    lines.push('- No increment was worked in this run.')
+  }
+  if (blockedOnHuman.length) {
+    lines.push('- Questions that ended this run, unanswered:')
+    for (const q of blockedOnHuman) lines.push(`  - ${q.step}: ${q.question}`)
+  }
+  if (stopped) lines.push(`- The run stopped early: ${stopped}`)
+  return lines.join('\n') + '\n'
+}
+
 // Every agent above commits and pushes its own step; this one makes sure the
 // branch has a pull request, which is the human's gate. It is dispatched every
 // time, recorded or not: a finished run re-asserting an open pull request costs
@@ -1028,24 +1068,31 @@ const push = await agent(
     'environment has one and no MCP tool. If an OPEN one exists, ' +
     'leave it alone: pushing already updated it. Report its URL.\n' +
     '3. If none is open, open one against the default branch. Title and body come ' +
-    `from the issue directory's \`issue.md\` and from the run state's skeleton, which you ` +
-    `read with the backlog helper's \`index\` subcommand — never the state file whole: ` +
-    'what was asked for, ' +
+    `from the issue directory's \`issue.md\` and from the run outcome at the end of this ` +
+    'prompt: what was asked for, ' +
     'which increments were delivered, which are still open or blocked and why, what the ' +
     'review said, and every open finding or recorded observation the human should see ' +
     'before merging. This run worked the issue in increments, so say plainly in the body ' +
     'when the backlog did NOT empty and name what is left, and when a question for the ' +
-    'human ended the run. Name the branch of every blocked increment — its `branch` ' +
-    'field in the index — so its unmerged work is findable without being in the ' +
+    'human ended the run. Name the branch of every blocked increment — the outcome ' +
+    'below carries it — so its unmerged work is findable without being in the ' +
     'diff. End the body with a blank line, `---`, and ' +
     '`🤖 Generated with [Claude Code](https://claude.com/claude-code)`.\n' +
     '4. If the only pull request for this branch is already MERGED, do NOT open a ' +
     'second one on top of merged history and do NOT rebase — report `prUrl` of the ' +
     "merged one and say so in the summary. That is the human's call.\n\n" +
+    `Do NOT open ${dir}/backlog.json — not with the backlog helper, not by hand. The ` +
+    'outcome below is that file read for you, and the steps behind it move into an ' +
+    "increment's attempts as it closes, so asking for them costs context and returns " +
+    'nothing.\n' +
+    'Fetch the default branch before you compare anything against it: this checkout ' +
+    "may hold a stale copy of it, and a diff against a stale copy names files this " +
+    'branch never touched.\n' +
     'Do NOT commit, do NOT stage, do NOT change any file, do NOT force-push, and do ' +
     'NOT merge anything. Beyond the one checkout step 1 names, do NOT switch ' +
     'branches. If the working tree is dirty, leave it dirty and report it.\n' +
-    'You are running inside a workflow script. Do NOT dispatch any subagent.',
+    'You are running inside a workflow script. Do NOT dispatch any subagent.\n\n' +
+    runOutcome(),
   { agentType: 'general-purpose', phase: 'Publish', label: 'publish', schema: PUSH },
 )
 log(`Push: ${push.pushed ? 'ok' : 'FAILED'} — ${push.summary}`)
