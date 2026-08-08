@@ -558,6 +558,28 @@
             "openQuestions": [],
             "questions": []
           }
+        },
+        {
+          "label": "implement:ui.2",
+          "at": "2026-08-08T12:21:19.739Z",
+          "return": {
+            "deviations": [],
+            "commands": [
+              {
+                "command": "npm --prefix tools/argus-ui test",
+                "exitCode": 0,
+                "note": "The whole interface suite, node --test over test/*.test.mjs: 291 tests, 291 pass, 0 fail, nothing skipped."
+              },
+              {
+                "command": "./test.sh",
+                "exitCode": 0,
+                "note": "Every suite in the repository, all six: PASS, 0 fail, nothing skipped."
+              }
+            ],
+            "blockers": [],
+            "questions": [],
+            "summary": "Moved the run-refresh decision out of refreshRuns into a new exported shouldLoadRun in tools/argus-ui/public/run.js and made app.js delegate to it, behaviour unchanged."
+          }
         }
       ]
     },

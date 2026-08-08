@@ -25,7 +25,7 @@ import {
   liveCursor,
   TOOL_EVENT,
 } from './timeline.js';
-import { pickRunId, renderRun, renderRunList, runFrame } from './run.js';
+import { pickRunId, renderRun, renderRunList, runFrame, shouldLoadRun } from './run.js';
 
 const TOKEN = new URLSearchParams(location.search).get('token');
 
@@ -569,14 +569,15 @@ async function loadRun() {
 
 /**
  * The run view, brought up to date. `changedId` is the run an SSE frame named;
- * without one this is a boot or an explicit switch and the shown run is fetched
- * regardless. A collector that serves no run endpoints costs the page nothing.
+ * whether that means the shown run's state has to be asked for again is
+ * shouldLoadRun's decision. A collector that serves no run endpoints costs the
+ * page nothing.
  */
 async function refreshRuns(changedId = null) {
   try {
     const shown = state.selectedRunId;
     await loadRuns();
-    if (changedId === null || !shown || changedId === state.selectedRunId) await loadRun();
+    if (shouldLoadRun({ changedId, shownId: shown, selectedId: state.selectedRunId })) await loadRun();
     renderRunPicker();
     renderRunView();
   } catch {

@@ -38,6 +38,18 @@ export function pickRunId(items, wanted) {
   return list[0]?.id ?? null;
 }
 
+/**
+ * Whether the shown run's state has to be asked for again. Without a frame this
+ * is a boot or an explicit switch, so it always has to be; with one, it has to
+ * be when the frame names the run now shown, and when nothing was shown before
+ * the picker chose one — the boot that opens on the latest run.
+ */
+export function shouldLoadRun({ changedId = null, shownId = null, selectedId = null } = {}) {
+  if (changedId === null) return true;
+  if (!shownId) return true;
+  return changedId === selectedId;
+}
+
 /** One SSE `run` frame's data string, or null for anything that is not one. */
 export function runFrame(data) {
   let parsed;
